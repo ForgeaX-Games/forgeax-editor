@@ -247,6 +247,7 @@
         "audio": "Audio",
         "model": "3D Model",
         "font": "Font",
+        "ui": "UI Asset",
         "data": "Data",
         "other": "File"
       },
@@ -304,7 +305,9 @@
         "emptyFolder": "Empty folder",
         "noTextPreview": "No text preview for this file type",
         "items": "{{count}} items",
-        "assetCount": "→ {{count}} assets"
+        "assetCount": "→ {{count}} assets",
+        "uiPreview": "UI preview",
+        "uiPayloadUnavailable": "UI payload is not available yet"
       },
       "empty": {
         "noGame": "Open a game to browse assets",

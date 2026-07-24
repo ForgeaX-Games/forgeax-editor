@@ -294,6 +294,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
 
   function dispose(): void {
     if (disposed) return;
+    const wasPlaying = active !== null || starting;
     const wasStarting = starting;
     disposed = true;
     generation++;
@@ -307,6 +308,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
     }
     editorPaused = false;
+    if (wasPlaying) deps.onPlayFailed?.();
   }
 
   function currentPlayWorld(): unknown {

@@ -678,6 +678,14 @@
   overflow: auto;
   padding: 10px;
 }
+.cb-preview-ui-viewport {
+  position: relative;
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.10));
+  border-radius: 8px;
+  background: #111;
+}
 .cb-preview-code {
   margin: 0;
   white-space: pre-wrap;

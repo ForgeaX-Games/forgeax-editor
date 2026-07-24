@@ -28,6 +28,8 @@ export interface CBAsset extends CBItem {
   payload: Record<string, unknown>;
   /** Full path to the `.pack.json` file containing this asset. */
   packPath: string;
+  /** Game-relative author source path, when the catalog provides one. */
+  sourcePath?: string;
   /** Zero-based index within the pack's `assets[]` array. */
   packIndex: number;
   /** GUID cross-references from pack `assets[].refs`. */
@@ -65,6 +67,7 @@ export type CBFileFamily =
   | 'audio'
   | 'model'
   | 'font'
+  | 'ui'
   | 'data'
   | 'other';
 

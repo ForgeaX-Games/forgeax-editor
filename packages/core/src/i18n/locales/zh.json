@@ -247,6 +247,7 @@
         "audio": "音频",
         "model": "3D 模型",
         "font": "字体",
+        "ui": "UI 资产",
         "data": "数据",
         "other": "文件"
       },
@@ -304,7 +305,9 @@
         "emptyFolder": "空文件夹",
         "noTextPreview": "此文件类型暂无文本预览",
         "items": "{{count}} 项",
-        "assetCount": "→ {{count}} 资产"
+        "assetCount": "→ {{count}} 资产",
+        "uiPreview": "UI 预览",
+        "uiPayloadUnavailable": "UI 资产内容暂不可用"
       },
       "empty": {
         "noGame": "打开游戏后浏览资产",

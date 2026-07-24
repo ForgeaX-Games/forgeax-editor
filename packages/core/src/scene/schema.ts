@@ -21,6 +21,7 @@ import type {
   SchemaFieldType,
 } from '@forgeax/engine-ecs';
 import { getRegisteredComponents, RELATIONSHIP_COMPONENTS } from '@forgeax/engine-ecs';
+import { applyEditorComponentMeta, editorMetaOf } from './editor-component-meta';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public types (unchanged API surface)
@@ -131,6 +132,7 @@ function ensurePopulated(): Map<string, ComponentSchema> {
   if (_cache !== null) return _cache;
   _cache = new Map();
   try {
+    applyEditorComponentMeta();
     const registry = getRegisteredComponents();
     for (const [name, comp] of registry) {
       if (shouldExclude(name, comp)) continue;
@@ -150,10 +152,11 @@ export function _resetSchemaCache(): void {
 }
 
 function shouldExclude(name: string, comp: Component): boolean {
-  // Engine-declared meta hint (SSOT): components tagged `editorHidden` are
-  // internal (Entity / Children / ChildOf) and never surface in the Inspector.
-  // Meta injection supersedes the legacy hard-coded lists below (kept as
-  // fallback for components that predate the meta convention).
+  // Editor-owned meta overlay (SSOT): components the editor config marks
+  // `meta.editor.hidden` are internal (Entity / Children / ChildOf) and never
+  // surface in the Inspector. The overlay is injected post-registration (the
+  // engine stays agnostic to editor keys) and supersedes the legacy hard-coded
+  // lists below, which remain as a fallback for components not in the config.
   if (isMetaHidden(comp)) return true;
   if (comp.transient) return true;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -162,20 +165,22 @@ function shouldExclude(name: string, comp: Component): boolean {
   return false;
 }
 
-/** Read the engine-injected `editorHidden` component-level meta flag. */
+/** Read the editor-injected `meta.editor.hidden` overlay flag. */
 function isMetaHidden(comp: Component): boolean {
-  return (comp.meta as { editorHidden?: boolean } | undefined)?.editorHidden === true;
+  return editorMetaOf(comp)?.hidden === true;
 }
 
 /**
- * Whether a component is hidden from the Inspector via engine-declared meta
- * (`meta.editorHidden === true`). Consumed by the Inspector to drop internal
+ * Whether a component is hidden from the Inspector via the editor-owned meta
+ * overlay (`meta.editor.hidden === true`, injected post-registration from
+ * `editor-component-meta.json`). Consumed by the Inspector to drop internal
  * component sections (Entity / Children / ChildOf) from the per-entity strip,
  * which enumerates ALL present components rather than the filtered schema.
  * Returns `false` when the engine is not loaded or the component is unknown.
  */
 export function isComponentHidden(name: string): boolean {
   try {
+    applyEditorComponentMeta();
     const comp = getRegisteredComponents().get(name);
     return comp !== undefined && isMetaHidden(comp);
   } catch {

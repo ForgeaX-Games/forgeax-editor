@@ -11,6 +11,7 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ResizeHandle } from '@forgeax/editor-core';
 import { AssetThumbnail } from '@forgeax/editor-ui';
 import { colorForAssetKind, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind } from './content-browser-icons';
+import { CBUiAssetPreview } from './CBUiAssetPreview';
 import { dirOfPath, type PreviewFileInfo } from './content-browser-format';
 import { realPayload } from './hooks';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
@@ -121,7 +122,9 @@ export function CBPreviewPanel({
       body = <div className="cb-preview-note">{t('editor.contentBrowser.preview.noTextPreview')}</div>;
     }
   } else {
-    body = (
+    body = previewItem.kind === 'ui' ? (
+      <CBUiAssetPreview asset={previewItem} gameSlug={gameSlug} />
+    ) : (
       <>
         <div className="cb-preview-media cb-preview-asset-hero">
           <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} packPath={previewItem.packPath} size={168} fit="contain" />

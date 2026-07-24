@@ -41,6 +41,7 @@ import {
 import { getLocale, useTranslation, type Locale } from '@forgeax/editor-core/i18n';
 import {
   getViewportQuadrant,
+  setViewportQuadrant,
   onViewportQuadrantChange,
   type DisplayMode,
   type RunMode,
@@ -1006,7 +1007,13 @@ export function createEditorPanelContributionsExtension(): AppExtension {
         onGizmoModeChange(() => syncEditorContext(host)),
         onFpsChange(() => syncEditorContext(host)),
         onSceneListChange(() => syncEditorContext(host)),
-        gateway.subscribe(() => syncEditorContext(host)),
+        gateway.subscribe(() => {
+          syncEditorContext(host);
+          const q = getViewportQuadrant();
+          if (q.run === 'play' && gateway.mode === 'edit' && gateway.playPhase !== 'starting') {
+            setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
+          }
+        }),
       ];
 
       const dirtyTimer = window.setInterval(() => syncEditorContext(host), 500);

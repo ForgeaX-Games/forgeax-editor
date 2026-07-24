@@ -271,7 +271,7 @@ export function ContentBrowser() {
   const handleActivate = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') { nav.navigate(item.path); return; }
     if (item.type === 'file') {
-      if (viewMode === 'file' && (item.family === 'pack' || item.family === 'meta') && item.assets.length > 0) {
+      if (viewMode === 'file' && (item.family === 'pack' || item.family === 'meta' || item.family === 'ui') && item.assets.length > 0) {
         togglePackExpansion(item.path);
         return;
       }
@@ -709,7 +709,7 @@ export function ContentBrowser() {
     e.stopPropagation();
     setDragOver(false);
     const all = Array.from(e.dataTransfer.files);
-    const files = all.filter(f => isImportable(f.name));
+    const files = all;
     logImport('ContentBrowser.drop', {
       allNames: all.map(f => f.name),
       importableNames: files.map(f => f.name),
@@ -797,7 +797,6 @@ export function ContentBrowser() {
                 items={viewItems}
                 thumbnailSize={thumbnailSize}
                 multiSelect={multiSelect}
-                selectedPath={previewItem ? viewItemKey(previewItem) : null}
                 viewMode={viewMode}
                 expandedPacks={expandedPacks}
                 onTogglePackExpansion={togglePackExpansion}

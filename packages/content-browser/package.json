@@ -33,6 +33,7 @@
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
+    "@forgeax/engine-ui": "workspace:*",
     "@forgeax/interface": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",

@@ -62,7 +62,7 @@ export function validateSource(
   }
 
   // Check: extension supported
-  const format = getImportFormat(ext);
+  const format = getImportFormat(filePath);
   if (!format) {
     diagnostics.push({
       file: filePath,

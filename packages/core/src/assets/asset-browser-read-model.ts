@@ -99,7 +99,7 @@ export interface CreateAssetBrowserReadModelDeps {
 interface SidecarObservation {
   sourcePath: string;
   metaPath: string;
-  guids: string[];
+  subAssets: { guid: string; kind?: string }[];
 }
 
 function normalize(path: string): string {
@@ -242,11 +242,18 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const json = await response.json() as { source?: unknown; subAssets?: unknown };
         if (!Array.isArray(json.subAssets)) throw new Error('meta sidecar subAssets must be an array');
-        const guids = json.subAssets
-          .map((entry) => (entry && typeof entry === 'object' ? (entry as { guid?: unknown }).guid : undefined))
-          .filter((guid): guid is string => typeof guid === 'string' && guid.length > 0)
-          .map((guid) => guid.toLowerCase());
-        sidecars.push({ sourcePath: sourcePathForSidecar(file.path, json.source), metaPath: file.path, guids });
+        const subAssets = json.subAssets
+          .map((entry) => {
+            if (!entry || typeof entry !== 'object') return null;
+            const value = entry as { guid?: unknown; kind?: unknown };
+            if (typeof value.guid !== 'string' || value.guid.length === 0) return null;
+            return {
+              guid: value.guid.toLowerCase(),
+              ...(typeof value.kind === 'string' && value.kind.length > 0 ? { kind: value.kind } : {}),
+            };
+          })
+          .filter((entry): entry is { guid: string; kind?: string } => entry !== null);
+        sidecars.push({ sourcePath: sourcePathForSidecar(file.path, json.source), metaPath: file.path, subAssets });
       } catch (err) {
         sidecarDiagnostics.push(diagnosticsForError('INVALID_META', file.path, err));
       }
@@ -263,18 +270,41 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
     for (const sidecar of sidecars) sidecarBySource.set(sidecar.sourcePath, sidecar);
     for (const diagnostic of sidecarDiagnostics) sourcePaths.add(diagnostic.path?.replace(/\.meta\.json$/, '') ?? '');
 
+    // UI authoring is meta-defined, and the runtime catalog may lag behind the
+    // source tree during a dev refresh. Keep the sidecar's UI identity visible
+    // in that interval instead of making the source look like an unindexed raw
+    // document. Catalog rows remain authoritative when present; this only
+    // materializes missing `kind: "ui"` rows.
+    for (const sidecar of sidecars) {
+      for (const subAsset of sidecar.subAssets) {
+        if (subAsset.kind !== 'ui' || seenGuids.has(subAsset.guid)) continue;
+        seenGuids.add(subAsset.guid);
+        assets.push({
+          guid: subAsset.guid,
+          kind: 'ui',
+          name: sidecar.sourcePath.split('/').pop()?.replace(/\.ui\.html$/i, '') ?? subAsset.guid.slice(0, 8),
+          relativeUrl: sidecar.metaPath,
+          storageRelativeUrl: sidecar.metaPath,
+          sourcePath: sidecar.sourcePath,
+          storageSourcePath: sidecar.sourcePath,
+          refs: [],
+        });
+        catalogBySource.set(sidecar.sourcePath, [...(catalogBySource.get(sidecar.sourcePath) ?? []), subAsset.guid]);
+      }
+    }
+
     const sources: AssetSourceState[] = [];
     for (const sourcePath of sourcePaths) {
       if (!sourcePath) continue;
       const sidecar = sidecarBySource.get(sourcePath);
       const catalogGuids = catalogBySource.get(sourcePath) ?? [];
       const invalidMeta = sidecarDiagnostics.some((diagnostic) => diagnostic.path === `${sourcePath}.meta.json`);
-      const observedMetaGuids = sidecar?.guids ?? [];
+      const observedMetaGuids = sidecar?.subAssets.map((entry) => entry.guid) ?? [];
       const phase: AssetSourcePhase = invalidMeta
         ? 'invalid-meta'
         : catalogGuids.length > 0
           ? 'indexed'
-          : observedMetaGuids.length > 0
+          : sidecar?.subAssets.length
             ? 'pending-index'
             : 'raw';
       sources.push({ sourcePath, ...(sidecar ? { metaPath: sidecar.metaPath } : {}), phase, catalogGuids, observedMetaGuids });

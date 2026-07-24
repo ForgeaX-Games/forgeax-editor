@@ -42,6 +42,7 @@ const KIND_GLYPHS: Record<string, LucideIcon> = {
   sampler: Settings, material: Paintbrush, scene: Clapperboard, shader: Braces,
   skeleton: Bone, skin: PersonStanding, 'animation-clip': Film, animation: Film,
   audio: Music, font: Type, 'render-pipeline': Settings, tileset: LayoutGrid,
+  ui: LayoutGrid,
 };
 
 /** Renders the vector glyph for an asset kind (falls back to a generic box). */
@@ -55,7 +56,7 @@ const KIND_COLORS: Record<string, string> = {
   sampler: '#8a6a4a', material: '#8a4a6a', scene: '#4a8a6a',
   shader: '#6a4a8a', skeleton: '#8a8a4a', skin: '#4a4a8a',
   'animation-clip': '#8a4a4a', animation: '#8a4a4a', audio: '#4a8a4a', font: '#6a6a8a',
-  'render-pipeline': '#8a6a6a', tileset: '#6a8a6a',
+  'render-pipeline': '#8a6a6a', tileset: '#6a8a6a', ui: '#8a6a8a',
 };
 
 function extractBaseColor(payload: Record<string, unknown>): [number, number, number, number] | null {

@@ -11,7 +11,7 @@ import type { CBFilterFamily } from './types';
 /** The fixed, spec-defined filter families in display order (`dir` first).
  * `other` is intentionally absent: the spec defines no "other" chip. */
 export const ALL_FILTER_FAMILIES: readonly CBFilterFamily[] = [
-  'dir', 'scene', 'pack', 'meta', 'model', 'image', 'audio', 'font', 'code', 'config', 'doc', 'data',
+  'dir', 'scene', 'pack', 'meta', 'model', 'image', 'audio', 'font', 'ui', 'code', 'config', 'doc', 'data',
 ];
 
 /** family → PascalCase lucide-react name (must exist in the panel menu's ICONS
@@ -28,6 +28,7 @@ export const FAMILY_FILTER_ICON: Record<CBFilterFamily, string> = {
   audio: 'Music',
   model: 'Box',
   font: 'Type',
+  ui: 'Paintbrush',
   data: 'Database',
   other: 'File',
 };

@@ -164,7 +164,7 @@ function extensionOf(name: string): string {
 function fileFamilyOf(name: string): CBFileFamily {
   if (name.toLowerCase().endsWith('.pack.json')) return 'pack';
   const ext = extensionOf(name);
-  if (['.ts', '.tsx', '.js', '.jsx', '.jsonc', '.css', '.scss', '.wgsl', '.glsl', '.rs', '.py'].includes(ext)) return 'code';
+  if (['.html', '.htm', '.ts', '.tsx', '.js', '.jsx', '.jsonc', '.css', '.scss', '.wgsl', '.glsl', '.rs', '.py'].includes(ext)) return 'code';
   if (['.json', '.toml', '.yaml', '.yml'].includes(ext)) return 'config';
   if (['.md', '.txt'].includes(ext)) return 'doc';
   if (['.scene', '.level'].includes(ext)) return 'scene';
@@ -189,6 +189,7 @@ function fileKindLabel(family: CBFileFamily): string {
     case 'audio': return 'Audio';
     case 'model': return 'Model';
     case 'font': return 'Font';
+    case 'ui': return 'UI Asset';
     case 'data': return 'Data';
     default: return 'File';
   }

@@ -640,9 +640,10 @@ export function InspectorPanel() {
   const nodeComponents = entComponents(gateway.activeWorld, sel, readOptsFor(sel));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
   // Drop `Name` (rendered via NameField in the header) and any component the
-  // engine flags as `editorHidden` via injected meta (Entity / Children /
-  // ChildOf). The strip enumerates ALL present components, so meta filtering
-  // must happen here, not only in the schema registry.
+  // editor overlay marks `meta.editor.hidden` (Entity / Children / ChildOf,
+  // injected post-registration from editor-component-meta.json). The strip
+  // enumerates ALL present components, so this filtering must happen here, not
+  // only in the schema registry.
   const bodyComponents = Object.entries(nodeComponents).filter(([comp]) => comp !== 'Name' && !isComponentHidden(comp));
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;

@@ -35,6 +35,7 @@ export const FILE_FAMILY_ICON_NAMES = {
   audio: 'music',
   model: 'box',
   font: 'type',
+  ui: 'paintbrush',
   data: 'database',
   other: 'file',
 } as const satisfies Record<CBFileFamily | 'dir', string>;
@@ -50,6 +51,7 @@ export const ASSET_KIND_ICON_NAMES: Readonly<Record<string, string>> = {
   'animation-clip': 'film',
   audio: 'music',
   font: 'type',
+  ui: 'paintbrush',
 };
 
 export const FILE_FAMILY_COLORS = {
@@ -64,6 +66,7 @@ export const FILE_FAMILY_COLORS = {
   audio: 'var(--accent-pink, #ff6db8)',
   model: 'var(--accent-cyan, #6cc4ff)',
   font: '#e0d060',
+  ui: 'var(--accent-violet, #b58cff)',
   data: 'var(--text-mute, rgba(255, 255, 255, 0.30))',
   other: 'var(--text-mute, rgba(255, 255, 255, 0.30))',
 } as const satisfies Record<CBFileFamily | 'dir', string>;
@@ -79,6 +82,7 @@ export const ASSET_KIND_COLORS: Readonly<Record<string, string>> = {
   'animation-clip': 'var(--accent-pink, #ff6db8)',
   audio: 'var(--accent-pink, #ff6db8)',
   font: '#e0d060',
+  ui: 'var(--accent-violet, #b58cff)',
 };
 
 const ICONS: Record<string, LucideIcon> = {

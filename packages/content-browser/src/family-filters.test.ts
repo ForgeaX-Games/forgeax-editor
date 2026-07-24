@@ -7,7 +7,7 @@ describe('family filters', () => {
     expect(ALL_FILTER_FAMILIES[0]).toBe('dir');
     expect(ALL_FILTER_FAMILIES).not.toContain('other');
     expect(ALL_FILTER_FAMILIES).toEqual([
-      'dir', 'scene', 'pack', 'meta', 'model', 'image', 'audio', 'font', 'code', 'config', 'doc', 'data',
+      'dir', 'scene', 'pack', 'meta', 'model', 'image', 'audio', 'font', 'ui', 'code', 'config', 'doc', 'data',
     ]);
   });
 
@@ -17,7 +17,7 @@ describe('family filters', () => {
 
   it('maps every family (incl. dir) to a PascalCase lucide glyph', () => {
     const families: CBFilterFamily[] = [
-      'dir', 'code', 'config', 'doc', 'scene', 'pack', 'meta', 'image', 'audio', 'model', 'font', 'data', 'other',
+      'dir', 'code', 'config', 'doc', 'scene', 'pack', 'meta', 'image', 'audio', 'model', 'font', 'ui', 'data', 'other',
     ];
     for (const family of families) {
       expect(FAMILY_FILTER_ICON[family]).toMatch(/^[A-Z]/);

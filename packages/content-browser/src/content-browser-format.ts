@@ -102,6 +102,13 @@ export function resolveCopyPath(path: string): string {
   return isAbsoluteHostPath(path) ? path : resolveGamePath(path);
 }
 
+/** Engine UI packages use `<name>.meta.json` beside `<name>.ui.html`. */
+export function metaPathForSource(sourcePath: string): string {
+  return /\.ui\.html$/i.test(sourcePath)
+    ? sourcePath.replace(/\.ui\.html$/i, '.meta.json')
+    : `${sourcePath}.meta.json`;
+}
+
 // ── File-family classification + label ──────────────────────────────────────
 
 export function fileFamilyOf(name: string): CBFileFamily {
@@ -111,7 +118,7 @@ export function fileFamilyOf(name: string): CBFileFamily {
   if (lower.endsWith('.scene.json') || lower === 'scene.json') return 'scene';
   if (lower.endsWith('.colliders.json')) return 'data';
   const ext = lower.split('.').pop() ?? '';
-  if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py'].includes(ext)) return 'code';
+  if (['html', 'css', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py'].includes(ext)) return 'code';
   if (['json', 'lock'].includes(ext)) return 'config';
   if (['md', 'markdown', 'txt'].includes(ext)) return 'doc';
   if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico', 'hdr'].includes(ext)) return 'image';
@@ -148,6 +155,7 @@ const FILE_KIND_FALLBACK_LABELS: Record<CBFileFamily, string> = {
   audio: 'Audio',
   model: '3D Model',
   font: 'Font',
+  ui: 'UI Asset',
   data: 'Data',
   other: 'File',
 };
@@ -168,6 +176,7 @@ export function fileKindLabel(tOrFamily: TFunction | CBFileFamily | undefined, f
     case 'audio': return translate('editor.contentBrowser.fileKinds.audio', FILE_KIND_FALLBACK_LABELS.audio);
     case 'model': return translate('editor.contentBrowser.fileKinds.model', FILE_KIND_FALLBACK_LABELS.model);
     case 'font': return translate('editor.contentBrowser.fileKinds.font', FILE_KIND_FALLBACK_LABELS.font);
+    case 'ui': return translate('editor.contentBrowser.fileKinds.ui', FILE_KIND_FALLBACK_LABELS.ui);
     case 'data': return translate('editor.contentBrowser.fileKinds.data', FILE_KIND_FALLBACK_LABELS.data);
     default: return translate('editor.contentBrowser.fileKinds.other', FILE_KIND_FALLBACK_LABELS.other);
   }
@@ -294,11 +303,11 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
   // `sourcePath`; derive the sidecar path from it. Fallback to relativeUrl for
   // inline/dev entries that never went through pack-index (no sidecar, no CRUD).
   const packPath = (e.relativeUrl.includes('__forgeax-ddc'))
-    ? (e.sourcePath ? `${e.sourcePath.replace(/^\//, '')}.meta.json` : e.relativeUrl)
+    ? (e.sourcePath ? metaPathForSource(e.sourcePath.replace(/^\//, '')) : e.relativeUrl)
     : e.relativeUrl.endsWith('.pack.json')
       ? e.relativeUrl
       : e.sourcePath
-        ? `${e.sourcePath.replace(/^\//, '')}.meta.json`
+        ? metaPathForSource(e.sourcePath.replace(/^\//, ''))
         : e.relativeUrl;
   return {
     type: 'asset',
@@ -307,6 +316,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
     name: e.name ?? e.guid.slice(0, 8),
     payload: {},
     packPath,
+    ...(e.sourcePath ? { sourcePath: e.sourcePath } : {}),
     packIndex: index,
     refs: e.refs ? [...e.refs] : [],
     estimatedSize: 0,

@@ -9,7 +9,6 @@ interface Props {
   items: CBViewItem[];
   thumbnailSize: number;
   multiSelect: MultiSelectAPI;
-  selectedPath?: string | null;
   viewMode?: CBViewMode2;
   expandedPacks?: ReadonlySet<string>;
   onTogglePackExpansion?: (filePath: string) => void;
@@ -23,21 +22,11 @@ interface Props {
   onToggleFavorite?: (item: CBViewItem) => void;
 }
 
-function selectedKey(item: CBViewItem): string {
-  // Assets must key on their GUID, not packPath: every sub-asset of an imported
-  // source (main.pack.json → scene + N materials) shares one packPath, so keying
-  // on it would light up the whole pack when a single card is clicked.
-  if (item.type === 'asset') return item.guid;
-  return item.path;
-}
-
-export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, isItemFavorite, onToggleFavorite }: Props) {
+export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, isItemFavorite, onToggleFavorite }: Props) {
   return (
     <div className="cb-grid-view cb-fe-grid">
       {items.map((item, index) => {
-        const isSelected = selectedPath != null
-          ? selectedPath === selectedKey(item)
-          : multiSelect.isSelected(item);
+        const isSelected = multiSelect.isSelected(item);
         const favorite = isItemFavorite?.(item) ?? false;
         const toggleFavorite = onToggleFavorite ? () => onToggleFavorite(item) : undefined;
         if (item.type === 'folder') {
@@ -57,7 +46,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, selectedPath, viewMo
         }
         if (item.type === 'file') {
           const isAssetMode = viewMode === 'asset';
-          const hasExpandableAssets = (item.family === 'pack' || item.family === 'meta') && item.assets.length > 0;
+          const hasExpandableAssets = (item.family === 'pack' || item.family === 'meta' || item.family === 'ui') && item.assets.length > 0;
           return (
             <CBFileItem
               key={item.path}

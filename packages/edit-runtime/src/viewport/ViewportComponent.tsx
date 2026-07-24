@@ -895,7 +895,7 @@ async function bootViewport(
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
   // container (drop → gateway spawn; visibility → editorApp.pause/resume).
   registerTeardown(installViewportDropZone(container));
-  registerTeardown(installVisibilityPause(container, editorApp));
+  registerTeardown(installVisibilityPause(container, editorApp, () => getViewportQuadrant().run === 'play'));
   registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');

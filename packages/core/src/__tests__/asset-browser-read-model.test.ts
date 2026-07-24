@@ -75,6 +75,29 @@ describe('AssetBrowserSnapshot read model (M2)', () => {
     expect(invalidSnapshot.sources).toContainEqual(expect.objectContaining({ phase: 'invalid-meta' }));
   });
 
+  it('materializes a meta-defined UI asset when the runtime catalog has not emitted it yet', async () => {
+    const { model } = makeModel({
+      rows: [],
+      treeValue: { type: 'dir', name: 'assets', path: '/game/assets', children: [
+        { type: 'file', name: 'hud.ui.html', path: '/game/assets/ui/hud.ui.html' },
+        { type: 'file', name: 'hud.meta.json', path: '/game/assets/ui/hud.meta.json' },
+      ] },
+      fetchImpl: async (path) => path.startsWith('/api/files/tree')
+        ? response({ tree: { type: 'dir', name: 'assets', path: '/game/assets', children: [
+          { type: 'file', name: 'hud.ui.html', path: '/game/assets/ui/hud.ui.html' },
+          { type: 'file', name: 'hud.meta.json', path: '/game/assets/ui/hud.meta.json' },
+        ] } })
+        : path.includes('hud.meta.json')
+          ? response({ kind: 'external-asset-package', importer: 'ui', source: 'hud.ui.html', subAssets: [{ guid: 'GUID-UI', kind: 'ui' }] })
+          : response({}, 404),
+    });
+    const snapshot = await model.refresh();
+    expect(snapshot.assets).toContainEqual(expect.objectContaining({
+      guid: 'guid-ui', kind: 'ui', sourcePath: 'assets/ui/hud.ui.html', storageRelativeUrl: 'assets/ui/hud.meta.json',
+    }));
+    expect(snapshot.sources).toContainEqual(expect.objectContaining({ sourcePath: 'assets/ui/hud.ui.html', phase: 'indexed' }));
+  });
+
   it('drops stale generations and directory-only refreshes do not refresh the catalog', async () => {
     let catalogRefreshes = 0;
     let resolveFirstTree!: (value: Response) => void;

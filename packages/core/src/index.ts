@@ -164,6 +164,14 @@ export type {
   ComponentSchema,
   FieldType,
 } from './scene/schema';
+// Editor-owned component metadata overlay (SSOT), injected into
+// `Component.meta.editor` post-registration; the engine stays agnostic.
+export {
+  applyEditorComponentMeta,
+  editorMetaOf,
+  EDITOR_COMPONENT_META,
+} from './scene/editor-component-meta';
+export type { EditorComponentMeta } from './scene/editor-component-meta';
 
 // ── Euler↔quat conversion (SSOT, XYZ order, AGENTS.md #6) ──
 export { quatToEuler, eulerToQuat } from './util/euler-quat';

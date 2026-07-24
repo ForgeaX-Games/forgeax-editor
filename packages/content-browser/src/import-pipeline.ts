@@ -112,6 +112,24 @@ export async function importFiles(
       if (!uploaded) {
         result = { filename: file.name, status: 'error', error: 'Upload failed' };
       } else {
+        // `.ui.css` is a companion, not an independently imported asset. When
+        // the user drops/selects an HTML/CSS pair, put the companion on disk
+        // before the UI importer runs so its same-name sibling read succeeds.
+        const uiCompanion = file.name.toLowerCase().endsWith('.ui.html')
+          ? files.find(candidate => candidate.name.toLowerCase() === file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'))
+          : undefined;
+        if (uiCompanion) {
+          const companionPath = `${basePath}/${uiCompanion.name}`;
+          const companionBase64 = arrayBufferToBase64(await uiCompanion.arrayBuffer());
+          const companionUploaded = await assetIO.uploadSourceBytes(companionPath, companionBase64);
+          if (!companionUploaded) {
+            result = { filename: file.name, status: 'error', error: `Failed to upload UI stylesheet companion: ${uiCompanion.name}` };
+            results.push(result);
+            progress.completed++;
+            onProgress?.(structuredClone(progress));
+            continue;
+          }
+        }
         // Bytes are now on disk → dispatch the one-door import op (skipUpload).
         // Pass the game-RELATIVE path (without slug) — the applier calls
         // resolveGamePath() to add the slug, so passing the already-resolved

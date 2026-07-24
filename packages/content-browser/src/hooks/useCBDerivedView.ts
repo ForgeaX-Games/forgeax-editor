@@ -65,7 +65,11 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   const scopedAssets = useMemo(() => {
     const out: { asset: CBAsset; rel: string }[] = [];
     for (const a of allAssets) {
-      const rel = catalogPathToRoot(a.packPath, gameSlug, catalogAssetRoots);
+      // External/imported assets belong to their engine-owned sidecar. The
+      // author source remains a sibling file; for UI this is especially
+      // important: `hud.meta.json` owns the UI asset while `.ui.html/.ui.css`
+      // are only authoring inputs.
+      const rel = catalogPathToRoot(a.kind === 'ui' ? a.packPath : (a.sourcePath ?? a.packPath), gameSlug, catalogAssetRoots);
       if (!rel) continue;
       out.push({ asset: a, rel });
     }
@@ -159,7 +163,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
         const rel = normalizeGameRelativePath(node.path, gameRootPath, gameSlug);
         if (!rel && node !== diskTree) return null;
         if (node.type === 'file') {
-          const assets = assetsByRel.get(rel) ?? [];
+          const assets = assetsByRel.get(rel) ?? assetsByRel.get(`${rel}.meta.json`) ?? [];
           const family = fileFamilyOfWithAssets(node.name, assets);
           return {
             type: 'file',
@@ -328,7 +332,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     if (viewMode === 'asset') {
       for (const file of filesInPath) {
         items.push(file);
-        if ((file.family === 'pack' || file.family === 'meta') && file.assets.length > 0) {
+        if ((file.family === 'pack' || file.family === 'meta' || file.family === 'ui') && file.assets.length > 0) {
           items.push(...file.assets);
         }
       }
@@ -336,7 +340,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     } else {
       for (const file of filesInPath) {
         items.push(file);
-        if ((file.family === 'pack' || file.family === 'meta') && expandedPacks.has(file.path) && file.assets.length > 0) {
+        if ((file.family === 'pack' || file.family === 'meta' || file.family === 'ui') && expandedPacks.has(file.path) && file.assets.length > 0) {
           items.push(...file.assets);
         }
       }

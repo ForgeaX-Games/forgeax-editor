@@ -3,13 +3,13 @@
  * and default import settings (aligned with meta.schema.json).
  */
 
-export type ImporterKey = 'image' | 'gltf' | 'fbx' | 'audio' | 'font' | 'pack';
+export type ImporterKey = 'image' | 'gltf' | 'fbx' | 'audio' | 'font' | 'ui' | 'pack';
 
 /** Sub-asset kind enum from meta.schema.json subAsset.kind. */
 export type SubAssetKind =
   | 'mesh' | 'material' | 'scene' | 'texture' | 'image'
   | 'cube-texture' | 'material-shader' | 'skeleton' | 'skin'
-  | 'animation-clip' | 'audio' | 'font' | 'sampler';
+  | 'animation-clip' | 'audio' | 'font' | 'sampler' | 'ui';
 
 export interface ImportFormat {
   extensions: string[];
@@ -67,6 +67,13 @@ export const IMPORT_FORMATS: ImportFormat[] = [
     subAssetKinds: ['texture', 'sampler', 'font'],
     defaultSettings: {},
   },
+  {
+    extensions: ['.ui.html'],
+    label: 'UI Asset (HTML/CSS)',
+    importer: 'ui',
+    subAssetKinds: ['ui'],
+    defaultSettings: {},
+  },
 ];
 
 const extMap = new Map<string, ImportFormat>();
@@ -75,8 +82,13 @@ for (const fmt of IMPORT_FORMATS) {
 }
 
 /** Look up the import format for a file extension (e.g. '.png'). */
-export function getImportFormat(ext: string): ImportFormat | undefined {
-  return extMap.get(ext.toLowerCase());
+export function getImportFormat(extOrFilename: string): ImportFormat | undefined {
+  const lower = extOrFilename.toLowerCase();
+  const exact = extMap.get(lower);
+  if (exact) return exact;
+  return [...extMap.entries()]
+    .sort(([a], [b]) => b.length - a.length)
+    .find(([extension]) => lower.endsWith(extension))?.[1];
 }
 
 /** Build a combined `accept` attribute string for file input elements. */
@@ -100,9 +112,7 @@ export function getImportRegistrySnapshot() {
 
 /** Check if a filename has a recognized importable extension. */
 export function isImportable(filename: string): boolean {
-  const dot = filename.lastIndexOf('.');
-  if (dot < 0) return false;
-  return extMap.has(filename.slice(dot).toLowerCase());
+  return getImportFormat(filename) !== undefined;
 }
 
 /** Dev tracing — filter console: CB:import */

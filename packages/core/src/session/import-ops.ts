@@ -78,7 +78,7 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportFileResult> {
   const { destPath, sourceName, base64, skipUpload } = spec;
   const ext = sourceName.slice(sourceName.lastIndexOf('.')).toLowerCase();
-  const format = getImportFormat(ext);
+  const format = getImportFormat(sourceName);
 
   console.info('[import-diag] executeAssetImport START', { destPath, sourceName, ext, importer: format?.importer, skipUpload, hasBase64: base64 !== undefined });
 
@@ -103,7 +103,11 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       }
     }
 
-    const metaPath = `${destPath}.meta.json`;
+    // UI packages keep the sidecar beside the source stem (`hud.meta.json`),
+    // while the older external importers use `<source>.meta.json`.
+    const metaPath = format.importer === 'ui'
+      ? destPath.replace(/\.ui\.html$/i, '.meta.json')
+      : `${destPath}.meta.json`;
     console.info('[import-diag] metaPath computed', { metaPath, destPath });
 
     // 2. glTF / FBX are cooked into a canonical meta.json on the frontend (engine
