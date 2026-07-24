@@ -10,16 +10,8 @@ export function DeleteGuardDialog() {
   useEffect(() => subscribeDeleteGuard(setReq), []);
   if (!req) return null;
 
-  // Two shapes share one reliable dialog: asset-domain deletes (destroyAsset,
-  // undoable) and path-domain deletes (folder/file, from the keyboard router).
-  const isAssets = (req.assets?.length ?? 0) > 0;
-  const names = isAssets ? req.assets!.map((a) => a.name || a.guid) : (req.paths ?? []);
-  const count = names.length;
-  const multi = count > 1;
-  const noun = isAssets ? '资产' : '文件/文件夹';
-  const note = isAssets
-    ? '这些资产将被永久删除（document 域 op，可撤销）。'
-    : '将从磁盘删除所选文件/文件夹（含其内容），此操作不可撤销。';
+  const names = req.assets.map((a) => a.name || a.guid);
+  const multi = req.assets.length > 1;
 
   return (
     <div
@@ -44,14 +36,14 @@ export function DeleteGuardDialog() {
         }}
       >
         <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>
-          删除{multi ? ` ${count} 项${noun}` : noun}？
+          删除{multi ? ` ${req.assets.length} 个资产` : '资产'}？
         </h3>
         <p style={{ margin: '0 0 10px', fontSize: 13, opacity: 0.8 }}>
-          {note}
+          这些资产将被永久删除（document 域 op，可撤销）。
         </p>
         <ul style={{ margin: '0 0 14px', paddingLeft: 18, fontSize: 12, maxHeight: 120, overflow: 'auto' }}>
           {names.map((n, i) => (
-            <li key={isAssets ? req.assets![i].guid : `${i}:${n}`}>{n}</li>
+            <li key={req.assets[i].guid}>{n}</li>
           ))}
         </ul>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

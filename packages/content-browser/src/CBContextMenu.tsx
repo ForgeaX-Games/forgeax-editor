@@ -7,11 +7,9 @@ import {
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
-// Rename fallback still uses the editor-ui prompt modal (only when no host
-// onRename callback is supplied). Delete no longer uses the editor-ui confirm —
-// it always routes through the host's reliable cb-dialog delete guards
-// (onDelete / onDeleteFolder), which paint correctly in the standalone host.
-import { prompt as promptDialog } from '@forgeax/editor-ui';
+// Themed overlay modals (editor-ui) replace window.prompt/confirm in the
+// fallback branches below (used only when no host CRUD callback is supplied).
+import { confirm as confirmDialog, prompt as promptDialog } from '@forgeax/editor-ui';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
  *  material/mesh: direct bindAssetRef op. texture/image: createMaterial + bindAssetRef.
@@ -81,19 +79,11 @@ export interface CRUDCallbacks {
   onNewFolder?: (parentPath: string) => void;
   onReload?: () => void;
   /**
-   * Route asset deletion through the host's reference-aware delete guard (C3).
-   * The context menu always delegates to this — there is no editor-ui `confirm`
-   * fallback, since that AlertDialog never paints in the standalone host (isolated
-   * overlay React root) and would hang the delete. Keyboard and menu deletes thus
-   * share one reliable guard dialog.
+   * Route deletion through the host's reference-aware delete guard (C3).
+   * When provided, the context menu delegates instead of running its own
+   * `window.confirm`, so keyboard and menu deletes share one guard dialog.
    */
   onDelete?: (targets: CBAsset[]) => void;
-  /**
-   * Route folder deletion through the host's path-delete guard (reliable
-   * cb-dialog modal), mirroring {@link onDelete} for assets. Same rationale:
-   * no editor-ui confirm fallback.
-   */
-  onDeleteFolder?: (folder: { path: string; name: string }) => void;
 }
 
 export function buildAssetContextMenu(
@@ -142,9 +132,21 @@ export function buildAssetContextMenu(
       }
     }},
     { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
-      // Always delegate to the host's reference-aware delete guard (reliable
-      // cb-dialog modal). No editor-ui confirm fallback — see CRUDCallbacks.onDelete.
-      callbacks?.onDelete?.(targets);
+      if (callbacks?.onDelete) { callbacks.onDelete(targets); return; }
+      void (async () => {
+        const names = targets.map(a => a.name).join(', ');
+        const ok = await confirmDialog({
+          title: tr('editor.contentBrowser.deleteGuard.title', { count: targets.length, plural: targets.length === 1 ? '' : 's' }),
+          description: names,
+          confirmText: tr('editor.contentBrowser.deleteGuard.confirm'),
+          cancelText: tr('editor.contentBrowser.deleteGuard.cancel'),
+          destructive: true,
+        });
+        if (!ok) return;
+        for (const a of targets) {
+          gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
+        }
+      })();
     }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
@@ -222,9 +224,17 @@ export function buildFolderContextMenu(
 
     { id: 'rename', label: tr('editor.contentBrowser.contextMenu.rename'), shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
     { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
-      // Route through the host's path-delete guard (reliable cb-dialog modal),
-      // consistent with asset delete. No editor-ui confirm fallback.
-      callbacks?.onDeleteFolder?.({ path: folder.path, name: folder.name });
+      void (async () => {
+        const ok = await confirmDialog({
+          title: tr('editor.contentBrowser.contextMenu.delete'),
+          description: tr('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: folder.name }),
+          confirmText: tr('editor.contentBrowser.deleteGuard.confirm'),
+          cancelText: tr('editor.contentBrowser.deleteGuard.cancel'),
+          destructive: true,
+        });
+        if (!ok) return;
+        gateway.dispatch({ kind: 'deleteDirectory', path: folder.path }, 'human');
+      })();
     }},
     { id: 'copy-path', label: tr('editor.contentBrowser.contextMenu.copyPath'), action: () => {
       void navigator.clipboard.writeText(folder.path);

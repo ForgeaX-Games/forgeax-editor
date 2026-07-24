@@ -52,12 +52,10 @@ onSelectionChange(() => {
   if (domain !== 'entity') { domain = 'entity'; emit(); }
 });
 onAssetSelectionChange(() => {
-  const len = getAssetSelectionList().length;
-  if (len > 0 && domain !== 'asset') { domain = 'asset'; emit(); }
+  if (getAssetSelectionList().length > 0 && domain !== 'asset') { domain = 'asset'; emit(); }
 });
 onFolderSelectionChange(() => {
-  const items = getPathSelectionList();
-  if (items.length > 0 && domain !== 'folder') { domain = 'folder'; emit(); }
+  if (getPathSelectionList().length > 0 && domain !== 'folder') { domain = 'folder'; emit(); }
 });
 
 /** Reactive read for UI panels — lights the header scope ring. */

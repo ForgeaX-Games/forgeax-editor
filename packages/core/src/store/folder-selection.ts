@@ -95,9 +95,7 @@ sessionAppliers.set('setFolderSelection', (op) => {
     next = (raw.paths ?? []).map((p) => ({ path: p, kind: 'dir' as const }));
   }
   // Dedup: don't emit when nothing changed (prevents domain pollution on empty→empty).
-  if (sameItems(selectedItems, next)) {
-    return { ok: true };
-  }
+  if (sameItems(selectedItems, next)) return { ok: true };
   selectedItems = next;
   emit();
   return { ok: true };
