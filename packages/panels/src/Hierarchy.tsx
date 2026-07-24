@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore, useState } from 'react';
+import { useEffect, useRef, useSyncExternalStore, useState } from 'react';
 import {
   Box,
   ChevronDown,
@@ -27,7 +27,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getSelection, getSelectionList, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelectionList } from '@forgeax/editor-core';
+import { gateway, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelectionList } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -43,6 +43,7 @@ import {
   getHierarchyPanelSnapshot,
   getHierarchyVisibleMatches,
   hasHierarchyViewFilter,
+  revealHierarchyEntity,
   subscribeHierarchyPanelState,
   toggleHierarchyCollapsed,
   type HierarchyColumns,
@@ -273,11 +274,18 @@ function Row({
 }) {
   const { t } = useTranslation();
   const selList = useSelectionList();
+  const isSelected = selList.has(id);
   const hoverId = useHoverEntity();
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
   const [editing, setEditing] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   // F2 (or any panel) can request this row to enter inline-rename mode.
   useEffect(() => onRenameRequest((rid) => rid === id && setEditing(true)), [id]);
+  useEffect(() => {
+    if (isSelected && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [isSelected]);
   // M3 (I1/AC-08): entity view read from the active world (SSOT) via entity-state
   // helpers keyed by EntityHandle. `hidden` derives from the EditorHidden
   // component; `components` from the world component walk.
@@ -305,7 +313,8 @@ function Row({
   return (
     <>
       <div
-        className={`tn k-${typeToken.toLowerCase()}${selList.has(id) ? ' sel' : ''}${nodeHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${hoverId === id ? ' hov' : ''}`}
+        ref={rowRef}
+        className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${hoverId === id ? ' hov' : ''}`}
         data-testid={`hier-row-${id}`}
         title={`${nodeName} · #${id}`}
         onMouseEnter={() => gateway.dispatch({ kind: 'setHoverEntity', id })}
@@ -617,6 +626,13 @@ export function HierarchyPanel() {
   // are rejected at the gateway (`edit-rejected-in-play`). Disable the editing
   // controls so they don't silently no-op (P0-4). enterPlay/exitPlay emit, so
   // useDocVersion re-renders this on mode change.
+  useEffect(() => {
+    return onSelectionChange(() => {
+      const sel = getSelection();
+      if (sel !== null) revealHierarchyEntity(sel);
+    });
+  }, []);
+
   const readOnly = gateway.mode === 'play';
   const activeWorld = gateway.activeWorld;
   const worldReady = activeWorld != null;
@@ -666,7 +682,7 @@ export function HierarchyPanel() {
   const createMenuItems = (): MenuItemDef[] => [
     { label: t('editor.hierarchy.menu.createEntity'), icon: 'file-plus', onClick: spawnEntity, disabled: readOnly },
     ...ENTITY_PRESETS.map((preset) => ({
-      label: t('editor.hierarchy.menu.createPreset', { label: preset.label }),
+      label: t(`editor.hierarchy.menu.presets.${preset.label}`, { defaultValue: preset.label }),
       icon: 'box',
       onClick: () => spawnPreset(preset.label),
       disabled: readOnly,

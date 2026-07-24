@@ -9,6 +9,11 @@
 // domain type into this base package.
 
 import { useState, type CSSProperties } from 'react';
+import {
+  Box, Image as ImageIcon, Globe, Paintbrush, Clapperboard, Braces, Bone,
+  PersonStanding, Film, Music, Type, Settings, LayoutGrid, Package,
+  type LucideIcon,
+} from 'lucide-react';
 
 export interface AssetThumbnailInput {
   /** Engine asset kind discriminant, e.g. 'mesh' | 'texture' | 'material'. */
@@ -22,7 +27,6 @@ export interface AssetThumbnailInput {
 
 export interface ThumbnailData {
   type: 'icon' | 'swatch' | 'gradient' | 'image';
-  icon?: string;
   color?: string;
   gradient?: string;
   badge?: string;
@@ -30,12 +34,21 @@ export interface ThumbnailData {
   imageUrl?: string;
 }
 
-const KIND_ICONS: Record<string, string> = {
-  mesh: '◫', texture: '🖼', image: '🖼', 'cube-texture': '🧊', sampler: '⚙',
-  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', animation: '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱',
+// Kind → lucide glyph. This is the rendered SSOT for every icon-type preview
+// (Content Browser cards, Inspector fields, pickers). Vector glyphs only — no
+// emoji — so scene reads as the same clapperboard everywhere else in the UI.
+const KIND_GLYPHS: Record<string, LucideIcon> = {
+  mesh: Box, texture: ImageIcon, image: ImageIcon, 'cube-texture': Globe,
+  sampler: Settings, material: Paintbrush, scene: Clapperboard, shader: Braces,
+  skeleton: Bone, skin: PersonStanding, 'animation-clip': Film, animation: Film,
+  audio: Music, font: Type, 'render-pipeline': Settings, tileset: LayoutGrid,
 };
+
+/** Renders the vector glyph for an asset kind (falls back to a generic box). */
+export function AssetKindGlyph({ kind, size = 16, className }: { kind: string; size?: number; className?: string }) {
+  const Glyph = KIND_GLYPHS[kind] ?? Package;
+  return <Glyph size={size} className={className} aria-hidden="true" />;
+}
 
 const KIND_COLORS: Record<string, string> = {
   mesh: '#4a6b8a', texture: '#6a8a4a', image: '#6a8a4a', 'cube-texture': '#4a8a8a',
@@ -109,28 +122,27 @@ export function getThumbnailData(asset: AssetThumbnailInput): ThumbnailData {
   if (kind === 'texture' || kind === 'image') {
     const imageUrl = resolveImageUrl(asset);
     if (imageUrl) {
-      return { type: 'image', imageUrl, icon: '🖼', color: KIND_COLORS.texture, badge: textureBadge(payload) };
+      return { type: 'image', imageUrl, color: KIND_COLORS.texture, badge: textureBadge(payload) };
     }
-    return { type: 'icon', icon: '🖼', color: KIND_COLORS.texture, badge: textureBadge(payload) };
+    return { type: 'icon', color: KIND_COLORS.texture, badge: textureBadge(payload) };
   }
 
   if (kind === 'mesh') {
-    return { type: 'icon', icon: KIND_ICONS.mesh, color: KIND_COLORS.mesh, badge: meshBadge(payload) };
+    return { type: 'icon', color: KIND_COLORS.mesh, badge: meshBadge(payload) };
   }
 
   if (kind === 'scene') {
-    return { type: 'icon', icon: KIND_ICONS.scene, color: KIND_COLORS.scene, badge: sceneBadge(payload) };
+    return { type: 'icon', color: KIND_COLORS.scene, badge: sceneBadge(payload) };
   }
 
   if (kind === 'animation-clip') {
     const channels = (payload as { channels?: unknown[] }).channels;
     const badge = Array.isArray(channels) ? `${channels.length} ch` : undefined;
-    return { type: 'icon', icon: KIND_ICONS['animation-clip'], color: KIND_COLORS['animation-clip'], badge };
+    return { type: 'icon', color: KIND_COLORS['animation-clip'], badge };
   }
 
   return {
     type: 'icon',
-    icon: KIND_ICONS[kind] ?? '📦',
     color: KIND_COLORS[kind],
   };
 }
@@ -178,8 +190,8 @@ export function AssetThumbnail({ kind, payload, packPath, size = 16, fit = 'cove
     );
   }
   return (
-    <span className={className} style={{ ...box, background: thumb.color ?? 'var(--color-background-floating, #222)' }} title={title}>
-      {thumb.icon}
+    <span className={className} style={{ ...box, color: 'var(--color-text-tertiary, #8a8a8a)' }} title={title}>
+      <AssetKindGlyph kind={kind} size={Math.round(size * 0.6)} />
     </span>
   );
 }

@@ -150,11 +150,37 @@ export function _resetSchemaCache(): void {
 }
 
 function shouldExclude(name: string, comp: Component): boolean {
+  // Engine-declared meta hint (SSOT): components tagged `editorHidden` are
+  // internal (Entity / Children / ChildOf) and never surface in the Inspector.
+  // Meta injection supersedes the legacy hard-coded lists below (kept as
+  // fallback for components that predate the meta convention).
+  if (isMetaHidden(comp)) return true;
   if (comp.transient) return true;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if ((RELATIONSHIP_COMPONENTS as ReadonlySet<any>).has(comp)) return true;
   if (EXCLUDED_COMPONENTS.has(name)) return true;
   return false;
+}
+
+/** Read the engine-injected `editorHidden` component-level meta flag. */
+function isMetaHidden(comp: Component): boolean {
+  return (comp.meta as { editorHidden?: boolean } | undefined)?.editorHidden === true;
+}
+
+/**
+ * Whether a component is hidden from the Inspector via engine-declared meta
+ * (`meta.editorHidden === true`). Consumed by the Inspector to drop internal
+ * component sections (Entity / Children / ChildOf) from the per-entity strip,
+ * which enumerates ALL present components rather than the filtered schema.
+ * Returns `false` when the engine is not loaded or the component is unknown.
+ */
+export function isComponentHidden(name: string): boolean {
+  try {
+    const comp = getRegisteredComponents().get(name);
+    return comp !== undefined && isMetaHidden(comp);
+  } catch {
+    return false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -14,6 +14,8 @@ import { resolveGamePath } from '../util/path-resolver';
 import type { DocApplierCtx } from './document';
 import { deletedEntryCache, renamedNameCache, duplicatedGuidCache } from '../io/asset-op-caches';
 import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
+import { validateAssetBasename, checkPathNotJailbreak } from './asset-basename';
+import { broadcastAssetsError } from '../store/assets-error-bus';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Materials } from '@forgeax/engine-runtime';
 import {
@@ -27,6 +29,19 @@ export { readPack, writePack, deleteFile, deleteAsset, generateAssetGuid,
 export type { MetaSubAsset } from '../io/asset-io-primitives';
 
 type PackAssetEntry = PackFile['assets'][number];
+
+// ── async-IO failure hint text (shared by fire-and-forget catch blocks) ────
+// The applier synchronously returned `ok:true` (INVALID_ARGS was gated at
+// entry), but the disk/network write later failed. Emit through the
+// assetsError bus so a subscribed panel can toast — the alternative (silent
+// console.warn) leaves the UI showing stale/inconsistent state with no user
+// feedback (dev-plan §5 step 3).
+function _ioFailHint(op: string, path: string | undefined, e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e ?? 'unknown');
+  return path
+    ? `${op}("${path}") failed: ${msg}`
+    : `${op} failed: ${msg}`;
+}
 
 // ── Active-scene-pack resolver seam (breaks the pack-ops <-> scene-persistence
 // import cycle) ────────────────────────────────────────────────────────────────
@@ -240,44 +255,93 @@ export async function renameSourceFileOnDisk(fromPath: string, toPath: string): 
 // ── Session applier: createDirectory ─────────────────────────────────────────
 // Registered into sessionAppliers (D-1) so gateway.dispatch routes it as a
 // session op (ledger only, no undo). Human UI and AI are equal callers.
+//
+// BASENAME VALIDATION (2026-07-23 assets-folder-name-validation): the applier
+// is the north-star SSOT for "is this name legal?" — reject illegal input BEFORE
+// touching disk so the same illegal input is caught regardless of caller (any
+// of the 4 UI entry points, AI dispatch, transaction sub-op). See
+// session/asset-basename.ts for the shared rule set (same function used by the
+// prompt dialog for UX highlighting).
 sessionAppliers.set('createDirectory', (op) => {
   const { parentPath, name } = op as { parentPath: string; name: string };
+  const check = validateAssetBasename(name);
+  if (!check.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `createDirectory: ${check.hint}` } };
+  }
   const base = parentPath || 'assets';
-  const fullPath = resolveGamePath(`${base}/${name}`);
+  const targetPath = `${base}/${check.name}`;
+  const fullPath = resolveGamePath(targetPath);
+  // Fire-and-forget: applier already returned ok:true. On disk failure the
+  // ok:false branch (server said no) AND the .catch branch (promise rejected
+  // — network drop, disk full) both emit through assetsError so a subscribed
+  // panel can toast. Without this, a failed write is a silent console.warn
+  // and the panel keeps showing the pre-op state with no user feedback.
   void createDirectory(fullPath).then(ok => {
     if (ok) broadcastAssetsChanged('directory-only');
-  });
+    else broadcastAssetsError({ op: 'createDirectory', path: targetPath, hint: `createDirectory("${targetPath}") failed on server` });
+  }).catch(e => broadcastAssetsError({ op: 'createDirectory', path: targetPath, hint: _ioFailHint('createDirectory', targetPath, e) }));
   return { ok: true };
 });
 
 sessionAppliers.set('deleteDirectory', (op) => {
   const { path } = op as { path: string };
+  // Path-level jailbreak defence only — `deleteDirectory` intentionally accepts
+  // ANY existing on-disk path (including one that carries a bad basename from
+  // an older build predating this validator), so we do NOT run
+  // validateAssetBasename on the last segment. That leaves the escape hatch for
+  // users to clean up already-created bad folders through the panel.
+  const jail = checkPathNotJailbreak(path);
+  if (!jail.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `deleteDirectory: ${jail.hint}` } };
+  }
   const fullPath = resolveGamePath(path);
   void deleteDirectory(fullPath).then(ok => {
     if (ok) broadcastAssetsChanged('directory-only');
-  });
+    else broadcastAssetsError({ op: 'deleteDirectory', path, hint: `deleteDirectory("${path}") failed on server` });
+  }).catch(e => broadcastAssetsError({ op: 'deleteDirectory', path, hint: _ioFailHint('deleteDirectory', path, e) }));
   return { ok: true };
 });
 
 sessionAppliers.set('renameDirectory', (op) => {
   const { path, newName } = op as { path: string; newName: string };
+  // `path` is an existing on-disk directory — same jailbreak logic as
+  // deleteDirectory. `newName` is authored input and must pass full basename
+  // validation.
+  const jail = checkPathNotJailbreak(path);
+  if (!jail.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `renameDirectory: ${jail.hint}` } };
+  }
+  const check = validateAssetBasename(newName);
+  if (!check.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `renameDirectory: ${check.hint}` } };
+  }
   const fullPath = resolveGamePath(path);
   const parentDir = fullPath.slice(0, fullPath.lastIndexOf('/'));
-  const newFullPath = `${parentDir}/${newName}`;
+  const newFullPath = `${parentDir}/${check.name}`;
   void renameOnDisk(fullPath, newFullPath).then(ok => {
     if (ok) broadcastAssetsChanged('directory-only');
-  });
+    else broadcastAssetsError({ op: 'renameDirectory', path, hint: `renameDirectory("${path}" -> "${check.name}") failed on server` });
+  }).catch(e => broadcastAssetsError({ op: 'renameDirectory', path, hint: _ioFailHint('renameDirectory', path, e) }));
   return { ok: true };
 });
 
 sessionAppliers.set('renameSourceFile', (op) => {
   const { path, newName } = op as { path: string; newName: string };
+  const jail = checkPathNotJailbreak(path);
+  if (!jail.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `renameSourceFile: ${jail.hint}` } };
+  }
+  const check = validateAssetBasename(newName);
+  if (!check.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `renameSourceFile: ${check.hint}` } };
+  }
   const fullPath = resolveGamePath(path);
   const parentDir = fullPath.slice(0, fullPath.lastIndexOf('/'));
-  const newFullPath = `${parentDir}/${newName}`;
+  const newFullPath = `${parentDir}/${check.name}`;
   void renameSourceFileOnDisk(fullPath, newFullPath).then(ok => {
     if (ok) broadcastAssetsChanged();
-  });
+    else broadcastAssetsError({ op: 'renameSourceFile', path, hint: `renameSourceFile("${path}" -> "${check.name}") failed on server` });
+  }).catch(e => broadcastAssetsError({ op: 'renameSourceFile', path, hint: _ioFailHint('renameSourceFile', path, e) }));
   return { ok: true };
 });
 
@@ -497,6 +561,16 @@ registerApplier('document', 'createMaterial', applyCreateMaterial as unknown as 
  *  the pack on disk is the SSOT for the current name, not the caller.) */
 export function applyRenameAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   const { packPath, guid, newName } = cmd as { packPath: string; guid: string; newName: string };
+  // Fail Fast (asset name shares the basename SSOT with folders — same
+  // asset-basename.ts rule set). NOTE on undo: if a legacy pack contains an
+  // asset with an already-invalid name, undoing a rename BACK to that name
+  // will trip this guard. That is intentional loud failure — the alternative
+  // is silently re-writing a name that no filesystem-derived tooling can
+  // round-trip. Clean up the legacy name first, then re-do the rename.
+  const check = validateAssetBasename(newName);
+  if (!check.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `renameAsset: ${check.hint}` } };
+  }
   const key = _cacheKey(packPath, guid);
   // Fire the async rename; stash the replaced (old) name so the inverse can
   // restore it synchronously. A .catch guards against an unhandled rejection —

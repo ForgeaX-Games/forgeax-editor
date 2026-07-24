@@ -24,6 +24,25 @@ export interface PanelBridgeEvents {
   addAssetToScene: DragAssetRef;
   /** Asset file/catalog changed; directory-only skips pack-catalog refresh. */
   assetsChanged: { hint?: 'directory-only' | 'pack-changed'; source?: 'local-op' | 'disk-watch' };
+  /**
+   * Asset filesystem/write operation FAILED asynchronously (after the applier
+   * already returned `ok:true` and control has left the gateway). This is the
+   * companion channel to `assetsChanged` for the failure case — panels can
+   * subscribe and surface a toast so a background disk/network error becomes
+   * user-visible instead of a silent console.warn.
+   *
+   * Emitted by session appliers (broadcastAssetsError() in
+   * session/asset-error-bus.ts) with the op-kind for attribution and a hint
+   * text safe to display verbatim. Synchronous INVALID_ARGS from the gateway
+   * is NOT emitted here — that path returns `{ok:false}` on `dispatch` and
+   * the caller can react at the callsite.
+   */
+  assetsError: {
+    op: string;
+    path?: string;
+    hint: string;
+    ts: number;
+  };
   /** In-process edit-runtime diagnostics; play keeps its real iframe VAG wire. */
   editorHealth: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number };
   editorConsole: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number };

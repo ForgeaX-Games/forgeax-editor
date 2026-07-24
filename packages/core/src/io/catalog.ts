@@ -39,6 +39,33 @@ export interface ArgsSchema {
    * (feat-20260709 world split); this field says so at the id property.
    */
   description?: string;
+
+  // ── content-validation fields (2026-07-23 args-schema-pattern follow-up) ──
+  /**
+   * Regex applied when `type === 'string'`. Accepts a DELIBERATELY narrow
+   * subset (see io/args-schema.ts `_compilePattern`): character classes,
+   * anchors (^ / $), quantifiers `+` `*` `?` on chars or bounded classes,
+   * and `{n,m}` bounded quantifiers. Rejects lookbehind / backreferences /
+   * group+quantifier patterns that can catastrophically backtrack (ReDoS
+   * defense). Pair with `patternHint` so failures surface as human-readable
+   * text; the raw regex is NEVER echoed to the caller.
+   */
+  pattern?: string;
+  /**
+   * Human/AI-readable explanation shown when `pattern` fails. Preferred over
+   * the terse default "does not match required pattern"; both AI listOps()
+   * consumers and end-user toasts render this verbatim. Use imperative voice
+   * describing what a legal value looks like.
+   */
+  patternHint?: string;
+  /** Inclusive `.length` lower bound; only checked when `type === 'string'`. */
+  minLength?: number;
+  /** Inclusive `.length` upper bound; only checked when `type === 'string'`. */
+  maxLength?: number;
+  /** Inclusive numeric lower bound; only checked when `type === 'number'`. */
+  minimum?: number;
+  /** Inclusive numeric upper bound; only checked when `type === 'number'`. */
+  maximum?: number;
 }
 
 // ── OpDescriptor (listOps return shape) ────────────────────────────────────
@@ -529,6 +556,99 @@ const builtinOps: ReadonlyArray<{
       required: ['path', 'requestId'],
     },
     title: 'Delete Source File',
+  },
+  // ── filesystem folder + source-file ops (2026-07-23 assets-folder-name-validation) ──
+  // Registered here so gateway.listOps() shows them to AI (registry razor: same
+  // capability, same descriptor, AI-reachable by construction). Two layers of
+  // name validation, both non-negotiable:
+  //   1) gateway-entry: this schema's `pattern` + `minLength`/`maxLength` (added
+  //      by follow-up PR-B; catches char-class + length before the applier is
+  //      even entered — an AI listOps() consumer learns the rules by machine).
+  //   2) applier SSOT: session/asset-basename.ts validateAssetBasename()
+  //      catches the SEMANTIC rules a regex can't express (Windows reserved
+  //      names / trailing "." or space / "." / ".." / trim). Belt+suspenders:
+  //      the pattern is a strict subset of the SSOT, and the applier remains
+  //      the ONLY code that mutates the disk (north-star §9 — the write gate).
+  { id: 'createDirectory', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        parentPath: { type: 'string', description: 'Game-relative parent directory (e.g. "assets", "assets/textures"). Empty string defaults to "assets".' },
+        name: {
+          type: 'string',
+          pattern: '^[^\\\\/:*?"<>|\\x00-\\x1f]+$',
+          patternHint:
+            'folder name contains an illegal character (not allowed: \\ / : * ? " < > | or control chars)',
+          minLength: 1,
+          maxLength: 255,
+          description: 'New folder BASENAME only (single path segment). Additional applier-side rules: rejects "." / ".." / Windows reserved (CON/PRN/AUX/NUL/COM1-9/LPT1-9) / trailing space or period. Full SSOT: session/asset-basename.ts validateAssetBasename().',
+        },
+      },
+      required: ['parentPath', 'name'],
+    },
+    title: 'Create Directory',
+  },
+  { id: 'deleteDirectory', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        // path is on-disk-visible (may point at a pre-existing dir authored by
+        // an older build), so we do NOT enforce a BASENAME pattern here — the
+        // applier's checkPathNotJailbreak() catches only "..", NUL, and "\\"
+        // to prevent traversal / smuggling. See asset-basename.ts.
+        path: { type: 'string', minLength: 1, description: 'Game-relative directory path to delete recursively (e.g. "assets/textures"). Must not contain ".." segments, NUL bytes, or "\\" separators. The basename is intentionally NOT validated — this is the escape hatch for cleaning up folders that predate name validation.' },
+      },
+      required: ['path'],
+    },
+    title: 'Delete Directory',
+  },
+  { id: 'renameDirectory', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing directory path (same jailbreak rules as deleteDirectory.path).' },
+        newName: {
+          type: 'string',
+          pattern: '^[^\\\\/:*?"<>|\\x00-\\x1f]+$',
+          patternHint:
+            'folder name contains an illegal character (not allowed: \\ / : * ? " < > | or control chars)',
+          minLength: 1,
+          maxLength: 255,
+          description: 'New BASENAME for the directory (same content rules as createDirectory.name).',
+        },
+      },
+      required: ['path', 'newName'],
+    },
+    title: 'Rename Directory',
+  },
+  { id: 'renameSourceFile', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing source file path (e.g. "assets/Fox.glb").' },
+        newName: {
+          type: 'string',
+          pattern: '^[^\\\\/:*?"<>|\\x00-\\x1f]+$',
+          patternHint:
+            'file name contains an illegal character (not allowed: \\ / : * ? " < > | or control chars)',
+          minLength: 1,
+          maxLength: 255,
+          description: 'New BASENAME WITH extension (same content rules as createDirectory.name).',
+        },
+      },
+      required: ['path', 'newName'],
+    },
+    title: 'Rename Source File',
+  },
+  { id: 'revealInFileManager', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1, description: 'Game-relative file or directory path to reveal in the OS file manager.' },
+      },
+      required: ['path'],
+    },
+    title: 'Reveal in File Manager',
   },
   // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): session-
   // domain, ledger-only, fire-and-forget async. Cataloged so AI self-discovers it

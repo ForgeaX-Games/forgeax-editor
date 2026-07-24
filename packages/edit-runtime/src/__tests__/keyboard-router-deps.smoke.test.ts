@@ -39,7 +39,7 @@ describe('buildKeyboardRouterDeps — router dep shape (keyboard-router converge
   afterEach(() => setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' }));
 
   it('returns exactly the interface KeyboardRouterDeps callbacks', () => {
-    const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true });
+    const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true, confirmDeleteFolder: async () => true, promptRenameAsset: async () => null });
     const rec = deps as unknown as Record<string, unknown>;
     for (const k of EXPECTED_KEYS) {
       expect(typeof rec[k]).toBe('function');
@@ -51,7 +51,7 @@ describe('buildKeyboardRouterDeps — router dep shape (keyboard-router converge
 
   it('derives Play from the viewport quadrant, not the edit gateway mode', () => {
     setViewportQuadrant({ run: 'play', display: 'game', control: 'editor' });
-    const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true });
+    const deps = buildKeyboardRouterDeps({ confirmDeleteAssets: async () => true, confirmDeleteFolder: async () => true, promptRenameAsset: async () => null });
     expect(deps.isPlayMode()).toBe(true);
     setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
   });

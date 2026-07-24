@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { colorForAssetKind, ContentBrowserIcon } from './content-browser-icons';
+import { colorForAssetKind, ContentBrowserIcon, iconNameForAssetKind } from './content-browser-icons';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 
@@ -88,7 +88,7 @@ export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorit
       <div
         className="cb-grid-thumb cb-fe-thumb"
         style={{
-          background: thumb.type === 'gradient' ? thumb.gradient : (thumb.color ?? undefined),
+          background: thumb.type === 'gradient' ? thumb.gradient : undefined,
         }}
       >
         {thumb.type === 'gradient' ? (
@@ -102,7 +102,9 @@ export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorit
             loading="lazy"
           />
         ) : (
-          <span className="cb-grid-icon">{thumb.icon}</span>
+          <span className="cb-grid-icon">
+            <ContentBrowserIcon name={iconNameForAssetKind(asset.kind)} />
+          </span>
         )}
         {thumb.badge && <span className="cb-thumb-badge">{thumb.badge}</span>}
         {Boolean(asset.payload?.cookError) && <span className="cb-thumb-warn" title={String(asset.payload?.cookError)}>⚠</span>}
@@ -113,7 +115,9 @@ export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorit
       {hovered && tipXY && createPortal(
         <div className="cb-rich-tooltip" style={{ position: 'fixed', left: tipXY.left, top: tipXY.top }}>
           <div className="cb-tooltip-header">
-            <span className="cb-tooltip-icon">{thumb.icon ?? '📦'}</span>
+            <span className="cb-tooltip-icon">
+              <ContentBrowserIcon name={iconNameForAssetKind(asset.kind)} />
+            </span>
             <span className="cb-tooltip-name">{asset.name}</span>
           </div>
           <div className="cb-tooltip-row">{t('editor.contentBrowser.tooltip.kind', { kind: asset.kind })}</div>

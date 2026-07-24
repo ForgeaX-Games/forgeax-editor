@@ -326,6 +326,33 @@
     "title": "Go Forward"
   },
   {
+    "id": "createDirectory",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "parentPath": {
+          "type": "string",
+          "description": "Game-relative parent directory (e.g. \"assets\", \"assets/textures\"). Empty string defaults to \"assets\"."
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[^\\\\/:*?\"<>|\\x00-\\x1f]+$",
+          "patternHint": "folder name contains an illegal character (not allowed: \\ / : * ? \" < > | or control chars)",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "New folder BASENAME only (single path segment). Additional applier-side rules: rejects \".\" / \"..\" / Windows reserved (CON/PRN/AUX/NUL/COM1-9/LPT1-9) / trailing space or period. Full SSOT: session/asset-basename.ts validateAssetBasename()."
+        }
+      },
+      "required": [
+        "parentPath",
+        "name"
+      ]
+    },
+    "title": "Create Directory"
+  },
+  {
     "id": "createMaterial",
     "domain": "document",
     "source": "builtin",
@@ -397,6 +424,25 @@
       ]
     },
     "title": "Create Scene"
+  },
+  {
+    "id": "deleteDirectory",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Game-relative directory path to delete recursively (e.g. \"assets/textures\"). Must not contain \"..\" segments, NUL bytes, or \"\\\" separators. The basename is intentionally NOT validated — this is the escape hatch for cleaning up folders that predate name validation."
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "title": "Delete Directory"
   },
   {
     "id": "deleteSourceFile",
@@ -671,6 +717,62 @@
     "title": "Rename Asset"
   },
   {
+    "id": "renameDirectory",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Game-relative existing directory path (same jailbreak rules as deleteDirectory.path)."
+        },
+        "newName": {
+          "type": "string",
+          "pattern": "^[^\\\\/:*?\"<>|\\x00-\\x1f]+$",
+          "patternHint": "folder name contains an illegal character (not allowed: \\ / : * ? \" < > | or control chars)",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "New BASENAME for the directory (same content rules as createDirectory.name)."
+        }
+      },
+      "required": [
+        "path",
+        "newName"
+      ]
+    },
+    "title": "Rename Directory"
+  },
+  {
+    "id": "renameSourceFile",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Game-relative existing source file path (e.g. \"assets/Fox.glb\")."
+        },
+        "newName": {
+          "type": "string",
+          "pattern": "^[^\\\\/:*?\"<>|\\x00-\\x1f]+$",
+          "patternHint": "file name contains an illegal character (not allowed: \\ / : * ? \" < > | or control chars)",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "New BASENAME WITH extension (same content rules as createDirectory.name)."
+        }
+      },
+      "required": [
+        "path",
+        "newName"
+      ]
+    },
+    "title": "Rename Source File"
+  },
+  {
     "id": "reparent",
     "domain": "document",
     "source": "builtin",
@@ -758,6 +860,25 @@
       ]
     },
     "title": "Restore Asset"
+  },
+  {
+    "id": "revealInFileManager",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Game-relative file or directory path to reveal in the OS file manager."
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "title": "Reveal in File Manager"
   },
   {
     "id": "saveDocToDisk",

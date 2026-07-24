@@ -51,3 +51,17 @@ export {
   validateSource,
   validateSourceQuick,
 } from './validate-source';
+
+// Startup integrity scan + auto-repair
+export {
+  scanAssetsIntegrity,
+  type IntegrityScanResult,
+  type NeedsMetaEntry,
+  type OrphanedSidecarEntry,
+} from './integrity-scan';
+
+export {
+  repairAssets,
+  type RepairReport,
+  type RepairEntry,
+} from './integrity-repair';

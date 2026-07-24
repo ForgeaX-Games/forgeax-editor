@@ -579,6 +579,35 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   }
 
   // ── disk save ─────────────────────────────────────────────────────────────────
+  /** Invalidate the shared AssetRegistry cache for every GUID in a just-saved
+   *  pack so the next `loadByGuid` re-fetches fresh disk bytes.
+   *
+   *  Why (bug: ▶ Play loads the PRE-save scene): `doSaveDocToDisk` writes the new
+   *  pack to disk, but the registry `gateway.doc.registry` — which is the SAME
+   *  object ▶ Play reads through (`ViewportComponent` sets
+   *  `gateway.doc.registry = renderer.assets`, and Play's `loadDefaultScene`
+   *  calls `renderer.assets.loadByGuid`) — still holds the boot-time payload in
+   *  its `assetCatalog` fast path. Without invalidation the next Play returns the
+   *  stale cached SceneAsset (old Transform.pos) even though disk is fresh. Save
+   *  is the exact "asset bytes changed" boundary at which a targeted per-GUID
+   *  invalidate is correct (never `invalidateAll` on a broad signal). We
+   *  invalidate every GUID we just wrote (scene + inline material/etc. bodies
+   *  live in this one pack file). `invalidate` is a no-op for un-catalogued GUIDs. */
+  function invalidateSavedGuids(parsedPack: unknown): void {
+    const reg = gateway.doc.registry as { invalidate?: (guid: string) => void } | undefined;
+    if (!reg || typeof reg.invalidate !== 'function') return;
+    const assets = (parsedPack as { assets?: Array<{ guid?: unknown }> } | null)?.assets;
+    if (Array.isArray(assets)) {
+      for (const a of assets) {
+        if (typeof a?.guid === 'string' && a.guid.length > 0) reg.invalidate(a.guid);
+      }
+    }
+    // Belt-and-braces: the tracked scene GUID, in case the pack shape surprised us.
+    if (typeof ctx.currentSceneGuid === 'string' && ctx.currentSceneGuid.length > 0) {
+      reg.invalidate(ctx.currentSceneGuid);
+    }
+  }
+
   /** Write the active game's scene to disk as a native engine scene pack. MANUAL
    *  save (D-7): on success clears the dirty flag. Serialize FIRST and bail on
    *  failure — never POST an empty body over a good scene (0-byte data loss). */
@@ -639,7 +668,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: p, content }),
       });
-      if (r.ok) ctx.isDirty = false;
+      if (r.ok) {
+        ctx.isDirty = false;
+        // Save is the "asset bytes changed" boundary: drop the stale registry
+        // cache so the next ▶ Play (loadByGuid) re-reads the scene we just wrote.
+        invalidateSavedGuids(parsedNew);
+      }
       return r.ok;
     } catch {
       return false;

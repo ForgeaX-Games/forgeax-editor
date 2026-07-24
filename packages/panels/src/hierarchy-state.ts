@@ -2,6 +2,7 @@ import {
   childrenOf,
   entComponents,
   entName,
+  entParent,
   gateway,
   listComponentSchemas,
   worldEntityHandles,
@@ -227,6 +228,27 @@ export function toggleHierarchyCollapseAll(): void {
   const allCollapsed = parents.length > 0 && parents.every((id) => snapshot.collapsed.has(id));
   if (allCollapsed) expandHierarchyAll();
   else collapseHierarchyAll();
+}
+
+/** Expand all ancestors of `id` so it becomes visible in the tree. Also
+ *  expands the scene-folder root if it was collapsed. */
+export function revealHierarchyEntity(id: EntityHandle): void {
+  const world = gateway.activeWorld;
+  if (!world) return;
+  const toExpand: EntityHandle[] = [];
+  let cur = entParent(world, id);
+  while (cur !== null) {
+    if (snapshot.collapsed.has(cur)) toExpand.push(cur);
+    cur = entParent(world, cur);
+  }
+  if (snapshot.collapsed.has(HIERARCHY_SCENE_FOLDER_ID)) {
+    toExpand.push(HIERARCHY_SCENE_FOLDER_ID);
+  }
+  if (toExpand.length === 0) return;
+  const collapsed = new Set(snapshot.collapsed);
+  for (const ancestor of toExpand) collapsed.delete(ancestor);
+  saveCollapsed(collapsed);
+  nextSnapshot({ ...snapshot, collapsed });
 }
 
 /** The filter menu's options: the REGISTERED component set from the engine's

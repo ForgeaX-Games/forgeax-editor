@@ -39,4 +39,24 @@ describe('panelBridge', () => {
     off();
     expect(refs).toEqual(['mesh-1']);
   });
+
+  it('delivers assetsError with op/path/hint/ts for panel toasts (dev-plan §5 step 3)', () => {
+    const errors: Array<{ op: string; path?: string; hint: string }> = [];
+    const off = panelBridge.on('assetsError', ({ op, path, hint }) => errors.push({ op, path, hint }));
+    panelBridge.emit('assetsError', {
+      op: 'createDirectory',
+      path: 'assets/foo',
+      hint: 'createDirectory("assets/foo") failed: network dropped',
+      ts: Date.now(),
+    });
+    off();
+    // After dispose, further emits are silently dropped — panels don't stack
+    // listeners across remount (the standard bridge disposer contract).
+    panelBridge.emit('assetsError', { op: 'deleteDirectory', path: 'x', hint: 'y', ts: 0 });
+    expect(errors).toEqual([{
+      op: 'createDirectory',
+      path: 'assets/foo',
+      hint: 'createDirectory("assets/foo") failed: network dropped',
+    }]);
+  });
 });

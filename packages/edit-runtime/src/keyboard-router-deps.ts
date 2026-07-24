@@ -89,6 +89,10 @@ export interface BuildKeyboardRouterDepsOptions {
    * entity-delete, which has no confirm). UI-layer concern — core stays headless.
    */
   confirmDeleteAssets: (assets: RouterAsset[]) => Promise<boolean>;
+  /** Host-supplied confirm gate for folder deletion. */
+  confirmDeleteFolder: (folderPath: string) => Promise<boolean>;
+  /** Host-supplied prompt for renaming an asset. Returns null on cancel. */
+  promptRenameAsset: (currentName: string) => Promise<string | null>;
 }
 
 /**
@@ -152,18 +156,22 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       gateway.dispatch({ kind: 'duplicateAsset', packPath, guid } as never, 'human');
     },
     renameAsset: (guid: string, packPath: string) => {
-      const newName = window.prompt('Rename asset:', packPath.split('/').pop() ?? guid);
-      if (newName && newName.trim()) {
-        gateway.dispatch({ kind: 'renameAsset', packPath, guid, newName: newName.trim() } as never, 'human');
-      }
+      void opts.promptRenameAsset(packPath.split('/').pop() ?? guid).then((newName) => {
+        if (newName && newName.trim()) {
+          gateway.dispatch({ kind: 'renameAsset', packPath, guid, newName: newName.trim() } as never, 'human');
+        }
+      });
     },
     selectAllAssets: () => triggerAssetSelectAll(),
     getFolderSelection: () => getFolderSelectionList().map((p) => ({ path: p })),
     deleteFolders: (folders) => {
-      for (const f of folders) {
-        if (!window.confirm(`Delete folder "${f.path}" and all its contents?`)) return;
-        gateway.dispatch({ kind: 'deleteDirectory', path: f.path } as never, 'human');
-      }
+      void (async () => {
+        for (const f of folders) {
+          const ok = await opts.confirmDeleteFolder(f.path);
+          if (!ok) return;
+          gateway.dispatch({ kind: 'deleteDirectory', path: f.path } as never, 'human');
+        }
+      })();
     },
     undo: () => { gateway.undo(); },
     redo: () => { gateway.redo(); },

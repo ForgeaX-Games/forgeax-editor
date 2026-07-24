@@ -55,6 +55,57 @@ function _validate(
     }
   }
 
+  // ── content-validation (2026-07-23 args-schema-pattern follow-up) ────────
+  // string length / regex checks; runs BEFORE the array/object branches so a
+  // failing string doesn't fall through to the container walkers.
+  if (schema.type === 'string' && typeof value === 'string') {
+    if (schema.minLength !== undefined && value.length < schema.minLength) {
+      errors.push({
+        path: path || '(root)',
+        message: `string too short (min ${schema.minLength}, got ${value.length})`,
+      });
+    }
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) {
+      errors.push({
+        path: path || '(root)',
+        message: `string too long (max ${schema.maxLength}, got ${value.length})`,
+      });
+    }
+    if (schema.pattern !== undefined) {
+      const re = _compilePattern(schema.pattern);
+      if (!re) {
+        // Rejecting an unsafe/invalid pattern is a CATALOG bug (author error),
+        // not a caller bug. Surface loud so tests catch it, but keep the
+        // dispatch failure structured so nothing crashes.
+        errors.push({
+          path: path || '(root)',
+          message: `internal: catalog pattern is unsafe or invalid`,
+        });
+      } else if (!re.test(value)) {
+        errors.push({
+          path: path || '(root)',
+          message: schema.patternHint ?? 'does not match required pattern',
+        });
+      }
+    }
+  }
+
+  // number range checks
+  if (schema.type === 'number' && typeof value === 'number') {
+    if (schema.minimum !== undefined && value < schema.minimum) {
+      errors.push({
+        path: path || '(root)',
+        message: `number below minimum (>= ${schema.minimum}, got ${value})`,
+      });
+    }
+    if (schema.maximum !== undefined && value > schema.maximum) {
+      errors.push({
+        path: path || '(root)',
+        message: `number above maximum (<= ${schema.maximum}, got ${value})`,
+      });
+    }
+  }
+
   // type: 'array'
   if (schema.type === 'array' && Array.isArray(value)) {
     if (schema.items) {
@@ -109,5 +160,45 @@ function _validate(
     if (!schema.enum.some((e) => JSON.stringify(e) === JSON.stringify(value))) {
       errors.push({ path: path || '(root)', message: `value not in allowed enum` });
     }
+  }
+}
+
+// ── Safe pattern compilation (memoized, ReDoS-defensive) ──────────────────
+//
+// We accept a DELIBERATELY narrow regex subset to prevent catastrophic
+// backtracking (ReDoS) from a mis-authored catalog schema. Rejects on sight
+// (via `_UNSAFE_RE`):
+//   - lookbehind / lookahead assertions:      (?<= (?<! (?=  (?!  (?P<name>
+//   - backreferences:                         \1 .. \9
+//   - "group + unbounded quantifier":         )+ )*  or  |…)+  |…)*
+//
+// Allowed:
+//   - character classes with printable ranges + \x00-\xff hex escapes
+//   - anchors ^ $
+//   - +/*/? applied to characters or character classes
+//   - {n,m} bounded quantifiers
+//   - literal escapes \\ \. \+ \* \? \| \( \) \[ \] \{ \} \^ \$
+//
+// This is enough for basename / GUID / semver / bounded path patterns. If a
+// future op needs richer regex it should probably move the check into its
+// applier and use the schema pattern only as a coarse pre-filter.
+
+const _patternCache = new Map<string, RegExp | null>();
+const _UNSAFE_RE = /\(\?[<=!P]|\\[1-9]|\)[+*]|\|[^)]*\)[+*]/;
+
+function _compilePattern(pat: string): RegExp | null {
+  const cached = _patternCache.get(pat);
+  if (cached !== undefined) return cached;
+  if (_UNSAFE_RE.test(pat)) {
+    _patternCache.set(pat, null);
+    return null;
+  }
+  try {
+    const re = new RegExp(pat);
+    _patternCache.set(pat, re);
+    return re;
+  } catch {
+    _patternCache.set(pat, null);
+    return null;
   }
 }

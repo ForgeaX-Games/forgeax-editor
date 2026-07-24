@@ -77,6 +77,16 @@
         "create": "新建",
         "createEntity": "实体",
         "createPreset": "{{label}}",
+        "presets": {
+          "Empty": "空实体",
+          "Point Light": "点光源",
+          "Spot Light": "聚光灯",
+          "Directional Light": "平行光",
+          "Camera": "相机",
+          "Object": "物体",
+          "Ground": "地面",
+          "Character": "角色"
+        },
         "newFolder": "新建文件夹",
         "newGroup": "新建组",
         "group": "成组 ({{n}})",

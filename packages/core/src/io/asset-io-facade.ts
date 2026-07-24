@@ -21,6 +21,9 @@ import { recordAssetLeaf } from './trace';
 import type { CommandError } from '../types';
 import { deletedEntryCache as rawDeletedEntryCache } from './asset-op-caches';
 
+/** Mirror of the `/api/files/tree` response node (same shape as assets.ts TreeNode). */
+interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
+
 /** A single asset entry inside a pack file (derived from the zod PackFile shape). */
 export type PackAssetEntry = PackFile['assets'][number];
 
@@ -247,7 +250,7 @@ export class AssetIOFacade {
       return undefined;
     } catch (err) {
       console.error('[import-diag] triggerCook THREW', { guid }, err);
-      return undefined;
+      return `triggerCook network error: ${(err as Error)?.message ?? String(err)}`;
     }
   }
 
@@ -266,6 +269,28 @@ export class AssetIOFacade {
     } catch (err) {
       console.error('[import-diag] readSourceBytes THREW', { path }, err);
       return null;
+    }
+  }
+
+  /** List all files under a directory via `/api/files/tree`. Returns flat array of
+   *  relative paths (e.g. `['assets/foo.fbx', 'assets/foo.fbx.meta.json']`).
+   *  Used by the startup integrity scan to discover source files without sidecars. */
+  async listSourceFiles(root: string): Promise<string[]> {
+    try {
+      const r = await fetch(`/api/files/tree?root=${encodeURIComponent(root)}`);
+      if (!r.ok) return [];
+      const j = (await r.json()) as { tree?: TreeNode };
+      const out: string[] = [];
+      const walk = (n?: TreeNode): void => {
+        if (!n) return;
+        if (n.type === 'dir' && (n.name === 'node_modules' || n.name === '.git' || n.name === '.forgeax')) return;
+        if (n.type === 'file') out.push(n.path);
+        (n as { children?: TreeNode[] }).children?.forEach(walk);
+      };
+      walk(j.tree);
+      return out;
+    } catch {
+      return [];
     }
   }
 

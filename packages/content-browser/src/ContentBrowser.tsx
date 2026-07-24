@@ -5,7 +5,7 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
 import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolveGamePath, showContextMenu, useDocVersion,
-  ResizeHandle, useLocalSize, getSceneList } from '@forgeax/editor-core';
+  ResizeHandle, useLocalSize, getSceneList, validateAssetBasename } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
 // (standalone main.tsx / studio editorRenderers.tsx). Both are async.
@@ -78,10 +78,23 @@ export function ContentBrowser() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
   const [previewItem, setPreviewItem] = useState<CBViewItem | null>(null);
+  // Selection/preview for files & folders is anchored on the disk PATH
+  // (viewItemKey), which is exactly what a rename mutates — so after the catalog
+  // rebuilds, the old key matches nothing and the highlight drops. A rename queues
+  // its {oldPath → newPath} here; the reconcile effect re-binds the preview to the
+  // new path so a selected file/folder stays selected across the rename (assets are
+  // guid-keyed and survive on their own).
+  const pendingReselectRef = useRef<{ oldPath: string; newPath: string; newName: string } | null>(null);
   const [expandedPacks, setExpandedPacks] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const acceptString = useMemo(() => buildAcceptString(), []);
   const nav = useNavHistory();
+  // Fresh read of the current folder for the (memoised) rename handlers: renaming
+  // the folder you're inside (or an ancestor) must carry the nav path onto the new
+  // path, else the breadcrumb keeps pointing at the dead old path and the grid
+  // filters to nothing.
+  const navPathRef = useRef(nav.currentPath);
+  useEffect(() => { navPathRef.current = nav.currentPath; }, [nav.currentPath]);
   // Filter menu offers a FIXED set of spec-defined file families (`FE_FILTERABLE`)
   // — a static type filter, independent of the current folder's contents.
   const filter = useFilter();
@@ -165,6 +178,43 @@ export function ContentBrowser() {
     const index = viewItems.findIndex(viewItem => viewItemKey(viewItem) === viewItemKey(item));
     if (index >= 0) multiSelect.handleClick(index, e);
   }, [multiSelect, viewItems]);
+
+  // Keep the preview/selection bound to its item across catalog refreshes. If the
+  // item is still present under the same key (assets are guid-keyed → survive a
+  // rename), just refresh the reference so the shown name tracks any edit. If it
+  // vanished because a rename changed its path, re-bind to the queued new path so
+  // renaming a selected file/folder keeps it selected instead of clearing it.
+  useEffect(() => {
+    if (!previewItem) return;
+    const key = viewItemKey(previewItem);
+    const sameKey = viewItems.find(it => viewItemKey(it) === key);
+    if (sameKey) {
+      // Value-compare (not reference): viewItems is rebuilt with fresh object
+      // refs every render, so `sameKey !== previewItem` is ALWAYS true and would
+      // setState on every pass → infinite loop. Only refresh when the shown name
+      // actually changed (e.g. an asset rename — guid-keyed so it stays here).
+      if (sameKey.name !== previewItem.name) setPreviewItem(sameKey);
+      return;
+    }
+    // The previewed item's key vanished. If a rename of THIS item is pending,
+    // re-bind to the new path so the selection follows. Prefer the freshly-built
+    // grid item; fall back to rewriting the old snapshot (covers source-tree files
+    // that live outside the scoped grid view). Assets are guid-keyed → never here.
+    const pending = pendingReselectRef.current;
+    if (!pending || pending.oldPath !== key || previewItem.type === 'asset') return;
+    pendingReselectRef.current = null;
+    const moved = viewItems.find(it => it.type !== 'asset' && it.path === pending.newPath);
+    if (moved) {
+      setPreviewItem(moved);
+    } else if (previewItem.type === 'file') {
+      const slash = previewItem.diskPath.lastIndexOf('/');
+      const newDiskPath = slash >= 0 ? previewItem.diskPath.slice(0, slash + 1) + pending.newName : pending.newName;
+      setPreviewItem({ ...previewItem, path: pending.newPath, name: pending.newName, diskPath: newDiskPath });
+    } else {
+      setPreviewItem({ ...previewItem, path: pending.newPath, name: pending.newName });
+    }
+    if (previewItem.type === 'folder') gateway.dispatch({ kind: 'setFolderSelection', paths: [pending.newPath] });
+  }, [viewItems, previewItem]);
 
   // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
   // an asset can be referenced from another root (scenes/, other packs), and the
@@ -259,6 +309,7 @@ export function ContentBrowser() {
           label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
           confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
           cancelText: t('editor.contentBrowser.dialogs.cancel'),
+          validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
         });
         if (!name) return;
         gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
@@ -273,6 +324,7 @@ export function ContentBrowser() {
         label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
         confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
         cancelText: t('editor.contentBrowser.dialogs.cancel'),
+        validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
       });
       if (!name) return;
       gateway.dispatch({ kind: 'createDirectory', parentPath: nav.currentPath, name }, 'human');
@@ -330,6 +382,16 @@ export function ContentBrowser() {
               cancelText: t('editor.contentBrowser.dialogs.cancel'),
             });
             if (newName && newName !== item.name) {
+              const slash = item.path.lastIndexOf('/');
+              const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
+              pendingReselectRef.current = { oldPath: item.path, newPath, newName };
+              // If we're browsing inside the renamed folder (or a descendant),
+              // carry the current nav path onto the new prefix so the breadcrumb
+              // and grid don't strand on the now-dead old path.
+              const cur = navPathRef.current;
+              if (cur === item.path || cur.startsWith(`${item.path}/`)) {
+                nav.navigate(`${newPath}${cur.slice(item.path.length)}`);
+              }
               gateway.dispatch({ kind: 'renameDirectory', path: item.path, newName }, 'human');
             }
           })();
@@ -367,6 +429,9 @@ export function ContentBrowser() {
               cancelText: t('editor.contentBrowser.dialogs.cancel'),
             });
             if (newName && newName !== item.name) {
+              const slash = item.path.lastIndexOf('/');
+              const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
+              pendingReselectRef.current = { oldPath: item.path, newPath, newName };
               gateway.dispatch({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
             }
           })();
@@ -615,6 +680,7 @@ export function ContentBrowser() {
           label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
           confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
           cancelText: t('editor.contentBrowser.dialogs.cancel'),
+          validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
         });
         if (!name) return;
         gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
@@ -720,7 +786,7 @@ export function ContentBrowser() {
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
             <CBNavigationBar nav={nav} gameSlug={gameSlug} />
-            {loading ? (
+            {loading && viewItems.length === 0 ? (
               <div style={{ padding: 16, opacity: 0.5 }}>{t('editor.contentBrowser.empty.loading')}</div>
             ) : viewItems.length === 0 ? (
               <div style={{ padding: 16, opacity: 0.5 }}>

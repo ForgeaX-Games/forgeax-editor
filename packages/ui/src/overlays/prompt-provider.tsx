@@ -27,6 +27,22 @@ export function PromptProvider({ children }: { children: React.ReactNode }) {
   const active = queue[0] ?? null;
   const [value, setValue] = React.useState('');
 
+  // Live validation of the current input against active.options.validate.
+  // `error` is the inline message text (null when the input is legal). Submit
+  // is disabled while error !== null (Enter is also a no-op via the guard in
+  // `submit`). The validator is opt-in per prompt — legacy prompts without a
+  // `validate` callback continue to accept any input.
+  const error = React.useMemo<string | null>(() => {
+    if (!active?.options.validate) return null;
+    try {
+      return active.options.validate(value);
+    } catch (e) {
+      // A throwing validator is a caller bug; surface it inline instead of
+      // crashing the dialog. The prompt still resolves normally via Cancel.
+      return `validate() threw: ${(e as Error)?.message ?? 'unknown error'}`;
+    }
+  }, [active, value]);
+
   React.useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
@@ -57,7 +73,12 @@ export function PromptProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const submit = React.useCallback(() => finish(value), [finish, value]);
+  const submit = React.useCallback(() => {
+    // Guard: while the validator reports an error, submit (button OR Enter) is
+    // a no-op so an illegal value never reaches the caller.
+    if (error !== null) return;
+    finish(value);
+  }, [finish, value, error]);
 
   return (
     <>
@@ -85,6 +106,8 @@ export function PromptProvider({ children }: { children: React.ReactNode }) {
                   value={value}
                   placeholder={active.options.placeholder}
                   onChange={(event) => setValue(event.target.value)}
+                  aria-invalid={error !== null || undefined}
+                  aria-describedby={error !== null ? 'editor-ui-prompt-error' : undefined}
                 />
               ) : (
                 <Input
@@ -93,14 +116,25 @@ export function PromptProvider({ children }: { children: React.ReactNode }) {
                   value={value}
                   placeholder={active?.options.placeholder}
                   onChange={(event) => setValue(event.target.value)}
+                  aria-invalid={error !== null || undefined}
+                  aria-describedby={error !== null ? 'editor-ui-prompt-error' : undefined}
                 />
+              )}
+              {error !== null && (
+                <p
+                  id="editor-ui-prompt-error"
+                  role="alert"
+                  className="text-sm text-destructive"
+                >
+                  {error}
+                </p>
               )}
             </div>
             <DialogFooter>
               <Button type="button" variant="subtle" onClick={() => finish(null)}>
                 {active?.options.cancelText ?? 'Cancel'}
               </Button>
-              <Button type="submit">
+              <Button type="submit" disabled={error !== null}>
                 {active?.options.confirmText ?? 'OK'}
               </Button>
             </DialogFooter>

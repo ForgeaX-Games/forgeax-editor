@@ -83,6 +83,23 @@ export type { SessionApplier, SessionApplierMeta } from './io/appliers';
 // ── Edit session (authoring working state) ──
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './session/document';
 
+// ── Asset filesystem basename validation (SSOT for folder/rename ops) ──
+// One rule set shared by (1) session appliers in pack-ops.ts (HARD gate:
+// INVALID_ARGS on failure) and (2) UI prompt validators (SOFT gate for UX).
+// Barrel-exported so a UI-layer prompt call site can consume the SAME
+// validator the applier enforces — no second rule source to drift
+// (north-star §9 by construction). See
+// feedbacks/2026-07-23-assets-create-folder-name-validation-*.
+export {
+  validateAssetBasename,
+  checkPathNotJailbreak,
+  ASSET_BASENAME_MAX_LENGTH,
+} from './session/asset-basename';
+export type {
+  BasenameValidation,
+  PathJailbreakCheck,
+} from './session/asset-basename';
+
 // ── Entity state (activeWorld read face, handle IS identity) ──
 // Panels/consumers read entity name/parent/components/existence through these
 // helpers; each takes a World (typically gateway.activeWorld) + an EntityHandle.
@@ -140,6 +157,7 @@ export {
   fieldSchema,
   fieldVisible,
   defaultFieldValue,
+  isComponentHidden,
 } from './scene/schema';
 export type {
   FieldSchema,
@@ -317,6 +335,13 @@ export {
 
 // AssetsChangedHint — hint type for broadcastAssetsChanged optimization.
 export type { AssetsChangedHint } from './store/assets-changed';
+
+// broadcastAssetsError — companion to broadcastAssetsChanged: fire-and-forget
+// asset IO that failed AFTER the applier returned ok. Panels subscribe via
+// panelBridge.on('assetsError', …) and toast; the applier remains SSOT for
+// state mutation (north-star §9). See dev-plan §5 step 3.
+export { broadcastAssetsError } from './store/assets-error-bus';
+export type { AssetsErrorPayload } from './store/assets-error-bus';
 export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace } from './store/store';
 
 // ── Entity operations ──
@@ -407,5 +432,14 @@ export {
   getAllExtensions,
   validateSource,
   validateSourceQuick,
+  scanAssetsIntegrity,
+  repairAssets,
+} from './scan/index';
+export type {
+  IntegrityScanResult,
+  NeedsMetaEntry,
+  OrphanedSidecarEntry,
+  RepairReport,
+  RepairEntry,
 } from './scan/index';
 export { installAssetHmrBridge } from './assets/asset-hmr-bridge';

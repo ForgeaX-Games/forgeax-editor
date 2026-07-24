@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
-import { childrenOf } from '@forgeax/editor-core';
-import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
+import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, isComponentHidden, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
 // Shared component-name localization (SSOT with the hierarchy type column/filter):
 // engine component names → per-name i18n label, raw English fallback for unmapped.
 import { componentTypeLabel } from './hierarchy-state';
@@ -10,7 +9,7 @@ import { componentTypeLabel } from './hierarchy-state';
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
 import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
-import { entExists, entName, entParent, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
+import { entExists, entName, entComponent, entComponents } from '@forgeax/editor-core';
 // VERIFY finding-3 (defense-in-depth): the world-bound handle-pair + the live
 // active-read-world binding, so the primary Inspector reads run the three-layer
 // validateHandlePair check (world-mismatch / epoch / generation) at the read seam
@@ -350,19 +349,6 @@ function mergedFieldKeys(comp: string, value: Record<string, unknown>): string[]
   return [...new Set([...schemaKeys, ...Object.keys(value)])];
 }
 
-function descendantsAndSelf(id: EntityHandle): Set<EntityHandle> {
-  const out = new Set<EntityHandle>([id]);
-  const stack = [id];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    for (const c of childrenOf(gateway.activeWorld, cur)) {
-      out.add(c);
-      stack.push(c);
-    }
-  }
-  return out;
-}
-
 // Shallow-equal helper for per-field reset detection (default vs current).
 function fieldEquals(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -651,12 +637,13 @@ export function InspectorPanel() {
     );
   }
   const nodeName = entName(gateway.activeWorld, sel);
-  const nodeParent = entParent(gateway.activeWorld, sel);
   const nodeComponents = entComponents(gateway.activeWorld, sel, readOptsFor(sel));
-  const blocked = descendantsAndSelf(sel);
-  const parentOptions = worldEntityHandles(gateway.activeWorld).filter((id) => !blocked.has(id));
   const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
-  const bodyComponents = Object.entries(nodeComponents).filter(([comp]) => comp !== 'Name');
+  // Drop `Name` (rendered via NameField in the header) and any component the
+  // engine flags as `editorHidden` via injected meta (Entity / Children /
+  // ChildOf). The strip enumerates ALL present components, so meta filtering
+  // must happen here, not only in the schema registry.
+  const bodyComponents = Object.entries(nodeComponents).filter(([comp]) => comp !== 'Name' && !isComponentHidden(comp));
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;
 
@@ -797,40 +784,11 @@ export function InspectorPanel() {
         ))}
       </div>
 
-      {/* ── Body: Hierarchy + per-component categories ────────────── */}
+      {/* ── Body: per-component categories ─────────────────────────
+          The Hierarchy "Parent" dropdown was removed here: parent linkage is an
+          internal relationship (ChildOf) surfaced via drag-reparent in the
+          Hierarchy panel, not an editable Inspector field. */}
       <div className="dp-body">
-        {!searching && (
-          <div className="cat dim-all">
-            <div className="cat-head">
-              <span className="car"><ForgeaxIcon name="layers" size={13} /></span>
-              <span className="ct">{t('editor.inspector.hierarchy')}</span>
-            </div>
-            <div className="cat-fields">
-              <div className="f-row">
-                <span className="f-name">{t('editor.inspector.parent')}</span>
-                <span className="f-val">
-                  <span className="ddc">
-                    <Select
-                      value={nodeParent == null ? '__root__' : String(nodeParent)}
-                      onValueChange={(v) => gateway.dispatch({ kind: 'reparent', entity: sel, parent: v === '__root__' ? null : Number(v) })}
-                    >
-                      <SelectTrigger className="fx-insp-select" data-testid="insp-parent">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="fx-insp-menu">
-                        <SelectItem value="__root__" className="fx-insp-opt">(root)</SelectItem>
-                        {parentOptions.map((id) => (
-                          <SelectItem key={id} value={String(id)} className="fx-insp-opt">{entName(gateway.activeWorld, id)} #{id}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </span>
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
-
         {bodyComponents.map(([comp, value]) => {
           if (!compMatches(comp)) return null;
           const isCollapsed = collapsed.has(comp) && !searching;

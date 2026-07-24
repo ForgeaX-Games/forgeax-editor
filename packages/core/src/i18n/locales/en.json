@@ -77,6 +77,16 @@
         "create": "Create",
         "createEntity": "Entity",
         "createPreset": "{{label}}",
+        "presets": {
+          "Empty": "Empty",
+          "Point Light": "Point Light",
+          "Spot Light": "Spot Light",
+          "Directional Light": "Directional Light",
+          "Camera": "Camera",
+          "Object": "Object",
+          "Ground": "Ground",
+          "Character": "Character"
+        },
         "newFolder": "New Folder",
         "newGroup": "New Group",
         "group": "Group ({{n}})",

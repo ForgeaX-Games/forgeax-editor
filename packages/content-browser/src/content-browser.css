@@ -486,7 +486,8 @@
   width: 28px;
   height: 28px;
 }
-.cb-grid-icon { font-size: 24px; }
+.cb-grid-icon { display: inline-flex; align-items: center; justify-content: center; }
+.cb-grid-icon svg { width: 34px; height: 34px; }
 .cb-folder-thumb {
   background: transparent;
 }
@@ -872,7 +873,8 @@
   font-size: 11px;
   font-weight: 600;
 }
-.cb-tooltip-icon { font-size: 14px; }
+.cb-tooltip-icon { display: inline-flex; align-items: center; }
+.cb-tooltip-icon svg { width: 16px; height: 16px; }
 .cb-tooltip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-tooltip-row { color: var(--panel-fg, #999); padding: 1px 0; word-break: break-all; }
 

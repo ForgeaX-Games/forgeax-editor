@@ -3,7 +3,7 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // (resolves GUID → shared<T> handle) instead of setComponent with deprecated names.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  gateway, getSelection, entComponent,
+  gateway, getSelection, entComponent, validateAssetBasename,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
@@ -108,6 +108,12 @@ export function buildAssetContextMenu(
             defaultValue: asset.name,
             confirmText: tr('editor.contentBrowser.dialogs.ok'),
             cancelText: tr('editor.contentBrowser.dialogs.cancel'),
+            // Same SSOT the applier enforces; dialog Confirm disables while
+            // invalid so the user gets red text instead of a silent reject.
+            validate: (v) => {
+              const r = validateAssetBasename(v);
+              return r.ok ? null : r.hint;
+            },
           });
           if (newName && newName !== asset.name) {
             // D6: rename routes through the ONE gateway door (document op, undoable).
