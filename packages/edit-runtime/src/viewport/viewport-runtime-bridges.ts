@@ -222,15 +222,13 @@ export function installAssetCatalogRefresh(): () => void {
 export function installVisibilityPause(
   container: HTMLElement,
   editorApp: { pause(): void; resume(): void },
-  getPlayApp?: () => { pause(): void; resume(): void } | null,
+  isPlaying?: () => boolean,
 ): () => void {
   let hiddenByViewport = false;
   let hiddenByDocument = false;
   const apply = (): void => {
-    const playApp = getPlayApp?.();
-    const target = playApp ?? editorApp;
-    if (hiddenByViewport || hiddenByDocument) target.pause();
-    else target.resume();
+    if (hiddenByViewport || hiddenByDocument) editorApp.pause();
+    else if (!isPlaying?.()) editorApp.resume();
   };
 
   let io: IntersectionObserver | null = null;
