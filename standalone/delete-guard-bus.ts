@@ -16,7 +16,13 @@ export interface DeleteGuardAsset {
 }
 
 export interface DeleteGuardRequest {
-  assets: DeleteGuardAsset[];
+  /** Asset-shaped confirm (destroyAsset — document-domain op, undoable). */
+  assets?: DeleteGuardAsset[];
+  /** Path-shaped confirm for folders/files (deleteDirectory / deleteSourceFile
+   *  from the Plan-E keyboard delete path). Reuses the same reliable in-house
+   *  dialog instead of the editor-ui confirmDialog (which never paints in this
+   *  isolated host root). */
+  paths?: string[];
 }
 
 type Resolver = (ok: boolean) => void;

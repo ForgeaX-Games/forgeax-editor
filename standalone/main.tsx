@@ -41,7 +41,7 @@ import { useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
-import { confirm as confirmDialog, prompt as promptDialog } from '@forgeax/editor-ui';
+import { prompt as promptDialog } from '@forgeax/editor-ui';
 // Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
 // exports (no iframe). ViewportComponent boots the engine once in this window;
 // EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
@@ -91,13 +91,14 @@ import { gateway } from '@forgeax/editor-core';
 function makeKeyboardRouterDeps(): KeyboardRouterDeps {
   return buildKeyboardRouterDeps({
     confirmDeleteAssets: (assets) => requestDeleteGuard({ assets }),
-    confirmDeleteFolder: (folderPath) => confirmDialog({
-      title: 'Delete Folder',
-      description: `Delete folder "${folderPath}" and all its contents?`,
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      destructive: true,
-    }),
+    // Folder/file delete confirm for the keyboard-router path. The editor-ui
+    // `confirmDialog` (ConfirmProvider in the isolated #editor-overlay-root React
+    // root) queues the AlertDialog but never paints/receives interaction in this
+    // host, so the promise hangs forever and the delete stalls. Route through the
+    // same in-house DeleteGuardDialog the asset path uses — one consistent, reliable
+    // confirm UI. `path` is a single dir path or a ', '-joined file list.
+    confirmDeleteFolder: (path) =>
+      requestDeleteGuard({ paths: path.split(', ').filter(Boolean) }),
     promptRenameAsset: (currentName) => promptDialog({
       title: 'Rename Asset',
       label: 'New name',
