@@ -20,6 +20,8 @@ import { installCleanup, spawnService } from './lib/dev-stack.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PORTS = [15290, 15280];
+const EDITOR_BRIDGE_PORT = 15296;
+const bridgePort = process.env.FORGEAX_BRIDGE_PORT ?? String(EDITOR_BRIDGE_PORT);
 
 const children: ChildProcess[] = [];
 installCleanup(children, PORTS);
@@ -36,7 +38,7 @@ const bridgeEnv: NodeJS.ProcessEnv = {
   VITE_FORGEAX_BRIDGE: process.env.FORGEAX_BRIDGE === '0' ? '0' : '1',
   // Pass the relay port through Vite's compile-time environment too: the relay
   // and live page must derive it from the same source of truth.
-  VITE_FORGEAX_BRIDGE_PORT: process.env.FORGEAX_BRIDGE_PORT ?? '15295',
+  VITE_FORGEAX_BRIDGE_PORT: bridgePort,
 };
 
 console.log('[dev-standalone] starting edit-runtime :15280 (HMR→15290) ...');
@@ -51,12 +53,12 @@ children.push(
   ),
 );
 
-// DEV-only live gateway bridge relay (:15295). Lets a CLI drive THIS open
+// DEV-only live gateway bridge relay (:15296 by default). Lets a CLI drive THIS open
 // window in real time (skills/forgeax-editor-gateway/scripts/gateway-live.mjs) instead of a headless
 // playwright instance. Loopback-only; the page bridge (ViewportComponent, DEV
 // build) dials it. Opt out with FORGEAX_BRIDGE=0.
 if (process.env.FORGEAX_BRIDGE !== '0') {
-  console.log('[dev-standalone] starting gateway bridge relay :15295 ...');
+  console.log(`[dev-standalone] starting gateway bridge relay :${bridgePort} ...`);
   children.push(
     // `bun` not `node`: `ws` lives only in bun's isolated store
     // (node_modules/.bun/ws@*), unhoisted, so bare node ERR_MODULE_NOT_FOUNDs.
@@ -64,7 +66,7 @@ if (process.env.FORGEAX_BRIDGE !== '0') {
     // their harness); cwd=ROOT so `ws` still resolves from the root node_modules.
     spawnService('bun', ['skills/forgeax-editor-gateway/scripts/gateway-bridge-server.mjs'], {
       cwd: ROOT,
-      env: { ...process.env },
+      env: { ...process.env, FORGEAX_BRIDGE_PORT: bridgePort },
     }),
   );
 }

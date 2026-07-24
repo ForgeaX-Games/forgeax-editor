@@ -75,9 +75,13 @@ const PLAY_RUNTIME_PORT = 15273;
 // The RHI reviewer is a separate dev-only engine app. It receives capture
 // artifacts by URL from the editor host, so opening a frame needs no file picker.
 const RHI_REVIEWER_PORT = 15274;
-// 15295 = DEV-only live gateway bridge relay (on by default; FORGEAX_BRIDGE=0
-// opts out). Listed so `stop`/startup-preflight free a stale relay too.
-const PORTS = [15290, 15280, 15281, PLAY_RUNTIME_PORT, RHI_REVIEWER_PORT, 15295];
+// 15296 = editor standalone's DEV-only live gateway bridge relay. Studio's
+// superrepo stack owns :15295; do not reuse it here.
+const EDITOR_BRIDGE_PORT = 15296;
+// These are editor-owned service ports. The bridge port is appended dynamically
+// below so FORGEAX_BRIDGE_PORT overrides are cleaned up without sweeping a
+// hard-coded Studio port.
+const PORTS = [15290, 15280, 15281, PLAY_RUNTIME_PORT, RHI_REVIEWER_PORT];
 const GAME_API_PORT = 15281;
 // The gateway scripts live under the forgeax-editor-gateway skill (AI-first:
 // the AI tools and their harness ship together). ROOT-relative because
@@ -316,9 +320,20 @@ function clean(argv: string[]): void {
 
 // ── stop ────────────────────────────────────────────────────────────────────
 async function stop(): Promise<void> {
-  step(`stopping editor stack (ports ${PORTS.join(' ')}) ...`);
-  const killed = await killByPorts(PORTS);
+  const bridgeEnabled = process.env.FORGEAX_BRIDGE !== '0';
+  const ports = managedPorts(editorBridgePort(), bridgeEnabled);
+  step(`stopping editor stack (ports ${ports.join(' ')}) ...`);
+  const killed = await killByPorts(ports);
   if (!killed) ok('nothing to stop');
+}
+
+function editorBridgePort(): number {
+  const parsed = Number.parseInt(process.env.FORGEAX_BRIDGE_PORT ?? '', 10);
+  return Number.isFinite(parsed) ? parsed : EDITOR_BRIDGE_PORT;
+}
+
+function managedPorts(bridgePort: number, bridgeEnabled: boolean): number[] {
+  return bridgeEnabled ? [...PORTS, bridgePort] : [...PORTS];
 }
 
 // ── setup (install) ─────────────────────────────────────────────────────────
@@ -477,7 +492,7 @@ async function run(argv: string[]): Promise<void> {
   // /__forgeax-debug endpoints), flipping createApp's guard so the browser gets
   // window.__forgeax.captureFrame(n). Unset by default → zero injection, tree-shaken.
   // DEV-only live gateway bridge: on by default so `fx start` matches
-  // `dev:standalone`. It takes both a relay process (:15295) AND a compile-time
+  // `dev:standalone`. It takes both a relay process (:15296) AND a compile-time
   // flag so the editor page dials the relay — mirrors dev-standalone.ts. Opt out
   // with FORGEAX_BRIDGE=0. CRITICAL: the two Vite vars must reach the HOST vite
   // (`bun run dev`, :15290) — the standalone shell imports ViewportComponent
@@ -487,7 +502,7 @@ async function run(argv: string[]): Promise<void> {
   // bridgeEnabled=false and connectBridge() never runs. So they go into the base
   // `env` shared by every spawn; the relay reads the runtime FORGEAX_BRIDGE_PORT.
   const bridge = process.env.FORGEAX_BRIDGE !== '0';
-  const bridgePort = process.env.FORGEAX_BRIDGE_PORT ?? '15295';
+  const bridgePort = String(editorBridgePort());
   const bridgeEnv: NodeJS.ProcessEnv = bridge
     ? { VITE_FORGEAX_BRIDGE: '1', VITE_FORGEAX_BRIDGE_PORT: bridgePort }
     : { VITE_FORGEAX_BRIDGE: '0' };
@@ -516,8 +531,12 @@ async function run(argv: string[]): Promise<void> {
     die('engine not built (dist/wasm missing). Run first: bun fx setup');
   }
 
-  // always start from a clean slate (clears a stale :15290/:15280 from a prior run)
-  await stop();
+  // Always start from a clean slate, but only sweep editor-owned ports. In
+  // particular, never use Studio's :15295 as the editor relay default.
+  const editorPorts = managedPorts(Number(bridgePort), bridge);
+  step(`stopping editor stack (ports ${editorPorts.join(' ')}) ...`);
+  const killed = await killByPorts(editorPorts);
+  if (!killed) ok('nothing to stop');
 
   // bridgeEnv already folded into `env`; edit-runtime just adds the HMR port.
   const editRuntimeEnv: NodeJS.ProcessEnv = { ...env, FORGEAX_INTERFACE_PORT: '15290' };
@@ -574,7 +593,7 @@ async function run(argv: string[]): Promise<void> {
 
   // foreground: trap Ctrl-C to tear the whole stack down
   const children: ChildProcess[] = [];
-  installCleanup(children, PORTS);
+  installCleanup(children, editorPorts);
 
   if (gameDir) {
     step(`starting game-backend :${GAME_API_PORT} (platform-io reuse, R3) ...`);
@@ -706,7 +725,7 @@ Lifecycle:
   start --rhi-debug            enable viewport RHI capture + reviewer (:15274)
   stop                          stop everything the CLI started (by port)
 
-  Live gateway bridge (:15295) is ON by default so the forgeax-editor-gateway
+  Live gateway bridge (:15296 by default) is ON so the forgeax-editor-gateway
   skill's gateway-live.mjs can drive the open window; set FORGEAX_BRIDGE=0 to
   disable, FORGEAX_BRIDGE_PORT to move it.
 

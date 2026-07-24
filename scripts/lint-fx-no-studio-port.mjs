@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // lint-fx-no-studio-port.mjs — static gate: the editor's fx dev-stack must NOT
-// manage or launch its play-runtime on :15173, the port studio's superrepo stack
-// owns. Keeps the two dev stacks decoupled so they coexist.
+// manage or launch services on Studio-owned ports :15173 or :15295. Keeps the
+// two dev stacks decoupled so they coexist.
 //
 // WHY THIS EXISTS (the regression it closes — feedback
 // 2026-07-13-editor-studio-15173-port-collision.md)
@@ -26,7 +26,7 @@
 // Usage:   node scripts/lint-fx-no-studio-port.mjs [--file <path>]
 //          (--file defaults to scripts/fx.ts; the self-test feeds synthetic copies)
 // Exits    0 no studio-port collision in fx orchestration
-//          · 1 15173 present in PORTS literal or a FORGEAX_ENGINE_PORT launch value
+//          · 1 15173 present in PORTS/launch or Studio's 15295 appears in executable code
 //          · 2 anchor missing/renamed (refuse to pass blind — re-point the gate).
 
 import { readFileSync } from 'node:fs';
@@ -95,16 +95,27 @@ lines.forEach((l, i) => {
   }
 });
 
+// (3) 15295 is Studio's gateway relay. The editor may explain that port in
+// comments, but executable defaults and managed-port declarations must use the
+// editor-owned relay port instead.
+lines.forEach((l, i) => {
+  if (/\b15295\b/.test(l)) {
+    violations.push(
+      `line ${i + 1} references Studio's gateway port 15295 in executable code — use the editor-owned bridge port (15296 by default).`,
+    );
+  }
+});
+
 if (violations.length > 0) {
   console.error(`[lint-fx-no-studio-port] REGRESSION in ${target}:`);
   for (const v of violations) console.error(`  - ${v}`);
   console.error(
-    '  studio (forgeax-studio scripts/run.ts) owns :15173 for THIS package\'s play-runtime; the editor fx stack must stay on 15273 so the two coexist.',
+    '  studio owns :15173 (play-runtime) and :15295 (gateway); the editor fx stack must stay on 15273 and 15296 so the two coexist.',
   );
   process.exit(1);
 }
 
 console.log(
-  `[lint-fx-no-studio-port] OK — fx.ts orchestration does not manage or launch on studio's :15173.`,
+  `[lint-fx-no-studio-port] OK — fx.ts orchestration does not manage or launch on Studio's :15173/:15295.`,
 );
 process.exit(0);
