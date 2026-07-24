@@ -130,6 +130,10 @@ export interface RunLifecycle {
   /** The live play world while playing, else null. Tests read this to assert the
    *  lifecycle drops its reference on ■ Stop (AC-05 GC reachability proxy). */
   currentPlayWorld(): unknown;
+  /** The live play App's pause/resume handle while playing, else null.
+   *  Used by installVisibilityPause to pause the correct app when the viewport
+   *  is hidden during Play mode. */
+  getPlayPauseHandle(): { pause(): void; resume(): void } | null;
 }
 
 /**
@@ -315,5 +319,14 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     return active === null ? null : active.playWorld;
   }
 
-  return { playSimulation, stopSimulation, dispose, currentPlayWorld };
+  function getPlayPauseHandle(): { pause(): void; resume(): void } | null {
+    if (!active) return null;
+    const pa = active.playApp;
+    return {
+      pause() { pa.pause(); },
+      resume() { pa.resume(); },
+    };
+  }
+
+  return { playSimulation, stopSimulation, dispose, currentPlayWorld, getPlayPauseHandle };
 }
