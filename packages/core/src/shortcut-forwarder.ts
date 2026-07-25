@@ -38,6 +38,10 @@ function isComposing(e: KeyboardEvent): boolean {
 function isForwardable(e: KeyboardEvent): boolean {
   if (isComposing(e)) return false;
   if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) return true;
+  // Edit-domain keys (Plan-E): Delete/Backspace/F2 drive the host's keyboard
+  // router (routeDelete / routeF2). Without modifier, they must still be
+  // forwarded so the host's global-shortcuts capture-phase listener can route them.
+  if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'F2') && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) return true;
   const mod = e.metaKey || e.ctrlKey; // macOS ⌘ 与 Ctrl 同义
   if (!mod) return false;
   if (e.shiftKey) return true; // Ctrl/⌘ + Shift + *(F/B/C/D/Enter/1/2/3)

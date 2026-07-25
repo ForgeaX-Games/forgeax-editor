@@ -24,7 +24,8 @@ import {
   type VisualWorldRun,
   type VisualWorldStamp,
 } from './visual-source-contract';
-import { Camera, Transform } from '@forgeax/engine-runtime';
+import { Camera } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 
 export type VisualSource = ContractVisualSource<MediaStream, Blob>;
 export type VisualSourceCamera = ContractVisualSourceCamera;

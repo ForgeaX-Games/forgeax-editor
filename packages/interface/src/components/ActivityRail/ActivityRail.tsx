@@ -32,9 +32,9 @@ interface RailItem {
 }
 
 // Product spec: category → ordered plugin slugs.
+// 暂时隐藏(功能未就绪):方块人编辑(wb-lowpoly-obj)、Diffusion Renderer
+// (wb-diffusion-renderer)。就绪后把 slug 加回对应分组即可恢复。
 const RAIL_CATEGORIES: ReadonlyArray<{ category: string; slugs: readonly string[] }> = [
-  // wb-lowpoly-obj (方块人编辑) and wb-diffusion-renderer (Diffusion Renderer) are
-  // temporarily withheld from the rail — features not yet complete.
   { category: '3D', slugs: ['wb-skill', 'wb-gen3d', 'wb-3d-lowpoly'] },
   { category: '2D', slugs: ['wb-character', 'wb-items', 'wb-anim', 'wb-2d-scene-asset-generator'] },
   { category: '通用', slugs: ['wb-ui', 'wb-narrative', 'wb-reel', 'wb-game-video', 'wb-bgm', 'wb-scene-generator'] },

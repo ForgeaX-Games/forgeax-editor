@@ -25,8 +25,8 @@ import type { SelectedAsset } from './store/asset-selection';
  *  kinds can be blank-created, SSOT in `packages/content-browser/src/creatable-asset-kinds.ts`.
  *
  *  扩展：加一条字面量 + 对应 spec 行 + applier switch case。*/
-export type CreatableAssetKind = 'scene';
-// 未来扩展示例： 'material' | 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
+export type CreatableAssetKind = 'scene' | 'material';
+// 未来扩展示例： 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
 
 /** Builtin editor ops — the closed discriminated union of all 25 editor primitives.
  *  Narrowable on `kind` for strong type inference at call sites. Custom ops
@@ -80,6 +80,12 @@ export type BuiltinEditorOp =
   | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; baseColorTexture?: string; packPath?: string; refs?: string[] }
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
+  // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
+  // paramValues in-place. DOCUMENT-domain (undoable — inverse carries old patch).
+  // Shallow-merges paramPatch into the asset's paramValues; writes the new entry
+  // through ctx.assetIO then invalidates the registry cache for hot viewport reload.
+  // Gateway fills _oldPatch / _oldRefs / _oldEntry synchronously from the catalog.
+  | { kind: 'updateMaterialParams'; packPath: string; guid: string; paramPatch: Record<string, unknown>; textureGuids?: Record<string, string | null>; _oldPatch?: Record<string, unknown>; _oldRefs?: string[]; _oldEntry?: unknown }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
   | { kind: 'setSelection'; id: EntityId | null }
   | { kind: 'toggleSelection'; id: EntityId }

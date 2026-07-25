@@ -15,7 +15,8 @@
 
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Transform, MeshFilter, PointLight, Skylight, Camera, Name, DirectionalLight } from '@forgeax/engine-runtime';
+import { Transform, Name } from '@forgeax/engine-scene';
+import { MeshFilter, PointLight, Skylight, Camera, DirectionalLight } from '@forgeax/engine-render';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';

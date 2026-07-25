@@ -23,6 +23,7 @@ export interface CreatableAssetSpec {
 
 export const CREATABLE_ASSET_KINDS: readonly CreatableAssetSpec[] = [
   { kind: 'scene', label: 'Scene', icon: 'clapperboard', defaultNamePrefix: 'NewScene' },
+  { kind: 'material', label: 'Material', icon: 'paintbrush', defaultNamePrefix: 'NewMaterial' },
 ] as const;
 
 /** 类型层守卫：`CreatableAssetKind` 字面量通过 core applier 的 exhaustive switch

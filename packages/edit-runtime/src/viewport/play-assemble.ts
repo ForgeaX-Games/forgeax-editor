@@ -71,14 +71,9 @@ import {
   Entity,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
-import {
-  transformPlugin,
-  animationPlugin,
-  Transform,
-  Camera,
-  perspective,
-  PROPAGATE_TRANSFORMS_SYSTEM,
-} from '@forgeax/engine-runtime';
+import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
+import { animationPlugin } from '@forgeax/engine-animation';
+import { Camera, perspective } from '@forgeax/engine-render';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
 import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener } from '@forgeax/engine-audio';

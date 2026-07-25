@@ -17,7 +17,7 @@ import {
   entParent,
   entName,
 } from '../store/entity-state';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
 

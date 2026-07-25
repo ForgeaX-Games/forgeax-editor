@@ -22,7 +22,8 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import type { Handle } from '@forgeax/engine-ecs';
-import { MeshFilter, Transform } from '@forgeax/engine-runtime';
+import { MeshFilter } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 
 // `assetHandle` is a branded Handle<'MeshAsset','shared'> (u32-stored). The whole
 // point of the spike is that the RUNTIME u32 column accepts the raw value 0 as a

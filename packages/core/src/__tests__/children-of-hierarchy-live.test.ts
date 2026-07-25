@@ -17,7 +17,7 @@
 
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Name, Transform, ChildOf } from '@forgeax/engine-runtime';
+import { Name, Transform, ChildOf } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession, childrenOf } from '../session/document';

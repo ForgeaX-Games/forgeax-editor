@@ -183,6 +183,16 @@
       "description": "Interface language. Controls all UI chrome, agent catalog labels, and the language agents reply in.",
       "selectAria": "Select interface language"
     },
+    "memory": {
+      "label": "Memory",
+      "masterLabel": "Automatic memory extraction",
+      "masterHint": "Turn this off to stop memory extraction for every kernel. When enabled, each kernel follows its setting below.",
+      "byKernel": "By kernel",
+      "noKernels": "No registered kernels",
+      "lowestTokenUsage": "Lowest token usage",
+      "additionalTokenCost": "Uses a small number of additional tokens",
+      "additionalTokenHint": "{{kernel}} memory extraction uses a small number of additional tokens. Turn it off here if you do not need it."
+    },
     "env": {
       "saved": "Wrote {{count}} variable(s) to .env (takes effect after restarting the stack)"
     },
@@ -1490,6 +1500,7 @@
       "newProject": "New Project…",
       "openProject": "Open Project…",
       "openRecent": "Open Recent",
+      "openRecentEmpty": "No recent items",
       "closeProject": "Close Project",
       "save": "Save",
       "saveAll": "Save All",

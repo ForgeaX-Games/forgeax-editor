@@ -23,16 +23,8 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
-import {
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-  Name,
-  PointLight,
-  DirectionalLight,
-  SpotLight,
-  Materials,
-} from '@forgeax/engine-runtime';
+import { MeshFilter, MeshRenderer, PointLight, DirectionalLight, SpotLight, Materials } from '@forgeax/engine-render';
+import { Transform, Name } from '@forgeax/engine-scene';
 import {
   HANDLE_CUBE,
   HANDLE_CYLINDER,

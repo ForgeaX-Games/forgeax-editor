@@ -30,7 +30,7 @@
 //   plan-strategy §2.5: entity-state.ts net-reduction (double-map -> read face)
 //   research Finding 13: current entComponent returns undefined for stale ids (P3)
 
-import { Name, ChildOf, Transform } from '@forgeax/engine-runtime';
+import { Name, ChildOf, Transform } from '@forgeax/engine-scene';
 // EditorHidden is editor-core's own marker component (plan-strategy §2 D-7), NOT
 // an engine export — importing it from @forgeax/engine-runtime is the exact
 // `Socket`-class regression AGENTS.md anti-pattern #5 warns about (would trip

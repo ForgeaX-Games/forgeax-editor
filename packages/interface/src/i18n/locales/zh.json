@@ -183,6 +183,16 @@
       "description": "界面语言。控制所有 UI 文案、Agent 目录展示语言，以及 Agent 回复所用语言。",
       "selectAria": "选择界面语言"
     },
+    "memory": {
+      "label": "记忆",
+      "masterLabel": "自动记忆沉淀",
+      "masterHint": "关闭后所有内核都不再沉淀记忆；开启后按下方各内核设置生效。",
+      "byKernel": "按内核",
+      "noKernels": "没有已注册的内核",
+      "lowestTokenUsage": "Token 消耗最少",
+      "additionalTokenCost": "会额外消耗少量 Token",
+      "additionalTokenHint": "{{kernel}} 的记忆沉淀会额外消耗少量 Token。如不需要，可在此关闭。"
+    },
     "env": {
       "saved": "已写入 {{count}} 个变量到 .env（重启 stack 后生效）"
     },
@@ -1490,6 +1500,7 @@
       "newProject": "新建项目…",
       "openProject": "打开项目…",
       "openRecent": "打开最近",
+      "openRecentEmpty": "暂无最近记录",
       "closeProject": "关闭项目",
       "save": "保存",
       "saveAll": "全部保存",

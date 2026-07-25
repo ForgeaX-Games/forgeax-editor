@@ -21,12 +21,10 @@ import { describe, expect, it } from 'bun:test';
 import { World, defineComponent } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import {
-  ChildOf,
-  Name,
   rootsToSceneAsset,
   serializeSceneAssetToPack,
-  Transform,
 } from '@forgeax/engine-runtime';
+import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';

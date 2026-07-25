@@ -254,6 +254,7 @@
       "contextMenu": {
         "open": "打开",
         "newFolder": "新建文件夹",
+        "newMaterial": "新建材质",
         "favorite": "收藏",
         "unfavorite": "取消收藏",
         "rename": "重命名",

@@ -26,11 +26,10 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import {
-  Name,
-  Transform,
   rootsToSceneAsset,
   serializeSceneAssetToPack,
 } from '@forgeax/engine-runtime';
+import { Name, Transform } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneEntity, LocalEntityId } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';

@@ -5,7 +5,10 @@
 // importing engine dist files through eval (which can produce incompatible component
 // tokens) just to manufacture an instantiateSceneAsset payload.
 
-import { rootsToSceneAsset, Name } from '@forgeax/engine-runtime';
+import {
+  rootsToSceneAsset,
+} from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { SceneAsset } from '@forgeax/engine-types';

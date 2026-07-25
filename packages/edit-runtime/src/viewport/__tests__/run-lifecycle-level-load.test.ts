@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import type { BootstrapContext, GameProjectionRegistrar } from '@forgeax/engine-app';
-import { Name } from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
 import {
   addOnEnter,
   defineState,

@@ -254,6 +254,7 @@
       "contextMenu": {
         "open": "Open",
         "newFolder": "New Folder",
+        "newMaterial": "New Material",
         "favorite": "Favorite",
         "unfavorite": "Unfavorite",
         "rename": "Rename",

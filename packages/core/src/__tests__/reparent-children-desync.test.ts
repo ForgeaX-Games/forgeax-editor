@@ -20,7 +20,7 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
-import { ChildOf, Children, Name } from '@forgeax/engine-runtime';
+import { ChildOf, Children, Name } from '@forgeax/engine-scene';
 import { applyCommand, createEditSession } from '../session/document';
 import { EditorHidden } from '../components/EditorHidden';
 import type { EditorOp, EditSession, WithEntityId } from '../types';

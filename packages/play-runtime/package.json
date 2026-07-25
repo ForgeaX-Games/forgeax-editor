@@ -58,6 +58,8 @@
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "lucide-react": "^0.460.0",

@@ -19,6 +19,7 @@
  */
 
 import { isTauri } from './platform/runtime';
+import { warmRecentGames } from './recent-games';
 import {
   onMenuChange,
   serializeMenusForNative,
@@ -64,8 +65,17 @@ function findMenuItemById(id: string): MenuItemDef | undefined {
 function findInList(list: readonly MenuItemDef[], id: string): MenuItemDef | undefined {
   for (const item of list) {
     if (item.id === id) return item;
-    if (item.children && item.children.length > 0) {
-      const nested = findInList(item.children, id);
+    // Recurse into static children AND dynamic ones — a native click on a
+    // dynamically-derived row (e.g. a recent game under 打开最近) must resolve
+    // to its def so its commandId + args get dispatched. dynamicChildren is
+    // re-derived here (cache current at click time), matching what was pushed.
+    const kids = item.children && item.children.length > 0
+      ? item.children
+      : item.dynamicChildren
+        ? item.dynamicChildren()
+        : null;
+    if (kids && kids.length > 0) {
+      const nested = findInList(kids, id);
       if (nested) return nested;
     }
   }
@@ -80,6 +90,10 @@ async function pushMenusToNative(
   invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>,
   translate: (key: string) => string,
 ): Promise<void> {
+  // Warm the recent-games cache so 打开最近's dynamicChildren serialize with a
+  // current list. Web warms on File-dropdown open; native has no such hook, so
+  // we warm here before every rebuild. Failures leave the last cache intact.
+  await warmRecentGames();
   const raw = serializeMenusForNative(translate);
   // 补顶层 title —— 与 MenuBar.tsx 的 `t('menubar.${menu}')` 保持一致。
   const payload: NativeMenuWithTitle[] = raw.map((m) => ({

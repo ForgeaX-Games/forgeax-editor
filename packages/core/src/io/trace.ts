@@ -53,7 +53,8 @@ export type EngineInterfaceName =
   | 'assetIO.writeMetaSidecar'
   | 'assetIO.triggerCook'
   | 'assetIO.readSourceBytes'
-  | 'assetIO.deleteSourceFile';
+  | 'assetIO.deleteSourceFile'
+  | 'registry.invalidate';
 
 /** Record an asset-IO interface leaf onto the current active span's engineCalls
  *  list (symmetric to engine-facade's _recordLeaf, AC-D4). Used by AssetIOFacade.

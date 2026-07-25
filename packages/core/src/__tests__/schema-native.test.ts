@@ -6,15 +6,8 @@
 // (sceneload-native.test.ts documents the same trap). Import runtime tokens.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
-import {
-  Transform,
-  MeshFilter,
-  MeshRenderer,
-  DirectionalLight,
-  PointLight,
-  SpotLight,
-  Camera,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera } from '@forgeax/engine-render';
 import { _resetSchemaCache, getComponentSchema } from '../scene/schema';
 
 void Transform; void MeshFilter; void MeshRenderer;

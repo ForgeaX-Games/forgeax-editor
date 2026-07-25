@@ -377,6 +377,30 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Create Material',
   },
+  // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
+  // paramValues. Document-domain (undoable). The sole "edit material params" op —
+  // human and AI share one command (north-star §4). Gateway pre-fills _old* fields
+  // from the catalog so the applier constructs the inverse without async reads.
+  {
+    id: 'updateMaterialParams', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string', description: '.pack.json or .meta.json path (game-relative) containing the material asset.' },
+        guid: { type: 'string', description: 'Material asset GUID to update.' },
+        paramPatch: {
+          type: 'object',
+          description: 'Shallow merge into MaterialAsset.paramValues. Keys should come from the shader\'s paramSchema. undefined deletes the key. Example: {"baseColor":[1,0,0,1],"metallic":0.2,"roughness":0.4}',
+        },
+        textureGuids: {
+          type: 'object',
+          description: 'Texture params as GUID strings; applier encodes to pack refs[] indices. null clears the texture. Example: {"baseColorTexture":"a1b2…"}',
+        },
+      },
+      required: ['packPath', 'guid', 'paramPatch'],
+    },
+    title: 'Update Material Params',
+  },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════
   // ── selection ops: the entity id is a WORLD-BOUND handle ─────────────────────

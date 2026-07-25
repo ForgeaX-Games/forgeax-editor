@@ -22,7 +22,7 @@
 //   AGENTS.md invariant 4 (editor-side new World() out of no-second-world scan)
 
 import { World } from '@forgeax/engine-ecs';
-import { transformPlugin } from '@forgeax/engine-runtime';
+import { scenePlugin as transformPlugin } from '@forgeax/engine-scene';
 
 /**
  * Build a fresh editorWorld with only the transform system registered.

@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useAssetSelection, gateway, ensureAssetCataloged } from '@forgeax/editor-core';
 import { PropertyRow } from './PropertyRow';
 import type { PreviewProps } from './index';
 
@@ -6,18 +8,34 @@ interface PassDesc {
   shader?: string;
 }
 
-/** Engine SSOT: user-region texture field names (derive-paramschema.ts:287-291).
- *  These are the material param keys that store texture GUIDs. */
+/** Engine SSOT: user-region texture field names (derive-paramschema.ts:287-291). */
 const TEXTURE_FIELD_NAMES: ReadonlySet<string> = new Set([
   'baseColorTexture',
   'metallicRoughnessTexture',
   'normalTexture',
 ]);
 
-function TextureThumb({ label, guid }: { label: string; guid: string }) {
+/** Convert linear [0,1] RGB to sRGB hex string. */
+function linearToSrgbHex(linear: number[]): string {
+  const toSrgb = (c: number) => Math.round(Math.pow(Math.max(0, Math.min(1, c)), 1 / 2.2) * 255);
+  const r = toSrgb(linear[0] ?? 0);
+  const g = toSrgb(linear[1] ?? 0);
+  const b = toSrgb(linear[2] ?? 0);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+/** Convert sRGB hex to linear [r,g,b,a] array. */
+function srgbHexToLinear(hex: string, alpha: number = 1): [number, number, number, number] {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return [1, 1, 1, alpha];
+  const fromSrgb = (s: string) => Math.pow(parseInt(s, 16) / 255, 2.2);
+  return [fromSrgb(m[1]!), fromSrgb(m[2]!), fromSrgb(m[3]!), alpha];
+}
+
+function TextureThumb({ label, guid, onClear }: { label: string; guid: string; onClear?: () => void }) {
   const shortGuid = guid.length > 18 ? `${guid.slice(0, 18)}…` : guid;
   return (
-    <div className="field" data-testid={`preview-material-tex-${label}`}>
+    <div className="field" data-testid={`mat-${label}`}>
       <label title={`Texture GUID: ${guid}`}>
         <span style={{ marginRight: 6 }}>🖼</span>
         {label}
@@ -25,33 +43,204 @@ function TextureThumb({ label, guid }: { label: string; guid: string }) {
       <span className="muted" style={{ fontSize: '0.82em', fontFamily: 'monospace' }}>
         {shortGuid}
       </span>
+      {onClear && (
+        <button
+          className="mat-clear-btn"
+          title="Clear texture"
+          onClick={onClear}
+          style={{ marginLeft: 6, fontSize: '0.75em', cursor: 'pointer', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px', background: 'transparent', color: 'var(--text-muted)' }}
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }
 
 export default function AssetPreviewMaterial({ payload }: PreviewProps) {
-  const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
-  const parent = payload.parent as string | undefined;
-  const paramValues = payload.paramValues as Record<string, unknown> | undefined;
-  const paramKeys = paramValues ? Object.keys(paramValues) : [];
+  const asset = useAssetSelection();
+
+  // ── Eager load: ensure the material is in the engine's assetCatalog so the
+  // gateway-fill can synchronously read _oldPatch / _oldEntry (dev-plan §10.7).
+  // Materials not referenced by any scene entity are never loadByGuid'd at boot;
+  // they only exist in the packIndexCache (metadata-only). This effect bridges
+  // that gap by loading on-demand when the asset-inspector opens one.
+  const [catalogPayload, setCatalogPayload] = useState<Record<string, unknown> | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!asset?.guid) return;
+    let cancelled = false;
+    void ensureAssetCataloged(asset.guid).then((payload) => {
+      if (cancelled) return;
+      if (payload) setCatalogPayload(payload);
+      else setLoadError('Material not found in registry');
+    }).catch((e) => {
+      if (!cancelled) setLoadError(String(e));
+    });
+    return () => { cancelled = true; };
+  }, [asset?.guid]);
+
+  // Use catalog payload (real values) when available; fall back to prop payload.
+  const effectivePayload = catalogPayload ?? payload;
+  const passes = Array.isArray(effectivePayload.passes) ? (effectivePayload.passes as PassDesc[]) : [];
+  const parent = effectivePayload.parent as string | undefined;
+  const paramValues = (effectivePayload.paramValues ?? {}) as Record<string, unknown>;
+
+  const baseColor = Array.isArray(paramValues.baseColor) ? paramValues.baseColor as number[] : [1, 1, 1, 1];
+  const metallic = typeof paramValues.metallic === 'number' ? paramValues.metallic : 0;
+  const roughness = typeof paramValues.roughness === 'number' ? paramValues.roughness : 0.5;
+
+  const [localMetallic, setLocalMetallic] = useState(metallic);
+  const [localRoughness, setLocalRoughness] = useState(roughness);
+
+  // Sync local slider state when the catalog payload arrives (initial load).
+  useEffect(() => { setLocalMetallic(metallic); }, [metallic]);
+  useEffect(() => { setLocalRoughness(roughness); }, [roughness]);
+
+  const canEdit = !!asset?.packPath && !!asset?.guid && !loadError;
+
+  const dispatchParam = useCallback((paramPatch: Record<string, unknown>) => {
+    if (!asset) return;
+    gateway.dispatch({
+      kind: 'updateMaterialParams',
+      packPath: asset.packPath,
+      guid: asset.guid,
+      paramPatch,
+    }, 'human');
+    // After dispatch, re-read the catalog payload (applier updates it in-place
+    // via recatalogAsset) so subsequent renders show the fresh values.
+    const reg = gateway.doc.registry;
+    if (reg) {
+      const env = reg.assetCatalog.get(asset.guid.toLowerCase());
+      if (env) setCatalogPayload(env.payload as unknown as Record<string, unknown>);
+    }
+  }, [asset]);
+
+  const handleColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const hex = e.target.value;
+    const alpha = baseColor[3] ?? 1;
+    dispatchParam({ baseColor: srgbHexToLinear(hex, alpha) });
+  }, [dispatchParam, baseColor]);
+
+  const handleMetallicCommit = useCallback((val: number) => {
+    dispatchParam({ metallic: val });
+  }, [dispatchParam]);
+
+  const handleRoughnessCommit = useCallback((val: number) => {
+    dispatchParam({ roughness: val });
+  }, [dispatchParam]);
+
+  const handleClearTexture = useCallback((key: string) => {
+    if (!asset) return;
+    gateway.dispatch({
+      kind: 'updateMaterialParams',
+      packPath: asset.packPath,
+      guid: asset.guid,
+      paramPatch: { [key]: undefined },
+      textureGuids: { [key]: null },
+    }, 'human');
+  }, [asset]);
 
   return (
-    <div data-testid="preview-material">
+    <div data-testid="preview-material" className="mat-editor">
       <div className="compname">Material</div>
+      {loadError && (
+        <div className="field" style={{ color: 'var(--text-danger, #e53e3e)', fontSize: '0.82em', marginBottom: 6 }}>
+          ⚠ {loadError}
+        </div>
+      )}
+      {!catalogPayload && !loadError && (
+        <div className="field muted" style={{ fontSize: '0.82em', marginBottom: 6 }}>Loading material data…</div>
+      )}
+
+      {/* Base Color */}
+      <div className="f-row" data-testid="mat-baseColor">
+        <span className="f-name">Base Color</span>
+        <span className="f-val">
+          <input
+            type="color"
+            value={linearToSrgbHex(baseColor)}
+            onChange={handleColorChange}
+            disabled={!canEdit}
+            data-testid="mat-baseColor-input"
+            style={{ width: 32, height: 22, border: 'none', padding: 0, cursor: canEdit ? 'pointer' : 'default' }}
+          />
+          <span className="hexval" style={{ marginLeft: 6, fontSize: '0.82em', fontFamily: 'monospace' }}>
+            {linearToSrgbHex(baseColor)}
+          </span>
+        </span>
+      </div>
+
+      {/* Metallic */}
+      <div className="f-row" data-testid="mat-metallic">
+        <span className="f-name">Metallic</span>
+        <span className="f-val">
+          <input
+            type="range"
+            min={0} max={1} step={0.01}
+            value={localMetallic}
+            onChange={(e) => setLocalMetallic(Number(e.target.value))}
+            onMouseUp={() => handleMetallicCommit(localMetallic)}
+            onKeyUp={() => handleMetallicCommit(localMetallic)}
+            disabled={!canEdit}
+            data-testid="mat-metallic-slider"
+            style={{ width: '60%' }}
+          />
+          <span style={{ marginLeft: 6, fontSize: '0.85em', minWidth: 30 }}>{localMetallic.toFixed(2)}</span>
+        </span>
+      </div>
+
+      {/* Roughness */}
+      <div className="f-row" data-testid="mat-roughness">
+        <span className="f-name">Roughness</span>
+        <span className="f-val">
+          <input
+            type="range"
+            min={0} max={1} step={0.01}
+            value={localRoughness}
+            onChange={(e) => setLocalRoughness(Number(e.target.value))}
+            onMouseUp={() => handleRoughnessCommit(localRoughness)}
+            onKeyUp={() => handleRoughnessCommit(localRoughness)}
+            disabled={!canEdit}
+            data-testid="mat-roughness-slider"
+            style={{ width: '60%' }}
+          />
+          <span style={{ marginLeft: 6, fontSize: '0.85em', minWidth: 30 }}>{localRoughness.toFixed(2)}</span>
+        </span>
+      </div>
+
+      {/* Passes (read-only) */}
       <PropertyRow label="Passes" value={passes.length} />
       {passes.map((p, i) => (
         <PropertyRow key={i} label={`  Pass ${i}`} value={`${p.name ?? '?'} → ${p.shader ?? '?'}`} />
       ))}
+
       {parent && <PropertyRow label="Parent" value={parent} />}
-      <PropertyRow label="Params" value={paramKeys.length > 0 ? paramKeys.join(', ') : '(none)'} />
-      {paramValues && paramKeys.map(k => {
-        const v = paramValues[k];
-        // Texture GUID fields → render as thumbnail row
-        if (TEXTURE_FIELD_NAMES.has(k) && typeof v === 'string' && v.length > 0) {
-          return <TextureThumb key={k} label={k} guid={v} />;
+
+      {/* Texture fields */}
+      {Object.entries(paramValues).map(([k, v]) => {
+        if (!TEXTURE_FIELD_NAMES.has(k)) return null;
+        if (typeof v === 'string' && v.length > 0) {
+          return <TextureThumb key={k} label={k} guid={v} onClear={canEdit ? () => handleClearTexture(k) : undefined} />;
         }
-        if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') {
-          return <PropertyRow key={k} label={`  ${k}`} value={v} />;
+        if (typeof v === 'number') {
+          return (
+            <div className="field" key={k} data-testid={`mat-${k}`}>
+              <label>{k}</label>
+              <span className="muted" style={{ fontSize: '0.82em' }}>ref[{v}]</span>
+              {canEdit && (
+                <button
+                  className="mat-clear-btn"
+                  title="Clear texture"
+                  onClick={() => handleClearTexture(k)}
+                  style={{ marginLeft: 6, fontSize: '0.75em', cursor: 'pointer', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px', background: 'transparent', color: 'var(--text-muted)' }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          );
         }
         return null;
       })}

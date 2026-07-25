@@ -6,7 +6,7 @@
 // Component.meta map after the engine registers its components.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
-import { ChildOf, Children } from '@forgeax/engine-runtime';
+import { ChildOf, Children } from '@forgeax/engine-scene';
 import { getRegisteredComponents } from '@forgeax/engine-ecs';
 import { isComponentHidden, _resetSchemaCache } from '../scene/schema';
 import {

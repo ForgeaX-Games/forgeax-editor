@@ -20,11 +20,9 @@
 // engine builtin (cube / sphere), pre-catalogued by GUID -- no runtime catalog
 // step, no __import round-trip.
 
-import {
-  Transform, Camera, perspective, quat,
-  SceneInstance,
-  TONEMAP_REINHARD_EXTENDED, ANTIALIAS_FXAA,
-} from '@forgeax/engine-runtime';
+import { quat } from '@forgeax/engine-math';
+import { Camera, perspective, TONEMAP_REINHARD_EXTENDED, ANTIALIAS_FXAA, SceneInstance } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from '@forgeax/engine-app';

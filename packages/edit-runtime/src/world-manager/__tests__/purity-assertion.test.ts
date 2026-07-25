@@ -26,16 +26,8 @@
 //   research F3（AC-01 现状靠隐式排除，分家后应结构性不存在）
 
 import { describe, expect, it } from 'bun:test';
-import {
-  Camera,
-  MeshFilter,
-  MeshRenderer,
-  Materials,
-  Name,
-  Transform,
-  transformPlugin,
-  perspective,
-} from '@forgeax/engine-runtime';
+import { Camera, MeshFilter, MeshRenderer, Materials, perspective } from '@forgeax/engine-render';
+import { Name, Transform, scenePlugin as transformPlugin } from '@forgeax/engine-scene';
 // engine #650 (Tier-2 decomposition) moved builtin handles into
 // @forgeax/engine-assets-runtime.
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';

@@ -138,16 +138,20 @@
 /* Hover / keyboard-highlight (Radix moves focus to the pointed row). Normal rows
    paint the neutral-selected surface with primary text; danger rows keep red on
    a red tint (prototype `.fe-ctx-item.danger:hover`). `:not([data-disabled])`
-   leaves disabled rows greyed with no hover paint. */
+   leaves disabled rows greyed with no hover paint. `[data-state="open"]` covers
+   a SubTrigger whose submenu is open (e.g. 打开最近) — without it, the ui/dropdown
+   default `data-[state=open]:bg-accent` (brand-green) would leak through. */
 .fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):hover,
 .fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):focus,
-.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-highlighted] {
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-highlighted],
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-state="open"] {
   background: var(--color-interaction-selected-neutral, var(--color-interaction-hover));
   color: var(--color-text-primary);
 }
 .fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):hover .fx-menubar-item-icon,
 .fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled]):focus .fx-menubar-item-icon,
-.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-highlighted] .fx-menubar-item-icon {
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-highlighted] .fx-menubar-item-icon,
+.fx-menubar-content .fx-menubar-item:not(.fx-menubar-item--danger):not([data-disabled])[data-state="open"] .fx-menubar-item-icon {
   color: var(--color-text-secondary);
 }
 .fx-menubar-content .fx-menubar-item--danger:not([data-disabled]):hover,

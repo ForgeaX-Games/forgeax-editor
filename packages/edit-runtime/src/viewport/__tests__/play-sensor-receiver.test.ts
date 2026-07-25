@@ -26,7 +26,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import {
   Collider,
   CollidingEntities,

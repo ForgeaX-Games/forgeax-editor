@@ -28,7 +28,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Name } from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import {
   gateway,

@@ -214,6 +214,21 @@ export const builtinCommandsExtension: AppExtension = {
       execute: () => { getState().setGameSwitcherOpen(true); return { status: 'completed' as const }; },
     }));
 
+    // game.pick — switch directly to a specific game by slug. Drives the File →
+    // 打开最近 submenu (each recent-game row dispatches this with its slug). Same
+    // store.switchGame mechanism the game.switch action + game-list modal use —
+    // no second code path, just a command-bus entry so the menu can reach it.
+    cleanups.push(registerCommand({
+      id: 'game.pick',
+      title: '切换到游戏',
+      execute: (args) => {
+        const slug = (args as { slug?: unknown } | undefined)?.slug;
+        if (typeof slug !== 'string' || !slug) return { status: 'rejected' as const };
+        void getState().switchGame(slug);
+        return { status: 'completed' as const };
+      },
+    }));
+
     // Remaining actions (workbench.list_plugins / workbench.open_plugin /
     // console.clear / console.read / network.clear / session.* / game.switch)
     // stay in lib/builtin-actions.ts for now — they're consumed by

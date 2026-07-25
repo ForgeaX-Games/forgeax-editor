@@ -17,13 +17,8 @@ import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
-import {
-  ChildOf,
-  MeshFilter,
-  MeshRenderer,
-  Name,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-runtime';
 import type { EntityHandle } from '../scene/scene-types';
 import { createEditSession, childrenOf, applyCommand } from '../session/document';

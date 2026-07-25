@@ -181,7 +181,7 @@ record → replay → inspect，第一用户是 AI subagent（经 `WS:5732` JSON
 | **工具** | `rhi-debug` · `debug-draw` · `remote` · `console` · `vite-plugin-*` | 帧调试器、活体 inspector、Vite 集成 |
 
 > [!NOTE]
-> 公共包统一前缀 `@forgeax/engine-`；裸 `@forgeax/engine` 是 placeholder——安装 **`@forgeax/engine-runtime`**。每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
+> 公共包统一前缀 `@forgeax/engine-`；裸 `@forgeax/engine-runtime` 是 placeholder——安装 **`@forgeax/engine-runtime`**。每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
 
 ## 布局
 

@@ -717,6 +717,13 @@ export class EditGateway {
         }
       }
 
+      // updateMaterialParams: gateway-fill _oldPatch / _oldRefs / _oldEntry from
+      // the synchronous assetCatalog so the applier can construct a correct inverse
+      // and write the updated entry. Same gateway-fill pattern as destroyEntity._asset.
+      if (kind === 'updateMaterialParams') {
+        this._preFillMaterialOp(cmd as { kind: 'updateMaterialParams'; guid: string; _oldPatch?: unknown; _oldRefs?: unknown; _oldEntry?: unknown; [k: string]: unknown });
+      }
+
       // Prepare this public document command before the executor writes. Nested
       // transaction duplicates pass through the same helper in dispatchSub above.
       const prepared = this._prepareDocumentCommand(cmd);
@@ -1079,6 +1086,24 @@ export class EditGateway {
       destroy._parent = entParent(this.activeWorld, entity);
       destroy._name = entName(this.activeWorld, entity);
     }
+  }
+
+  /** Pre-fill an updateMaterialParams op's _oldPatch / _oldRefs / _oldEntry from
+   *  the synchronous assetCatalog before the applier runs. Idempotent — skips if
+   *  already filled (redo replay carries the pre-filled fields). */
+  private _preFillMaterialOp(
+    cmd: { guid: string; _oldPatch?: unknown; _oldRefs?: unknown; _oldEntry?: unknown; [k: string]: unknown },
+  ): void {
+    if (cmd._oldPatch !== undefined) return;
+    const registry = this.doc.registry;
+    if (!registry) return;
+    const key = cmd.guid.toLowerCase();
+    const envelope = registry.assetCatalog.get(key);
+    if (!envelope) return;
+    const payload = envelope.payload as unknown as Record<string, unknown>;
+    cmd._oldPatch = (payload.paramValues ?? {}) as Record<string, unknown>;
+    cmd._oldRefs = [...(envelope.refs ?? [])];
+    cmd._oldEntry = { guid: envelope.guid, kind: envelope.kind, name: (envelope as unknown as { name?: string }).name, payload, refs: [...(envelope.refs ?? [])] };
   }
 
   // ── Asset read surface (Part 4) ────────────────────────────────────────────

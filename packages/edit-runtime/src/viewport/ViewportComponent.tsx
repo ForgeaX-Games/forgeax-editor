@@ -33,13 +33,9 @@
 // (single world), AC-04 (engine boots once in host), AC-12 (active-camera cut).
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  Transform,
-  Camera,
-  perspective,
-  TONEMAP_REINHARD_EXTENDED,
-  setActiveCamera,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { setActiveCamera } from '@forgeax/engine-render/internal';
 import { Entity, Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import {

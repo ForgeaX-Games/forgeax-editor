@@ -4,7 +4,8 @@
 // viewport for animation preview / pose inspection. Kept dependency-light +
 // world-loose (matching main.tsx's `as never` engine access).
 
-import { Skin, Transform } from '@forgeax/engine-runtime';
+import { Skin } from '@forgeax/engine-skinning';
+import { Transform } from '@forgeax/engine-scene';
 import type { EngineFacade, EntityHandle } from '@forgeax/editor-core';
 
 /**

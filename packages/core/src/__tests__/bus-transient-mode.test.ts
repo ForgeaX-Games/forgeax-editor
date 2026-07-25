@@ -8,7 +8,7 @@
 // emit (so the engine sync repaints), but it skips undoStack / ledger / origins
 // growth. This test pins exactly that: stacks frozen when true, normal when false.
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import type { EditorOp } from '../types';

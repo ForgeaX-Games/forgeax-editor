@@ -17,24 +17,10 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World, getRegisteredComponents, defineComponent } from '@forgeax/engine-ecs';
-import {
-  Name,
-  Transform,
-  MeshFilter,
-  MeshRenderer,
-  DirectionalLight,
-  PointLight,
-  SpotLight,
-  Camera,
-  SpriteRegionOverride,
-  Skylight,
-  SkyboxBackground,
-  AnimationPlayer,
-  GlyphText,
-  Layer,
-  SortKey,
-  PointLightShadow,
-} from '@forgeax/engine-runtime';
+import { Name, Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera, Skylight, SkyboxBackground, Layer, SortKey, PointLightShadow } from '@forgeax/engine-render';
+import { SpriteRegionOverride, GlyphText } from '@forgeax/engine-render/authoring';
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { EntityHandle } from '../scene/scene-types';
 import { applyCommand, createEditSession } from '../session/document';
 import { listComponentSchemas, defaultComponentData, getComponentSchema } from '../scene/schema';

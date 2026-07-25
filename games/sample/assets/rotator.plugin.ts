@@ -26,7 +26,8 @@
 
 import { defineComponent, defineSystem, Entity } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
-import { Transform, quat } from '@forgeax/engine-runtime';
+import { quat } from '@forgeax/engine-math';
+import { Transform } from '@forgeax/engine-scene';
 
 // ── Component ────────────────────────────────────────────────────────────────
 // A tiny authoring component: spin `speed` radians/second about local `axis`.

@@ -26,7 +26,8 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import { transformPlugin, Camera, Transform, perspective } from '@forgeax/engine-runtime';
+import { scenePlugin as transformPlugin, Transform } from '@forgeax/engine-scene';
+import { Camera, perspective } from '@forgeax/engine-render';
 import { WorldManager } from '../index';
 
 function installFakeRaf() {

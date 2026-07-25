@@ -3,7 +3,8 @@ import {
   loadGame,
   type BootstrapEntry,
 } from '@forgeax/engine-app';
-import { perspective, Camera, Transform } from '@forgeax/engine-runtime';
+import { perspective, Camera } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 // engine #610 (Tier-1 decomposition) moved procedural geometry out of
 // engine-runtime into the @forgeax/engine-geometry leaf package.
 import { createCylinderGeometry } from '@forgeax/engine-geometry';

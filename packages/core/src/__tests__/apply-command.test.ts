@@ -31,13 +31,9 @@ import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type { AnimationClip } from '@forgeax/engine-types';
 import type { EntityHandle } from '../scene/scene-types';
-import {
-  AnimationPlayer,
-  ChildOf,
-  Name,
-  Transform,
-  MeshFilter,
-} from '@forgeax/engine-runtime';
+import { AnimationPlayer } from '@forgeax/engine-animation';
+import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
+import { MeshFilter } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import { EditorHidden } from '../components/EditorHidden';

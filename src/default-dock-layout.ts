@@ -37,7 +37,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
             {
               type: 'leaf',
               size: 382,
-              data: { views: ['ep:inspector'], activeView: 'ep:inspector', id: 'g-inspector' },
+              data: { views: ['ep:inspector', 'ep:asset-inspector'], activeView: 'ep:inspector', id: 'g-inspector' },
             },
           ],
         },
@@ -69,6 +69,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
     'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
     'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
+    'ep:asset-inspector': { id: 'ep:asset-inspector', contentComponent: 'ep:asset-inspector', title: 'Asset Inspector' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     info: { id: 'info', contentComponent: 'info', title: 'Info' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },

@@ -28,7 +28,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Name, Transform, ChildOf } from '@forgeax/engine-runtime';
+import { Name, Transform, ChildOf } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
 import * as entityState from '../store/entity-state';
 import { entName, entComponent, entComponents, entExists, entParent } from '../store/entity-state';

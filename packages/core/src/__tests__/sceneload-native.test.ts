@@ -23,7 +23,10 @@ import type { EntityHandle } from '../scene/scene-types';
 // global registry, corrupting every other test in the same process (the tokens
 // their entities were spawned with stop resolving). The runtime Transform
 // carries extra fields (quat*, world) the assertions here ignore.
-import { Name as TestName, rootsToSceneAsset, Transform as TestTransform } from '@forgeax/engine-runtime';
+import {
+  rootsToSceneAsset,
+} from '@forgeax/engine-runtime';
+import { Name as TestName, Transform as TestTransform } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { LocalEntityId, SceneEntity } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';

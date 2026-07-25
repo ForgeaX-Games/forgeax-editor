@@ -14,7 +14,8 @@
 // (sceneWorld) via the caller-supplied helpers (super moves VALUES across
 // worlds, not identity).
 
-import { Transform, MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-render';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
 import { meshFromInterleaved } from '@forgeax/engine-geometry';

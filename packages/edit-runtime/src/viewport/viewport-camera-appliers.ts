@@ -23,7 +23,7 @@
 // span (facade._recordLeaf reads the ambient active span, not a per-world
 // binding), so ledger/trace semantics are preserved.
 
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { EngineFacade } from '@forgeax/editor-core';
 import { registerSessionApplier } from '@forgeax/editor-core';

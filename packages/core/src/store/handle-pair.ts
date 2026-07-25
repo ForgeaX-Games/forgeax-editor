@@ -41,7 +41,7 @@
 //   research RD3 (engine generation does NOT defend cross-world misuse)
 //   requirements AC-05 (scene reload handle batch invalidation — RED LINE) / AC-06
 
-import { Name } from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 

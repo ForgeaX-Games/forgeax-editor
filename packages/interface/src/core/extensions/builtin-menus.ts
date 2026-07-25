@@ -19,6 +19,7 @@ import type { AppExtension } from '../app-shell/types';
 import { registerMenuItem, type MenuItemDef } from '../../lib/menu-registry';
 import { isPanelVisible } from '../../components/DockShell/DockRegion';
 import { useShellStore } from '../../store';
+import { getRecentGames } from '../../lib/recent-games';
 
 // Window-menu `checked()` predicates read from the DockRegion module-level
 // visibility mirror (interface-owned SSOT — kept in sync via
@@ -53,15 +54,27 @@ export const builtinMenusExtension: AppExtension = {
         labelKey: 'menu.brand.checkUpdate', icon: 'refresh-cw' },
 
       // ─── FILE ─────────────────────────────────────────────────────────────
-      // Labels unchanged (文本不变); the LOGIC now targets games — a project is a
-      // game here. 新建项目 → new-game dialog; 打开项目 / 打开最近 → the GameSwitcher
-      // dropdown (game list). 关闭项目 stays unimplemented (disabled).
+      // 新建项目 → new-game dialog (game.new). 打开项目 → the workspace modal's
+      // "打开已有目录" tab (project.open → openProjectModal('open') = FsBrowser).
+      // 打开最近 → a hover submenu of recent games (dynamicChildren, derived from
+      // the recent-games cache by mtime); each row switches to that game via
+      // game.pick. 关闭项目 stays unimplemented (disabled).
       { id: 'file.newProject', menu: 'file', group: 'project', order: 10,
         labelKey: 'menu.file.newProject', commandId: 'game.new', icon: 'file-plus' },
       { id: 'file.openProject', menu: 'file', group: 'project', order: 20,
-        labelKey: 'menu.file.openProject', commandId: 'game.open', icon: 'folder-open' },
+        labelKey: 'menu.file.openProject', commandId: 'project.open', icon: 'folder-open' },
       { id: 'file.openRecent', menu: 'file', group: 'project', order: 30,
-        labelKey: 'menu.file.openRecent', commandId: 'game.open', icon: 'clock' },
+        labelKey: 'menu.file.openRecent', icon: 'clock',
+        // Dynamic submenu: recent games (mtime-desc). Label uses the raw game
+        // name as the i18n key — `t()` falls back to the key when unmatched, so
+        // the display name shows as-is (same fallback the top-menu titles rely
+        // on). Clicking dispatches game.pick with the slug (→ store.switchGame).
+        dynamicChildren: () => getRecentGames().map((g): MenuItemDef => ({
+          id: `file.openRecent.${g.slug}`,
+          menu: 'file', group: 'recent', order: 0,
+          labelKey: (typeof g.name === 'string' && g.name) ? g.name : g.slug,
+          commandId: 'game.pick', args: { slug: g.slug },
+        })) },
       { id: 'file.closeProject', menu: 'file', group: 'project', order: 40,
         labelKey: 'menu.file.closeProject', icon: 'x' },
 

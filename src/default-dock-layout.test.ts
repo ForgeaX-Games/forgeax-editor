@@ -23,7 +23,7 @@ describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
   test('contains exactly the default visible dock panels', () => {
     const views = collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root).sort();
 
-    expect(views).toEqual(['chat', 'ep:assets', 'ep:hierarchy', 'ep:inspector', 'info', 'viewport']);
+    expect(views).toEqual(['chat', 'ep:asset-inspector', 'ep:assets', 'ep:hierarchy', 'ep:inspector', 'info', 'viewport']);
   });
 
   test('has a matching dockview panel descriptor for every view', () => {

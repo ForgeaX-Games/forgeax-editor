@@ -53,6 +53,12 @@ export interface MenuItemDef {
   danger?: boolean;
   /** 子菜单 (例:File → Open Recent → ...;Select → By Type → ...)。 */
   children?: MenuItemDef[];
+  /** 动态子菜单派生器 —— 渲染器在 submenu 展开时同步求值,返回运行时派生的子项
+   *  (例:File → 打开最近 → 按 mtime 排序的最近游戏列表)。与静态 `children`
+   *  互斥优先:声明了本项即视为可展开的 submenu,展开时才求值 (SSOT 仍是注册表,
+   *  子项是纯 derive)。求值必须同步 (数据源需在展开前预取/缓存);仅 Web 端消费,
+   *  原生序列化不含动态子项 (native 菜单结构在 build 时固化)。 */
+  dynamicChildren?: () => MenuItemDef[];
 }
 
 // ─── 注册表本体 (模块级 Map,页级单例) ────────────────────────────────────────
@@ -174,7 +180,23 @@ function toNativeAccelerator(combo: string): string {
 /** 递归序列化一项 (含 children) —— 返回值必须完全无函数,可直接 JSON.stringify。 */
 function serializeItem(def: MenuItemDef, translate: (key: string) => string): NativeMenuItem | null {
   if (def.when && !def.when()) return null; // 隐藏项直接 drop
-  const enabledResolved = def.enabled ? def.enabled() : !!def.commandId;
+  // Static `children` OR a `dynamicChildren` derivation — both serialize the
+  // same way. dynamicChildren is evaluated at serialize time (native menu is
+  // rebuilt on every registry change, so it re-derives with the cache current
+  // at that moment). Web + native thus share one derivation (§Derive / §SSOT).
+  const childDefs = def.children && def.children.length > 0
+    ? def.children
+    : def.dynamicChildren
+      ? def.dynamicChildren()
+      : null;
+  // enabled: explicit predicate wins; a submenu opener (has children) defaults
+  // enabled even without a command; else `!!commandId`. Mirrors the web
+  // renderer's resolveEnabled so both bars agree on which items are clickable.
+  const enabledResolved = def.enabled
+    ? def.enabled()
+    : (childDefs && childDefs.length > 0)
+      ? true
+      : !!def.commandId;
   const out: NativeMenuItem = {
     id: def.id,
     label: translate(def.labelKey),
@@ -182,9 +204,9 @@ function serializeItem(def: MenuItemDef, translate: (key: string) => string): Na
   };
   if (def.keybinding) out.accelerator = toNativeAccelerator(def.keybinding);
   if (def.danger) out.danger = true;
-  if (def.children && def.children.length > 0) {
+  if (childDefs && childDefs.length > 0) {
     const kids: NativeMenuItem[] = [];
-    for (const child of def.children) {
+    for (const child of childDefs) {
       const ser = serializeItem(child, translate);
       if (ser) kids.push(ser);
     }

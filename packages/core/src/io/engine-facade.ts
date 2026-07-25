@@ -74,6 +74,8 @@ const ENGINE_SIDE_EFFECT_HINTS: Partial<Record<EngineInterfaceName, string>> = {
     'by contract may migrate the entity to a new archetype and mark dependent systems dirty',
   'registry.instantiateFlat':
     'by contract may spawn a collected SceneAsset subtree as live world entities, re-acquiring shared asset (material/mesh) handles from their GUIDs',
+  'registry.invalidate':
+    'by contract clears the pack-body cache + catalogue entry for a single GUID, forcing a fresh loadByGuid on next access',
 };
 
 // M3 t16 (CI-typecheck fix feat-20260707): the facade's write methods forward the
@@ -282,6 +284,43 @@ export class EngineFacade {
   ): Result<void, EcsError> {
     _recordLeaf('world.removeComponent');
     return this._world.removeComponent(entity, component);
+  }
+
+  /** Invalidate a single asset GUID in the registry's pack-body cache, forcing
+   *  a fresh `loadByGuid` on next access. Used by `updateMaterialParams` after
+   *  writing new pack bytes — clears the stale cached payload so the viewport
+   *  (and any other consumer) picks up the updated material on the next frame.
+   *  No-op when the facade has no registry (headless / pre-boot). Records
+   *  'registry.invalidate' leaf. */
+  invalidateAsset(guid: string): void {
+    _recordLeaf('registry.invalidate');
+    this._registry?.invalidate(guid);
+  }
+
+  /** Update an asset's in-memory catalog envelope payload WITHOUT invalidating
+   *  the entry. Used by `updateMaterialParams` after writing new pack bytes so
+   *  the NEXT gateway-fill reads the fresh paramValues (not the pre-edit state).
+   *  `invalidateAsset` deletes the catalog entry entirely, which causes the next
+   *  dispatch to fail (gateway-fill finds nothing). This method keeps the entry
+   *  alive with updated payload. Also clears the packFileCache for the entry's
+   *  URL so a future `loadByGuid` (e.g. ▶ Play) re-reads from disk.
+   *  No-op when the facade has no registry or when the GUID is not catalogued. */
+  recatalogAsset(guid: string, nextPayload: Record<string, unknown>, nextRefs: string[]): void {
+    _recordLeaf('registry.invalidate');
+    const reg = this._registry;
+    if (!reg) return;
+    const key = guid.toLowerCase();
+    const envelope = reg.assetCatalog.get(key);
+    if (!envelope) return;
+    // Update envelope in-place (same object reference in the Map).
+    (envelope as unknown as { payload: unknown }).payload = nextPayload;
+    (envelope as unknown as { refs: string[] }).refs = nextRefs;
+    // Clear the packFileCache for this GUID's URL so a future loadByGuid
+    // re-fetches from disk (▶ Play correctness).
+    const indexEntry = (reg as unknown as { packIndexCache?: Map<string, { relativeUrl: string }> }).packIndexCache?.get(key);
+    if (indexEntry) {
+      (reg as unknown as { packFileCache: Map<string, unknown> }).packFileCache.delete(indexEntry.relativeUrl);
+    }
   }
 
   /** Internal: access the raw world for backward-compatible document applier

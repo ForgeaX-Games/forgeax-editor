@@ -770,7 +770,10 @@ export function createHostSession(deps: HostSessionDeps): {
       if (!gpResult.ok) return;
       const skin = gpResult.value.preview?.skin;
       if (!skin?.sceneGuid) return;
-      const { AnimationPlayer, Skin, SceneInstance, Transform: TransformC } = await import('@forgeax/engine-runtime');
+      const { AnimationPlayer } = await import('@forgeax/engine-animation');
+      const { Skin } = await import('@forgeax/engine-skinning');
+      const { Transform: TransformC } = await import('@forgeax/engine-scene');
+      const { SceneInstance } = await import('@forgeax/engine-render');
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const assets = renderer.assets;
       const sceneGid = AssetGuid.parse(skin.sceneGuid);

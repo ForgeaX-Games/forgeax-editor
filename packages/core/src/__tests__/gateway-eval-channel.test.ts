@@ -19,7 +19,7 @@
 
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
 import { registerApplier, sessionAppliers } from '../io/appliers';
 import { createEditSession } from '../session/document';

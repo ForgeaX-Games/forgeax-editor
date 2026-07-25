@@ -42,6 +42,7 @@
         "@forgeax/editor-core": "workspace:*",
         "@forgeax/editor-ui": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-ui": "workspace:*",
         "@forgeax/interface": "workspace:*",
         "@tanstack/react-virtual": "^3.14.3",
         "@tanstack/virtual-core": "^3.17.1",
@@ -61,6 +62,7 @@
       "name": "@forgeax/editor-core",
       "version": "0.1.0",
       "dependencies": {
+        "@forgeax/engine-animation": "workspace:*",
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
@@ -71,11 +73,14 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-project": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-skinning": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
@@ -94,6 +99,7 @@
       "dependencies": {
         "@forgeax/editor-core": "workspace:*",
         "@forgeax/editor-panels": "workspace:*",
+        "@forgeax/engine-animation": "workspace:*",
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-audio": "workspace:*",
@@ -113,13 +119,16 @@
         "@forgeax/engine-physics-rapier3d": "workspace:*",
         "@forgeax/engine-picking": "workspace:*",
         "@forgeax/engine-project": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-rhi-null": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-skinning": "workspace:*",
         "@forgeax/engine-state": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
@@ -146,6 +155,10 @@
     "packages/engine": {
       "name": "forgeax-engine",
       "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+      },
       "devDependencies": {
         "@biomejs/biome": "2.4.14",
         "@changesets/cli": "2.31.0",
@@ -180,10 +193,23 @@
         "webgpu": "^0.4.0",
       },
     },
+    "packages/engine/packages/animation": {
+      "name": "@forgeax/engine-animation",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-skinning": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+    },
     "packages/engine/packages/app": {
       "name": "@forgeax/engine-app",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-animation": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-audio-webaudio": "workspace:*",
@@ -194,8 +220,10 @@
         "@forgeax/engine-physics-rapier2d": "workspace:*",
         "@forgeax/engine-physics-rapier3d": "workspace:*",
         "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-state": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
@@ -221,6 +249,9 @@
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-skinning": "workspace:*",
       },
     },
     "packages/engine/packages/audio": {
@@ -265,6 +296,9 @@
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
+      "devDependencies": {
+        "@webgpu/types": "^0.1.71",
+      },
     },
     "packages/engine/packages/ecs": {
       "name": "@forgeax/engine-ecs",
@@ -302,6 +336,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -347,6 +383,8 @@
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@webgpu/types": "^0.1.71",
       },
@@ -498,6 +536,7 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-physics": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -512,7 +551,9 @@
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -540,6 +581,31 @@
       "devDependencies": {
         "@types/node": "^20.14.0",
         "@types/ws": "^8.5.10",
+      },
+    },
+    "packages/engine/packages/render": {
+      "name": "@forgeax/engine-render",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-codec": "workspace:*",
+        "@forgeax/engine-debug-draw": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
+        "@forgeax/engine-graphics-extras": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:^",
+        "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-null": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-skinning": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
     },
     "packages/engine/packages/render-graph": {
@@ -614,6 +680,7 @@
       "name": "@forgeax/engine-runtime",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-animation": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-codec": "workspace:*",
@@ -625,12 +692,15 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:^",
         "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-rhi-null": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-skinning": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -638,6 +708,15 @@
         "@forgeax/engine-naga": "workspace:*",
         "@forgeax/engine-state": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
+      },
+    },
+    "packages/engine/packages/scene": {
+      "name": "@forgeax/engine-scene",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
       },
     },
     "packages/engine/packages/shader": {
@@ -656,6 +735,13 @@
         "@forgeax/engine-naga": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@webgpu/types": "^0.1.71",
+      },
+    },
+    "packages/engine/packages/skinning": {
+      "name": "@forgeax/engine-skinning",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
       },
     },
     "packages/engine/packages/state": {
@@ -876,11 +962,13 @@
         "@forgeax/engine-physics-rapier3d": "workspace:*",
         "@forgeax/engine-picking": "workspace:*",
         "@forgeax/engine-project": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
@@ -1173,6 +1261,8 @@
 
     "@forgeax/engine": ["@forgeax/engine@workspace:packages/engine/packages/engine"],
 
+    "@forgeax/engine-animation": ["@forgeax/engine-animation@workspace:packages/engine/packages/animation"],
+
     "@forgeax/engine-app": ["@forgeax/engine-app@workspace:packages/engine/packages/app"],
 
     "@forgeax/engine-assets-runtime": ["@forgeax/engine-assets-runtime@workspace:packages/engine/packages/assets-runtime"],
@@ -1227,6 +1317,8 @@
 
     "@forgeax/engine-remote": ["@forgeax/engine-remote@workspace:packages/engine/packages/remote"],
 
+    "@forgeax/engine-render": ["@forgeax/engine-render@workspace:packages/engine/packages/render"],
+
     "@forgeax/engine-render-graph": ["@forgeax/engine-render-graph@workspace:packages/engine/packages/render-graph"],
 
     "@forgeax/engine-rhi": ["@forgeax/engine-rhi@workspace:packages/engine/packages/rhi"],
@@ -1241,9 +1333,13 @@
 
     "@forgeax/engine-runtime": ["@forgeax/engine-runtime@workspace:packages/engine/packages/runtime"],
 
+    "@forgeax/engine-scene": ["@forgeax/engine-scene@workspace:packages/engine/packages/scene"],
+
     "@forgeax/engine-shader": ["@forgeax/engine-shader@workspace:packages/engine/packages/shader"],
 
     "@forgeax/engine-shader-compiler": ["@forgeax/engine-shader-compiler@workspace:packages/engine/packages/shader-compiler"],
+
+    "@forgeax/engine-skinning": ["@forgeax/engine-skinning@workspace:packages/engine/packages/skinning"],
 
     "@forgeax/engine-state": ["@forgeax/engine-state@workspace:packages/engine/packages/state"],
 

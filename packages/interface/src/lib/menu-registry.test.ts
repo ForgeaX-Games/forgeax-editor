@@ -362,4 +362,31 @@ describe('serializeMenusForNative — 原生契约', () => {
     expect(recent.children![0]!.accelerator).toBe('CmdOrCtrl+O');
     expect(recent.children![0]!.label).toBe('[menu.file.recent.a]');
   });
+
+  test('dynamicChildren 在原生序列化时求值并展开为 children', () => {
+    registerMenuItem({
+      id: 'file.openRecent',
+      menu: 'file',
+      group: 'project',
+      order: 1,
+      labelKey: 'menu.file.openRecent',
+      // No commandId — opener with a runtime-derived submenu.
+      dynamicChildren: () => [
+        { id: 'file.openRecent.g1', menu: 'file', group: 'recent', order: 0,
+          labelKey: 'Game One', commandId: 'game.pick', args: { slug: 'g1' } },
+        { id: 'file.openRecent.g2', menu: 'file', group: 'recent', order: 0,
+          labelKey: 'Game Two', commandId: 'game.pick', args: { slug: 'g2' } },
+      ],
+    });
+    const native = serializeMenusForNative(t);
+    const opener = native.find((m) => m.menu === 'file')!.items[0]!;
+    // Opener has no command but children default it to enabled + a submenu.
+    expect(opener.enabled).toBe(true);
+    expect(opener.children).toBeDefined();
+    expect(opener.children!.map((c) => c.id)).toEqual([
+      'file.openRecent.g1',
+      'file.openRecent.g2',
+    ]);
+    expect(opener.children![0]!.label).toBe('[Game One]');
+  });
 });

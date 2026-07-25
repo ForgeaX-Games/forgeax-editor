@@ -8,27 +8,10 @@ import { describe, expect, it, beforeAll } from 'bun:test';
 import { defineComponent, resolveComponent } from '@forgeax/engine-ecs';
 
 // Side-effect: register real runtime components (production tokens).
-import {
-  Transform,
-  MeshFilter,
-  MeshRenderer,
-  DirectionalLight,
-  PointLight,
-  SpotLight,
-  Camera,
-  Skylight,
-  SkyboxBackground,
-  AnimationPlayer,
-  GlyphText,
-  Layer,
-  SortKey,
-  PointLightShadow,
-  SpriteRegionOverride,
-  SceneInstance,
-  ChildOf,
-  Children,
-  Name,
-} from '@forgeax/engine-runtime';
+import { Transform, ChildOf, Children, Name } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera, Skylight, SkyboxBackground, Layer, SortKey, PointLightShadow, SceneInstance } from '@forgeax/engine-render';
+import { GlyphText, SpriteRegionOverride } from '@forgeax/engine-render/authoring';
+import { AnimationPlayer } from '@forgeax/engine-animation';
 
 void Transform; void MeshFilter; void MeshRenderer;
 void DirectionalLight; void PointLight; void SpotLight; void Camera;

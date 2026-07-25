@@ -87,6 +87,7 @@ import {
 } from '../../lib/menu-registry';
 import { prettyCombo } from '../../lib/global-shortcuts';
 import { isTauri } from '../../lib/platform/runtime';
+import { warmRecentGames } from '../../lib/recent-games';
 import './MenuBar.css';
 
 // Icon name → lucide component. Mirrors ContextMenu.tsx's MENU_ICONS pattern
@@ -183,11 +184,12 @@ type Execute = (id: string, args?: unknown) => void;
 
 /** Compute the resolved enabled flag for one item.
  *  - Explicit `enabled()` always wins.
- *  - Items with children default to enabled (a submenu opener needs no cmd).
+ *  - Items with children (static or dynamic) default to enabled (a submenu
+ *    opener needs no cmd).
  *  - Leaf items default to `!!commandId` (no command = no-op = disabled). */
 function resolveEnabled(item: MenuItemDef): boolean {
   if (item.enabled) return item.enabled();
-  if (item.children && item.children.length > 0) return true;
+  if ((item.children && item.children.length > 0) || item.dynamicChildren) return true;
   return !!item.commandId;
 }
 
@@ -205,7 +207,8 @@ function MenuItemRow({ item, t, execute }: RowProps) {
   const label = t(item.labelKey);
   const combo = item.keybinding ? prettyCombo(item.keybinding) : '';
   const checked = item.checked ? item.checked() : false;
-  const hasChildren = !!item.children && item.children.length > 0;
+  const hasStaticChildren = !!item.children && item.children.length > 0;
+  const hasChildren = hasStaticChildren || !!item.dynamicChildren;
   const dangerCls = item.danger ? 'fx-menubar-item--danger text-destructive focus:text-destructive' : '';
   // Left glyph — a SINGLE slot, like the prototype's `.fe-ctx-item`: a checkable
   // item shows its check state there, every other item shows its icon. Rendering
@@ -224,6 +227,12 @@ function MenuItemRow({ item, t, execute }: RowProps) {
     : iconNode;
 
   if (hasChildren) {
+    // Dynamic children are evaluated fresh on each render of the SubContent.
+    // Radix mounts SubContent lazily (on hover-open) and unmounts on close, so
+    // `item.dynamicChildren()` runs at open-time — the caller must have the data
+    // ready synchronously (see file-menu game-list prefetch). Empty result → a
+    // single disabled "no recent" placeholder so the submenu never looks broken.
+    const kids = hasStaticChildren ? item.children! : item.dynamicChildren!();
     return (
       <DropdownMenuSub>
         <DropdownMenuSubTrigger disabled={!enabled} className={['fx-menubar-item', dangerCls].filter(Boolean).join(' ')}>
@@ -231,7 +240,13 @@ function MenuItemRow({ item, t, execute }: RowProps) {
           <span className="fx-menubar-item-label">{label}</span>
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent className="fx-menubar-content">
-          {renderMenuChildren(item.children!, t, execute)}
+          {kids.length > 0
+            ? renderMenuChildren(kids, t, execute)
+            : (
+                <DropdownMenuItem disabled className="fx-menubar-item">
+                  <span className="fx-menubar-item-label">{t('menu.file.openRecentEmpty')}</span>
+                </DropdownMenuItem>
+              )}
         </DropdownMenuSubContent>
       </DropdownMenuSub>
     );
@@ -293,8 +308,14 @@ function TopMenu({ menu, items, t, execute }: TopMenuProps) {
   // populated yet (T3 owns that), `t()` falls back to returning the key so we
   // don't crash — we just show "menubar.file" in place of "File" until T3.
   const titleKey = `menubar.${menu}`;
+  // File menu owns a dynamic 打开最近 submenu whose rows come from an async game
+  // list. Warm the cache when the File dropdown opens so `getRecentGames()` is
+  // populated by the time the user hovers into the submenu (sync at that point).
+  const onOpenChange = menu === 'file'
+    ? (open: boolean) => { if (open) void warmRecentGames(); }
+    : undefined;
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

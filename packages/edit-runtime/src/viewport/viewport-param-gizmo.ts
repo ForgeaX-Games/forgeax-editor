@@ -9,7 +9,8 @@
 // (editorEngine). Component reads still go through gateway.activeWorld
 // (sceneWorld) via the caller-supplied getSelectionComponents helper.
 
-import { Transform, Materials } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Materials } from '@forgeax/engine-render';
 import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
 import type { EngineFacade } from '@forgeax/editor-core';
 

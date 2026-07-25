@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Name } from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
 
 // The stale-entity-handle error will be defined in entity-state.ts by w5.

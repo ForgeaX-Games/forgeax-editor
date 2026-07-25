@@ -19,14 +19,9 @@
 // Camera math uses qCam = yaw·[0,1,0] × pitch·[1,0,0]; forward = qCam·[0,0,-1].
 // Pure geometry (ray/AABB/plane) is factored into sibling modules and unit-
 // tested; only the wiring depends on the (untyped) engine.
-import {
-  Transform,
-  ChildOf,
-  Camera,
-  perspective,
-  TONEMAP_REINHARD_EXTENDED,
-  quat,
-} from '@forgeax/engine-runtime';
+import { Transform, ChildOf } from '@forgeax/engine-scene';
+import { Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { quat } from '@forgeax/engine-math';
 // engine #650 (Tier-2 decomposition) moved pick/PickError into @forgeax/engine-picking.
 import { pick as enginePick, PickError } from '@forgeax/engine-picking';
 import type { World, EntityHandle } from '@forgeax/engine-ecs';

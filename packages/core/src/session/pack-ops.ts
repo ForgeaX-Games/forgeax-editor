@@ -17,7 +17,7 @@ import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
 import { validateAssetBasename, checkPathNotJailbreak } from './asset-basename';
 import { broadcastAssetsError } from '../store/assets-error-bus';
 import type { SceneAsset } from '@forgeax/engine-types';
-import { Materials } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
 import {
   readPack, writePack, deleteFile, deleteAsset, generateAssetGuid,
   readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset,
@@ -428,8 +428,11 @@ function defaultPayloadFor(kind: CreatableAssetKind): Record<string, unknown> {
       const scene: SceneAsset = { kind: 'scene', entities: [] };
       return scene as unknown as Record<string, unknown>;
     }
-    // Future extension example (TS enforces matching cases here):
-    // case 'material': { const mat: MaterialAsset = { kind:'material', passes:[], paramValues:{} }; return mat as unknown as Record<string,unknown>; }
+    case 'material':
+      throw new Error(
+        'material assets must be created via the createMaterial op, not createAsset — ' +
+        'createMaterial uses Materials.standard() (engine canonical builder) and is the SSOT for material authoring',
+      );
   }
 }
 

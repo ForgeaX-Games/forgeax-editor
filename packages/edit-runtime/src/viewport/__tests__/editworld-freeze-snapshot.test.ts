@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'bun:test';
 import { World, Entity, Update } from '@forgeax/engine-ecs';
 import { createApp, inputPlugin } from '@forgeax/engine-app';
-import { transformPlugin, Name, Transform } from '@forgeax/engine-runtime';
+import { scenePlugin as transformPlugin, Name, Transform } from '@forgeax/engine-scene';
 import { assemblePlayWorld, type PlayAssembly } from '../play-assemble';
 import { createRunLifecycle } from '../run-lifecycle';
 

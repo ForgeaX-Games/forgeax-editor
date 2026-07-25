@@ -22,14 +22,8 @@ import type {
 } from '../types';
 import type { SceneAsset } from '@forgeax/engine-types';
 
-import {
-  ChildOf,
-  Children,
-  MeshFilter,
-  MeshRenderer,
-  Name,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
@@ -54,7 +48,7 @@ export { createEditSession } from './edit-session';
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid'
+  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset' | 'recatalogAsset'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.

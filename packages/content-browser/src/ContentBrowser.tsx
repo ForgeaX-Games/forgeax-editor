@@ -9,7 +9,12 @@ import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolve
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
 // (standalone main.tsx / studio editorRenderers.tsx). Both are async.
-import { confirm as confirmDialog, prompt as promptDialog } from '@forgeax/editor-ui';
+// NOTE: folder/file delete no longer uses the editor-ui `confirm` AlertDialog —
+// in the standalone host that dialog (isolated overlay React root) never paints,
+// hanging the delete. Folder/file deletes now route through the in-package
+// cb-dialog path-confirm modal (same reliable styling as the asset DeleteGuard),
+// so keyboard + context-menu delete are consistent across studio & standalone.
+import { Button, prompt as promptDialog } from '@forgeax/editor-ui';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
@@ -30,7 +35,7 @@ import { CBSourceTree } from './CBSourceTree';
 import { iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
-import type { CreatableAssetSpec } from './creatable-asset-kinds';
+import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
@@ -241,6 +246,24 @@ export function ContentBrowser() {
     });
   }, []);
 
+  // Path-domain delete confirm (folders / source files) — mirrors the asset
+  // DeleteGuardDialog but for filesystem paths, using the same reliable cb-dialog
+  // styling instead of the editor-ui AlertDialog (which never paints in the
+  // standalone host). Context-menu folder/file delete routes through this.
+  const [pathDeleteTarget, setPathDeleteTarget] = useState<{ path: string; name: string; kind: 'dir' | 'file' } | null>(null);
+  const performPathDelete = useCallback(() => {
+    setPathDeleteTarget(current => {
+      if (current) {
+        if (current.kind === 'dir') {
+          gateway.dispatch({ kind: 'deleteDirectory', path: current.path }, 'human');
+        } else {
+          gateway.dispatch({ kind: 'deleteSourceFile', path: current.path, requestId: crypto.randomUUID() }, 'human');
+        }
+      }
+      return null;
+    });
+  }, []);
+
   // M3 (AC-03): asset-selection is a transient op — it goes through the one
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
   // (gateway-only door, M3), which is no longer exported from the barrel.
@@ -276,15 +299,25 @@ export function ContentBrowser() {
         return;
       }
       setPreviewItem(item);
-      if (item.assets[0]) openAsset(item.assets[0]);
+      if (item.assets[0]) {
+        openAsset(item.assets[0]);
+        if (item.assets[0].kind !== 'scene') {
+          void host.commands.execute('app.editor.focus', { panel: 'asset-inspector' });
+        }
+      }
       return;
     }
     openAsset(item);
-  }, [nav, openAsset, togglePackExpansion, viewMode]);
+    if (item.kind !== 'scene') {
+      void host.commands.execute('app.editor.focus', { panel: 'asset-inspector' });
+    }
+  }, [nav, openAsset, togglePackExpansion, viewMode, host]);
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
     onDelete: requestDelete,
+    onDeleteFolder: (folder: { path: string; name: string }) =>
+      setPathDeleteTarget({ path: folder.path, name: folder.name, kind: 'dir' }),
     onRename: (asset: CBAsset) => {
       void (async () => {
         const newName = await promptDialog({
@@ -342,13 +375,25 @@ export function ContentBrowser() {
         cancelText: t('editor.contentBrowser.dialogs.cancel'),
       }))?.trim();
       if (!name) return;
-      gateway.dispatch({
-        kind: 'createAsset',
-        packPath: `${basePath}/${name}.pack.json`,
-        guid: generateAssetGuid(),
-        assetKind: spec.kind,
-        name,
-      }, 'human');
+      if (spec.kind === 'material') {
+        gateway.dispatch({
+          kind: 'createMaterial',
+          guid: generateAssetGuid(),
+          name,
+          baseColor: [1, 1, 1, 1],
+          metallic: 0,
+          roughness: 0.5,
+          packPath: `${basePath}/Materials.pack.json`,
+        }, 'human');
+      } else {
+        gateway.dispatch({
+          kind: 'createAsset',
+          packPath: `${basePath}/${name}.pack.json`,
+          guid: generateAssetGuid(),
+          assetKind: spec.kind,
+          name,
+        }, 'human');
+      }
     })();
   }, [nav.currentPath, t]);
 
@@ -402,17 +447,7 @@ export function ContentBrowser() {
           gateway.dispatch({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
         } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          void (async () => {
-            const ok = await confirmDialog({
-              title: t('editor.contentBrowser.contextMenu.delete'),
-              description: t('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: item.name }),
-              confirmText: t('editor.contentBrowser.deleteGuard.confirm'),
-              cancelText: t('editor.contentBrowser.deleteGuard.cancel'),
-              destructive: true,
-            });
-            if (!ok) return;
-            gateway.dispatch({ kind: 'deleteDirectory', path: item.path }, 'human');
-          })();
+          setPathDeleteTarget({ path: item.path, name: item.name, kind: 'dir' });
         } },
       ];
     }
@@ -452,21 +487,7 @@ export function ContentBrowser() {
           }).catch(() => {});
         } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          void (async () => {
-            const ok = await confirmDialog({
-              title: t('editor.contentBrowser.contextMenu.delete'),
-              description: t('editor.contentBrowser.dialogs.deleteFileConfirm', { name: item.name }),
-              confirmText: t('editor.contentBrowser.deleteGuard.confirm'),
-              cancelText: t('editor.contentBrowser.deleteGuard.cancel'),
-              destructive: true,
-            });
-            if (!ok) return;
-            gateway.dispatch({
-              kind: 'deleteSourceFile',
-              path: item.path,
-              requestId: crypto.randomUUID(),
-            }, 'human');
-          })();
+          setPathDeleteTarget({ path: item.path, name: item.name, kind: 'file' });
         } },
       ];
     }
@@ -679,6 +700,7 @@ export function ContentBrowser() {
   const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
+    const materialSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'material');
     const menuItems = buildBlankAreaContextMenu(nav.currentPath, (parentPath) => {
       void (async () => {
         const name = await promptDialog({
@@ -691,7 +713,7 @@ export function ContentBrowser() {
         if (!name) return;
         gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
       })();
-    });
+    }, materialSpec ? () => createAssetInCurrentPath(materialSpec) : undefined);
     const resolved = menuItems.map(m => ({
       label: m.label,
       icon: m.icon ?? menuIconForId(m.id),
@@ -865,6 +887,62 @@ export function ContentBrowser() {
           onConfirm={performDelete}
           onCancel={() => setDeleteTargets(null)}
         />,
+        document.body,
+      )}
+
+      {pathDeleteTarget && createPortal(
+        <div
+          className="cb-dialog-overlay"
+          data-testid="cb-path-delete-overlay"
+          onClick={() => setPathDeleteTarget(null)}
+        >
+          <div
+            className="cb-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            data-testid="cb-path-delete-modal"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); setPathDeleteTarget(null); }
+              else if (e.key === 'Enter') { e.preventDefault(); performPathDelete(); }
+            }}
+            tabIndex={-1}
+          >
+            <div className="cb-dialog-title">{t('editor.contentBrowser.contextMenu.delete')}</div>
+            <div className="cb-dialog-body">
+              <ul className="cb-dialog-list">
+                <li className="cb-dialog-item">
+                  <span className="cb-dialog-item-name">{pathDeleteTarget.name}</span>
+                </li>
+              </ul>
+              <p className="cb-dialog-note">
+                {pathDeleteTarget.kind === 'dir'
+                  ? t('editor.contentBrowser.dialogs.deleteFolderConfirm', { name: pathDeleteTarget.name })
+                  : t('editor.contentBrowser.dialogs.deleteFileConfirm', { name: pathDeleteTarget.name })}
+              </p>
+            </div>
+            <div className="cb-dialog-actions">
+              <Button
+                className="cb-dialog-btn"
+                data-testid="cb-path-delete-cancel"
+                size="sm"
+                variant="subtle"
+                onClick={() => setPathDeleteTarget(null)}
+              >
+                {t('editor.contentBrowser.deleteGuard.cancel')}
+              </Button>
+              <Button
+                className="cb-dialog-btn"
+                data-testid="cb-path-delete-confirm"
+                size="sm"
+                variant="destructive"
+                onClick={performPathDelete}
+              >
+                {t('editor.contentBrowser.deleteGuard.confirm')}
+              </Button>
+            </div>
+          </div>
+        </div>,
         document.body,
       )}
     </div>

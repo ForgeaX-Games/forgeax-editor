@@ -18,7 +18,7 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
-import { ChildOf, Name, Transform } from '@forgeax/engine-runtime';
+import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import { applyCommand, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 

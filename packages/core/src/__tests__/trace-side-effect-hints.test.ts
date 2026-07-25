@@ -39,7 +39,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { World } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
 import { registerApplier, sessionAppliers } from '../io/appliers';
 import { createEditSession } from '../session/document';

@@ -15,13 +15,8 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
-import {
-  ChildOf,
-  MeshFilter,
-  MeshRenderer,
-  Name,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { EditGateway } from '../io/gateway';
