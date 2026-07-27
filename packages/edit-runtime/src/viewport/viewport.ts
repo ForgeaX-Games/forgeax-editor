@@ -227,7 +227,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     getSelectionWorldQuat: gizmoSelWorldQ,
     getGizmoSpace,
     isAuxVisible,
-    getDist: () => dist,
+    getCamPos: () => camPos,
   });
   const paramGizmo = createParamGizmo({
     editorEngine,
