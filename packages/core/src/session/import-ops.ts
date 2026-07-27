@@ -71,6 +71,22 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 /**
+ * Extract sub-asset GUIDs (in declared order) from a parsed `.meta.json`, for
+ * re-import identity reuse. Returns [] for a missing/first-import/malformed
+ * sidecar; a per-slot '' means "no reusable GUID at this index" (mint fresh).
+ */
+function extractSubAssetGuids(existingMeta: unknown): string[] {
+  if (existingMeta === null || typeof existingMeta !== 'object') return [];
+  const subAssets = (existingMeta as { subAssets?: unknown }).subAssets;
+  if (!Array.isArray(subAssets)) return [];
+  return subAssets.map((s) =>
+    s !== null && typeof s === 'object' && typeof (s as { guid?: unknown }).guid === 'string'
+      ? (s as { guid: string }).guid
+      : '',
+  );
+}
+
+/**
  * THE single asset-import implementation. Every disk write routes through the
  * assetIO write-gate (Invariant 7 / write-gate axis). Returns the terminal result;
  * never throws (errors are captured into { status:'error', error }).
@@ -138,16 +154,27 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         : { filename: sourceName, status: 'error', error: 'Failed to write .meta.json sidecar' };
     }
 
-    // 3. Other importers (image/audio/font/pack): write a simple sidecar + cook.
+    // 3. Other importers (image/audio/font/pack/ui): write a simple sidecar + cook.
     // Font is special: the engine fontImporter expects three sub-assets
     // (texture atlas, sampler, font glyph metrics) declared in the sidecar so
     // it can resolve each by kind. All other importers produce a single
     // sub-asset of their declared kind.
-    const subAssets = format.subAssetKinds.map((kind) => ({
-      guid: kind === format.subAssetKinds[0] ? guid : generateAssetGuid(),
+    //
+    // Re-import identity preservation: when a sidecar already exists at metaPath,
+    // reuse its per-slot sub-asset GUIDs instead of minting fresh ones. Re-importing
+    // an asset that already has a sidecar (the startup integrity repair, or a manual
+    // Content Browser re-import) MUST NOT change its GUID — source-code constants
+    // (e.g. HUD_UI_GUID / SETTINGS_UI_GUID in src/hud.ts) and the per-game catalog
+    // reference the ORIGINAL GUID, so churning it here silently breaks loadByGuid
+    // (`asset-not-imported`). `readExistingMeta` returns undefined on first import,
+    // so a brand-new asset still gets a freshly-minted GUID.
+    const existingSubGuids = extractSubAssetGuids(await assetIO.readExistingMeta(metaPath));
+    const subAssets = format.subAssetKinds.map((kind, i) => ({
+      guid: existingSubGuids[i] || (i === 0 ? guid : generateAssetGuid()),
       sourceIndex: 0,
       kind,
     }));
+    const primaryGuid = subAssets[0]?.guid ?? guid;
     const meta = {
       schemaVersion: '1.0.0',
       kind: 'external-asset-package',
@@ -156,7 +183,7 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       importSettings: { ...format.defaultSettings },
       subAssets,
     };
-    console.info('[import-diag] writing generic sidecar', { metaPath, importer: format.importer });
+    console.info('[import-diag] writing generic sidecar', { metaPath, importer: format.importer, primaryGuid, reusedExisting: existingSubGuids.some(Boolean) });
     const wrote = await assetIO.writeMetaSidecar(metaPath, JSON.stringify(meta, null, 2) + '\n');
     if (!wrote) {
       return { filename: sourceName, status: 'error', error: 'Failed to create .meta.json sidecar' };
@@ -164,14 +191,14 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
 
     // Audio is pass-through — sidecar alone is sufficient for catalog fold.
     if (format.importer !== 'audio') {
-      console.info('[import-diag] triggering cook', { guid, sourceName });
-      const cookError = await assetIO.triggerCook(guid);
-      console.info('[import-diag] cook trigger result', { guid, sourceName, cookError });
+      console.info('[import-diag] triggering cook', { guid: primaryGuid, sourceName });
+      const cookError = await assetIO.triggerCook(primaryGuid);
+      console.info('[import-diag] cook trigger result', { guid: primaryGuid, sourceName, cookError });
       if (cookError) {
-        return { filename: sourceName, status: 'error', guid, error: cookError };
+        return { filename: sourceName, status: 'error', guid: primaryGuid, error: cookError };
       }
     }
-    return { filename: sourceName, status: 'done', guid };
+    return { filename: sourceName, status: 'done', guid: primaryGuid };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[import-diag] executeAssetImport THREW', { sourceName, destPath, error: msg });

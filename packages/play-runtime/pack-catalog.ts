@@ -51,7 +51,7 @@ interface ExternalAssetMetaJson {
   // closed `assetType` enum with the open `importer` key (one-cut migration,
   // no shim). This replica must read `importer` to match meta.schema.json and
   // the engine's build-catalog.ts; reading `assetType` rejected every sidecar.
-  readonly importer: 'image' | 'gltf' | 'fbx' | 'audio' | 'font';
+  readonly importer: 'image' | 'gltf' | 'fbx' | 'audio' | 'font' | 'ui';
   readonly source: string;
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
@@ -180,6 +180,86 @@ async function bakeHdrEquirect(
   return { binAbsPath, width: tex.width, height: tex.height };
 }
 
+// Cook a UI author source (`.ui.html` + `.ui.css`) into the
+// `internal-text-package` pack the runtime loads. We cook it HERE, at per-game
+// catalog build, because this dev per-game route has NO `/__import` step wired
+// for game roots, so a raw-source ui row would 404 the cook and surface to the
+// game as `asset-not-imported` (the HUD/settings UI PLAY bug). This mirrors the
+// sibling bakeHdrEquirect inline-cook: keep the per-game route self-sufficient
+// instead of round-tripping `/__import`.
+//
+// We read the `.ui.html` + `.ui.css` sources VERBATIM rather than routing them
+// through the engine `createUiImporter`: for a UI with no external image
+// companions (the template HUD/settings case), the importer's finalized html/css
+// are byte-identical to the raw sources, so the emitted pack matches the engine
+// `POST /__import` ui arm output. Doing it dependency-free keeps this
+// vite-config-time module from importing the engine UI importer (css-tree/parse5
+// validation stack) just to no-op. UIs that DO reference image companions cannot
+// be served by this per-game dev route anyway (no `/__ui/*` serving) and must be
+// pre-imported at build time.
+//
+// The cooked pack is cached on disk next to the source under a
+// NON-`.pack.json`/`.meta.json` name so `scan()` never re-folds it as a
+// duplicate-GUID source.
+async function cookUiPack(
+  sourceAbsPath: string,
+  guid: string,
+): Promise<string | null> {
+  const guidLower = guid.toLowerCase();
+  const outAbsPath = `${sourceAbsPath}.${guidLower}.ui.json`;
+  const cssAbsPath = sourceAbsPath.replace(/\.ui\.html$/i, '.ui.css');
+  // Freshness cache: reuse the cooked pack unless the `.ui.html` / `.ui.css`
+  // source is newer, so the pack-index HTTP hot path does not re-cook on every
+  // request.
+  try {
+    const [outStat, htmlStat, cssStat] = await Promise.all([
+      stat(outAbsPath),
+      stat(sourceAbsPath),
+      stat(cssAbsPath).catch(() => ({ mtimeMs: 0 })),
+    ]);
+    if (
+      outStat.size > 0 &&
+      outStat.mtimeMs >= htmlStat.mtimeMs &&
+      outStat.mtimeMs >= cssStat.mtimeMs
+    ) {
+      return outAbsPath;
+    }
+  } catch {
+    // No cached pack (or stat failed) -> cook below.
+  }
+
+  let html: string;
+  try {
+    html = await readFile(sourceAbsPath, 'utf-8');
+  } catch (e) {
+    console.warn(`[forgeax-pack] ui cook: cannot read ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+  // The `.ui.css` companion is authored next to the `.ui.html`. The engine
+  // UiLoader requires `css` to be a string, so default to '' when a UI ships
+  // without a stylesheet rather than failing the cook.
+  let css = '';
+  try {
+    css = await readFile(cssAbsPath, 'utf-8');
+  } catch {
+    // no `.ui.css` companion -> css stays ''
+  }
+  const payload = { guid, html, css };
+  const pack = {
+    schemaVersion: '1.0.0',
+    kind: 'internal-text-package',
+    assets: [{ guid, kind: 'ui', payload, refs: [] }],
+  };
+  try {
+    await mkdir(dirname(outAbsPath), { recursive: true });
+    await writeFile(outAbsPath, JSON.stringify(pack));
+  } catch (e) {
+    console.warn(`[forgeax-pack] ui cook: write failed for ${outAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+  return outAbsPath;
+}
+
 // ── URL base prefixing ─────────────────────────────────────────────────
 // The engine vite root uses `base: '/preview/'`, and the interface dev server
 // only proxies `/preview/*` to the engine (packages/interface/vite.config:
@@ -215,7 +295,7 @@ async function processMetaSidecar(
   if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
     return `sidecar ${rawPath} missing required 'importer' field`;
   }
-  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'fbx' && metaObj.importer !== 'audio' && metaObj.importer !== 'font') {
+  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'fbx' && metaObj.importer !== 'audio' && metaObj.importer !== 'font' && metaObj.importer !== 'ui') {
     return `sidecar ${rawPath} has unfoldable importer: ${JSON.stringify(metaObj.importer)}`;
   }
 
@@ -358,6 +438,28 @@ async function processMetaSidecar(
       } else if (sub.kind === 'font') {
         out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'font', sourcePath: sourceRel, name: subName(sub) });
       }
+    }
+  }
+
+  // importer === 'ui': the engine SSOT build-catalog.ts folds a raw-source ui
+  // row and relies on `POST /__import` to cook it; this dev per-game route has
+  // no such cook wired for game roots, so we cook the UiAsset inline (cookUiPack)
+  // and point the row at the cached pack. Without this arm the HUD/settings UI
+  // GUIDs never entered the per-game catalog -> loadByGuid miss -> transport
+  // -> /__import 404 (meta-not-found) -> `asset-not-imported`.
+  if (meta.importer === 'ui') {
+    for (const sub of meta.subAssets) {
+      if (sub.kind !== 'ui') continue;
+      const cookedAbs = await cookUiPack(sourceAbsPath, sub.guid);
+      if (cookedAbs === null) continue;
+      const cookedRel = relative(cwd, cookedAbs).replace(/\\/g, '/');
+      out.push({
+        guid: sub.guid,
+        relativeUrl: withBase(base, cookedRel),
+        kind: 'ui',
+        sourcePath: sourceRel,
+        name: subName(sub),
+      });
     }
   }
 

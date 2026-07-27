@@ -16,7 +16,7 @@
 //   import-ops.ts: executeAssetImport({ skipUpload: true }) — startup-scan bootstrap
 
 import { assetIO } from '../io/asset-io-facade';
-import { isImportable } from './ext-importer-map';
+import { getImportFormat, isImportable } from './ext-importer-map';
 import { resolveGamePath } from '../util/path-resolver';
 import type { ScanDiagnostic } from './scan-diagnostic';
 
@@ -110,14 +110,25 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
   // Cross-reference: for each importable source file, check if its .meta.json exists.
   for (const sourcePath of sourceFiles) {
     const basename = sourcePath.slice(sourcePath.lastIndexOf('/') + 1);
-    const ext = basename.slice(basename.lastIndexOf('.')).toLowerCase();
 
-    if (!isImportable(basename)) {
+    const format = getImportFormat(basename);
+    if (!format) {
       result.skipped.push(sourcePath);
       continue;
     }
 
-    const expectedMeta = `${sourcePath}.meta.json`;
+    // The expected sidecar path MUST match the convention executeAssetImport
+    // (import-ops.ts) writes, or a fully-imported asset looks half-imported and
+    // gets re-imported on every boot. UI packages keep the sidecar beside the
+    // source STEM (`hud.ui.html` -> `hud.meta.json`); all other importers use
+    // `<source>.meta.json` (`model.fbx` -> `model.fbx.meta.json`). Using the
+    // `<source>.meta.json` form for UI meant every `*.ui.html` was flagged
+    // `needsMeta`, so the startup repair re-imported it and minted a fresh GUID
+    // into the sidecar — desyncing it from the source-code GUID constant
+    // (HUD_UI_GUID / SETTINGS_UI_GUID) and breaking loadByGuid at PLAY.
+    const expectedMeta = format.importer === 'ui'
+      ? sourcePath.replace(/\.ui\.html$/i, '.meta.json')
+      : `${sourcePath}.meta.json`;
     if (metaFiles.has(expectedMeta)) {
       result.ok.push(sourcePath);
     } else {
