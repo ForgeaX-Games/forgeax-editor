@@ -297,32 +297,6 @@ export class EngineFacade {
     this._registry?.invalidate(guid);
   }
 
-  /** Update an asset's in-memory catalog envelope payload WITHOUT invalidating
-   *  the entry. Used by `updateMaterialParams` after writing new pack bytes so
-   *  the NEXT gateway-fill reads the fresh paramValues (not the pre-edit state).
-   *  `invalidateAsset` deletes the catalog entry entirely, which causes the next
-   *  dispatch to fail (gateway-fill finds nothing). This method keeps the entry
-   *  alive with updated payload. Also clears the packFileCache for the entry's
-   *  URL so a future `loadByGuid` (e.g. ▶ Play) re-reads from disk.
-   *  No-op when the facade has no registry or when the GUID is not catalogued. */
-  recatalogAsset(guid: string, nextPayload: Record<string, unknown>, nextRefs: string[]): void {
-    _recordLeaf('registry.invalidate');
-    const reg = this._registry;
-    if (!reg) return;
-    const key = guid.toLowerCase();
-    const envelope = reg.assetCatalog.get(key);
-    if (!envelope) return;
-    // Update envelope in-place (same object reference in the Map).
-    (envelope as unknown as { payload: unknown }).payload = nextPayload;
-    (envelope as unknown as { refs: string[] }).refs = nextRefs;
-    // Clear the packFileCache for this GUID's URL so a future loadByGuid
-    // re-fetches from disk (▶ Play correctness).
-    const indexEntry = (reg as unknown as { packIndexCache?: Map<string, { relativeUrl: string }> }).packIndexCache?.get(key);
-    if (indexEntry) {
-      (reg as unknown as { packFileCache: Map<string, unknown> }).packFileCache.delete(indexEntry.relativeUrl);
-    }
-  }
-
   /** Internal: access the raw world for backward-compatible document applier
    *  wrapping (t9 adapter). NOT part of the public ApplierCtx surface. */
   _rawWorld(): World {

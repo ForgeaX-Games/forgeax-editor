@@ -355,11 +355,6 @@ export type { PathSelectionItem } from './store/folder-selection';
 // AssetsChangedHint — hint type for broadcastAssetsChanged optimization.
 export type { AssetsChangedHint } from './store/assets-changed';
 
-// ensureAssetCataloged — eager-load an asset by GUID into the engine's
-// assetCatalog. Used by the material editor to ensure the gateway-fill can
-// synchronously pre-fill _oldPatch before the updateMaterialParams applier.
-export { ensureAssetCataloged } from './store/ensure-asset-cataloged';
-
 // broadcastAssetsError — companion to broadcastAssetsChanged: fire-and-forget
 // asset IO that failed AFTER the applier returned ok. Panels subscribe via
 // panelBridge.on('assetsError', …) and toast; the applier remains SSOT for

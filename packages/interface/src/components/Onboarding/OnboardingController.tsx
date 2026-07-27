@@ -124,6 +124,7 @@ const CLI_LINKS: Record<string, { name: string; url: string }> = {
   codex: { name: 'Codex CLI', url: 'https://developers.openai.com/codex/quickstart' },
   'cursor-agent': { name: 'Cursor CLI', url: 'https://cursor.com/docs/cli/installation' },
   codebuddy: { name: 'a peer agent CLI CLI', url: 'https://www.codebuddy.ai/cli' },
+  'kimi-code': { name: 'Kimi Code CLI', url: 'https://www.kimi.com/code/docs/kimi-code-cli/guides/getting-started.html' },
 };
 
 // The native ForgeaX kernel (forgeax-core / forgeax) is registered in the shared
@@ -138,7 +139,7 @@ const NATIVE_KERNEL_IDS = new Set(['forgeax-core', 'forgeax']);
 // codebuddy later" bug. It is only a paint-fast optimism: once health returns it
 // becomes the source of truth (below), so a future driver it doesn't list still
 // appears, and per-row status is always live.
-const SEED_CLI_IDS: CliId[] = ['claude-code', 'codex', 'cursor-agent', 'codebuddy'];
+const SEED_CLI_IDS: CliId[] = ['claude-code', 'codex', 'cursor-agent', 'codebuddy', 'kimi-code'];
 
 /** Local-CLI driver ids to offer. Before health lands: the complete seed (all
  *  rows visible, each "checking"). After: derived LIVE from /api/cli/health with

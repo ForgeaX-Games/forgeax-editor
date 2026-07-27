@@ -179,6 +179,20 @@ function gameEngineResolve(gameDirAbs: string | null): PluginOption {
 // (packages/edit-runtime) = repo root.
 const SHARED_BASE = resolve(EDIT_RUNTIME_DIR, '../../forgeax-editor-assets');
 
+// Canonical template HUD/settings packs live with the engine pin. They are
+// shared runtime inputs, not game-local `.ui.html`/`.meta.json` authoring files.
+// Keep the engine-assets submodule as their SSOT and add only its template UI
+// directory to the self-hosted pack roots below.
+const ENGINE_TEMPLATE_UI_BASE = resolve(
+  EDIT_RUNTIME_DIR,
+  '..',
+  'engine',
+  'forgeax-engine-assets',
+  'demo-assets',
+  'template-game-default',
+  'ui',
+);
+
 /**
  * A resolved root plus its stable catalog-space prefix. The engine pack catalog
  * reports source paths relative to `process.cwd()`, so the browser must classify
@@ -220,10 +234,11 @@ function gameCatalogRoots(gameDirAbs: string): CatalogAssetRoot[] {
 }
 
 function gamePackRoots(gameDirAbs: string): string[] {
-  return resolveGameAssetRoots(gameDirAbs, {
+  const roots = resolveGameAssetRoots(gameDirAbs, {
     sharedBase: SHARED_BASE,
     implicitSharedSubs: ['template-game-default'],
   }).map((r) => r.abs);
+  return existsSync(ENGINE_TEMPLATE_UI_BASE) ? [ENGINE_TEMPLATE_UI_BASE, ...roots] : roots;
 }
 
 // ── orphan .meta.json auto-cleanup (editor-level policy) ────────────────────

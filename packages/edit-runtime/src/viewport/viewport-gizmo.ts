@@ -34,10 +34,6 @@ import type { GizmoSpace } from '@forgeax/editor-core';
 type Shape = 'translate' | 'scale' | 'rings';
 export type GizmoMode = 'translate' | 'rotate' | 'scale';
 
-/** Lower bound on the camera→gizmo distance used for sizing. Keeps the gizmo
- *  grabbable (doesn't collapse to ~0) when the camera is flown right up to it. */
-const MIN_GIZMO_DIST = 1.5;
-
 export interface GizmoDeps {
   /** editorWorld facade — gizmo entities/assets are minted here (AC-01). */
   editorEngine: EngineFacade;
@@ -54,11 +50,9 @@ export interface GizmoDeps {
   getGizmoSpace(): GizmoSpace;
   /** Aux-entity visibility gate (w23, D-5): display='game' hides all gizmos. */
   isAuxVisible(): boolean;
-  /** Current camera world position. Handles are sized ∝ the camera→gizmo-center
-   *  distance so they keep a roughly CONSTANT SCREEN SIZE at any zoom — in both
-   *  orbit AND fly mode (fly moves camPos but never touches the orbit `dist`, so
-   *  sizing off `dist` would leave the gizmo huge when flying in close). */
-  getCamPos(): Vec3;
+  /** Current camera distance — handles are sized ∝ dist so they stay grabbable
+   *  at any zoom. Read on every update (orbit / dolly change it live). */
+  getDist(): number;
 }
 
 export interface GizmoPool {
@@ -109,7 +103,7 @@ const IDENTITY_QUAT: [number, number, number, number] = [0, 0, 0, 1];
 export function createGizmoPool({
   editorEngine, getSelection, getGizmoMode, getSelectionWorldTransform,
   getSelectionWorldQuat, getGizmoSpace,
-  isAuxVisible, getCamPos,
+  isAuxVisible, getDist,
 }: GizmoDeps): GizmoPool {
   let gizmoMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
   let tipMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
@@ -292,11 +286,7 @@ export function createGizmoPool({
     rotatedPlaneNormals = PLANES.map(p => rotVec3(gizmoQuat, p.normal));
     gizmoCenter = center;
 
-    // Size handles off the REAL camera→center distance (not the orbit `dist`),
-    // so the gizmo stays a roughly constant screen size in orbit AND fly mode.
-    const cam = getCamPos();
-    const dcx = cam[0] - center[0], dcy = cam[1] - center[1], dcz = cam[2] - center[2];
-    const dist = Math.max(Math.hypot(dcx, dcy, dcz), MIN_GIZMO_DIST);
+    const dist = getDist();
     const len = dist * 0.13, thick = dist * 0.007;
     const gm = getGizmoMode();
     const want: Shape = gm === 'rotate' ? 'rings' : gm === 'scale' ? 'scale' : 'translate';

@@ -17,6 +17,11 @@ import {
   VagNetworkSchema,
   VagFpsStatsSchema,
   VagDeviceLostSchema,
+  VagCarrierHandshakeSchema,
+  VagCarrierHeartbeatSchema,
+  VagCarrierFailureSchema,
+  VAG_CARRIER_PROTOCOL_VERSION,
+  type VagCarrierFailureDetail,
 } from '@forgeax/editor-core/protocol';
 import {
   loadGameProject,
@@ -31,8 +36,8 @@ import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
 
-// todo 004:本 Play/preview 视口作为 studio 的 iframe 嵌入时,把全局快捷键(⌘K 命令面板 /
-// Ctrl+Shift+* / Esc)转发给 studio 顶层。独立运行(顶层窗口)时是 no-op。
+// TODO 004: When this Play/preview viewport is embedded as a studio iframe,
+// forward global shortcuts to the studio shell. Standalone mode is a no-op.
 installShortcutForwarder();
 
 const root = document.getElementById('app') ?? document.body;
@@ -58,7 +63,7 @@ loadingOverlay.style.cssText = [
   'background:linear-gradient(180deg,#8fb1d6 0%,#c9d8e8 55%,#dbe4d0 100%)',
   'font:14px/1.4 ui-sans-serif,system-ui,sans-serif', 'color:#3a4a5a', 'transition:opacity .3s',
 ].join(';');
-loadingOverlay.innerHTML = '<div style="width:34px;height:34px;border:3px solid rgba(58,74,90,.25);border-top-color:#3a4a5a;border-radius:50%;animation:fx-spin .8s linear infinite"></div><div>加载中…</div>';
+loadingOverlay.innerHTML = '<div style="width:34px;height:34px;border:3px solid rgba(58,74,90,.25);border-top-color:#3a4a5a;border-radius:50%;animation:fx-spin .8s linear infinite"></div><div>Loading...</div>';
 const spinStyle = document.createElement('style');
 spinStyle.textContent = '@keyframes fx-spin{to{transform:rotate(360deg)}}';
 document.head.appendChild(spinStyle);
@@ -79,6 +84,33 @@ const GAME_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const qp = new URLSearchParams(location.search);
 const rawGameId = qp.get('game') ?? qp.get('slug');
 const gameId = (rawGameId && GAME_ID_RE.test(rawGameId)) ? rawGameId : '_template';
+const carrierRuntimeId = qp.get('runtimeId')?.trim() || null;
+const carrierProjectId = qp.get('projectId')?.trim() || null;
+const carrierGameId = rawGameId && GAME_ID_RE.test(rawGameId) ? rawGameId : null;
+const carrierScope = carrierProjectId ? { projectId: carrierProjectId, gameId: carrierGameId } : null;
+const carrierPageNonce = crypto.randomUUID();
+const carrierCanvasId = `canvas-${carrierPageNonce}`;
+const carrierRendererId = `renderer-${carrierPageNonce}`;
+const carrierPageIdentity = `${location.origin}${location.pathname}`;
+canvas.id = carrierCanvasId;
+
+let carrierSentinel = 0;
+let carrierFailure: VagCarrierFailureDetail | null = null;
+function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', failure: VagCarrierFailureDetail | null = carrierFailure) {
+  return {
+    version: VAG_CARRIER_PROTOCOL_VERSION,
+    runtimeId: carrierRuntimeId,
+    scope: carrierScope,
+    pageNonce: carrierPageNonce,
+    pageIdentity: carrierPageIdentity,
+    canvasIdentity: carrierCanvasId,
+    rendererIdentity: carrierRendererId,
+    sentinel: carrierSentinel,
+    liveness: 'alive' as const,
+    renderReadiness,
+    failure,
+  };
+}
 
 // ── Physics gate (per-game opt-in via forge.json "physics") ──
 // Physics is OFF by default so non-physics games pay zero rapier-WASM cost. A
@@ -206,7 +238,7 @@ const { world, renderer } = app.value;
 // loadByGuid(scene) recurses into the cylinder ref, finds it absent (and
 // /__import is sidecar-only → 404), and fails with `asset-not-imported` →
 // resolveDefaultScene fails → the game falls back to a bare ground (cow-level's
-// "只剩几个灯光"). Register the cylinder HERE, right after createApp and before
+// "only a few lights"). Register the cylinder HERE, right after createApp and before
 // any scene resolves, so every host-startup game with a cylinder resolves.
 const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
 {
@@ -436,6 +468,10 @@ if (entry) {
 // ── Start the frame loop ──
 app.value.start();
 
+try {
+  sendVagMessage(window.parent, VagCarrierHandshakeSchema, carrierPayload('pending', null));
+} catch { /* parent might be cross-origin */ }
+
 // ── Device-lost → ask the shell to self-heal (reload this iframe) ──
 // The engine's onError fan-out carries the RhiError 'device-lost' arm (the
 // engine error union has no 'context-lost' code). PlaySurface listens for
@@ -444,6 +480,22 @@ app.value.start();
 // engine runs its cleanup funnel).
 let deviceLostSent = false;
 app.value.onError((err) => {
+  const code = typeof err.code === 'string' ? err.code : 'renderer-error';
+  const detail = err as unknown as { hint?: unknown; message?: unknown };
+  carrierFailure = {
+    code,
+    stage: code === 'device-lost' ? 'device-lost' : 'uncaptured-error',
+    retryable: code !== 'device-lost',
+    hint: typeof detail.hint === 'string' ? detail.hint : 'Inspect the renderer error, then stop and ensure again.',
+    at: new Date().toISOString(),
+    message: typeof detail.message === 'string' ? detail.message : undefined,
+  };
+  const failure = carrierFailure;
+  if (!failure) return;
+  try {
+    const payload = carrierPayload('unavailable', failure);
+    sendVagMessage(window.parent, VagCarrierFailureSchema, { ...payload, failure });
+  } catch { /* parent might be cross-origin */ }
   if (err.code === 'device-lost' && !deviceLostSent) {
     deviceLostSent = true;
     sendVagMessage(window.parent, VagDeviceLostSchema, {});
@@ -489,6 +541,10 @@ world.addSystem(Update, {
       lastHeartbeat = now;
       try {
         sendVagMessage(window.parent, VagFpsStatsSchema, { fps: lastFps });
+        carrierSentinel++;
+        sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(
+          carrierFailure ? 'unavailable' : 'ready',
+        ));
       } catch { /* parent might be cross-origin */ }
     }
   },

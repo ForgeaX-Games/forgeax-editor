@@ -31,6 +31,8 @@ const PROVIDER_DISPLAY: Record<string, string> = {
   "claude-code": "the reference agent CLI",
   "codex": "OpenAI Codex",
   "cursor-agent": "Cursor Agent",
+  "codebuddy": "a peer agent CLI",
+  "kimi-code": "Kimi Code",
 };
 
 interface RawCliHealth {

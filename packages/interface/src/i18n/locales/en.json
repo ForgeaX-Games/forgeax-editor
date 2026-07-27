@@ -159,7 +159,7 @@
       },
       "cli": {
         "title": "Local CLI",
-        "hint": "Detects installed claude-code / codex / cursor-agent / codebuddy and can run a 1-token Test.",
+        "hint": "Detects installed claude-code / codex / cursor-agent / codebuddy / kimi-code and can run a 1-token Test.",
         "healthy": "Healthy",
         "unavailable": "Unavailable",
         "useReason": "This CLI is unavailable and cannot be set as active"
@@ -501,6 +501,7 @@
     "cliDescCodex": "OpenAI Codex CLI",
     "cliDescCursor": "Cursor Agent CLI",
     "cliDescCodebuddy": "a peer agent CLI Code CLI",
+    "cliDescKimiCode": "Moonshot Kimi Code CLI",
     "cliBusPillTitle": "bus extension: {{extension}} · click to view in Bus details →",
     "interruptTitle": "Interrupt the current reply and send now (steer)",
     "queueSendTitle": "Queue send — runs in order after the current reply finishes ([Enter])",
@@ -665,7 +666,22 @@
     "openInBusDetail": "View in Bus detail →",
     "pluginAuthor": "Plugin Author",
     "pluginStore": "Plugin Store",
-    "editor": "Editor"
+    "editor": "Editor",
+    "plugins": {
+      "skill": "Skill VFX",
+      "gen3d": "3D Character",
+      "lowpoly3d": "3D Low Poly",
+      "character": "Character Editor",
+      "items": "Items & Icons",
+      "animation": "Animation",
+      "sceneAssets2d": "2D Scene Assets",
+      "ui": "UI Design",
+      "narrative": "Narrative",
+      "reel": "Cinematic Studio",
+      "gameVideo": "Video Game",
+      "audio": "Music & SFX",
+      "sceneGenerator": "Scene Generator"
+    }
   },
   "trust": {
     "import": {

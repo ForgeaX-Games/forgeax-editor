@@ -24,8 +24,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve, basename } from 'node:path';
-import { existsSync } from 'node:fs';
+import { dirname, resolve, basename, join } from 'node:path';
+import { existsSync, realpathSync, readFileSync } from 'node:fs';
 import { engineVitePreset } from './packages/edit-runtime/src/viewport/runtime-vite-preset';
 import tailwindcss from 'tailwindcss';
 import autoprefixer from 'autoprefixer';
@@ -76,6 +76,53 @@ const STANDALONE_PORT = Number(process.env.FORGEAX_STANDALONE_PORT ?? 15290);
 // (no --game) -> demo seed, shader plugin alone serves the manifest.
 const enginePreset = engineVitePreset({ base: '/', gameDirAbs: GAME_DIR, preserveSymlinks: false });
 
+// Keep the standalone host on one engine checkout. The host root lives above
+// the workspace packages and does not have a direct node_modules link for every
+// engine package. Vite can therefore walk into the parent checkout's Bun
+// install for packages such as engine-app and engine-render-graph, while the
+// game-entry resolver correctly anchors its imports to this worktree. That
+// split creates two ECS/component-token realms: a SceneInstance written by one
+// World is invisible to the other. Derive aliases from edit-runtime's complete
+// engine workspace link set so every engine package resolves to this checkout.
+const ENGINE_LINK_DIR = resolve(PACKAGE_DIR, 'packages/edit-runtime/node_modules/@forgeax');
+const engineWorktreeSubpathAliases: Record<string, string> = {};
+const engineWorktreeRootAliases: Record<string, string> = {};
+for (const id of enginePreset.resolve.dedupe) {
+  if (!id.startsWith('@forgeax/engine-')) continue;
+  const packageName = id.slice('@forgeax/'.length);
+  try {
+    const packageDir = realpathSync(resolve(ENGINE_LINK_DIR, packageName));
+    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+      exports?: Record<string, string | { import?: string } | null>;
+    };
+    for (const [subpath, entry] of Object.entries(manifest.exports ?? {})) {
+      if (subpath.includes('*')) continue;
+      const importPath = typeof entry === 'string' ? entry : entry?.import;
+      if (typeof importPath !== 'string') continue;
+      const specifier = subpath === '.'
+        ? id
+        : `${id}/${subpath.slice(2)}`;
+      const target = resolve(packageDir, importPath);
+      if (subpath === '.') engineWorktreeRootAliases[specifier] = target;
+      else engineWorktreeSubpathAliases[specifier] = target;
+    }
+  } catch {
+    // Transitive-only engine packages are intentionally not in the link set;
+    // Vite may resolve those normally without creating a second engine realm.
+  }
+}
+const engineWorktreeTargets = {
+  ...engineWorktreeSubpathAliases,
+  ...engineWorktreeRootAliases,
+};
+const engineWorktreeResolve = {
+  name: 'forgeax:standalone-engine-worktree-resolve',
+  enforce: 'pre' as const,
+  resolveId(id: string): string | null {
+    return engineWorktreeTargets[id] ?? null;
+  },
+};
+
 // INTERFACE_DIR resolution — embedded vs standalone:
 //   - Embedded in studio: the parent studio tree's packages/interface (../../
 //     interface) is the canonical single copy; prefer it so editor shares the
@@ -114,7 +161,7 @@ export default defineConfig({
   // react() + the D7 engine-serve plugins (shader manifest emit + optional
   // self-hosted pluginPack catalog). This is what lets the engine boot
   // in-process in this host window (no /editor proxy).
-  plugins: [react(), ...enginePreset.plugins],
+  plugins: [react(), engineWorktreeResolve, ...enginePreset.plugins],
   // Expose the game slug + abs dir to the standalone client bundle. The slug
   // pins the game (setPinnedSlug) and threads ?scene=/?gameRoot=; the abs dir
   // (__FORGEAX_GAME_DIR_ABS__) is read by the in-process engine boot (host-boot
@@ -141,17 +188,10 @@ export default defineConfig({
     preserveSymlinks: enginePreset.resolve.preserveSymlinks,
     alias: {
       // Order matters — vite picks first matching prefix. Most-specific first.
-      // The standalone root has no direct engine dependencies. Without explicit
-      // anchors, imports from the host and edit-runtime resolve the token-owning
-      // ECS/runtime packages through different Bun workspace links. Component
-      // tokens are identity objects, so that split makes loaded scene entities
-      // invisible to Hierarchy and the renderer. Keep both at one real path.
-      '@forgeax/engine-runtime': resolve(PACKAGE_DIR, 'packages/engine/packages/runtime'),
-      // The root ECS alias preserves component-token identity. Its public
-      // externalization subpath is a built entry, so anchor it before the
-      // prefix alias rather than rewriting it to a nonexistent source folder.
-      '@forgeax/engine-ecs/externalization': resolve(PACKAGE_DIR, 'packages/engine/packages/ecs/dist/externalization/index.mjs'),
-      '@forgeax/engine-ecs': resolve(PACKAGE_DIR, 'packages/engine/packages/ecs'),
+      // Engine specifiers are handled by the exact-match resolver above. Do not
+      // add them here: Vite's prefix aliasing would turn
+      // `engine-render/internal/construct-renderer` into
+      // `dist/internal.mjs/construct-renderer`.
       '@/': `${resolve(INTERFACE_DIR, 'src')}/`,
       // @forgeax/interface package.json's exports map covers `./*: ./src/*.ts`
       // and `./styles/*.css`, but does NOT cover the `.tsx` files we deep-

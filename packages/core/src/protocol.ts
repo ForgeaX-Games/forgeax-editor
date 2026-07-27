@@ -68,7 +68,63 @@ export const VagFpsStatsSchema = z.object({
 });
 export type VagFpsStatsMessage = z.infer<typeof VagFpsStatsSchema>;
 
-// ── 5. VAG_PREVIEW_DISPOSE ───────────────────────────────────────────────────
+// ── 5. Runtime carrier health messages ──────────────────────────────────────
+// The page is the source of truth for confirmed scope and surface identity.
+// These messages are additive: they do not add Play/control/input/query/capture
+// commands and they do not replace the existing VAG_FPS_STATS/VAG_DEVICE_LOST
+// signals.
+export const VAG_CARRIER_PROTOCOL_VERSION = 1 as const;
+
+export const VagCarrierScopeSchema = z.object({
+  projectId: z.string().min(1),
+  gameId: z.string().min(1).nullable(),
+});
+export type VagCarrierScope = z.infer<typeof VagCarrierScopeSchema>;
+
+export const VagCarrierFailureDetailSchema = z.object({
+  code: z.string().min(1),
+  stage: z.enum(['handshake', 'heartbeat', 'renderer', 'device-lost', 'uncaptured-error']),
+  retryable: z.boolean(),
+  hint: z.string().min(1),
+  at: z.string().min(1),
+  message: z.string().optional(),
+});
+export type VagCarrierFailureDetail = z.infer<typeof VagCarrierFailureDetailSchema>;
+
+const VagCarrierPayloadSchema = z.object({
+  version: z.literal(VAG_CARRIER_PROTOCOL_VERSION),
+  runtimeId: z.string().min(1).nullable(),
+  scope: VagCarrierScopeSchema.nullable(),
+  pageNonce: z.string().min(1),
+  pageIdentity: z.string().min(1),
+  canvasIdentity: z.string().min(1),
+  rendererIdentity: z.string().min(1),
+  sentinel: z.number().int().nonnegative(),
+  liveness: z.enum(['alive', 'unreachable', 'terminated']),
+  renderReadiness: z.enum(['pending', 'ready', 'unavailable']),
+  failure: VagCarrierFailureDetailSchema.nullable(),
+});
+export type VagCarrierPayload = z.infer<typeof VagCarrierPayloadSchema>;
+
+function carrierMessageSchema<T extends string>(type: T) {
+  return z.object({ type: z.literal(type), payload: VagCarrierPayloadSchema });
+}
+
+function carrierFailureMessageSchema<T extends string>(type: T) {
+  return z.object({
+    type: z.literal(type),
+    payload: VagCarrierPayloadSchema.extend({ failure: VagCarrierFailureDetailSchema }),
+  });
+}
+
+export const VagCarrierHandshakeSchema = carrierMessageSchema('VAG_CARRIER_HANDSHAKE');
+export type VagCarrierHandshakeMessage = z.infer<typeof VagCarrierHandshakeSchema>;
+export const VagCarrierHeartbeatSchema = carrierMessageSchema('VAG_CARRIER_HEARTBEAT');
+export type VagCarrierHeartbeatMessage = z.infer<typeof VagCarrierHeartbeatSchema>;
+export const VagCarrierFailureSchema = carrierFailureMessageSchema('VAG_CARRIER_FAILURE');
+export type VagCarrierFailureMessage = z.infer<typeof VagCarrierFailureSchema>;
+
+// ── 6. VAG_PREVIEW_DISPOSE ───────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:287 / 324 / 414 (interface). Type-only command
 // asking the preview iframe to dispose its engine before src reset / unmount.
 export const VagPreviewDisposeSchema = z.object({
@@ -129,6 +185,7 @@ export type VagSchemaTypes = z.infer<ReturnType<typeof vagSchemaUnion>>;
 function vagSchemaUnion() {
   return z.union([
     VagConsoleSchema, VagDeviceLostSchema, VagFpsStatsSchema,
+    VagCarrierHandshakeSchema, VagCarrierHeartbeatSchema, VagCarrierFailureSchema,
     VagPreviewDisposeSchema, VagPreviewPauseSchema, VagPreviewPlaySchema,
     VagPreviewReloadSchema,
   ]);
@@ -226,6 +283,9 @@ const VAG_SCHEMA_BY_TYPE = {
   VAG_NETWORK: VagNetworkSchema,
   VAG_DEVICE_LOST: VagDeviceLostSchema,
   VAG_FPS_STATS: VagFpsStatsSchema,
+  VAG_CARRIER_HANDSHAKE: VagCarrierHandshakeSchema,
+  VAG_CARRIER_HEARTBEAT: VagCarrierHeartbeatSchema,
+  VAG_CARRIER_FAILURE: VagCarrierFailureSchema,
   VAG_PREVIEW_DISPOSE: VagPreviewDisposeSchema,
   VAG_PREVIEW_PAUSE: VagPreviewPauseSchema,
   VAG_PREVIEW_PLAY: VagPreviewPlaySchema,

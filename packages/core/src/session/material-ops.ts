@@ -120,12 +120,7 @@ function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
   const engine = ctx.engine;
   void ctx.assetIO.writePackEntry(packPath, nextEntry as never)
     .then(() => {
-      // Update the in-memory catalog with the new payload so the NEXT
-      // gateway-fill reads fresh paramValues. DO NOT call invalidateAsset —
-      // that deletes the catalog entry, causing subsequent edits to fail
-      // (gateway-fill finds nothing). recatalogAsset keeps the entry alive
-      // and only clears the packFileCache for ▶ Play correctness.
-      engine.recatalogAsset(guid, nextEntry.payload, nextRefs);
+      engine.invalidateAsset(guid);
       broadcastAssetsChanged();
     })
     .catch((e) => broadcastAssetsError({ op: 'updateMaterialParams', path: packPath, hint: _ioFailHint('updateMaterialParams', packPath, e) }));

@@ -50,6 +50,13 @@ export function restoreBrowserLocalStorage(entries: Record<string, string>): num
   try {
     for (const [key, val] of Object.entries(entries)) {
       if (!shouldSyncKey(key) || typeof val !== 'string') continue;
+      // Non-destructive: never overwrite a value that already exists locally.
+      // localStorage survives reloads natively, so a fresh same-tab change
+      // (e.g. resetting the dock layout) must win over the periodically-pushed
+      // server snapshot — which is only refreshed on the 30s interval /
+      // unreliable beforeunload. Only fill genuinely-missing keys (fresh
+      // browser, cleared storage, or import into a fresh profile).
+      if (window.localStorage.getItem(key) !== null) continue;
       window.localStorage.setItem(key, val);
       n += 1;
     }
@@ -86,7 +93,10 @@ export function flushBrowserPrefs(): void {
   void pushBrowserPrefs();
 }
 
-/** Pull server snapshot into localStorage (server wins on first boot after import). */
+/** Pull server snapshot into localStorage. Non-destructive: the snapshot only
+ *  fills keys that are MISSING locally (fresh browser / cleared storage / import
+ *  into a fresh profile). On a normal reload the local value always wins, so a
+ *  same-tab change (e.g. layout reset) is never clobbered by a stale snapshot. */
 export async function syncBrowserPrefsFromServer(): Promise<number> {
   try {
     const res = await fetch('/api/prefs/browser-localStorage');

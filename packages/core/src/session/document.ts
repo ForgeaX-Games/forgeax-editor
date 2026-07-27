@@ -48,7 +48,7 @@ export { createEditSession } from './edit-session';
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset' | 'recatalogAsset'
+  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.

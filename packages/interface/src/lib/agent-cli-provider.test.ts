@@ -12,5 +12,6 @@ describe('preferredCliProviderToKernel', () => {
 
   test('passes through kernel ids', () => {
     expect(preferredCliProviderToKernel('claude-code')).toBe('claude-code');
+    expect(preferredCliProviderToKernel('kimi-code')).toBe('kimi-code');
   });
 });

@@ -18,6 +18,9 @@ import {
   VagDeviceLostSchema,
   VagFpsStatsSchema,
   VagPreviewDisposeSchema,
+  VagCarrierFailureSchema,
+  VagCarrierHandshakeSchema,
+  VagCarrierHeartbeatSchema,
 } from '@forgeax/editor-core/protocol';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -53,6 +56,12 @@ type HealthLevel = 'info' | 'success' | 'warn' | 'error';
 function forwardHealth(level: HealthLevel, code: string, message: string): void {
   try {
     window.parent?.postMessage({ type: 'forgeax:health', level, source: 'play', code, message }, '*');
+  } catch { /* parent might be cross-origin / gone */ }
+}
+
+function forwardCarrierMessage(message: unknown): void {
+  try {
+    window.parent?.postMessage(message, '*');
   } catch { /* parent might be cross-origin / gone */ }
 }
 
@@ -101,7 +110,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   // at once (one visible, one display:none'd). If we drove the iframe src straight
   // from `slug`, switching GAMES would cold-boot the new game in this hidden iframe
   // AND in the visible Edit iframe simultaneously → two concurrent WebGPU boots wedge
-  // the WKWebView GPU process ("切一个新游戏的 edit 又卡死"). So the iframe loads
+  // the WKWebView GPU process. So the iframe loads
   // `loadedSlug`, which only advances to the latest `slug` while this surface is
   // VISIBLE — a hidden surface defers the new game until it's shown (one boot at a
   // time). `slug` still loads immediately on first mount (loadedSlug seeded = slug).
@@ -159,6 +168,43 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       // VAG_NETWORK: healthBridge (same host window, single-realm) receives the
       // original message from the engine iframe directly — no forwarding needed.
       if (t === 'VAG_NETWORK') return;
+
+      if (t === 'VAG_CARRIER_HANDSHAKE') {
+        const r = VagCarrierHandshakeSchema.safeParse(ev.data);
+        if (!r.success) {
+          console.warn('VAG_CARRIER_HANDSHAKE schema failure', { issues: r.error.issues });
+          return;
+        }
+        forwardCarrierMessage(r.data);
+        forwardHealth('info', 'carrier-handshake', 'Runtime carrier handshake received.');
+        return;
+      }
+
+      if (t === 'VAG_CARRIER_HEARTBEAT') {
+        const r = VagCarrierHeartbeatSchema.safeParse(ev.data);
+        if (!r.success) {
+          console.warn('VAG_CARRIER_HEARTBEAT schema failure', { issues: r.error.issues });
+          return;
+        }
+        forwardCarrierMessage(r.data);
+        if (r.data.payload.failure) {
+          const failure = r.data.payload.failure;
+          forwardHealth('error', failure.code, failure.message ?? failure.hint);
+        }
+        return;
+      }
+
+      if (t === 'VAG_CARRIER_FAILURE') {
+        const r = VagCarrierFailureSchema.safeParse(ev.data);
+        if (!r.success) {
+          console.warn('VAG_CARRIER_FAILURE schema failure', { issues: r.error.issues });
+          return;
+        }
+        forwardCarrierMessage(r.data);
+        const failure = r.data.payload.failure;
+        forwardHealth('error', failure.code, failure.message ?? failure.hint);
+        return;
+      }
 
       if (t === 'VAG_FPS_STATS') {
         const r = VagFpsStatsSchema.safeParse(ev.data);
@@ -229,7 +275,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   // The Play game grabs the OS cursor via the Tauri `set_pointer_capture` bridge
   // (CGAssociate) for mouse-look, and ONLY released it on Esc. Switching to Edit /
   // AI while locked left the cursor FROZEN — the whole desktop window became
-  // uninteractable ("从 Play 切到 Edit 窗口交互不了/死了"). Headless Playwright can't
+  // uninteractable (frozen). Headless Playwright can't
   // catch this (no Tauri `invoke`). The shell forwards fx-pointer-capture:false to
   // the Tauri release command; harmless on web (no native grab to release).
   //

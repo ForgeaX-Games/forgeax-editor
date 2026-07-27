@@ -38,6 +38,7 @@ const PROVIDER_BADGE: Record<string, ProviderBadge> = {
   'forgeax':     { label: 'forgeax',     color: '#9ec5d4', title: 'ForgeaX CLI provider' },
   'claude-code': { label: 'claude-code', color: '#cfa3ff', title: 'Anthropic claude-code CLI provider' },
   'codex':       { label: 'codex',       color: '#7be7c4', title: 'OpenAI Codex CLI provider' },
+  'kimi-code':   { label: 'kimi-code',   color: '#58d8b5', title: 'Kimi Code CLI provider' },
 };
 
 export function providerBadgeFor(id: string): ProviderBadge {

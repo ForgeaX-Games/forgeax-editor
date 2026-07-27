@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useAssetSelection, gateway, ensureAssetCataloged } from '@forgeax/editor-core';
+import { useCallback, useState } from 'react';
+import { useAssetSelection, gateway } from '@forgeax/editor-core';
 import { PropertyRow } from './PropertyRow';
 import type { PreviewProps } from './index';
 
@@ -59,33 +59,9 @@ function TextureThumb({ label, guid, onClear }: { label: string; guid: string; o
 
 export default function AssetPreviewMaterial({ payload }: PreviewProps) {
   const asset = useAssetSelection();
-
-  // ── Eager load: ensure the material is in the engine's assetCatalog so the
-  // gateway-fill can synchronously read _oldPatch / _oldEntry (dev-plan §10.7).
-  // Materials not referenced by any scene entity are never loadByGuid'd at boot;
-  // they only exist in the packIndexCache (metadata-only). This effect bridges
-  // that gap by loading on-demand when the asset-inspector opens one.
-  const [catalogPayload, setCatalogPayload] = useState<Record<string, unknown> | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!asset?.guid) return;
-    let cancelled = false;
-    void ensureAssetCataloged(asset.guid).then((payload) => {
-      if (cancelled) return;
-      if (payload) setCatalogPayload(payload);
-      else setLoadError('Material not found in registry');
-    }).catch((e) => {
-      if (!cancelled) setLoadError(String(e));
-    });
-    return () => { cancelled = true; };
-  }, [asset?.guid]);
-
-  // Use catalog payload (real values) when available; fall back to prop payload.
-  const effectivePayload = catalogPayload ?? payload;
-  const passes = Array.isArray(effectivePayload.passes) ? (effectivePayload.passes as PassDesc[]) : [];
-  const parent = effectivePayload.parent as string | undefined;
-  const paramValues = (effectivePayload.paramValues ?? {}) as Record<string, unknown>;
+  const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
+  const parent = payload.parent as string | undefined;
+  const paramValues = (payload.paramValues ?? {}) as Record<string, unknown>;
 
   const baseColor = Array.isArray(paramValues.baseColor) ? paramValues.baseColor as number[] : [1, 1, 1, 1];
   const metallic = typeof paramValues.metallic === 'number' ? paramValues.metallic : 0;
@@ -94,11 +70,7 @@ export default function AssetPreviewMaterial({ payload }: PreviewProps) {
   const [localMetallic, setLocalMetallic] = useState(metallic);
   const [localRoughness, setLocalRoughness] = useState(roughness);
 
-  // Sync local slider state when the catalog payload arrives (initial load).
-  useEffect(() => { setLocalMetallic(metallic); }, [metallic]);
-  useEffect(() => { setLocalRoughness(roughness); }, [roughness]);
-
-  const canEdit = !!asset?.packPath && !!asset?.guid && !loadError;
+  const canEdit = !!asset?.packPath && !!asset?.guid;
 
   const dispatchParam = useCallback((paramPatch: Record<string, unknown>) => {
     if (!asset) return;
@@ -108,13 +80,6 @@ export default function AssetPreviewMaterial({ payload }: PreviewProps) {
       guid: asset.guid,
       paramPatch,
     }, 'human');
-    // After dispatch, re-read the catalog payload (applier updates it in-place
-    // via recatalogAsset) so subsequent renders show the fresh values.
-    const reg = gateway.doc.registry;
-    if (reg) {
-      const env = reg.assetCatalog.get(asset.guid.toLowerCase());
-      if (env) setCatalogPayload(env.payload as unknown as Record<string, unknown>);
-    }
   }, [asset]);
 
   const handleColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -145,14 +110,6 @@ export default function AssetPreviewMaterial({ payload }: PreviewProps) {
   return (
     <div data-testid="preview-material" className="mat-editor">
       <div className="compname">Material</div>
-      {loadError && (
-        <div className="field" style={{ color: 'var(--text-danger, #e53e3e)', fontSize: '0.82em', marginBottom: 6 }}>
-          ⚠ {loadError}
-        </div>
-      )}
-      {!catalogPayload && !loadError && (
-        <div className="field muted" style={{ fontSize: '0.82em', marginBottom: 6 }}>Loading material data…</div>
-      )}
 
       {/* Base Color */}
       <div className="f-row" data-testid="mat-baseColor">

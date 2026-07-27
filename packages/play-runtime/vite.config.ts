@@ -77,6 +77,21 @@ function gameEngineResolve() {
 // then rewritten to the in-viteRoot symlink before scanning.
 const SHARED_BASE = resolve(here, '..', '..', 'forgeax-editor-assets');
 
+// The engine template's shipped UI is a canonical self-contained pack, not a
+// game-local `.ui.html`/`.meta.json` authoring pair. Keep it in the engine
+// assets submodule (the engine pin is its SSOT) and mount only that directory
+// into this Vite root so the pack catalog can serve it without copying the
+// payload into forgeax-editor-assets.
+const ENGINE_TEMPLATE_UI_BASE = resolve(
+  here,
+  '..',
+  'engine',
+  'forgeax-engine-assets',
+  'demo-assets',
+  'template-game-default',
+  'ui',
+);
+
 // Games stay a host concern: a standalone/desktop/studio host injects the
 // physical directory.  When it does not supply a public URL prefix, mount it
 // under this generated in-root name so Vite can serve it without an ambient
@@ -120,9 +135,8 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
 // Git on Windows without core.symlinks=true checks out symlinks as plain text
 // files containing the target path, which breaks the Vite dev server — so we
 // (re)create a real symlink/junction on demand.
-(function setupExternalRootFarm() {
-  const linkPath = resolve(here, 'shared-assets');
-  const targetPath = SHARED_BASE;
+function setupExternalRootFarm(linkName: string, targetPath: string): void {
+  const linkPath = resolve(here, linkName);
   if (existsSync(linkPath)) {
     const stat = lstatSync(linkPath);
     if (!stat.isSymbolicLink() && stat.isFile()) {
@@ -137,9 +151,11 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
   try {
     symlinkSync(targetPath, linkPath, 'junction');
   } catch (e) {
-    console.warn(`[forgeax] failed to create shared-assets junction:`, e);
+    console.warn(`[forgeax] failed to create ${linkName} junction:`, e);
   }
-})();
+}
+
+setupExternalRootFarm('shared-assets', SHARED_BASE);
 
 // Rewrite a resolved root to the path the scanner should see. Local roots pass
 // through as their abs path; shared (`@shared/<sub>`) roots are redirected to the
@@ -149,6 +165,10 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
 // same dir so the redirected path exists too.
 function farmPath(r: ResolvedRoot): string {
   return r.shared && r.sub !== undefined ? resolve(here, 'shared-assets', r.sub) : r.abs;
+}
+
+function engineTemplateUiFarmPath(): string {
+  return resolve(here, 'engine-template-ui');
 }
 
 // Self-contained vite root: the engine directory itself. Pre-2026-05-13 the
@@ -285,7 +305,9 @@ function gameAssetRoots(): string[] {
   const gamesDir = gamesDirRoot();
   if (!gamesDir) return [];
   if (!existsSync(gamesDir)) return [];
-  const roots: string[] = [];
+  const roots: string[] = existsSync(engineTemplateUiFarmPath())
+    ? [engineTemplateUiFarmPath()]
+    : [];
   for (const slug of readdirSync(gamesDir).filter(isRealGameSlug)) {
     const gameDir = join(gamesDir, slug);
     // resolveGameAssetRoots reads package.json#forgeax.assets.roots (SSOT),
@@ -305,7 +327,8 @@ function gameAssetRoots(): string[] {
 // declared roots (A2/A3: scenes are ordinary assets).
 function perGamePackRoots(slug: string): string[] {
   const gameDir = join(gamesDirRoot(), slug);
-  return resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS }).map(farmPath);
+  const roots = resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS }).map(farmPath);
+  return existsSync(engineTemplateUiFarmPath()) ? [engineTemplateUiFarmPath(), ...roots] : roots;
 }
 
 // Return slugs for every game directory under the host-injected games dir that

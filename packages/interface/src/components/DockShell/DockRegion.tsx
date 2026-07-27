@@ -292,6 +292,24 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     ),
     [],
   );
+  // Region-aware layout persistence — the write-side counterpart to the
+  // region-scoped restore paths below. DockShell persists through
+  // saveWorkbenchLayout (project-scoped `workbench-layout:<wsId>` slot, mirrored
+  // to the server); every other region (AuxBar, …) writes to its OWN
+  // `ws-layout:<wsId>:<region>` slot via layoutKey(). Stable identity
+  // (layoutKey has [] deps) so once-bound callbacks can call it safely.
+  const persistLayout = useCallback(
+    (wsId: string, layout: SerializedDockview): void => {
+      if (regionRef.current === 'DockShell') {
+        saveWorkbenchLayout(wsId, layout);
+        return;
+      }
+      try {
+        localStorage.setItem(layoutKey(wsId), JSON.stringify(layout));
+      } catch { /* quota */ }
+    },
+    [layoutKey],
+  );
   const apiRef = useRef<DockviewApi | null>(null);
   // Last app.dock.reset epoch this region has applied. Compared to
   // getDockResetEpoch() so a reset requested before onReady still lands once.
@@ -365,6 +383,17 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // save its layout before switching. Lives outside onReady so useEffect cleanup
   // can unsubscribe correctly on HMR remounts.
   const prevWorkspaceIdRef = useRef(loadWorkbenchList().activeId);
+  // Track the PROJECT id the dock last reconciled under. Layout localStorage keys
+  // are project-scoped (`forgeax:project:<projId>:workbench-layout:<wsId>`), but
+  // `currentProjectId` boots as the transient 'default' and only advances to the
+  // real id once ProjectSwitcher resolves /api/projects (async). If onReady runs
+  // BEFORE that resolve it restores/builds under 'default' and, when the real id
+  // arrives, applyWorkspace was previously a no-op (same workbench id) so the
+  // dock stayed on the default layout even though the real project's dragged
+  // layout is sitting in localStorage — the "拖动布局刷新有时保存有时不保存"
+  // race (timing of onReady vs. the /api/projects round-trip). Comparing this ref
+  // lets applyWorkspace FORCE a re-restore when only the project id changed.
+  const lastAppliedProjectRef = useRef(getCurrentProject());
   // Track which panels were hidden by the collapse toggle (not by the user clicking ×).
   // Only these panels get reopened when the toggle is expanded again — prevents
   // the "close fails" bug where manually-closed panels came back on sidebar toggle.
@@ -423,8 +452,15 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // needed here.
 
     // Workspace-aware persistence: save to the current workspace's slot on every change.
+    // Region-aware: DockShell owns the canonical, project-scoped + server-synced
+    // `workbench-layout:<wsId>` slot; every OTHER region (AuxBar, …) persists to
+    // its own `ws-layout:<wsId>:<region>` slot — the SAME split the restore paths
+    // read (see layoutKey() + the onReady restore branch). Writing every region
+    // through the one DockShell key let AuxBar's near-empty layout RACE-CLOBBER
+    // DockShell's slot, so a dragged layout was saved or lost depending on which
+    // region's onDidLayoutChange fired last ("拖动布局刷新有时保存有时不保存").
     api.onDidLayoutChange(() => {
-      saveWorkbenchLayout(prevWorkspaceIdRef.current, api.toJSON());
+      persistLayout(prevWorkspaceIdRef.current, api.toJSON());
       bump();
       // Tell the keep-alive surface layer to re-track its anchors — panel
       // resize/drag/close moves the Play/Edit anchor rects the fixed surfaces
@@ -611,8 +647,24 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // restores the target's saved layout or builds its default. Single source of
   // the switch logic, shared by every trigger below.
   const applyWorkspace = useCallback((api: DockviewApi, newId: string): void => {
-    if (newId === prevWorkspaceIdRef.current) return;
-    saveWorkbenchLayout(prevWorkspaceIdRef.current, api.toJSON());
+    // Force a reconcile when the PROJECT id changed even if the workbench id is
+    // unchanged: the dock may have been built under the transient 'default'
+    // scope before /api/projects resolved, so we must re-restore from the real
+    // project's (now-correct-scope) localStorage slot. See lastAppliedProjectRef.
+    const currentProject = getCurrentProject();
+    const projectChanged = currentProject !== lastAppliedProjectRef.current;
+    if (newId === prevWorkspaceIdRef.current && !projectChanged) return;
+    lastAppliedProjectRef.current = currentProject;
+    // Region-aware save of the OUTGOING workspace (see persistLayout / the
+    // onDidLayoutChange note above) — never clobber DockShell's slot from AuxBar.
+    // SKIP this on a project-id resolve: currentProjectId has already advanced to
+    // the real id, so persisting the transient 'default'-scope layout now would
+    // write it into the REAL project's slot and clobber the dragged layout we are
+    // about to restore. onDidLayoutChange already persists every change
+    // synchronously, so this save is redundant and safely skipped here.
+    if (!projectChanged) {
+      persistLayout(prevWorkspaceIdRef.current, api.toJSON());
+    }
     prevWorkspaceIdRef.current = newId;
     // The layout is being completely replaced — reset toggle-hidden tracking so
     // sidebar/chat collapse effects start fresh for the new workspace.
@@ -675,7 +727,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     if (hideChatRef.current) {
       try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
     }
-  }, [titleFor, closeStrayPanels]);
+  }, [titleFor, closeStrayPanels, persistLayout]);
 
   // Dock layout is a DERIVED view of the active workspace id (workbenches.ts is
   // the SSOT). Reconcile whenever that id changes — including when it changes
