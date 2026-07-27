@@ -245,9 +245,16 @@ describe('AC-01 export-surface snapshot', () => {
     // registerAssetSelectAllHandler / triggerAssetSelectAll) → 49 + 5 = 54.
     // feat/gizmo-local-space then PUBLISHED 4 gizmo-space symbols
     // (getGizmoSpace / onGizmoSpaceChange / useGizmoSpace / GizmoSpace type)
-    // → 54 + 4 = 58. This count is the machine witness that the barrel
-    // surface moved exactly as intended.
-    expect(entries.length).toBe(58);
+    // → 54 + 4 = 58. perf/editor-panels-render then PUBLISHED 3 per-row
+    // subscription symbols the Hierarchy rows ride so a 60fps ▶ Play doc churn
+    // costs zero row re-renders — useIsSelected / useIsHoverEntity (granular
+    // selection/hover subscriptions) + subscribeDocVersion (raw doc-change
+    // subscription behind each row's value-compared structural snapshot)
+    // → 58 + 3 = 61. (entComponentsPresent / worldComponentNames were published
+    // too, but from './store/entity-state', so they are outside this barrel's
+    // count.) This count is the machine witness that the surface moved exactly
+    // as intended.
+    expect(entries.length).toBe(61);
 
     // Every entry must be non-empty.
     for (const e of entries) {

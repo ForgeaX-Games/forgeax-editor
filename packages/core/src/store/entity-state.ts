@@ -346,6 +346,73 @@ export function entComponents(
   return out;
 }
 
+/** Map every live entity handle in `world` to the list of component names it
+ *  carries — derived STRUCTURALLY (one query per registered component; a query
+ *  matches archetypes, so a component the entity LACKS is never touched and no
+ *  `ComponentNotPresentError` is ever constructed).
+ *
+ *  This is the list-level metadata source. Views that only need "which components
+ *  does this entity have" (the Hierarchy type column / filter / hidden flag) must
+ *  read names from this map, NOT call `entComponents` per row: the latter probes
+ *  ALL registered components with `world.get`, eagerly building a stack-carrying
+ *  Error on every miss — O(entities × all-registered-components) allocations that
+ *  dominated a Hierarchy re-render. Full component VALUES (for the selected entity)
+ *  still go through entComponent/entComponents in the Inspector. Missing world → {}.
+ *
+ *  Cost: O(registered-components × archetypes) query matching + O(present pairs)
+ *  collection, all zero-allocation on the error path. Callers build it ONCE per
+ *  render pass (structural changes are what re-render the tree) and index into it. */
+export function worldComponentNames(world: World): Map<EntityHandle, string[]> {
+  const map = new Map<EntityHandle, string[]>();
+  if (!hasWorld(world)) return map;
+  type EntityColumn = { self?: { length: number; [i: number]: number } };
+  for (const [name, token] of getRegisteredComponents()) {
+    // `Entity` must be in the query `with` for the row-handle column to populate
+    // (same convention as worldEntityHandles). Generics don't flow through a
+    // dynamic `with`, so shapes erase to unknown and narrow at the read site.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = createQueryState({ with: [token, Entity] as any[] });
+    queryRun(
+      state as unknown as Parameters<typeof queryRun>[0],
+      world as unknown as Parameters<typeof queryRun>[1],
+      (bundle: unknown) => {
+        const entities = (bundle as { Entity?: EntityColumn }).Entity?.self;
+        if (!entities) return;
+        for (let i = 0; i < entities.length; i++) {
+          const h = entities[i];
+          if (h === undefined) continue;
+          let names = map.get(h as EntityHandle);
+          if (names === undefined) { names = []; map.set(h as EntityHandle, names); }
+          names.push(name);
+        }
+      },
+    );
+  }
+  return map;
+}
+
+/** Value dict for ONLY the components named in `names` — a zero-miss read: every
+ *  `world.get` hits (the names came from `worldComponentNames`, i.e. the entity's
+ *  own archetype), so no `ComponentNotPresentError` is constructed. Use this for a
+ *  list row that needs a FEW component values (e.g. the mobility hint) after
+ *  deriving the name set structurally, instead of `entComponents`' probe-all-and-
+ *  catch-misses loop. Missing world / unknown name → skipped. */
+export function entComponentsPresent(
+  world: World,
+  handle: EntityHandle,
+  names: readonly string[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!hasWorld(world)) return out;
+  for (const name of names) {
+    const token = resolveReadToken(name);
+    if (token === undefined) continue;
+    const r = world.get(handle, token as Parameters<typeof world.get>[1]);
+    if (r.ok) out[name] = r.value;
+  }
+  return out;
+}
+
 // ── Component token resolution (known tokens fast-path + registry) ──────────
 
 const _readTokenCache = new Map<string, unknown>();

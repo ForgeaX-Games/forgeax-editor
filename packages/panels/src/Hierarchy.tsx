@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useSyncExternalStore, useState } from 'react';
 import {
   Box,
   ChevronDown,
@@ -18,7 +18,7 @@ import {
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
-import { entExists, entName, entParent, entComponent, entComponents, worldEntityHandles } from '@forgeax/editor-core';
+import { entExists, entName, entParent, entComponent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
 import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
@@ -27,7 +27,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, useDocVersion, useHoverEntity, useSelectionList } from '@forgeax/editor-core';
+import { gateway, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -53,6 +53,28 @@ interface Menu {
   id: EntityHandle;
   x: number;
   y: number;
+}
+
+// Handle → component-name list for the whole active world, built ONCE per
+// HierarchyPanel render (worldComponentNames, zero Error) and threaded down so a
+// Row derives its type / hidden / mobility from a cheap lookup instead of the
+// O(all-registered-components) entComponents probe that ran per row per render.
+type CompNameIndex = ReadonlyMap<EntityHandle, readonly string[]>;
+const EMPTY_COMP_INDEX: CompNameIndex = new Map();
+const EMPTY_NAMES: readonly string[] = [];
+const EMPTY_IDS: readonly EntityHandle[] = [];
+
+// A referentially STABLE callback that always invokes the latest closure — the
+// `useEvent` idiom (React RFC). The right-click/collapse handlers close over the
+// per-render `t`/`readOnly`/world reads, but must NOT change identity every
+// render, or they would defeat the memo() on every Row/SceneFolderRow (a single
+// panel re-render would otherwise re-render the whole tree). Refs are exempt from
+// dependency tracking, so the returned function is created once and never bust
+// downstream shallow-prop comparison.
+function useEvent<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: A) => ref.current(...args), []);
 }
 
 // in-app drag source — more reliable than DataTransfer.getData, which is in
@@ -251,12 +273,108 @@ function hierarchyMobilityKey(components: Record<string, unknown>): 'static' | '
   return '';
 }
 
-function Row({
+// ── Per-row value-stable snapshot ────────────────────────────────────────────
+// A Row's rendered output depends ONLY on this small structural view-model — not
+// on transform values or any other frame-volatile world state. We therefore let
+// each Row subscribe to the raw doc-change signal (which ▶ Play bumps every
+// frame) but return a value-COMPARED snapshot: if the entity's name / type /
+// hidden / mobility / child set are unchanged, getSnapshot returns the SAME
+// object reference, so useSyncExternalStore bails on Object.is and the Row does
+// NOT re-render. This is why a 60fps doc churn costs zero row re-renders while a
+// real rename still repaints exactly the one row that changed. Passing a
+// whole-tree Map down as a prop (the previous approach) defeated this: the Map
+// ref changed every frame, busting memo() on every Row.
+interface HierarchyRowVM {
+  readonly exists: boolean;
+  readonly name: string;
+  readonly typeId: string;
+  readonly hidden: boolean;
+  readonly mobilityKey: ReturnType<typeof hierarchyMobilityKey>;
+  readonly childIds: readonly EntityHandle[];
+}
+const MISSING_ROW_VM: HierarchyRowVM = {
+  exists: false, name: '', typeId: '', hidden: false, mobilityKey: '', childIds: EMPTY_IDS,
+};
+// One component-name index per doc change, rebuilt lazily the first time any row
+// reads a snapshot after a change (dirty flag) — so a 60fps churn rebuilds the
+// index once, not once per mounted row.
+let rowVmDirty = true;
+let rowVmCompIndex: CompNameIndex = EMPTY_COMP_INDEX;
+const rowVmCache = new Map<EntityHandle, HierarchyRowVM>();
+
+function idsEqual(a: readonly EntityHandle[], b: readonly EntityHandle[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+function rowVmEqual(a: HierarchyRowVM, b: HierarchyRowVM): boolean {
+  return a.exists === b.exists
+    && a.name === b.name
+    && a.typeId === b.typeId
+    && a.hidden === b.hidden
+    && a.mobilityKey === b.mobilityKey
+    && idsEqual(a.childIds, b.childIds);
+}
+function rowVmSnapshot(id: EntityHandle): HierarchyRowVM {
+  if (rowVmDirty) {
+    rowVmDirty = false;
+    const w = gateway.activeWorld;
+    rowVmCompIndex = w ? worldComponentNames(w) : EMPTY_COMP_INDEX;
+  }
+  const prev = rowVmCache.get(id);
+  const world = gateway.activeWorld;
+  if (world == null || !entExists(world, id)) {
+    if (prev && !prev.exists) return prev;
+    rowVmCache.set(id, MISSING_ROW_VM);
+    return MISSING_ROW_VM;
+  }
+  const names = rowVmCompIndex.get(id) ?? EMPTY_NAMES;
+  const candidate: HierarchyRowVM = {
+    exists: true,
+    name: entName(world, id),
+    typeId: getHierarchyEntityType(names, world, id).id,
+    hidden: names.includes('EditorHidden'),
+    mobilityKey: hierarchyMobilityKey(entComponentsPresent(world, id, names)),
+    childIds: childrenOf(world, id),
+  };
+  if (prev && rowVmEqual(prev, candidate)) return prev;
+  rowVmCache.set(id, candidate);
+  return candidate;
+}
+function subscribeRowVm(fn: () => void): () => void {
+  // Any doc change (incl. per-frame Play mirror) marks the shared index dirty
+  // and pings the row; the value-compared snapshot then decides whether the row
+  // actually re-renders.
+  return subscribeDocVersion(() => {
+    rowVmDirty = true;
+    fn();
+  });
+}
+function useHierarchyRowVM(id: EntityHandle): HierarchyRowVM {
+  const getSnapshot = useCallback(() => rowVmSnapshot(id), [id]);
+  return useSyncExternalStore(subscribeRowVm, getSnapshot, getSnapshot);
+}
+// Per-row collapse subscription: toggling one node's collapse re-renders only
+// the rows whose own collapsed flag flips, not the whole tree.
+function useIsHierarchyCollapsed(id: EntityHandle): boolean {
+  const getSnapshot = useCallback(() => getHierarchyPanelSnapshot().collapsed.has(id), [id]);
+  return useSyncExternalStore(subscribeHierarchyPanelState, getSnapshot, getSnapshot);
+}
+// Collapse an id list to a stable reference across renders: while ▶ Play bumps
+// docVersion every frame, the root order rarely changes, so returning the prior
+// array when contents are value-equal keeps the SceneFolderRow memo intact.
+function useStableIds(ids: readonly EntityHandle[]): readonly EntityHandle[] {
+  const ref = useRef(ids);
+  if (!idsEqual(ref.current, ids)) ref.current = ids;
+  return ref.current;
+}
+
+const Row = memo(function Row({
   id,
   depth,
   onMenu,
   flat,
-  collapsed,
   toggleCollapse,
   highlight,
   readOnly,
@@ -266,16 +384,20 @@ function Row({
   depth: number;
   onMenu: (m: Menu) => void;
   flat?: boolean | undefined;
-  collapsed?: ReadonlySet<EntityHandle> | undefined;
   toggleCollapse?: ((id: EntityHandle) => void) | undefined;
   highlight?: string | undefined;
   readOnly?: boolean | undefined;
   columns: HierarchyColumns;
 }) {
   const { t } = useTranslation();
-  const selList = useSelectionList();
-  const isSelected = selList.has(id);
-  const hoverId = useHoverEntity();
+  // Per-row subscriptions: each source (structural VM / selection / hover /
+  // collapse) re-renders ONLY the rows whose own value actually flips
+  // (useSyncExternalStore bails on Object.is), so a doc churn or a hover move
+  // no longer repaints the whole tree.
+  const vm = useHierarchyRowVM(id);
+  const isSelected = useIsSelected(id);
+  const isHovered = useIsHoverEntity(id);
+  const isCollapsed = useIsHierarchyCollapsed(id);
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
   const [editing, setEditing] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -286,25 +408,15 @@ function Row({
       rowRef.current.scrollIntoView({ block: 'nearest' });
     }
   }, [isSelected]);
-  // M3 (I1/AC-08): entity view read from the active world (SSOT) via entity-state
-  // helpers keyed by EntityHandle. `hidden` derives from the EditorHidden
-  // component; `components` from the world component walk.
-  // Cross-game gap: activeWorld may be briefly undefined while old Row fibers still
-  // re-render — bail before any world.get (AC-01).
-  const world = gateway.activeWorld;
-  if (world == null || !entExists(world, id)) return null;
-  const nodeName = entName(world, id);
-  const nodeComponents = entComponents(world, id);
-  const nodeHidden = 'EditorHidden' in nodeComponents;
-  const actualKids = childrenOf(world, id);
-  const kids = flat ? [] : actualKids;
-  const entityType = getHierarchyEntityType(world, id);
-  const typeLabel = componentTypeLabel(entityType.id, t);
-  const typeToken = hierarchyTypeToken(entityType.id);
-  const mobilityKey = hierarchyMobilityKey(nodeComponents);
+  // Cross-game gap: activeWorld may be briefly undefined while old Row fibers
+  // still re-render — the snapshot reports exists:false and we bail (AC-01).
+  if (!vm.exists) return null;
+  const { name: nodeName, typeId, hidden: nodeHidden, mobilityKey } = vm;
+  const kids = flat ? EMPTY_IDS : vm.childIds;
+  const typeLabel = componentTypeLabel(typeId, t);
+  const typeToken = hierarchyTypeToken(typeId);
   const mobilityLabel = mobilityKey ? t(`editor.hierarchy.mobility.${mobilityKey}`) : '';
-  const TypeIcon = hierarchyTypeIcon(entityType.id);
-  const isCollapsed = collapsed?.has(id) ?? false;
+  const TypeIcon = hierarchyTypeIcon(typeId);
   function commitRename(next: string) {
     setEditing(false);
     const name = next.trim();
@@ -314,14 +426,14 @@ function Row({
     <>
       <div
         ref={rowRef}
-        className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${hoverId === id ? ' hov' : ''}`}
+        className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${isHovered ? ' hov' : ''}`}
         data-testid={`hier-row-${id}`}
         title={`${nodeName} · #${id}`}
         onMouseEnter={() => gateway.dispatch({ kind: 'setHoverEntity', id })}
         onMouseLeave={() => gateway.dispatch({ kind: 'setHoverEntity', id: null })}
         onClick={(e) => {
-          if (e.shiftKey && collapsed) {
-            handleShiftClick(id, collapsed);
+          if (e.shiftKey) {
+            handleShiftClick(id, getHierarchyPanelSnapshot().collapsed);
           } else if (e.metaKey || e.ctrlKey) {
             gateway.dispatch({ kind: 'toggleSelection', id });
             anchorId = id;
@@ -378,8 +490,9 @@ function Row({
             if (readOnly) return;
             const newHidden = !nodeHidden;
             gateway.dispatch({ kind: 'setHidden', entity: id, hidden: newHidden });
-            if (selList.has(id)) {
-              for (const sid of selList) {
+            const sel = getSelectionList();
+            if (sel.has(id)) {
+              for (const sid of sel) {
                 if (sid === id) continue;
                 const sameState = entComponent(gateway.activeWorld, sid, 'EditorHidden').ok === nodeHidden;
                 if (sameState) gateway.dispatch({ kind: 'setHidden', entity: sid, hidden: newHidden });
@@ -447,7 +560,7 @@ function Row({
         </span>
         {columns.type && (
           <span className="cell type col-type">
-            {entityType.id === HIERARCHY_GROUP_TYPE_ID ? <span className="kind">{typeLabel}</span> : typeLabel}
+            {typeId === HIERARCHY_GROUP_TYPE_ID ? <span className="kind">{typeLabel}</span> : typeLabel}
           </span>
         )}
         {columns.mobility && <span className={`cell mob col-mob mob-${mobilityKey || 'none'}`}>{mobilityLabel}</span>}
@@ -455,11 +568,11 @@ function Row({
       </div>
       {!isCollapsed &&
         kids.map((k) => (
-          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} collapsed={collapsed} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} />
+          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} />
         ))}
     </>
   );
-}
+});
 
 // An always-present drop target at the top of the tree for "move to root"
 // (P0-5). Dragging a node onto it makes the node a sibling of the top-level
@@ -496,14 +609,13 @@ function RootDropBar({ readOnly }: { readOnly: boolean }) {
   );
 }
 
-function SceneFolderRow({
+const SceneFolderRow = memo(function SceneFolderRow({
   childrenIds,
   visibilityIds,
   filtered,
   highlight,
   onMenu,
   onBlankMenu,
-  collapsed,
   toggleCollapse,
   readOnly,
   columns,
@@ -514,14 +626,14 @@ function SceneFolderRow({
   highlight?: string | undefined;
   onMenu: (m: Menu) => void;
   onBlankMenu: (x: number, y: number) => void;
-  collapsed: ReadonlySet<EntityHandle>;
   toggleCollapse: (id: EntityHandle) => void;
   readOnly: boolean;
   columns: HierarchyColumns;
 }) {
   const { t } = useTranslation();
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
-  const isCollapsed = !filtered && collapsed.has(HIERARCHY_SCENE_FOLDER_ID);
+  const sceneCollapsed = useIsHierarchyCollapsed(HIERARCHY_SCENE_FOLDER_ID);
+  const isCollapsed = !filtered && sceneCollapsed;
   const sceneLabel = t('editor.hierarchy.sceneRoot');
   const folderTypeLabel = t('editor.hierarchy.types.folder');
   const visibilityTargets = collectEntitySubtree(visibilityIds ?? childrenIds);
@@ -603,7 +715,6 @@ function SceneFolderRow({
           depth={1}
           onMenu={onMenu}
           flat={filtered}
-          collapsed={collapsed}
           toggleCollapse={toggleCollapse}
           highlight={highlight}
           readOnly={readOnly}
@@ -612,11 +723,11 @@ function SceneFolderRow({
       ))}
     </>
   );
-}
+});
 
 export function HierarchyPanel() {
   const { t } = useTranslation();
-  useDocVersion();
+  const docVersion = useDocVersion();
   const view = useSyncExternalStore(
     subscribeHierarchyPanelState,
     getHierarchyPanelSnapshot,
@@ -637,9 +748,15 @@ export function HierarchyPanel() {
   const activeWorld = gateway.activeWorld;
   const worldReady = activeWorld != null;
   if (worldReady) pruneDisplayOrder(worldEntityHandles(activeWorld));
-  const roots = worldReady ? stableDisplayOrder(childrenOf(activeWorld, null)) : [];
-  const collapsed = view.collapsed;
-  const toggleCollapse = (id: EntityHandle) => toggleHierarchyCollapsed(id);
+  // Root order derives from the doc. `docVersion` is referenced so the panel
+  // re-derives roots when the document mutates (incl. the per-frame Play mirror),
+  // but useStableIds collapses value-equal results to the SAME array reference,
+  // so the SceneFolderRow memo (and therefore the rows) stay put across a 60fps
+  // churn. Each Row otherwise self-subscribes to its own structural snapshot —
+  // no whole-tree component index is threaded down anymore.
+  void docVersion;
+  const roots = useStableIds(worldReady ? stableDisplayOrder(childrenOf(activeWorld, null)) : EMPTY_IDS);
+  const toggleCollapse = useCallback((id: EntityHandle) => toggleHierarchyCollapsed(id), []);
   const spawnEntity = () => {
     if (readOnly) return;
     gateway.dispatch({
@@ -698,7 +815,7 @@ export function HierarchyPanel() {
   // Build the right-click menu items and hand them to the shared service, which
   // renders at the top layer of the whole window (or posts to the interface
   // parent when embedded in an iframe) — never clipped by this panel's bounds.
-  const openMenu = (m: Menu) => {
+  const openMenu = useEvent((m: Menu) => {
     if (!worldReady) return;
     // M7 / AC-15: entity name/components read from world (SSOT); doc.entities +
     // EntityNode.source deleted, so the edit-source menu item is dropped.
@@ -726,8 +843,8 @@ export function HierarchyPanel() {
     items.push({ sep: true });
     items.push({ label: t('editor.hierarchy.menu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => { multi ? deleteManyCascade(snapshot) : deleteEntity(m.id); } });
     showContextMenu({ clientX: m.x, clientY: m.y, preventDefault: () => {} }, items);
-  };
-  const openBlankMenu = (x: number, y: number) => {
+  });
+  const openBlankMenu = useEvent((x: number, y: number) => {
     const items: MenuItemDef[] = [
       { label: t('editor.hierarchy.menu.create'), icon: 'folder-plus', children: createMenuItems() },
       { sep: true },
@@ -744,7 +861,7 @@ export function HierarchyPanel() {
       { label: t('editor.hierarchy.menu.refreshOutliner'), icon: 'refresh-cw', disabled: true },
     ];
     showContextMenu({ clientX: x, clientY: y, preventDefault: () => {} }, items);
-  };
+  });
   // When filtering, flatten to all entities whose NAME or any COMPONENT name
   // matches (tree semantics dropped so deep matches surface immediately). Matching
   // by component lets a human/AI find entities by capability, e.g. "light".
@@ -817,7 +934,6 @@ export function HierarchyPanel() {
               highlight={view.searchQuery.trim()}
               onMenu={openMenu}
               onBlankMenu={openBlankMenu}
-              collapsed={collapsed}
               toggleCollapse={toggleCollapse}
               readOnly={readOnly}
               columns={view.columns}
@@ -854,7 +970,6 @@ export function HierarchyPanel() {
             visibilityIds={roots}
             onMenu={openMenu}
             onBlankMenu={openBlankMenu}
-            collapsed={collapsed}
             toggleCollapse={toggleCollapse}
             readOnly={readOnly}
             columns={view.columns}

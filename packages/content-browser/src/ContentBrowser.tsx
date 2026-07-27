@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useHost } from '@forgeax/interface/core/app-shell';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolveGamePath, showContextMenu, useDocVersion,
+import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolveGamePath, showContextMenu,
   ResizeHandle, useLocalSize, getSceneList, validateAssetBasename } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
@@ -70,11 +70,26 @@ const catalogAssetRoots: readonly CatalogAssetRoot[] =
     ? []
     : __FORGEAX_CATALOG_ASSET_ROOTS__;
 
+// The Content Browser mirrors the FILE SYSTEM — a low-frequency source — not the
+// scene document. Its only doc-side dependency is the bound asset registry
+// reference (read at render by useAssetBrowserSnapshot), which swaps on a
+// scene/game switch (replaceDoc). So it must repaint ONLY when that reference
+// changes — never on entity edits, and never on the per-frame ▶ Play mirror
+// (notifyDocChanged bumps docVersion but does NOT run gateway.subscribe). A
+// gateway subscription with a registry-ref snapshot gives exactly that: Object.is
+// bails on edits/play frames and fires only on a genuine doc swap. (The old bare
+// useDocVersion() over-fired at 60fps in Play and repainted the whole panel.)
+const getAssetRegistry = (): unknown => gateway.doc.registry;
+const subscribeAssetRegistry = (fn: () => void): () => void => gateway.subscribe(() => fn());
+function useAssetRegistryRef(): unknown {
+  return useSyncExternalStore(subscribeAssetRegistry, getAssetRegistry, getAssetRegistry);
+}
+
 export function ContentBrowser() {
   const host = useHost();
   const { t } = useTranslation();
   useContentBrowserPanelContributions();
-  useDocVersion();
+  useAssetRegistryRef();
   const gameSlug = getSceneId();
   const { allAssets, loading, reload, diskTree, fetchDiskDirs } = useCBData(gameSlug, catalogAssetRoots);
   const [thumbnailSize, setThumbnailSize] = useState(80);
@@ -218,7 +233,16 @@ export function ContentBrowser() {
     } else {
       setPreviewItem({ ...previewItem, path: pending.newPath, name: pending.newName });
     }
-    if (previewItem.type === 'folder') gateway.dispatch({ kind: 'setFolderSelection', items: [{ path: pending.newPath, kind: 'dir' }] });
+    // Re-bind the grid highlight too: folder/file selection lives in the
+    // path-keyed folder-selection store, so the renamed item's OLD path no longer
+    // matches and the card would drop its highlight. Mirror the preview re-bind
+    // for BOTH kinds (previously only folders were re-bound, so renaming a
+    // selected FILE silently lost its selection). Assets are guid-keyed and
+    // already returned above.
+    gateway.dispatch({
+      kind: 'setFolderSelection',
+      items: [{ path: pending.newPath, kind: previewItem.type === 'folder' ? 'dir' : 'file' }],
+    });
   }, [viewItems, previewItem]);
 
   // Dependency graph (C2) is built over the FULL catalog, not the scoped view:

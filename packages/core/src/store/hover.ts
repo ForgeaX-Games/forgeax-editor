@@ -15,7 +15,7 @@
 //     (useHoverEntity) MUST stay in one file — the subscribe closure captures
 //     hoverListeners directly, so splitting the chain would break it.
 //   requirements AC-03: transient goes through gateway, leaves no trace.
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { EditorOp, EntityId } from '../types';
 import { transientAppliers } from '../io/appliers';
 
@@ -52,4 +52,18 @@ export function useHoverEntity(): EntityId | null {
     getHoverEntity,
     getHoverEntity,
   );
+}
+
+/** Whether `id` is the currently-hovered entity, as a BOOLEAN snapshot. A list
+ *  row subscribes to this instead of the raw hoverId so a hover move only
+ *  re-renders the two rows whose boolean flips (useSyncExternalStore bails on an
+ *  unchanged `Object.is` value) — not the whole tree. This is the render-perf
+ *  counterpart to useHoverEntity for large hierarchies. */
+export function useIsHoverEntity(id: EntityId): boolean {
+  const subscribe = useCallback((fn: () => void) => {
+    hoverListeners.add(fn);
+    return () => hoverListeners.delete(fn);
+  }, []);
+  const getSnapshot = useCallback(() => hoverId === id, [id]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

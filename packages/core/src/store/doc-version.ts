@@ -29,6 +29,18 @@ function subscribeDoc(fn: () => void): () => void {
   docListeners.add(fn);
   return () => docListeners.delete(fn);
 }
+/** Raw doc-change subscription (add listener → unsubscribe). Same signal
+ *  useDocVersion rides, but WITHOUT forcing a version-number re-render: a
+ *  consumer can subscribe here and pair it with a value-compared snapshot
+ *  (useSyncExternalStore) so it re-renders ONLY when its own derived data
+ *  actually changed — even while the doc churns every frame (▶ Play mirrors
+ *  the live world via notifyDocChanged() per frame). This is the per-row
+ *  Hierarchy path: a row subscribes to doc changes but bails on Object.is when
+ *  its structural snapshot is unchanged, so a 60fps doc churn costs zero row
+ *  re-renders. */
+export function subscribeDocVersion(fn: () => void): () => void {
+  return subscribeDoc(fn);
+}
 /** Bump docVersion + fire listeners so panels re-read the doc after a direct
  *  (non-gateway) world mutation — e.g. a nested GLB SceneInstance added by
  *  instantiateSceneRefUnderWorld, which the gateway never sees. */

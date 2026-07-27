@@ -1,4 +1,4 @@
-import { useCallback, type MouseEvent } from 'react';
+import { memo, useCallback, type MouseEvent } from 'react';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForFileFamily, ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
@@ -6,23 +6,46 @@ import type { CBFile } from './types';
 
 interface Props {
   file: CBFile;
+  index: number;
   selected: boolean;
   expanded?: boolean;
+  expandable?: boolean;
   favorite?: boolean;
-  onToggleFavorite?: () => void;
-  onToggleExpand?: () => void;
-  onClick: (e: MouseEvent) => void;
-  onDoubleClick: () => void;
-  onContextMenu: (e: MouseEvent) => void;
+  // List-level, referentially STABLE callbacks — the leaf composes its own
+  // per-item handlers internally so these props never change identity across
+  // renders (which is what lets memo() skip an unchanged card).
+  onSelect: (item: CBFile) => void;
+  onActivate: (item: CBFile) => void;
+  onContextMenu: (e: MouseEvent, item: CBFile) => void;
+  onToggleFavorite: (item: CBFile) => void;
+  onToggleExpand: (path: string) => void;
+  onClickIndex: (index: number, e: MouseEvent) => void;
 }
 
-export function CBFileItem({ file, selected, expanded, favorite, onToggleFavorite, onToggleExpand, onClick, onDoubleClick, onContextMenu }: Props) {
+function CBFileItemImpl({
+  file,
+  index,
+  selected,
+  expanded,
+  expandable = false,
+  favorite,
+  onSelect,
+  onActivate,
+  onContextMenu,
+  onToggleFavorite,
+  onToggleExpand,
+  onClickIndex,
+}: Props) {
   const { t } = useTranslation();
   const fav = favorite ?? file.isFavorite;
   const hasAssets = file.assets.length > 0;
-  const expandable = Boolean(onToggleExpand);
   const metaLabel = hasAssets ? t('editor.contentBrowser.preview.assetCount', { count: file.assets.length }) : file.kindLabel;
   const metaColor = hasAssets ? 'var(--accent-mint, #63eacf)' : colorForFileFamily(file.family);
+
+  const handleClick = useCallback((e: MouseEvent) => {
+    onSelect(file);
+    onClickIndex(index, e);
+  }, [onSelect, onClickIndex, file, index]);
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData('text/plain', `@${file.name}`);
@@ -58,21 +81,21 @@ export function CBFileItem({ file, selected, expanded, favorite, onToggleFavorit
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={e => { e.preventDefault(); onContextMenu(e); }}
+      onClick={handleClick}
+      onDoubleClick={() => onActivate(file)}
+      onContextMenu={e => { e.preventDefault(); onContextMenu(e, file); }}
       title={file.path}
     >
       <span
         className={`cb-card-fav${fav ? ' on' : ''}`}
         title={t(fav ? 'editor.contentBrowser.contextMenu.unfavorite' : 'editor.contentBrowser.contextMenu.favorite')}
-        onClick={e => { e.stopPropagation(); onToggleFavorite?.(); }}
+        onClick={e => { e.stopPropagation(); onToggleFavorite(file); }}
       ><ContentBrowserIcon name="star" /></span>
       {expandable && (
         <button
           type="button"
           className={`cb-pack-expand-btn${expanded ? ' open' : ''}`}
-          onClick={e => { e.stopPropagation(); onToggleExpand?.(); }}
+          onClick={e => { e.stopPropagation(); onToggleExpand(file.path); }}
           title={expanded ? t('editor.contentBrowser.contextMenu.collapseSubAssets', { defaultValue: 'Collapse sub-assets' }) : t('editor.contentBrowser.contextMenu.expandSubAssets')}
         >
           <ContentBrowserIcon name="chevron-down" />
@@ -88,3 +111,9 @@ export function CBFileItem({ file, selected, expanded, favorite, onToggleFavorit
     </div>
   );
 }
+
+// memo with default shallow prop comparison: `file` is a referentially stable
+// object (useCBDerivedView no longer rebuilds it every render) and every other
+// prop is a primitive value or a stable callback, so an unrelated panel
+// re-render leaves all props Object.is-equal and the card is skipped entirely.
+export const CBFileItem = memo(CBFileItemImpl);

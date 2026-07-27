@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { memo, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
@@ -8,28 +8,45 @@ import { getThumbnailData } from './hooks/useThumbnail';
 
 interface Props {
   asset: CBAsset;
+  index: number;
   selected: boolean;
   thumbnailSize?: number;
   favorite?: boolean;
-  onToggleFavorite?: () => void;
-  onClick: (e: React.MouseEvent) => void;
-  onDoubleClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  onSelect: (item: CBAsset) => void;
+  onActivate: (item: CBAsset) => void;
+  onContextMenu: (e: React.MouseEvent, item: CBAsset) => void;
+  onToggleFavorite: (item: CBAsset) => void;
+  onClickIndex: (index: number, e: React.MouseEvent) => void;
 }
 
 const TIP_W = 260;
 const TIP_GAP = 8;
 
-export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorite, onClick, onDoubleClick, onContextMenu }: Props) {
+function CBAssetItemImpl({
+  asset,
+  index,
+  selected,
+  favorite = false,
+  onSelect,
+  onActivate,
+  onContextMenu,
+  onToggleFavorite,
+  onClickIndex,
+}: Props) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [tipXY, setTipXY] = useState<{ left: number; top: number } | null>(null);
   const thumb = getThumbnailData(asset);
 
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    onSelect(asset);
+    onClickIndex(index, e);
+  }, [onSelect, onClickIndex, asset, index]);
+
   const handleCtxMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    onContextMenu(e);
-  }, [onContextMenu]);
+    onContextMenu(e, asset);
+  }, [onContextMenu, asset]);
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
     const ref = {
@@ -62,8 +79,8 @@ export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorit
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      onClick={handleClick}
+      onDoubleClick={() => onActivate(asset)}
       onContextMenu={handleCtxMenu}
       onMouseEnter={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -83,7 +100,7 @@ export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorit
       <span
         className={`cb-card-fav${favorite ? ' on' : ''}`}
         title={t(favorite ? 'editor.contentBrowser.contextMenu.unfavorite' : 'editor.contentBrowser.contextMenu.favorite')}
-        onClick={e => { e.stopPropagation(); onToggleFavorite?.(); }}
+        onClick={e => { e.stopPropagation(); onToggleFavorite(asset); }}
       ><ContentBrowserIcon name="star" /></span>
       <div
         className="cb-grid-thumb cb-fe-thumb"
@@ -133,3 +150,5 @@ export function CBAssetItem({ asset, selected, favorite = false, onToggleFavorit
     </div>
   );
 }
+
+export const CBAssetItem = memo(CBAssetItemImpl);

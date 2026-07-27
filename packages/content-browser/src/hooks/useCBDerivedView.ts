@@ -120,7 +120,11 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     };
     walk(diskTree);
     return files.sort((a, b) => a.path.localeCompare(b.path));
-  }, [assetsByRel, diskTree, favorites, gameSlug, t]);
+    // Depend on `favorites.isFavorite` (a useCallback stable per favorites-array),
+    // NOT the whole `favorites` API object — useFavorites returns a fresh object
+    // literal every render, so depending on it would rebuild this list (and every
+    // CBFile object in it) on EVERY render, defeating the leaf memo downstream.
+  }, [assetsByRel, diskTree, favorites.isFavorite, gameSlug, t]);
 
   const diskDirs = useMemo(() => {
     if (!diskTree) return [];
@@ -241,7 +245,9 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     };
     sortTree(roots);
     return roots;
-  }, [assetsByRel, diskTree, favorites, gameSlug, packDirs, scopedAssets]);
+    // Same rationale as diskFiles: depend on the stable `isFavorite` fn +
+    // `favorites` array, not the fresh-every-render API object.
+  }, [assetsByRel, diskTree, favorites.isFavorite, favorites.favorites, gameSlug, packDirs, scopedAssets]);
 
   // UE-parity: a folder shows its IMMEDIATE subfolders + the assets sitting
   // directly in it (non-recursive). Folders are derived from the same rels the
@@ -292,7 +298,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
       const rel = relByAssetGuid.get(asset.guid);
       return (rel != null && favorites.isFavorite(rel)) || favorites.isFavorite(asset.packPath);
     }),
-    [assetsInPath, favorites, favoritesOnly, relByAssetGuid],
+    [assetsInPath, favorites.isFavorite, favoritesOnly, relByAssetGuid],
   );
   const filteredAssets = useMemo(() => filter.applyFilters(favoriteFilteredAssets), [filter, favoriteFilteredAssets]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);

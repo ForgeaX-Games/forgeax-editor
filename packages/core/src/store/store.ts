@@ -31,6 +31,7 @@ export {
   onSelectionChange,
   useSelection,
   useSelectionList,
+  useIsSelected,
 } from './selection';
 
 // ── cluster 3: gizmo-mode (setGizmoMode sealed — M3) ──
@@ -55,7 +56,7 @@ export type { GizmoSpace } from './gizmo-space';
 export { onRenameRequest } from './rename-request';
 
 // ── cluster 6: hover (setHoverEntity sealed — M3) ──
-export { getHoverEntity, useHoverEntity } from './hover';
+export { getHoverEntity, useHoverEntity, useIsHoverEntity } from './hover';
 
 // ── cluster 7: field-preview (setFieldPreview sealed — M3) ──
 export { getFieldPreview, useFieldPreview } from './field-preview';
@@ -71,7 +72,7 @@ export {
 // ── cluster 9: doc-version ──
 // M3 (D-6): the origin-less `dispatch` wrapper was deleted (no compat layer,
 // AC-08) — consumers call gateway.dispatch(op) directly through the gateway.
-export { notifyDocChanged, useDocVersion } from './doc-version';
+export { notifyDocChanged, useDocVersion, subscribeDocVersion } from './doc-version';
 
 // ── cluster 10: scene-persistence ──
 // M3 (AC-08): setSceneId + saveDocToDisk are SEALED (session ops now dispatched

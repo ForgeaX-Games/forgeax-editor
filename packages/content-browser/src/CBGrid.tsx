@@ -22,45 +22,67 @@ interface Props {
   onToggleFavorite?: (item: CBViewItem) => void;
 }
 
+// No-op fallbacks so the memo'd leaves always receive a STABLE function
+// reference (a fresh `() => {}` per render would defeat their shallow-prop memo).
+const NOOP_ITEM = (_item: CBViewItem) => {};
+const NOOP_CTX = (_e: React.MouseEvent, _item: CBViewItem) => {};
+const NOOP_PATH = (_path: string) => {};
+
 export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, isItemFavorite, onToggleFavorite }: Props) {
+  // Pull the two stable members off the multiSelect API. `isSelected` is read
+  // here (during render) to derive each card's `selected` value; `handleClick`
+  // is a stable identity (latest-ref inside useMultiSelect) forwarded to leaves.
+  const { isSelected, handleClick } = multiSelect;
+  const isAssetMode = viewMode === 'asset';
+
+  // Every callback below is already referentially stable (either a ContentBrowser
+  // useCallback or a no-op fallback), so the memo'd item components only re-render
+  // when their own `item`/`selected`/`favorite`/`expanded` actually change.
+  const selectCb = onSelect ?? NOOP_ITEM;
+  const activateCb = onDoubleClick ?? NOOP_ITEM;
+  const contextCb = onContextMenu ?? NOOP_CTX;
+  const favoriteCb = onToggleFavorite ?? NOOP_ITEM;
+  const expandCb = onTogglePackExpansion ?? NOOP_PATH;
+
   return (
     <div className="cb-grid-view cb-fe-grid">
       {items.map((item, index) => {
-        const isSelected = multiSelect.isSelected(item);
+        const selected = isSelected(item);
         const favorite = isItemFavorite?.(item) ?? false;
-        const toggleFavorite = onToggleFavorite ? () => onToggleFavorite(item) : undefined;
         if (item.type === 'folder') {
           return (
             <CBFolderItem
               key={item.path}
               folder={item}
-              selected={isSelected}
+              index={index}
+              selected={selected}
               thumbnailSize={thumbnailSize}
               favorite={favorite}
-              onToggleFavorite={toggleFavorite}
-              onClick={e => { onSelect?.(item); multiSelect.handleClick(index, e); }}
-              onDoubleClick={() => onDoubleClick?.(item)}
-              onContextMenu={e => onContextMenu?.(e, item)}
+              onSelect={selectCb}
+              onActivate={activateCb}
+              onContextMenu={contextCb}
+              onToggleFavorite={favoriteCb}
+              onClickIndex={handleClick}
             />
           );
         }
         if (item.type === 'file') {
-          const isAssetMode = viewMode === 'asset';
           const hasExpandableAssets = (item.family === 'pack' || item.family === 'meta' || item.family === 'ui') && item.assets.length > 0;
           return (
             <CBFileItem
               key={item.path}
               file={item}
-              selected={isSelected}
+              index={index}
+              selected={selected}
               expanded={isAssetMode ? undefined : expandedPacks?.has(item.path)}
+              expandable={!isAssetMode && hasExpandableAssets}
               favorite={favorite}
-              onToggleFavorite={toggleFavorite}
-              onToggleExpand={!isAssetMode && hasExpandableAssets
-                ? () => onTogglePackExpansion?.(item.path)
-                : undefined}
-              onClick={e => { onSelect?.(item); multiSelect.handleClick(index, e); }}
-              onDoubleClick={() => onDoubleClick?.(item)}
-              onContextMenu={e => onContextMenu?.(e, item)}
+              onSelect={selectCb}
+              onActivate={activateCb}
+              onContextMenu={contextCb}
+              onToggleFavorite={favoriteCb}
+              onToggleExpand={expandCb}
+              onClickIndex={handleClick}
             />
           );
         }
@@ -68,13 +90,15 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
           <CBAssetItem
             key={item.guid}
             asset={item}
-            selected={isSelected}
+            index={index}
+            selected={selected}
             thumbnailSize={thumbnailSize}
             favorite={favorite}
-            onToggleFavorite={toggleFavorite}
-            onClick={e => { onSelect?.(item); multiSelect.handleClick(index, e); }}
-            onDoubleClick={() => onDoubleClick?.(item)}
-            onContextMenu={e => onContextMenu?.(e, item)}
+            onSelect={selectCb}
+            onActivate={activateCb}
+            onContextMenu={contextCb}
+            onToggleFavorite={favoriteCb}
+            onClickIndex={handleClick}
           />
         );
       })}

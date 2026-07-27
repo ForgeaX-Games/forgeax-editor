@@ -1,10 +1,10 @@
 import {
   childrenOf,
-  entComponents,
   entName,
   entParent,
   gateway,
   listComponentSchemas,
+  worldComponentNames,
   worldEntityHandles,
   type EntityHandle,
 } from '@forgeax/editor-core';
@@ -266,10 +266,9 @@ export function getHierarchyFilterOptions(): readonly HierarchyFilterOption[] {
   const world = gateway.activeWorld;
   const counts = new Map<string, number>();
   if (world) {
-    for (const entity of worldEntityHandles(world)) {
-      for (const name of Object.keys(entComponents(world, entity))) {
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-      }
+    // Structural name index (zero Error) instead of per-entity entComponents probe.
+    for (const names of worldComponentNames(world).values()) {
+      for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
     }
   }
   return listComponentSchemas()
@@ -287,25 +286,32 @@ export function getHierarchyFilterOptions(): readonly HierarchyFilterOption[] {
  *    2. Children (or a live child count) — the node is a 'group'.
  *    3. only infra (Transform/Name/…) or nothing — a bare 'entity'.
  *  So Transform/entity are the floor: any real component outranks them. */
-export function getHierarchyEntityType(world: NonNullable<typeof gateway.activeWorld>, entity: EntityHandle): { id: string; label: string } {
-  const components = Object.keys(entComponents(world, entity));
-  const intent = components.filter((name) => name !== CHILDREN_COMPONENT && !LOW_TIER_COMPONENTS.has(name));
+export function getHierarchyEntityType(
+  componentNames: readonly string[],
+  world: NonNullable<typeof gateway.activeWorld>,
+  entity: EntityHandle,
+): { id: string; label: string } {
+  const intent = componentNames.filter((name) => name !== CHILDREN_COMPONENT && !LOW_TIER_COMPONENTS.has(name));
   if (intent.length > 0) {
     const id = intent.reduce((best, name) => (compareComponentNames(name, best) < 0 ? name : best));
     return { id, label: id };
   }
-  if (components.includes(CHILDREN_COMPONENT) || childrenOf(world, entity).length > 0) {
+  if (componentNames.includes(CHILDREN_COMPONENT) || childrenOf(world, entity).length > 0) {
     return { id: HIERARCHY_GROUP_TYPE_ID, label: 'Group' };
   }
   return { id: HIERARCHY_ENTITY_TYPE_ID, label: 'Entity' };
 }
 
-export function entityMatchesHierarchyView(id: EntityHandle): boolean {
-  const world = gateway.activeWorld;
-  if (!world) return false;
+/** Does entity `id` (whose component names are `componentNames`) pass the current
+ *  search + filter view? Component names are passed in (from the caller's
+ *  worldComponentNames index) so this never re-probes the world per entity. */
+export function entityMatchesHierarchyView(
+  world: NonNullable<typeof gateway.activeWorld>,
+  id: EntityHandle,
+  componentNames: readonly string[],
+): boolean {
   const q = snapshot.searchQuery.trim().toLowerCase();
-  const componentNames = Object.keys(entComponents(world, id));
-  const type = getHierarchyEntityType(world, id);
+  const type = getHierarchyEntityType(componentNames, world, id);
   const passesSearch = !q
     || entName(world, id).toLowerCase().includes(q)
     || type.label.toLowerCase().includes(q)
@@ -322,7 +328,10 @@ export function entityMatchesHierarchyView(id: EntityHandle): boolean {
 export function getHierarchyVisibleMatches(): EntityHandle[] {
   const world = gateway.activeWorld;
   if (!world) return [];
-  return worldEntityHandles(world).filter(entityMatchesHierarchyView);
+  // One structural name index for the whole world (zero Error), reused for every
+  // candidate instead of an entComponents probe per entity.
+  const index = worldComponentNames(world);
+  return worldEntityHandles(world).filter((id) => entityMatchesHierarchyView(world, id, index.get(id) ?? []));
 }
 
 export function hasHierarchyViewFilter(): boolean {

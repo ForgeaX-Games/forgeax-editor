@@ -79,29 +79,43 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
     gateway.dispatch({ kind: 'setFolderSelection', items: pathItems });
   }, []);
 
+  // Read `items` / `isItemSelected` through latest-refs so the click/select-all
+  // handlers keep a STABLE identity across renders and across selection changes.
+  // These handlers are passed down to every memo'd grid item; if they changed
+  // identity (as they would with `items`/`isItemSelected` in the dep array) a
+  // single selection change would re-render EVERY item instead of only the ones
+  // whose `selected` flag flips. dispatchSet is already stable ([] deps).
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const isSelectedRef = useRef(isItemSelected);
+  isSelectedRef.current = isItemSelected;
+
   const handleClick = useCallback((index: number, e: React.MouseEvent) => {
-    const item = items[index];
+    const list = itemsRef.current;
+    const isSel = isSelectedRef.current;
+    const item = list[index];
     if (!item) return;
     const key = itemKey(item);
     let next: Selectable[];
     if (e.shiftKey && anchorIndexRef.current >= 0) {
       const start = Math.min(anchorIndexRef.current, index);
       const end = Math.max(anchorIndexRef.current, index);
-      next = items.slice(start, end + 1);
+      next = list.slice(start, end + 1);
     } else if (e.ctrlKey || e.metaKey) {
-      const base = items.filter(isItemSelected);
-      if (isItemSelected(item)) next = base.filter((i) => itemKey(i) !== key);
+      const base = list.filter(isSel);
+      if (isSel(item)) next = base.filter((i) => itemKey(i) !== key);
       else next = [...base, item];
     } else {
       next = [item];
     }
     dispatchSet(next, item);
     anchorIndexRef.current = index;
-  }, [items, isItemSelected, dispatchSet]);
+  }, [dispatchSet]);
 
   const selectAll = useCallback(() => {
-    dispatchSet(items, items[items.length - 1] ?? null);
-  }, [items, dispatchSet]);
+    const list = itemsRef.current;
+    dispatchSet(list, list[list.length - 1] ?? null);
+  }, [dispatchSet]);
 
   const clearSelection = useCallback(() => {
     clearAssetSelection();

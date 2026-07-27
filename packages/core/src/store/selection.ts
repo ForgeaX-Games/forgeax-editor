@@ -31,7 +31,7 @@
 //   requirements AC-06 / S7 (handle misuse structured; selection carries world)
 //   plan-strategy §2 D-4 (selection.ts evolves to consume the handle-pair type)
 //   research F4 (selection was Set<EntityHandle> with no world binding)
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 import type { HandlePair } from './handle-pair';
@@ -200,6 +200,16 @@ export function useSelection(): EntityHandle | null {
 }
 export function useSelectionList(): Set<EntityHandle> {
   return useSyncExternalStore(subscribeSelection, getSelectionList, getSelectionList);
+}
+
+/** Whether `handle` is selected, as a BOOLEAN snapshot. A list row subscribes to
+ *  this instead of the whole selection Set so a selection change only re-renders
+ *  the rows whose membership actually flips (useSyncExternalStore bails on an
+ *  unchanged `Object.is` value) — not every row that merely read the shared Set.
+ *  Render-perf counterpart to useSelectionList for large hierarchies. */
+export function useIsSelected(handle: EntityHandle): boolean {
+  const getSnapshot = useCallback(() => derivedHandleSet.has(handle), [handle]);
+  return useSyncExternalStore(subscribeSelection, getSnapshot, getSnapshot);
 }
 
 /**
