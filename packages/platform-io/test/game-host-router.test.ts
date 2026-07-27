@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { mkdtemp, mkdir, rm, readFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -59,7 +59,7 @@ describe('PUT/GET /games/:slug/package', () => {
     const body = await res.json();
     expect(body.blueprint).toEqual(sampleBlueprint);
     expect(body.project.id).toBe(SLUG);
-    expect(body.assetsManifest).toEqual({ assets: {} });
+    expect(body.assetsManifest).toEqual({ version: 2, assets: [] });
   });
 
   test('PUT without blueprint → 400', async () => {
@@ -78,7 +78,10 @@ describe('PUT/GET /games/:slug/package', () => {
 
   test('caller-provided project + manifest are persisted verbatim', async () => {
     const project = { id: SLUG, title: 'Custom', platform: 'wb-game-video', platformVersion: '1', entry: { blueprint: 'blueprint.json', components: 'dist/components' } };
-    const assetsManifest = { assets: { clip1: { url: 'https://cdn.example/clip1.mp4', kind: 'video' } } };
+    const assetsManifest = {
+      version: 2,
+      assets: [{ id: 'clip1', url: 'https://cdn.example/clip1.mp4', kind: 'video' }],
+    };
     const res = await router.request(`/games/${SLUG}/package`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -88,6 +91,30 @@ describe('PUT/GET /games/:slug/package', () => {
     const get = await (await router.request(`/games/${SLUG}/package`)).json();
     expect(get.project.title).toBe('Custom');
     expect(get.assetsManifest).toEqual(assetsManifest);
+  });
+
+  test('rejects a non-canonical asset manifest', async () => {
+    const res = await router.request(`/games/${SLUG}/package`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ blueprint: sampleBlueprint, assetsManifest: { assets: {} } }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('does not replace a malformed existing manifest when the payload omits it', async () => {
+    const manifestPath = join(gameRoot(), 'assets', 'manifest.json');
+    await writeFile(manifestPath, '{broken');
+
+    const res = await router.request(`/games/${SLUG}/package`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ blueprint: sampleBlueprint }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await readFile(manifestPath, 'utf-8')).toBe('{broken');
+    await writeFile(manifestPath, JSON.stringify({ version: 2, assets: [] }));
   });
 });
 
@@ -155,6 +182,7 @@ describe('versions', () => {
     // .gitignore was created with the defaults
     const gi = await (await import('fs/promises')).readFile(resolve(gameRoot(), '.gitignore'), 'utf-8');
     expect(gi).toContain('sessions/');
+    expect(gi).toContain('assets/.uploads/');
     expect(gi).toContain('*.log');
 
     // sessions/ + *.log are NOT tracked in the committed version
@@ -162,6 +190,37 @@ describe('versions', () => {
     expect(tracked).not.toContain('sessions/');
     expect(tracked).not.toContain('run.log');
     expect(tracked).toContain('blueprint.json');
+  });
+});
+
+describe('version switching (list + read at tag, non-destructive)', () => {
+  test('GET /versions lists all vN newest-first, matching current', async () => {
+    const body = await (await router.request(`/games/${SLUG}/versions`)).json();
+    const tags = body.versions.map((v: { tag: string }) => v.tag);
+    expect(tags.length).toBeGreaterThanOrEqual(2);
+    expect(tags).toContain('v1');
+    const cur = await (await router.request(`/games/${SLUG}/versions/current`)).json();
+    expect(tags[0]).toBe(cur.tag); // newest first == current latest
+  });
+
+  test('GET /versions/:tag/package reads that version content (no checkout / no history change)', async () => {
+    // v1 was the original sampleBlueprint (empty graph)
+    const v1 = await (await router.request(`/games/${SLUG}/versions/v1/package`)).json();
+    expect(v1.blueprint.graph.nodes).toEqual([]);
+    // latest tag's package matches the current on-disk blueprint
+    const cur = await (await router.request(`/games/${SLUG}/versions/current`)).json();
+    const latest = await (await router.request(`/games/${SLUG}/versions/${cur.tag}/package`)).json();
+    const nowPkg = await (await router.request(`/games/${SLUG}/package`)).json();
+    expect(latest.blueprint.graph).toEqual(nowPkg.blueprint.graph);
+    // reading an old version must NOT change current / dirty state
+    const cur2 = await (await router.request(`/games/${SLUG}/versions/current`)).json();
+    expect(cur2.tag).toBe(cur.tag);
+    expect(cur2.dirty).toBe(false);
+  });
+
+  test('unknown tag → 404; bad tag → 404', async () => {
+    expect((await router.request(`/games/${SLUG}/versions/v999/package`)).status).toBe(404);
+    expect((await router.request(`/games/${SLUG}/versions/nope/package`)).status).toBe(404);
   });
 });
 

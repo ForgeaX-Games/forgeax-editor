@@ -13,7 +13,7 @@ import { resolve } from 'node:path';
 
 // Runtime state that must never enter a game version (agent sessions, logs,
 // caches, deps). Kept minimal + generic; games may add their own lines.
-const DEFAULT_IGNORES = ['sessions/', '*.log', 'node_modules/', '.DS_Store'];
+const DEFAULT_IGNORES = ['sessions/', 'assets/.uploads/', '*.log', 'node_modules/', '.DS_Store'];
 
 // Inline identity + no-gpg so commits/tags never depend on ambient git config
 // (fresh game repos have none; CI/desktop must not prompt or fail).
@@ -71,7 +71,7 @@ function ensureGitignore(dir: string): void {
 function untrackRuntimeState(dir: string): void {
   if (!hasHead(dir)) return;
   try {
-    git(dir, ['rm', '-r', '--cached', '--ignore-unmatch', 'sessions']);
+    git(dir, ['rm', '-r', '--cached', '--ignore-unmatch', 'sessions', 'assets/.uploads']);
   } catch {
     /* best-effort */
   }
@@ -143,6 +143,76 @@ export interface CurrentVersion {
   tag: string | null;
   commitHash: string | null;
   dirty: boolean;
+}
+
+export interface VersionEntry {
+  tag: string;
+  /** annotated-tag creation time (unix seconds). */
+  createdAt: number;
+  /** tag message (subject). */
+  message: string;
+}
+
+/** List all `vN` versions (newest first), read-only. Empty when no repo/tags. */
+export function listVersions(dir: string): VersionEntry[] {
+  if (!hasRepo(dir)) return [];
+  let out = '';
+  try {
+    out = git(dir, [
+      'for-each-ref',
+      'refs/tags/v*',
+      '--format=%(refname:short)\t%(creatordate:unix)\t%(subject)',
+    ]);
+  } catch {
+    return [];
+  }
+  return out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const [tag, ts, ...rest] = l.split('\t');
+      return { tag, createdAt: Number(ts) || 0, message: rest.join('\t') };
+    })
+    .filter((v) => /^v\d+$/.test(v.tag))
+    .sort((a, b) => {
+      const na = Number(a.tag.slice(1));
+      const nb = Number(b.tag.slice(1));
+      return nb - na; // newest (highest vN) first
+    });
+}
+
+/**
+ * Read a game package **at a given version tag** without touching the working
+ * tree or history (`git show <tag>:<file>`). Returns parsed JSON per file, each
+ * `null` when absent/unparseable at that tag. Used for non-destructive "load an
+ * old version into the editor" — the editor then saves it as a new version.
+ */
+export function readPackageAtTag(
+  dir: string,
+  tag: string,
+): { project: unknown | null; blueprint: unknown | null; assetsManifest: unknown | null } | null {
+  if (!/^v\d+$/.test(tag)) return null;
+  if (!hasRepo(dir)) return null;
+  const showJson = (file: string): unknown | null => {
+    try {
+      const raw = git(dir, ['show', `${tag}:${file}`]);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  };
+  // tag must exist
+  try {
+    git(dir, ['rev-parse', `${tag}^{}`]);
+  } catch {
+    return null;
+  }
+  return {
+    project: showJson('project.json'),
+    blueprint: showJson('blueprint.json'),
+    assetsManifest: showJson('assets/manifest.json'),
+  };
 }
 
 /** Latest `vN` tag + HEAD hash + working-tree dirty flag. */
