@@ -365,11 +365,16 @@ function ensureFbxWasm(): void {
     return;
   }
 
-  warn('pre-built fbx wasm unavailable — falling back to local Emscripten build.');
-  requireCmd(
-    'emcc',
-    'pre-built fbx wasm fetch failed and local build needs Emscripten. Authenticate GitHub with GH_TOKEN/GITHUB_TOKEN or `gh auth login`; otherwise install: brew install emscripten (or activate emsdk)',
-  );
+  // fetch-wasm inherits stdio, so its own diagnosis is already on screen. Point
+  // at it instead of asserting a cause: a fetch that downloaded the asset and
+  // then died unpacking it is not an auth failure, and claiming otherwise sends
+  // people installing an Emscripten toolchain they don't need.
+  warn('pre-built fbx wasm unavailable — the real cause is in the fetch-wasm output above. Common ones:');
+  warn('  · GitHub auth — set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`');
+  warn('  · `Cannot connect to <drive>: resolve failed` — GNU tar (Git for Windows) sits ahead of');
+  warn('    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first');
+  warn('falling back to local Emscripten build.');
+  requireCmd('emcc', 'the local fbx wasm build needs Emscripten. install: brew install emscripten (or activate emsdk)');
   // build:wasm = fetch-ufbx (idempotent, downloads ufbx.c) + emcc. Invoke via
   // the package script so the emcc flag set stays owned by @forgeax/engine-fbx.
   sh('pnpm', ['-F', '@forgeax/engine-fbx', 'build:wasm'], { cwd: ENGINE_DIR });

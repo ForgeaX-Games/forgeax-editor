@@ -18,6 +18,10 @@
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
 import { sessionAppliers } from '../io/appliers';
+// Single-active-selection-domain: selecting an asset clears any entity selection
+// so Delete / blank-click resolve to one target. Direct clear (guarded on
+// non-empty); circular ref resolves at call time.
+import { clearSelection } from './selection';
 
 export interface SelectedAsset {
   guid: string;
@@ -54,6 +58,10 @@ function applySetAssetSelection(op: EditorOp): { ok: true } {
   if (sameSet(selectedAssets, assets) && primaryAsset?.guid === primary?.guid) {
     return { ok: true };
   }
+  // Only a forward (non-empty) asset selection is the active domain — clear the
+  // entity selection FIRST, then emit assets LAST so lastSelectionDomain = 'asset'.
+  // An empty set (deselect) must NOT clear the entity selection.
+  if (assets.length > 0) clearSelection();
   selectedAssets = assets;
   primaryAsset = primary;
   emitAssetSel();

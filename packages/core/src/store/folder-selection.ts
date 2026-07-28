@@ -18,6 +18,10 @@
 
 import { useSyncExternalStore } from 'react';
 import { sessionAppliers } from '../io/appliers';
+// Single-active-selection-domain: selecting a path clears any entity selection so
+// Delete / blank-click resolve to one target. Direct clear (guarded on non-empty);
+// circular ref resolves at call time.
+import { clearSelection } from './selection';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -98,7 +102,24 @@ sessionAppliers.set('setFolderSelection', (op) => {
   if (sameItems(selectedItems, next)) {
     return { ok: true };
   }
+  // Only a forward (non-empty) path selection is the active domain — clear the
+  // entity selection FIRST, then emit paths LAST so lastSelectionDomain = 'folder'.
+  // An empty set (deselect) must NOT clear the entity selection.
+  if (next.length > 0) clearSelection();
   selectedItems = next;
   emit();
   return { ok: true };
 });
+
+/**
+ * Directly clear the path selection — lifecycle/coordination seam. Not an edit op,
+ * not dispatched, not recorded in ledger/undo, and does NOT advance
+ * lastSelectionDomain. Used by the single-active-domain clears (selecting an
+ * entity) and by blank-area deselect handlers.
+ */
+export function clearFolderSelection(): void {
+  if (selectedItems.length !== 0) {
+    selectedItems = [];
+    emit();
+  }
+}

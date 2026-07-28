@@ -32,8 +32,16 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
   // Pull the two stable members off the multiSelect API. `isSelected` is read
   // here (during render) to derive each card's `selected` value; `handleClick`
   // is a stable identity (latest-ref inside useMultiSelect) forwarded to leaves.
-  const { isSelected, handleClick } = multiSelect;
+  const { isSelected, handleClick, clearSelection } = multiSelect;
   const isAssetMode = viewMode === 'asset';
+
+  // Blank-area deselect: clicking the grid background/gaps (not a card) clears the
+  // Content Browser selection. The `.cb-asset-view` container in ContentBrowser is
+  // fully covered by this grid, so its own blank-click handler rarely fires — this
+  // catches clicks that land between/around cards.
+  const handleBlankClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) clearSelection();
+  };
 
   // Every callback below is already referentially stable (either a ContentBrowser
   // useCallback or a no-op fallback), so the memo'd item components only re-render
@@ -45,7 +53,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
   const expandCb = onTogglePackExpansion ?? NOOP_PATH;
 
   return (
-    <div className="cb-grid-view cb-fe-grid">
+    <div className="cb-grid-view cb-fe-grid" onClick={handleBlankClick}>
       {items.map((item, index) => {
         const selected = isSelected(item);
         const favorite = isItemFavorite?.(item) ?? false;

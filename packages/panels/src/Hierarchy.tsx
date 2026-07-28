@@ -27,7 +27,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected } from '@forgeax/editor-core';
+import { gateway, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -917,6 +917,12 @@ export function HierarchyPanel() {
           className="ol-body"
           data-testid="hier-filtered"
           style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('.tn')) return;
+            gateway.dispatch({ kind: 'setSelection', id: null });
+            clearAssetSelection();
+            clearFolderSelection();
+          }}
           onContextMenu={(e) => {
             if ((e.target as HTMLElement).closest('.tn')) return;
             openBlankMenu(e.clientX, e.clientY);
@@ -958,6 +964,12 @@ export function HierarchyPanel() {
               else if (ids[0] !== undefined) reparent(ids[0], null);
             }
             draggingId = null;
+          }}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('.tn')) return;
+            gateway.dispatch({ kind: 'setSelection', id: null });
+            clearAssetSelection();
+            clearFolderSelection();
           }}
           onContextMenu={(e) => {
             if ((e.target as HTMLElement).closest('.tn')) return;

@@ -349,6 +349,7 @@ export {
   getPathSelectionList,
   onFolderSelectionChange,
   useFolderSelectionSet,
+  clearFolderSelection,
 } from './store/folder-selection';
 export type { PathSelectionItem } from './store/folder-selection';
 

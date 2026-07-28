@@ -51,7 +51,7 @@ import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-co
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getGizmoSpace, getSelection, onGizmoModeChange, onGizmoSpaceChange, onSelectionChange } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getGizmoSpace, getSelection, onGizmoModeChange, onGizmoSpaceChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -529,7 +529,11 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       grabOffset = g ? [dragWorldPos[0] - g[0], 0, dragWorldPos[2] - g[2]] : [0, 0, 0];
       mode = 'pendDrag';
     } else {
+      // Blank viewport click clears the whole selection (entity + asset + path) so
+      // a stale file/asset selection can't linger after clicking away into the scene.
       gateway.dispatch({ kind: 'setSelection', id: null });
+      clearAssetSelection();
+      clearFolderSelection();
       mode = 'none';
     }
   }
