@@ -183,25 +183,14 @@ export const builtinCommandsExtension: AppExtension = {
       execute: () => { getState().closeOverlay(); return { status: 'completed' as const }; },
     }));
 
-    // Workspace new/open — the ProjectSwitcher dropdown was removed from the
-    // TopBar; the File menu drives its modal (hosted by ProjectModalHost).
+    // Game flows — a "project" is a game here. Opening a directory links that
+    // game into the current Studio instance.
     cleanups.push(registerCommand({
-      id: 'project.new',
-      title: '新建项目',
-      execute: () => { getState().openProjectModal('new'); return { status: 'completed' as const }; },
+      id: 'game.open-directory',
+      title: '打开游戏目录',
+      execute: () => { getState().openGameDirectoryModal(); return { status: 'completed' as const }; },
     }));
 
-    cleanups.push(registerCommand({
-      id: 'project.open',
-      title: '打开项目',
-      execute: () => { getState().openProjectModal('open'); return { status: 'completed' as const }; },
-    }));
-
-    // Game flows — a "project" is a game here, so the File menu's 新建/打开 drive
-    // the GameSwitcher: game.new opens its new-game dialog, game.open expands its
-    // dropdown (the game list). project.new/open above stay registered but are
-    // no longer menu-referenced (kept per request — the modal host still runs the
-    // project-id sync).
     cleanups.push(registerCommand({
       id: 'game.new',
       title: '新建游戏',

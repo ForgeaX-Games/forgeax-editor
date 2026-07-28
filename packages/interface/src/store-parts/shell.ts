@@ -31,9 +31,9 @@ export function createShellState(
   | 'openOverlay'
   | 'setOverlayParam'
   | 'closeOverlay'
-  | 'projectModalTab'
-  | 'openProjectModal'
-  | 'closeProjectModal'
+  | 'gameDirectoryModalOpen'
+  | 'openGameDirectoryModal'
+  | 'closeGameDirectoryModal'
   | 'gameSwitcherOpen'
   | 'setGameSwitcherOpen'
   | 'gameModalOpen'
@@ -110,9 +110,9 @@ export function createShellState(
     },
     closeOverlay: () => set({ activeOverlay: null }),
 
-    projectModalTab: null,
-    openProjectModal: (tab) => set({ projectModalTab: tab }),
-    closeProjectModal: () => set({ projectModalTab: null }),
+    gameDirectoryModalOpen: false,
+    openGameDirectoryModal: () => set({ gameDirectoryModalOpen: true }),
+    closeGameDirectoryModal: () => set({ gameDirectoryModalOpen: false }),
 
     gameSwitcherOpen: false,
     setGameSwitcherOpen: (v) => set({ gameSwitcherOpen: v }),

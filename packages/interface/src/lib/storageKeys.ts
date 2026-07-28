@@ -75,6 +75,11 @@ export const STORAGE_KEYS = {
   // ── publish module ──
   /** when '1', the first-run Publish coach-mark has been seen (or skipped). */
   publishOnboarded: 'forgeax.publish.onboarded',
+
+  // ── activity rail ──
+  /** ordered plugin slugs pinned to the ActivityRail middle section.
+   *  Shape: string[]. Missing key → seed from product-spec defaults. */
+  activityRailPinned: 'forgeax.activityRail.pinned.v1',
 } as const;
 
 /** Build a per-workspace dockview layout key. Legacy — kept for the v7→v8

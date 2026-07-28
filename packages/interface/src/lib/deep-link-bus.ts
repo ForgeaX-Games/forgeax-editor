@@ -1,8 +1,8 @@
-// 跨-surface 深链意图 —— 建在 L1 bus primitive 之上的一层薄封装（R5/P2）。
+// 跨-surface 深链意图 —— 建在 interface bus primitive 之上的一层薄封装（R5/P2）。
 //
-// 背景：原来这些"点了 A 面里的东西 → 跳到 B 面并高亮/展开/过滤"的意图，是往 L1
+// 背景：原来这些"点了 A 面里的东西 → 跳到 B 面并高亮/展开/过滤"的意图，是往 interface
 // store 里塞 `pending*` 字段（producer set、consumer 读到后 act + 清空）实现的。
-// 那让 L1 store 变成了跨 app 导航总线（app 领域态漏进 L1）。R5/P2 把它们改成走 bus：
+// 那让 interface store 变成了跨 app 导航总线（app 领域态漏进 foundation）。R5/P2 把它们改成走 bus：
 //   - producer：`emitDeepLink(topic, payload)`  —— retain 一次（快照语义）
 //   - consumer：`useDeepLink(topic)` → [value, clear]，clear 时清 retained + 本地
 //
@@ -10,7 +10,7 @@
 // BusAdminPanel 此刻才挂载）。retain 让"晚挂载的消费者"在 subscribe 时立即补到值，
 // 复刻原 store 字段"持续到被消费"的行为。消费者消费后 clear，避免重复触发。
 //
-// L1 纯度说明：topic 字符串是"跨 surface 导航意图"，其消费者（BusAdminPanel/Sidebar
+// interface foundation 纯度说明：topic 字符串是"跨 surface 导航意图"，其消费者（BusAdminPanel/Sidebar
 // 等壳内 surface）目前仍驻留 interface（见 17b §7.4 —— 这些是壳/残留，非新耦合）。
 // bus primitive 本身零 app 语义；本文件只是把散落的 topic 常量收敛到一处、加类型。
 import { useEffect, useState, useCallback } from 'react';
@@ -36,7 +36,7 @@ export function clearDeepLink(topic: DeepLinkTopic): void {
   publish(topic, null as unknown as string);
 }
 
-/** consumer hook：镜像原 `pendingX / setPendingX(null)` 对，但值由 L1 bus 承载。
+/** consumer hook：镜像原 `pendingX / setPendingX(null)` 对，但值由 interface bus 承载。
  *  返回 `[value, clear]`：value 来自 retained 快照 + 后续 publish；clear() 清 retained + 本地。 */
 export function useDeepLink(topic: DeepLinkTopic): [string | null, () => void] {
   const [val, setVal] = useState<string | null>(() => (peek(topic) as string | undefined) ?? null);

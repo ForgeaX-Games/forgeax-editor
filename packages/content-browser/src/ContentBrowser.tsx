@@ -19,7 +19,7 @@ import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
-import { useFavorites } from './hooks/useFavorites';
+import { useFavorites, type CBFavoriteRef } from './hooks/useFavorites';
 import { useAssetGraph } from './hooks/useAssetGraph';
 import { useCBData } from './hooks/useCBData';
 import { useCBDerivedView } from './hooks/useCBDerivedView';
@@ -70,6 +70,12 @@ const catalogAssetRoots: readonly CatalogAssetRoot[] =
     ? []
     : __FORGEAX_CATALOG_ASSET_ROOTS__;
 
+/** Assets are identified by guid (a pack file holds N of them); folders and
+ *  files are identified by their game-relative path. */
+const favoriteRef = (item: CBViewItem): CBFavoriteRef => (
+  item.type === 'asset' ? { kind: 'asset', guid: item.guid } : { kind: 'path', path: item.path }
+);
+
 // The Content Browser mirrors the FILE SYSTEM — a low-frequency source — not the
 // scene document. Its only doc-side dependency is the bound asset registry
 // reference (read at render by useAssetBrowserSnapshot), which swaps on a
@@ -119,7 +125,7 @@ export function ContentBrowser() {
   // — a static type filter, independent of the current folder's contents.
   const filter = useFilter();
   const sort = useSort();
-  const favorites = useFavorites();
+  const favorites = useFavorites(gameSlug);
   // The Asset panel is scoped to the exact roots the host gave pluginPack.
   // `catalogAssetRoots` is derived from package.json#forgeax.assets.roots at the
   // host boundary, rather than re-reading package.json through a second browser
@@ -421,26 +427,23 @@ export function ContentBrowser() {
     })();
   }, [nav.currentPath, t]);
 
-  const assetFavoritePath = useCallback((asset: CBAsset) => (
-    relByAssetGuid.get(asset.guid) ?? catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots) ?? asset.packPath
-  ), [gameSlug, relByAssetGuid]);
-
   // Per-card favorite state + toggle, threaded through CBGrid so every card's
-  // ⭐ toggles favorites directly (same path semantics as the context menu:
-  // folders/files key on their game-relative path, assets on assetFavoritePath).
+  // ⭐ toggles favorites directly (same identity as the context menu: folders and
+  // files key on their game-relative path, assets on their guid — a pack file
+  // holds N assets, so a path cannot tell them apart).
   // The header "favorites only" filter then narrows the content view to these.
   const isItemFavorite = useCallback((item: CBViewItem): boolean => (
-    item.type === 'asset' ? favorites.isFavorite(assetFavoritePath(item)) : item.isFavorite
-  ), [assetFavoritePath, favorites]);
+    item.type === 'asset' ? favorites.isFavorite({ kind: 'asset', guid: item.guid }) : item.isFavorite
+  ), [favorites.isFavorite]);
   const toggleItemFavorite = useCallback((item: CBViewItem): void => {
-    favorites.toggleFavorite(item.type === 'asset' ? assetFavoritePath(item) : item.path);
-  }, [assetFavoritePath, favorites]);
+    favorites.toggleFavorite(favoriteRef(item));
+  }, [favorites.toggleFavorite]);
 
   const commonItemMenu = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') {
       const fullPath = resolveGamePath(item.path);
       return [
-        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(item.path) },
+        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
         { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
           void (async () => {
             const newName = await promptDialog({
@@ -477,7 +480,7 @@ export function ContentBrowser() {
     }
     if (item.type === 'file') {
       return [
-        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(item.path) },
+        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
         { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
           void (async () => {
             const newName = await promptDialog({
@@ -515,11 +518,11 @@ export function ContentBrowser() {
         } },
       ];
     }
-    const favPath = assetFavoritePath(item);
+    const favRef = favoriteRef(item);
     const relPath = relByAssetGuid.get(item.guid) ?? catalogPathToRoot(item.packPath, gameSlug, catalogAssetRoots) ?? item.packPath;
     const fullPath = resolveCopyPath(relPath);
     return [
-      { label: favorites.isFavorite(favPath) ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favPath) },
+      { label: favorites.isFavorite(favRef) ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favRef) },
       { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => crudCallbacks.onRename?.(item) },
       { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
       { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(relPath) },
@@ -539,7 +542,7 @@ export function ContentBrowser() {
         requestDelete(targets);
       } },
     ];
-  }, [assetFavoritePath, crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, multiSelect.selection, relByAssetGuid, reload, requestDelete, t]);
+  }, [crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, multiSelect.selection, relByAssetGuid, reload, requestDelete, t]);
 
   const handleImport = useCallback(() => {
     const input = fileInputRef.current;
@@ -559,7 +562,7 @@ export function ContentBrowser() {
     const menuItems = buildFolderContextMenu(folder, assetsInFolder, crudCallbacks);
     const resolved = resolveFolderMenuItems(menuItems, {
       onOpen: () => nav.navigate(folder.path),
-      onToggleFavorite: () => favorites.toggleFavorite(folder.path),
+      onToggleFavorite: () => favorites.toggleFavorite(favoriteRef(folder)),
       unsupportedIds: ['rename'],
     }).filter(item => !['toggle-fav', 'rename', 'copy-path', 'delete'].includes(item.id));
     if (resolved.length === 0) return;

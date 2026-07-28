@@ -41,6 +41,7 @@ import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { useHost } from '../../core/app-shell';
 import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
 import { buildDefault } from './builtinWorkbenches';
+import { shouldApplyHydratedWorkbenchLayout } from './workspace-hydration';
 import { getDockResetEpoch } from './dockResetEpoch';
 import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
 import './DockShell.css';
@@ -342,13 +343,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   const hideChatRef = useRef<boolean>(hideChatPanel);
   useEffect(() => { hideChatRef.current = hideChatPanel; }, [hideChatPanel]);
   // Active bus workbench plugins — used to populate the "插件面板" layout section.
-  // The plugin bus is owned by `cli` (后L2 Agent engine, /api/bus → getEventBus),
-  // NOT by platform-io (后L1). If the host did not inject chat, the standalone
+  // The plugin bus is owned by the orchestrator agent engine (`/api/bus` → `getEventBus`),
+  // NOT by the platform-io backend foundation. If the host did not inject chat, the standalone
   // shell has no agent engine, so there is never a bus to probe.
   // Skip the fetch entirely in that mode: firing it would guarantee a 404 (red in
   // the console) for a capability standalone intentionally doesn't have. (bus-api
   // still degrades gracefully if it IS hit; this just avoids the pointless wire
-  // request — §4 前L2 不连后L2.)
+  // request — the standalone frontend application does not reach the backend agent engine here.)
   const [busExtensions, setBusExtensions] = useState<ExtensionInfo[]>([]);
   useEffect(() => {
     if (hideChatPanel) return; // no injected chat/agent engine → no plugin bus
@@ -847,17 +848,32 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // storage or on a fresh machine). Then apply the active workspace's layout if
   // the dock is ready and localStorage was empty before init.
   useEffect(() => {
+    let cancelled = false;
     const { activeId } = loadWorkbenchList();
+    const started = {
+      projectId: getCurrentProject(),
+      activeWorkbenchId: activeId,
+    };
     const hadActiveLayout = region === 'DockShell'
       ? !!loadWorkbenchLayout(activeId)
       : !!localStorage.getItem(layoutKey(activeId));
     void initWorkbenchLayouts(new Set(editorPanelIds)).then(() => {
+      if (cancelled) return;
       if (hadActiveLayout) return; // localStorage already had data — nothing to apply
       // Tour/layout reset already seeded the default — don't rehydrate a stale
       // project-scoped / server layout over it.
       if (appliedResetEpochRef.current > 0) return;
       const api = apiRef.current;
       if (!api) return;
+      const current = {
+        projectId: getCurrentProject(),
+        activeWorkbenchId: loadWorkbenchList().activeId,
+      };
+      if (!shouldApplyHydratedWorkbenchLayout(
+        started,
+        current,
+        prevWorkspaceIdRef.current,
+      )) return;
       const saved = loadWorkbenchLayout(activeId);
       if (!saved) return;
       try {
@@ -871,6 +887,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         closeStrayPanels(api);
       } catch { /* fall through — keep current layout */ }
     });
+    return () => { cancelled = true; };
   }, [closeStrayPanels, editorPanelIds, layoutKey, region]);
 
   // Reconcile the dock when the project id resolves after boot. onReady may have

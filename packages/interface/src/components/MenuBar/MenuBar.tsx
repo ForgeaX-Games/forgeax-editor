@@ -87,7 +87,11 @@ import {
 } from '../../lib/menu-registry';
 import { prettyCombo } from '../../lib/global-shortcuts';
 import { isTauri } from '../../lib/platform/runtime';
-import { warmRecentGames } from '../../lib/recent-games';
+import {
+  getRecentGamesRevision,
+  subscribeRecentGames,
+  warmRecentGames,
+} from '../../lib/recent-games';
 import './MenuBar.css';
 
 // Icon name → lucide component. Mirrors ContextMenu.tsx's MENU_ICONS pattern
@@ -302,6 +306,13 @@ interface TopMenuProps {
 
 function TopMenu({ menu, items, t, execute }: TopMenuProps) {
   const brand = useBrand();
+  // The async warm completes after File has rendered. Subscribe so an
+  // already-open recent submenu replaces its empty placeholder immediately.
+  useSyncExternalStore(
+    subscribeRecentGames,
+    getRecentGamesRevision,
+    getRecentGamesRevision,
+  );
   if (items.length === 0) return null;
   const isBrand = menu === 'brand';
   // Top-level titles are fixed labels (`menubar.<menu>`). If i18n hasn't been

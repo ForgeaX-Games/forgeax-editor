@@ -16,13 +16,13 @@
 //
 // import + reveal: NOT registered. Content-browser import and OS file-reveal
 // live outside KeyboardRouterDeps and can't be reached editor-agnostically
-// from L1. The corresponding menu items in builtin-menus.ts carry no
+// from the interface foundation. The corresponding menu items in builtin-menus.ts carry no
 // commandId and stay disabled — the correct signal for a not-yet-wired
 // capability. Flip them on when a dep or command later lands.
 //
 // reloadPreview: registered as a best-effort event emit (`preview:reload` on
 // ctx.bus). No listener consumes it yet — the Play iframe self-reload lives
-// in @forgeax/editor/PlaySurface which L1 cannot import. Emitting the event
+// in @forgeax/editor/PlaySurface which the interface foundation cannot import. Emitting the event
 // keeps the menu item live and gives a future HMR/preview owner a stable hook
 // to subscribe to without touching this file.
 
@@ -141,7 +141,7 @@ export const editorCommandsExtension: AppExtension = {
     }));
 
     // Partial: bus event only, no listener wired yet (see file header). A
-    // future preview/HMR owner in an L2 package subscribes to 'preview:reload'
+    // future preview/HMR owner in a standalone application subscribes to 'preview:reload'
     // and forwards to the Play iframe self-reload. `ctx.bus.emit` is typed
     // against AppBusEventMap which extends Record<string, unknown>, so an
     // ad-hoc topic name is accepted with an `unknown` payload.

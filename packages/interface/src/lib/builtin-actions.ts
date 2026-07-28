@@ -155,7 +155,7 @@ export function registerBuiltinActions(): void {
   // 角色桥(插件桥的「角色版」:人和 AI 同一条路造/用/看角色)。role.create 是**唯一**创建
   // 路径 —— AI 经 ui_act_role_create / ui_invoke 调,人经 ⌘K / 按钮 pill 调;背后是 server
   // 执行器 team:create_role(对 AI 隐藏),经 /api/tools/call(caller:user)落 agent-pack 到
-  // L1/L2 插件层、reloadPlugins,新角色 ~5s 内自动进名单(roster 轮询 +1)。治理靠 trust-gate
+  // 用户安装/项目专属 extension source、reloadPlugins,新角色 ~5s 内自动进名单(roster 轮询 +1)。治理靠 trust-gate
   // 的 delegate 闸(capability 如实声明)。role.list 让 AI 能告诉用户「有哪些角色」并防重名;
   // role.open 打开角色页 / 把某角色绑到当前会话展示其详情。
   registerAction({

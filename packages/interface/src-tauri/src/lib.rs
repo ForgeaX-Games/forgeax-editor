@@ -638,6 +638,14 @@ fn start_bundled_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
                                 "FORGEAX_PROJECT_ROOT",
                                 projects_dir.to_string_lossy().to_string(),
                             )
+                            // play-runtime's vite.config needs the games dir to
+                            // scan asset roots for pluginPack. Mirrors run.ts's
+                            // FORGEAX_PREVIEW_GAMES_DIR / FORGEAX_GAMES_URL_PREFIX.
+                            .env(
+                                "FORGEAX_PREVIEW_GAMES_DIR",
+                                engine_work.join(".forgeax").join("games").to_string_lossy().to_string(),
+                            )
+                            .env("FORGEAX_GAMES_URL_PREFIX", ".forgeax/games")
                             .spawn()
                             .map_err(|e| e.to_string())
                     })

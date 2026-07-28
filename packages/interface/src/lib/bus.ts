@@ -1,8 +1,8 @@
-// L1 跨-app 事件总线 primitive —— 纯机制，零 app 语义。
+// interface 跨-app 事件总线 primitive —— 纯机制，零 app 语义。
 //
-// 设计意图（R5 store 收敛）：interface 是 L1 AppKit，不认识任何上层 app 的 topic。
+// 设计意图（R5 store 收敛）：interface 是可复用 AppKit foundation，不认识任何上层 app 的 topic。
 // 各 app 通过 TS declaration merging 往 `BusTopics` 里登记自己的 topic → payload
-// 类型；L1 只提供 publish / subscribe 机制本身。这样「新增 app 不改 L1」——app 自带
+// 类型；interface 只提供 publish / subscribe 机制本身。这样「新增 app 不改 foundation」——app 自带
 // 自己的 topic 声明即可。
 //
 // 两种用法：
@@ -15,7 +15,7 @@
 // HMR 安全：handler 表 + retained 表挂在 globalThis 上，模块被重新求值时不丢订阅、
 // 不丢最近快照。
 
-/** app 侧声明合并登记自己的 topic。L1 保持为空 —— 它不认识任何具体 topic。
+/** app 侧声明合并登记自己的 topic。interface 保持为空 —— 它不认识任何具体 topic。
  *
  *  app 侧示例（放在 app 自己的包里，不进 interface）：
  *    declare module '@forgeax/interface/lib/bus' {

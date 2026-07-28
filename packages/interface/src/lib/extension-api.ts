@@ -134,7 +134,7 @@ export function pickLang(
 }
 
 /**
- * Flat L0 marketplace path hint for BusAdminPanel / Sidebar detail rows.
+ * Flat built-in marketplace path hint for BusAdminPanel / Sidebar detail rows.
  * Normalizes `@forgeax-extension/<slug>` and legacy `@forgeax-plugin/<slug>`
  * to `packages/marketplace/extensions/<slug>/forgeax-extension.json`.
  *
@@ -154,7 +154,7 @@ export async function listExtensions(kind?: string): Promise<ExtensionListRespon
     : '/api/extensions/list';
   const empty: ExtensionListResponse = { kind: kind ?? null, count: 0, items: [] };
   const res = await fetch(url);
-  // The plugin bus is a studio-only surface (workbench app, front-L2). The
+  // The plugin bus is a studio-only surface owned by the workbench application. The
   // standalone editor has NO bus router, so its absence is EXPECTED, not an
   // error — degrade to an empty list either way the "no backend" shows up:
   //   - no `--game`: unknown /api routes fall to the SPA fallback → 200 + html

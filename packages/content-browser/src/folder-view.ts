@@ -38,14 +38,15 @@ export function deriveContentView(params: {
   scopedAssets: ScopedAsset[];
   packDirs: string[];
   currentPath: string;
-  favorites?: string[];
+  /** Membership test for a folder path. Passed as a predicate so the favorites
+   *  key format stays owned by `useFavorites` (folders key on path, assets on
+   *  guid — see CBFavoriteRef). */
+  isFavoriteFolder?: (path: string) => boolean;
 }): ContentView {
-  const { scopedAssets, packDirs, currentPath, favorites = [] } = params;
+  const { scopedAssets, packDirs, currentPath, isFavoriteFolder } = params;
 
   const prefix = currentPath ? `${currentPath}/` : '';
   const depth = currentPath ? currentPath.split('/').length : 0;
-
-  const favoriteSet = new Set(favorites);
 
   const folders: CBFolder[] = packDirs
     .filter((d) => d !== currentPath && d.startsWith(prefix) && d.split('/').length === depth + 1)
@@ -53,7 +54,7 @@ export function deriveContentView(params: {
       type: 'folder' as const,
       path,
       name: path.split('/').pop() ?? path,
-      isFavorite: favoriteSet.has(path),
+      isFavorite: isFavoriteFolder?.(path) ?? false,
       childCount: scopedAssets.reduce(
         (n, s) => (s.rel === path || s.rel.startsWith(`${path}/`) ? n + 1 : n),
         0,

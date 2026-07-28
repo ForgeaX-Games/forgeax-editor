@@ -13,6 +13,18 @@
 import { getWorkbenchClient, hasWorkbenchClient, type GameRow } from '../store-parts/workbench-client';
 
 let cache: GameRow[] = [];
+let revision = 0;
+const listeners = new Set<() => void>();
+
+export function subscribeRecentGames(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** Stable scalar snapshot for useSyncExternalStore consumers. */
+export function getRecentGamesRevision(): number {
+  return revision;
+}
 
 /** Prefetch the game list into the sync cache. Call when the File dropdown
  *  opens so `getRecentGames` has data ready by the time the submenu expands.
@@ -22,6 +34,8 @@ export async function warmRecentGames(): Promise<void> {
   try {
     const j = await getWorkbenchClient().listGames();
     cache = j.games ?? [];
+    revision += 1;
+    listeners.forEach((listener) => listener());
   } catch {
     /* keep last-known cache on transient failure */
   }

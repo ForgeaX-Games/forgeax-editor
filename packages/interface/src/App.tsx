@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { TopBar } from './components/TopBar/TopBar';
-import { ProjectModalHost } from './components/TopBar/ProjectSwitcher';
+import { GameDirectoryModalHost } from './components/TopBar/ProjectSwitcher';
 import { GameModalHost } from './components/TopBar/GameSwitcher';
 import { ActivityRail } from './components/ActivityRail/ActivityRail';
 import { ChatColumn } from './components/ChatColumn/ChatColumn';
@@ -148,7 +148,7 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
           {Settings && <div data-fx-slot="Settings" style={{ display: 'contents' }}><Settings /></div>}
           <ContextMenu />
           <CommandPalette />
-          <ProjectModalHost />
+          <GameDirectoryModalHost />
           <GameModalHost />
           <DialogHost />
           {isSlotDebugEnabled() && <SlotDebugOverlay />}

@@ -191,7 +191,7 @@ export interface PanelRenderers {
 
   /** Single-realm editor coordination callbacks. Interface declares only the
    * structural contract; studio/standalone inject the editor-core implementation
-   * so L1 never imports editor-core. */
+   * so the interface foundation never imports editor-core. */
   editor?: {
     setContextMenuRenderer?: (renderer: (menu: {
       x: number;

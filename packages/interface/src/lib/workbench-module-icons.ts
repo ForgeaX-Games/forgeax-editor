@@ -49,7 +49,7 @@ const WORKBENCH_ICON_BY_ID: Record<string, LucideIcon> = {
   anim: Film,
   reel: Clapperboard,
   'wb-reel': Clapperboard,
-  gamevideo: Gamepad2,
+  'wb-game-video': Gamepad2,
   bgm: Music2,
   scene: MapIcon,
   'wb-scene-generator': MapIcon,
@@ -73,13 +73,17 @@ const WORKBENCH_ICON_BY_ID: Record<string, LucideIcon> = {
   'diffusion-renderer': Aperture,
 };
 
+export function explicitIconForWorkbenchId(id: string): LucideIcon | undefined {
+  return WORKBENCH_ICON_BY_ID[id.replace(/^wb:/, '').toLowerCase()];
+}
+
 export function iconForWorkbenchModule(input: {
   workbenchId: string;
   label?: string;
   extensionId?: string;
 }): LucideIcon {
   const workbenchId = input.workbenchId.replace(/^wb:/, '').toLowerCase();
-  const explicitIcon = WORKBENCH_ICON_BY_ID[workbenchId];
+  const explicitIcon = explicitIconForWorkbenchId(workbenchId);
   if (explicitIcon) return explicitIcon;
 
   const key = `${workbenchId} ${input.label ?? ''} ${input.extensionId ?? ''}`.toLowerCase();

@@ -9,6 +9,7 @@ import { extensionRendersInSidebarLeftPane } from '../MainArea/WorkbenchExtensio
 import { KeepAliveExtensionIframes } from '../MainArea/KeepAliveExtensionIframes';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
 import { useTranslation } from '@/i18n';
+import { resolveSidebarActiveEntry } from './active-entry';
 import './Sidebar.css';
 
 // Sidebar is now the CONTENT host of the AI workbench's Tools panel: it renders
@@ -106,7 +107,7 @@ export function Sidebar() {
   }, [busEntries, busExtensions, entries, setWorkbenchTab, workbenchTab]);
 
   const activeEntry = useMemo(
-    () => entries.find((e) => e.id === workbenchTab) ?? entries[0],
+    () => resolveSidebarActiveEntry(entries, workbenchTab),
     [entries, workbenchTab],
   );
   // The left-pane standalone plugin to show right now (or null). Fed to the
@@ -390,4 +391,3 @@ function ExtensionPlaceholder({ entry, siblingCount }: { entry: BusEntry; siblin
     </div>
   );
 }
-

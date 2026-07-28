@@ -1,4 +1,4 @@
-// composer-bridge — the L1 (interface) cross-app contract for the Chat composer.
+// composer-bridge — the interface foundation's cross-app contract for the Chat composer.
 //
 // This is the chrome-level bridge any app/surface uses to push a reference into
 // the chat composer WITHOUT sharing the chat store's internals. It owns three
@@ -498,7 +498,7 @@ export function buildComponentPill(p: { entityId?: number; entityName: string; c
 // render tick via useComposerPendingInsert(), inserts the chip at the caret, then
 // clears. A queue lets batch "Add to AI Chat" (multi-select) insert all pills.
 //
-// Lives here (interface L1), NOT in the chat store, so the slot is a chrome-level
+// Lives in the interface foundation, NOT in the chat store, so the slot is a chrome-level
 // bridge the chat app reads — chat never shares useShellStore internals (R4 §5.3).
 interface ComposerInsertBridge {
   pendingInsert: PillPayload | null;

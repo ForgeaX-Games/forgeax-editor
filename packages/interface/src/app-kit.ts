@@ -3,7 +3,7 @@
  *
  * This file is the SSOT for AppKit. It lives in the interface layer because
  * AppKit is a business-agnostic app framework: any app (editor, and future
- * chat/workbench L2 apps) is mounted through these primitives. The editor
+ * chat/workbench standalone applications) is mounted through these primitives. The editor
  * repo re-exports this surface from `@forgeax/editor/app-kit` for backward
  * compatibility, but the implementation lives here.
  *

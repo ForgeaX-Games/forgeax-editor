@@ -125,9 +125,9 @@ if (detachedSurface) {
 }
 
 // Shared store/stream bootstrap. NOTE (R4): chat's session-stream lives in
-// `@forgeax/chat` now and is wired by the L3 host (studio). The standalone
+// `@forgeax/chat` now and is wired by the Studio product assembly. The standalone
 // interface AppKit boot is chat-agnostic — it does not subscribe the chat
-// message stream (L1 must not import L2 chat).
+// message stream (the interface foundation must not import the chat application).
 function bootStore() {
   // Health/INFO bridge — capture shell errors + iframe-forwarded health signals
   // (Play/Edit/plugin) into the status bar. Must run before any iframe mounts so

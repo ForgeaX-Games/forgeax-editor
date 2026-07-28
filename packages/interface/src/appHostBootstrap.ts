@@ -4,7 +4,7 @@
 // Studio (which injects Dashboard / Settings / StatusFeeds / surfaces / slots /
 // detached / editor concrete extensions) calls this and passes them via
 // `overrides.extensions`. Interface-alone callers pass no overrides — no overlays,
-// no detached windows, and no editor-specific panels show up (only the L1 base +
+// no detached windows, and no editor-specific panels show up (only the interface foundation +
 // chat remain).
 //
 // Each manifest's setup is wrapped in a control.beginSetup(m) / try / finally

@@ -324,7 +324,7 @@ button.bus-chip.is-link:hover .bus-chip-ring { opacity: 0.78; }
  * 紧贴在 R<N> 后面 (margin-left: 1px),让 chip 一行同时读出 ring 占用与 listener
  * 注册两条 runtime 信号。8px / 0.42 opacity 与 ring 完全一致,视觉同档；
  * 同色 family (bus tone) 让 R/L 读作一对 (telemetry pair) 而非两个对立维度。
- * 不像 ring 有 `> 0` gate, L 即使 0 也渲染 — L0 是有意义的状态 (bus up
+ * 不像 ring 有 `> 0` gate, L 即使 0 也渲染 — `L=0` 是有意义的状态 (bus up
  * 但暂无订阅,玩家想看也得看见)。 */
 .bus-chip-listeners {
   font-size: 8px;

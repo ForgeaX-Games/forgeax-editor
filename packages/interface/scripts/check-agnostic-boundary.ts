@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { validateApiCall } from "./agnostic-api-policy";
 
 const root = join(import.meta.dir, "..", "src");
 const packageJsonPath = join(import.meta.dir, "..", "package.json");
@@ -32,45 +33,6 @@ const importPattern =
 const apiCallPattern =
   /\b(?:fetch|EventSource|navigator\.sendBeacon)\s*\(\s*(["'`])([^"'`]*\/api\/[^"'`]*)\1/g;
 
-const allowedApiPatterns: RegExp[] = [
-  /^\/api\/boot-splash$/,
-  /^\/api\/extensions\/list(?:\?kind=(?:\$\{[^}]+\}|cli-provider))?$/,
-  /^\/api\/bus\/ui\/surfaces(?:\/\$\{[^}]+\}\/(?:ack|pending|snapshot)|\/\$\{[^}]+\})?$/,
-  /^\/api\/cli\/health$/,
-  // literal 'upload' — UploadPanel (SettingsPrimitives) drives the two-phase
-  // /upload command straight from the settings page, no template variable.
-  /^\/api\/commands\/(?:\$\{[^}]+\}|upload)\/(?:execute|query)$/,
-  /^\/api\/events\/stream\?topic=(?:plugin\.reloaded|tool\.confirm-\*|tool\.confirm-required)$/,
-  /^\/api\/files\/tree\?root=.forgeax\/games\/\$\{[^}]+\}$/,
-  /^\/api\/fs\/browse\?dir=\$\{[^}]+\}$/,
-  // Onboarding native OS folder picker (project root / open directory).
-  /^\/api\/fs\/pick-directory$/,
-  /^\/api\/health$/,
-  /^\/api\/logs$/,
-  /^\/api\/narrative\/history$/,
-  /^\/api\/prefs\/(?:browser-localStorage|workbench-layout\/\$\{[^}]+\})$/,
-  /^\/api\/projects$/,
-  /^\/api\/projects\/(?:registered\?path=\$\{[^}]+\}|\$\{[^}]+\})$/,
-  /^\/api\/sessions\/\$\{[^}]+\}(?:\/(?:abort\$\{[^}]+\}|checkpoints|file-activity\?limit=100|perception-reply|rewind(?:\/(?:cancel|overwrite-dirty|preview|undo-overwrite))?|ui-lease|ui-manifest))?$/,
-  /^\/api\/settings(?:\/env)?$/,
-  /^\/api\/telemetry$/,
-  /^\/api\/threads\/\$\{[^}]+\}$/,
-  /^\/api\/tools(?:\/call|\/confirm)?$/,
-  /^\/api\/version$/,
-  // builtin-actions game-list lookup (main feature merged 2026-07-09).
-  /^\/api\/workbench\/games$/,
-  // Onboarding first-run flow: link sample game + template catalog (main
-  // feature merged 2026-07-09).
-  /^\/api\/workbench\/games\/link$/,
-  /^\/api\/workbench\/templates$/,
-  // TopBar "reveal in Finder/Explorer" for packaged workbench artifacts (main
-  // feature merged 2026-07-09).
-  /^\/api\/workbench\/package\/reveal$/,
-  /^\/api\/workspaces\/activate$/,
-  // Onboarding reads the currently-active workspace (main feature 2026-07-09).
-  /^\/api\/workspaces\/active$/,
-];
-
 const sourceFiles: string[] = [];
 
 function stripComments(source: string) {
@@ -98,6 +60,7 @@ walk(root);
 const violations: string[] = [];
 
 for (const file of sourceFiles) {
+  const sourcePath = relative(process.cwd(), file);
   const source = stripComments(readFileSync(file, "utf8"));
   for (const match of source.matchAll(importPattern)) {
     const specifier = match[1];
@@ -114,9 +77,8 @@ for (const file of sourceFiles) {
   }
   for (const match of source.matchAll(apiCallPattern)) {
     const endpoint = match[2];
-    if (!allowedApiPatterns.some((pattern) => pattern.test(endpoint))) {
-      violations.push(`${relative(process.cwd(), file)} calls unallowlisted API endpoint ${endpoint}`);
-    }
+    const violation = validateApiCall(endpoint, sourcePath);
+    if (violation) violations.push(`${sourcePath} ${violation}`);
   }
 }
 

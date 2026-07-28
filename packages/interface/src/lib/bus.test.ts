@@ -1,5 +1,5 @@
 /**
- * L1 跨-app 总线 primitive 行为契约。纯（无 DOM）。
+ * interface 跨-app 总线 primitive 行为契约。纯（无 DOM）。
  * 锁三件事：意图 fire-and-forget、retain 快照对新订阅者立即补发、unsubscribe 生效。
  */
 import { describe, it, expect } from 'bun:test';

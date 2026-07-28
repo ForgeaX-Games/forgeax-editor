@@ -1,4 +1,4 @@
-// L1 广播流 boot 接线 —— 每页 boot 调一次 `bootBroadcast()`，拉起唯一公共 `/ws`
+// interface 广播流 boot 接线 —— 每页 boot 调一次 `bootBroadcast()`，拉起唯一公共 `/ws`
 // 广播连接，并挂上 app-agnostic 的两类帧处理：
 //   - `telemetry`         → 喂 telemetry slice（观测；P3 会随观测面下沉到 app）
 //   - `workspace-changed` → 全页 reload（后端把 FORGEAX_PROJECT_ROOT 重指到新目录）

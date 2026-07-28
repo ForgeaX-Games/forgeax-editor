@@ -85,7 +85,7 @@ describe('deriveContentView — UE-parity folder + direct-asset view', () => {
   it('reflects favorites via isFavorite', () => {
     const { folders } = deriveContentView({
       scopedAssets: SCOPED, packDirs: PACK_DIRS, currentPath: 'assets',
-      favorites: ['assets/props'],
+      isFavoriteFolder: path => path === 'assets/props',
     });
     expect(folders.find(f => f.path === 'assets/characters')!.isFavorite).toBe(false);
     expect(folders.find(f => f.path === 'assets/props')!.isFavorite).toBe(true);

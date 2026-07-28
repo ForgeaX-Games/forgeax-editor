@@ -47,7 +47,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
   let body: ReactElement;
   switch (surface.id) {
     case 'chat':
-      // chat is a 前L2 @forgeax/chat app injected via panels['chat'] (R4); a
+      // chat is the standalone @forgeax/chat application injected via panels['chat'] (R4); a
       // detached chat window has no keep-alive layer so render it directly.
       body = (
         <>
@@ -60,7 +60,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
       );
       break;
     case 'agents':
-      // 前L2 @forgeax/ai-workbench via detached.AgentsBrowser (R4): agents browser variant.
+      // The standalone @forgeax/ai-workbench application injects detached.AgentsBrowser (R4).
       body = (
         <>
           {AgentsBrowser ? (
@@ -72,7 +72,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
       );
       break;
     case 'files':
-      // 前L2 @forgeax/ai-workbench via detached.FilesBrowser (R4): file workbench variant.
+      // The standalone @forgeax/ai-workbench application injects detached.FilesBrowser (R4).
       body = (
         <>
           {FilesBrowser ? (

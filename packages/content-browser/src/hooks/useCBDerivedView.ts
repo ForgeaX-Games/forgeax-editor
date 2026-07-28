@@ -6,7 +6,7 @@
 // one place. Asset/tree/sidecar acquisition is owned by the core read model;
 // this hook only derives the render projection and preserves UI state.
 
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { resolveGamePath } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { deriveContentView } from '../folder-view';
@@ -113,7 +113,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
           family,
           assets,
           kindLabel: fileKindLabel(t, family),
-          isFavorite: favorites.isFavorite(rel),
+          isFavorite: favorites.isFavorite({ kind: 'path', path: rel }),
         });
       }
       for (const child of node.children ?? []) walk(child);
@@ -175,7 +175,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
             diskPath: node.path,
             name: node.name,
             childCount: assets.length,
-            isFavorite: favorites.isFavorite(rel),
+            isFavorite: favorites.isFavorite({ kind: 'path', path: rel }),
             family,
             assets,
             children: [],
@@ -202,7 +202,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
             (count, scoped) => (scoped.rel === rel || scoped.rel.startsWith(`${rel}/`) ? count + 1 : count),
             0,
           ),
-          isFavorite: favorites.isFavorite(rel),
+          isFavorite: favorites.isFavorite({ kind: 'path', path: rel }),
           children,
         };
       };
@@ -210,7 +210,6 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
       return root?.path ? [root] : (root?.children ?? []);
     }
 
-    const favoriteSet = new Set(favorites.favorites);
     const byPath = new Map<string, SourceTreeNode>();
     for (const path of packDirs) {
       byPath.set(path, {
@@ -218,7 +217,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
         path,
         diskPath: resolveGamePath(path),
         name: path.split('/').pop() ?? path,
-        isFavorite: favoriteSet.has(path),
+        isFavorite: favorites.isFavorite({ kind: 'path', path }),
         childCount: scopedAssets.reduce(
           (count, scoped) => (scoped.rel === path || scoped.rel.startsWith(`${path}/`) ? count + 1 : count),
           0,
@@ -245,9 +244,9 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     };
     sortTree(roots);
     return roots;
-    // Same rationale as diskFiles: depend on the stable `isFavorite` fn +
-    // `favorites` array, not the fresh-every-render API object.
-  }, [assetsByRel, diskTree, favorites.isFavorite, favorites.favorites, gameSlug, packDirs, scopedAssets]);
+    // Same rationale as diskFiles: depend on the stable `isFavorite` fn, not the
+    // fresh-every-render API object.
+  }, [assetsByRel, diskTree, favorites.isFavorite, gameSlug, packDirs, scopedAssets]);
 
   // UE-parity: a folder shows its IMMEDIATE subfolders + the assets sitting
   // directly in it (non-recursive). Folders are derived from the same rels the
@@ -257,9 +256,9 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
       scopedAssets,
       packDirs,
       currentPath: nav.currentPath,
-      favorites: favorites.favorites,
+      isFavoriteFolder: path => favorites.isFavorite({ kind: 'path', path }),
     }),
-    [scopedAssets, packDirs, nav.currentPath, favorites.favorites],
+    [scopedAssets, packDirs, nav.currentPath, favorites.isFavorite],
   );
 
   const visibleFoldersInPath = useMemo(
@@ -293,25 +292,37 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   // Filter + sort apply to assets only; folders always render first (UE-style),
   // sorted by name (deriveContentView already sorts them).
   const favoriteFilteredAssets = useMemo(
-    () => assetsInPath.filter(asset => {
-      if (!favoritesOnly) return true;
-      const rel = relByAssetGuid.get(asset.guid);
-      return (rel != null && favorites.isFavorite(rel)) || favorites.isFavorite(asset.packPath);
-    }),
-    [assetsInPath, favorites.isFavorite, favoritesOnly, relByAssetGuid],
+    () => assetsInPath.filter(asset => !favoritesOnly || favorites.isFavorite({ kind: 'asset', guid: asset.guid })),
+    [assetsInPath, favorites.isFavorite, favoritesOnly],
   );
   const filteredAssets = useMemo(() => filter.applyFilters(favoriteFilteredAssets), [filter, favoriteFilteredAssets]);
   const sortedAssets = useMemo(() => sort.sortItems(filteredAssets), [sort, filteredAssets]);
 
+  const holdsFavoriteAsset = useCallback(
+    (file: CBFile) => file.assets.some(asset => favorites.isFavorite({ kind: 'asset', guid: asset.guid })),
+    [favorites.isFavorite],
+  );
+
+  // The grid reaches an asset only THROUGH its file (see viewItems), so under
+  // "favorites only" a pack must also survive when it merely HOLDS a favorited
+  // asset — otherwise starring a material would hide the material.
   const filesInPath = useMemo(() => {
     const q = filter.searchQuery.trim().toLowerCase();
     return diskFiles
       .filter(file => dirOfPath(file.path) === nav.currentPath)
       .filter(file => filter.matchesFile(file))
-      .filter(file => !favoritesOnly || file.isFavorite)
+      .filter(file => !favoritesOnly || file.isFavorite || holdsFavoriteAsset(file))
       .filter(file => !q || file.name.toLowerCase().includes(q) || file.assets.some(asset => asset.name.toLowerCase().includes(q)))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, nav.currentPath]);
+  }, [diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, holdsFavoriteAsset, nav.currentPath]);
+
+  // A file kept only for its contents lists just the favorited ones; a file that
+  // is ITSELF the favorite lists all of them (the pack is what was starred).
+  const nestedAssetsOf = useCallback((file: CBFile): CBAsset[] => (
+    favoritesOnly && !file.isFavorite
+      ? file.assets.filter(asset => favorites.isFavorite({ kind: 'asset', guid: asset.guid }))
+      : file.assets
+  ), [favorites.isFavorite, favoritesOnly]);
 
   const diskFilePaths = useMemo(() => new Set(diskFiles.map(file => file.path)), [diskFiles]);
   // Registry-only assets have no disk file, hence no file family — an active
@@ -335,26 +346,16 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   const viewItems = useMemo<CBViewItem[]>(() => {
     const items: CBViewItem[] = [...visibleFoldersInPath];
 
-    if (viewMode === 'asset') {
-      for (const file of filesInPath) {
-        items.push(file);
-        if ((file.family === 'pack' || file.family === 'meta' || file.family === 'ui') && file.assets.length > 0) {
-          items.push(...file.assets);
-        }
-      }
-      items.push(...registryOnlyAssets);
-    } else {
-      for (const file of filesInPath) {
-        items.push(file);
-        if ((file.family === 'pack' || file.family === 'meta' || file.family === 'ui') && expandedPacks.has(file.path) && file.assets.length > 0) {
-          items.push(...file.assets);
-        }
-      }
-      items.push(...registryOnlyAssets);
+    for (const file of filesInPath) {
+      items.push(file);
+      const expanded = viewMode === 'asset' || expandedPacks.has(file.path);
+      if (!expanded || (file.family !== 'pack' && file.family !== 'meta' && file.family !== 'ui')) continue;
+      items.push(...nestedAssetsOf(file));
     }
+    items.push(...registryOnlyAssets);
 
     return items;
-  }, [expandedPacks, filesInPath, registryOnlyAssets, viewMode, visibleFoldersInPath]);
+  }, [expandedPacks, filesInPath, nestedAssetsOf, registryOnlyAssets, viewMode, visibleFoldersInPath]);
 
   return {
     scopedAssets,

@@ -1,8 +1,8 @@
 /** Vector agent avatar art (forgeax-preview port).
  *
  *  The video-enhanced variant (`AgentAvatarVideo`) lives in
- *  `@forgeax/ai-workbench`. Interface (L1) only owns the SVG-only
- *  presentation; L2 consumers that want the WEBM state-machine variant import
+ *  `@forgeax/ai-workbench`. The interface foundation only owns the SVG-only
+ *  presentation; standalone applications that want the WEBM state-machine variant import
  *  `AgentAvatarVideo` from workbench-builtins directly.
  */
 

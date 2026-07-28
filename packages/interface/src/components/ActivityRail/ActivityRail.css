@@ -1,10 +1,11 @@
-/* Shell-level persistent activity rail (Approach B). Vertical icon+label nav,
- * curated into product-spec groups (dividers only, no category text). Platform
- * group (插件制作 / 插件商店) pinned to the bottom. Fixed left column that survives
- * Scene/AI dock-layout switches (lives in `.studio-body` outside dockview).
+/* Shell-level persistent activity rail. Vertical icon+label nav:
+ *   top fixed (编辑器 / Agents)
+ *   middle = user-pinned plugins (catalog order)
+ *   bottom = More (⋯)
+ * Fixed left column that survives Scene/AI dock-layout switches.
  *
- * Styling is aligned 1:1 with the product prototype `.plugin-switcher` / `.ps-*`
- * (index 2.html): 52px item, 22px stroke icon, 8.5px label, accent-dim active. */
+ * Styling aligned with product prototype: 52px item, 22px stroke icon,
+ * 8.5px label, accent-dim active. */
 .activity-rail {
   flex: 0 0 64px;
   min-height: 0;
@@ -12,8 +13,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   padding: 6px 0 12px;
   position: relative;
   background: var(--color-background-base);
@@ -22,6 +22,7 @@
 }
 .activity-rail::-webkit-scrollbar { width: 0; }
 .activity-rail-group {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -32,8 +33,18 @@
 .activity-rail-group + .activity-rail-group {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
-.activity-rail-group--platform {
+.activity-rail-group[data-category="pinned"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.activity-rail-group[data-category="pinned"]::-webkit-scrollbar {
+  width: 0;
+}
+.activity-rail-group--more {
   margin-top: auto;
+  border-top: 0 !important;
 }
 .activity-rail-item {
   width: 52px;
@@ -78,5 +89,203 @@
 }
 .activity-rail-item:focus-visible {
   outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: -1px;
+}
+
+/* Plugin hover card — mirrors the studio demo, intentionally omitting
+ * version / install / update state. */
+.activity-rail-plugin-tip {
+  width: 214px;
+  padding: 12px 13px;
+  border-radius: 11px;
+  border-color: var(--color-border-default);
+  background: var(--color-background-elevated);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.activity-rail-plugin-tip-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--color-text-primary);
+}
+.activity-rail-plugin-tip-category {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--color-brand-primary);
+}
+.activity-rail-plugin-tip-description {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ── More plugins popover ── */
+.activity-rail-more {
+  width: 300px;
+  max-height: min(70vh, 560px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, var(--color-background-base) 92%, #000);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.88);
+}
+.activity-rail-more-hd {
+  flex: 0 0 auto;
+  padding: 12px 14px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.activity-rail-more-search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.38);
+}
+.activity-rail-more-search:focus-within {
+  border-color: rgba(212, 255, 72, 0.34);
+  color: rgba(255, 255, 255, 0.72);
+}
+.activity-rail-more-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.2;
+}
+.activity-rail-more-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.34);
+}
+.activity-rail-more-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+.activity-rail-more-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.activity-rail-more-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.38);
+}
+.activity-rail-more-sec + .activity-rail-more-sec {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.activity-rail-more-sec-hd {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.38);
+}
+.activity-rail-more-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+}
+.activity-rail-more-row.active .activity-rail-more-name {
+  color: var(--color-brand-primary);
+}
+.activity-rail-more-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.activity-rail-more-open:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.activity-rail-more-ic {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.72);
+}
+.activity-rail-more-row.active .activity-rail-more-ic {
+  background: rgba(212, 255, 72, 0.12);
+  color: var(--color-brand-primary);
+}
+.activity-rail-more-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.activity-rail-more-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-rail-more-desc {
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.38);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-rail-more-pin {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.28);
+  cursor: pointer;
+}
+.activity-rail-more-pin:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+}
+.activity-rail-more-pin.on {
+  color: var(--color-brand-primary);
+}
+.activity-rail-more-pin:focus-visible,
+.activity-rail-more-open:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.45);
   outline-offset: -1px;
 }

@@ -1,4 +1,4 @@
-// Workbench REST 契约。interface(L1)不持有实现;studio 在 boot 时通过
+// Workbench REST 契约。interface foundation 不持有实现;studio 在 boot 时通过
 // configureWorkbenchClient() 注入 packages/workbench-builtins 提供的
 // RestWorkbenchClient。未 configure 即 throw(与 SessionClient 语义一致)。
 

@@ -1,10 +1,8 @@
-// FsBrowser — server-side directory picker. Used by NewProjectModal's
-// "打开已有目录" tab to let the user pick an existing system directory as a
-// ForgeaX workspace.
+// FsBrowser — server-side directory picker. Used by File → Open Project to
+// pick an existing game directory outside the current instance root.
 //
-// Folder-only navigation (the server endpoint only returns dirs). Submitting
-// posts to /api/projects/open which optionally scaffolds .forgeax/games/_default/
-// so the preview iframe has something to render for non-game workspaces.
+// Folder-only navigation (the server endpoint only returns dirs). The caller
+// links the selected directory through /api/workbench/games/link.
 
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowUp, FolderOpen, Folder, Home, Loader2 } from 'lucide-react';
@@ -30,7 +28,7 @@ interface BrowseResp {
 
 export interface FsBrowserProps {
   initialDir?: string;
-  onPick: (absPath: string, initIfMissing: boolean) => void | Promise<void>;
+  onPick: (absPath: string) => void | Promise<void>;
   onCancel: () => void;
   busy?: boolean;
   externalError?: string | null;
@@ -43,7 +41,7 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
   const [data, setData] = useState<BrowseResp | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [initIfMissing, setInitIfMissing] = useState(true);
+  const [picking, setPicking] = useState(false);
 
   const load = useCallback(async (target: string) => {
     setLoading(true);
@@ -81,9 +79,36 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
     if (v) setDir(v);
   };
 
+  // OS-native folder dialog, same endpoint the onboarding project step uses.
+  // The list stays authoritative afterwards: we only feed the picked path back
+  // into `dir` so the footer's "select this directory" acts on it.
+  const pickNative = async () => {
+    setPicking(true);
+    try {
+      const r = await fetch('/api/fs/pick-directory', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ initialDir: data?.dir ?? dir }),
+      });
+      const j = (await r.json().catch(() => null)) as {
+        ok?: boolean; cancelled?: boolean; path?: string; error?: string;
+      } | null;
+      if (j?.cancelled) return;
+      if (!r.ok || !j?.ok || !j.path) { setLoadErr(j?.error ?? `HTTP ${r.status}`); return; }
+      setLoadErr(null);
+      // Same path as the current dir ⇒ no state change ⇒ no reload; that is the
+      // correct outcome, the user re-picked where they already were.
+      setDir(j.path);
+    } catch (e) {
+      setLoadErr((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
+  };
+
   const onPickClick = () => {
     if (!data) return;
-    void onPick(data.dir, initIfMissing);
+    void onPick(data.dir);
   };
 
   return (
@@ -102,9 +127,15 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
           onKeyDown={(e) => { if (e.key === 'Enter') goAddr(); }}
           spellCheck={false}
           placeholder="~/path/to/dir"
+          title={t('fsBrowser.addrHint')}
         />
-        <button className="fsb-icon-btn" onClick={goAddr} disabled={loading} title={t('fsBrowser.go')}>
-          <FolderOpen size={13} />
+        <button
+          className="fsb-icon-btn"
+          onClick={() => void pickNative()}
+          disabled={loading || picking || busy}
+          title={t('fsBrowser.browse')}
+        >
+          {picking ? <Loader2 size={13} className="fsb-spin" /> : <FolderOpen size={13} />}
         </button>
       </div>
 
@@ -136,14 +167,6 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
       </div>
 
       <div className="fsb-footer">
-        <label className="fsb-check">
-          <input
-            type="checkbox"
-            checked={initIfMissing}
-            onChange={(e) => setInitIfMissing(e.target.checked)}
-          />
-          <span>{t('fsBrowser.initWorkspaceWhenNoGame')}</span>
-        </label>
         {externalError && <div className="fsb-ext-err">{externalError}</div>}
         <div className="fsb-actions">
           <button className="tb-modal-btn" onClick={onCancel} disabled={busy}>{t('common.cancel')}</button>

@@ -38,7 +38,7 @@ export {
   type CleanPackageResult,
 } from './store-parts/workbench-client';
 
-// ③ PreviewFile 已移到 @forgeax/ai-workbench/file-preview（L1 不再持有文件预览态）。
+// ③ PreviewFile 已移到 @forgeax/ai-workbench/file-preview（interface foundation 不再持有文件预览态）。
 
 export interface ToolCall {
   callId: string;
@@ -341,7 +341,7 @@ export interface AppState {
    *  the user closes a detached window — redocks without re-closing the window. */
   markSurfaceDocked: (key: string) => void;
 
-  // R5/P2 — 跨-surface 深链槽（原 ~7 个 pending*）已全部移出 store，改走 L1 bus
+  // R5/P2 — 跨-surface 深链槽（原 ~7 个 pending*）已全部移出 store，改走 interface bus
   // （lib/deep-link-bus.ts：emitDeepLink / useDeepLink，retain 快照语义）。producer
   // `emitDeepLink('bus:expand-plugin'|'bus:filter-kind'|'sidebar:focus-plugin'|
   // 'sidebar:flash-kind'|'chat:flash-bus-chip', ...)`；consumer `useDeepLink(topic)`。
@@ -371,7 +371,7 @@ export interface AppState {
 
   // ── Workbench file preview（③ 已抽到 @forgeax/ai-workbench/file-preview,走 bus 'workbench:files'）──
   // openFiles/activeFilePath/openFile/activateFile/closeFile/updatePreviewContent/savePreviewFile
-  // 不再进 L1 store。壳侧打开文件走 bus 命令 'workbench:open-file'（见 workbench/file-preview.ts）。
+  // 不再进 interface store。壳侧打开文件走 bus 命令 'workbench:open-file'（见 workbench/file-preview.ts）。
 
   // ── Pinned active game (user's explicit selection; null = auto-detect) ──
   pinnedSlug: string | null;
@@ -383,7 +383,7 @@ export interface AppState {
   currentSessionId: string | null;
   setCurrentSessionId: (id: string | null) => void;
 
-  /** Per-(sid, agentId) streaming/busy flag, mirrored from the chat app so L1
+  /** Per-(sid, agentId) streaming/busy flag, mirrored from the chat app so the interface foundation
    *  registry surfaces (SessionSwitcher / AgentsPanel) can render a spinner
    *  without importing chat message state. Owned by chat via setAgentBusy. */
   busyByAgentBySid: Record<string, Record<string, boolean>>;
@@ -432,7 +432,7 @@ export interface AppState {
   pinReplyLanguage: (lang: 'en' | 'zh') => void;
 
   // ── Agent install prefs（① 已抽到 @forgeax/settings/agent-prefs，走 bus 'prefs:agents'）──
-  // defaultBootstrapAgent / uninstalledAgentIds 不再进 L1 store —— 见 settings/agent-prefs.ts。
+  // defaultBootstrapAgent / uninstalledAgentIds 不再进 interface store —— 见 settings/agent-prefs.ts。
 
   // ── Live agent state (driven by WS events + list_agents poll) ──
   liveAgents: Record<string, LiveAgent[]>;
@@ -477,14 +477,14 @@ export interface AppState {
    *  该 game 0 条 session 时自动新建一条（"新建 game 必带 session"）。 */
   switchGame: (slug: string) => Promise<void>;
   renameTab: (sid: string, displayName: string) => void;
-  /** L3 sub-agent switcher (P6d step d). For tabs with a server-side thread,
+  /** Product-assembly sub-agent switcher (P6d step d). For tabs with a server-side thread,
    *  PATCH /api/threads/:id { activeEmitterId } so the next /api/chat turn
    *  in this tab gets routed to the picked emitter. Side-effect-only — no
    *  immediate UI change beyond a status indication. */
   setActiveEmitter: (emitterId: string) => Promise<void>;
 
   // ── Overlay（通用壳级 overlay 槽 · R5/P5 去名化）──
-  //  L1 壳只有一个通用 overlay 槽，不 hardcode app 名：
+  //  interface 壳只有一个通用 overlay 槽，不 hardcode app 名：
   //   - `activeOverlay` = 当前打开的 overlay id（调用方传 'settings' / 'dashboard' / …；
   //      store 不认识这些具体值，只当字符串存）。null = 无 overlay。
   //   - `overlayParam` = 该 overlay 的可选参数（如 settings 的 section nav id）。
@@ -498,13 +498,11 @@ export interface AppState {
   setOverlayParam: (param: string | null) => void;
   closeOverlay: () => void;
 
-  // ── New/Open-project modal (workspace) ──
-  //  The ProjectSwitcher dropdown was removed from the TopBar; 新建/打开 now
-  //  live in the File menu. This drives the hosted <NewProjectModal>.
-  //  null = closed; 'new' | 'open' = which tab.
-  projectModalTab: 'new' | 'open' | null;
-  openProjectModal: (tab: 'new' | 'open') => void;
-  closeProjectModal: () => void;
+  // ── Open-game-directory modal ──
+  //  File → 打开项目 links an existing game directory into this Studio instance.
+  gameDirectoryModalOpen: boolean;
+  openGameDirectoryModal: () => void;
+  closeGameDirectoryModal: () => void;
 
   // ── Game switcher / new-game modal (driven from the File menu) ──
   //  The File menu's 新建项目 / 打开项目 / 打开最近 now open GAME flows (a project
@@ -537,7 +535,7 @@ export interface AppState {
   toggleChatpanel: () => void;
 }
 
-// Chat message/event-engine logic lives in @forgeax/chat. L1 keeps only the
+// Chat message/event-engine logic lives in @forgeax/chat. The interface foundation keeps only the
 // session registry and injected session-client contract used by shell chrome.
 
 // turnsToChatMessages removed — replay no longer goes through batch
@@ -599,7 +597,7 @@ if (typeof window !== 'undefined') {
 }
 
 // agent 安装偏好（DEFAULT_INSTALLED_AGENT_IDS / uninstalled / bootstrap / seed）已
-// 整体抽到 @forgeax/settings/agent-prefs（① · 走 bus 'prefs:agents'）—— L1 不再持有。
+// 整体抽到 @forgeax/settings/agent-prefs（① · 走 bus 'prefs:agents'）—— interface 不再持有。
 
 // R5/P1 — the broadcast `/ws` daemon socket moved OUT of the store's module-load
 // side-effect into the shared `lib/broadcast-stream` primitive, wired at boot by
@@ -705,7 +703,7 @@ async function _syncActiveAgentRunning(sid: string | null): Promise<void> {
       return { tabs, agentBySid };
     });
     if (!cached) persistAgentBySid(useShellStore.getState().agentBySid);
-    // 把 blackboard.RUNNING 同步到 L1 busy —— Composer 的 useActiveStreaming 会 OR 这份
+    // 把 blackboard.RUNNING 同步到 interface busy —— Composer 的 useActiveStreaming 会 OR 这份
     // 标志。缺 turnStart/snapshot 时(刷新中途加入)仍显示 Stop 而非可发送。
     commitBusySnapshot();
   } catch (e) {
@@ -732,7 +730,7 @@ const _initialMirror = {
 
 export const useShellStore = create<AppState>((set, get) => ({
   ...createShellState(set, get),
-  // R5/P2 — deep-link slots moved to L1 bus (lib/deep-link-bus.ts); removed from store.
+  // R5/P2 — deep-link slots moved to the interface bus (lib/deep-link-bus.ts); removed from store.
   setTabAgent: (sid, agentId) => {
     set((s) => {
       const tabs = s.tabs.map((t) => (t.sid === sid ? { ...t, agentId } : t));
@@ -803,7 +801,7 @@ export const useShellStore = create<AppState>((set, get) => ({
     });
   },
   // ① agent 安装偏好的写操作已移到 @forgeax/settings/agent-prefs（toggleAgentInstalled /
-  // setAgentInstalled / setDefaultBootstrapAgent），走 bus 'prefs:agents'。L1 不再持有。
+  // setAgentInstalled / setDefaultBootstrapAgent），走 bus 'prefs:agents'。interface 不再持有。
   // currentSessionId 在重做后等价 activeSid（一一对应），setter 保留只是为了不
   // 破已有 import surface —— 但实际真正切 session 应该走 switchToSession()。这里
   // 只 mirror top-level 字段、不动 activeSid（防止误用导致状态机错乱）。
@@ -1014,7 +1012,7 @@ export const useShellStore = create<AppState>((set, get) => ({
   createNewSession: async (opts) => {
     const { createSession, connectForgeaXWs } = getSessionClient();
     try {
-      // ① defaultBootstrapAgent 来自 settings/agent-prefs 的 bus 快照（L1 不再持有）。
+      // ① defaultBootstrapAgent 来自 settings/agent-prefs 的 bus 快照（interface 不再持有）。
       const bootstrap = (peek('prefs:agents') as { defaultBootstrapAgent?: string | null } | undefined)
         ?.defaultBootstrapAgent ?? null;
       const { sid, bootstrappedAgent } = await createSession({

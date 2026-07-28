@@ -667,6 +667,17 @@
     "pluginAuthor": "插件制作",
     "pluginStore": "插件商店",
     "editor": "编辑器",
+    "morePlugins": "更多插件",
+    "morePluginsHint": "打开更多插件菜单",
+    "searchPlugins": "搜索插件…",
+    "noMatchingPlugins": "没有匹配的插件",
+    "pinPlugin": "置顶到侧栏",
+    "unpinPlugin": "取消置顶",
+    "categories": {
+      "3D": "3D",
+      "2D": "2D",
+      "general": "通用"
+    },
     "plugins": {
       "skill": "技能特效",
       "gen3d": "3D角色",
@@ -709,7 +720,7 @@
     "conflicts": {
       "title": "冲突",
       "hint": "本机已存在同 id",
-      "entry": "已在 {{layer}} v{{oldVersion}} → 新包 v{{newVersion}}"
+      "entry": "已在 {{origin}} v{{oldVersion}} → 新包 v{{newVersion}}"
     },
     "warnings": {
       "title": "警告",
@@ -718,10 +729,10 @@
     "install": {
       "title": "安装",
       "hint": "复制到 destRoot/.forgeax/extensions/<id>/ · 自动 reload",
-      "destRootL1Placeholder": "通常: ~ (写入 ~/.forgeax/extensions/)",
-      "destRootL2Placeholder": "当前 project root",
-      "layerL1": "L1 · 用户级",
-      "layerL2": "L2 · 项目级",
+      "userRootPlaceholder": "通常: ~ (写入 ~/.forgeax/extensions/)",
+      "projectRootPlaceholder": "当前 project root",
+      "originUser": "用户安装 · ~/.forgeax",
+      "originProject": "项目专属 · 当前项目",
       "unsignedAck": "我了解此包未签名,来源由我自己负责",
       "button": "安装",
       "inProgress": "安装中…"
@@ -740,19 +751,19 @@
   "author": {
     "fork": {
       "title": "Fork extension",
-      "hint": "把现有 extension 拷到 L1/L2,接下来 chat-driven vibe-edit",
+      "hint": "把现有 extension 拷到用户或项目 extension 目录,接下来 chat-driven vibe-edit",
       "sourceLabel": "源",
       "selectPlaceholder": "— 选择 —",
       "newIdLabel": "新 id",
-      "destLayerLabel": "目标层",
-      "layerL1": "L1 · ~/.forgeax (推荐)",
-      "layerL2": "L2 · 项目级",
+      "destinationOriginLabel": "目标位置",
+      "originUser": "用户安装 · ~/.forgeax (推荐)",
+      "originProject": "项目专属",
       "copying": "复制中…",
       "refresh": "刷新清单",
       "refreshTitle": "重新拉 /api/extensions/manifests",
       "doneBadge": "已 fork ✓",
       "doneHelp": "已自动 reload — sidebar 应该看到新版本。",
-      "note": "fork 仅复制源目录(含 prompt / handlers / config)。manifest.id 改写、displayName 加 \"(我的)\" 后缀。L1 优先级高于 L0,fork 立即在 sidebar 替换原版。"
+      "note": "fork 仅复制源目录(含 prompt / handlers / config)。manifest.id 改写、displayName 加 \"(我的)\" 后缀。用户安装版本优先于内置版本,所以 fork 会立即在 sidebar 替换原版。"
     },
     "record": {
       "title": "录制为 skill",
@@ -843,7 +854,8 @@
     "displayNameLabel": "显示名（可选）",
     "displayNamePlaceholder": "留空用 id",
     "creating": "创建中...",
-    "create": "创建"
+    "create": "创建",
+    "openGameDirectory": "打开游戏目录"
   },
   "dashboard": {
     "busKindRegistering": "{{kind}} · 扩展登记中…",
@@ -1275,12 +1287,12 @@
   },
   "fsBrowser": {
     "parentDir": "上一级",
-    "go": "跳转",
+    "browse": "浏览…（打开系统文件夹选择器）",
+    "addrHint": "输入路径后按回车跳转",
     "emptyDir": "空目录",
-    "initWorkspaceWhenNoGame": "无 game 时初始化默认 workspace",
     "selectDir": "选择 {{dir}}",
     "processing": "处理中…",
-    "selectThisDir": "选择此目录"
+    "selectThisDir": "打开此游戏目录"
   },
   "subAgent": {
     "status": {
@@ -1453,7 +1465,15 @@
     "noEntryPrefix": "扩展",
     "noEntryMiddle": "没有",
     "noEntrySuffix": "入口。",
-    "iframeLoadFailed": "iframe 加载失败：{{error}}"
+    "iframeLoadFailed": "iframe 加载失败：{{error}}",
+    "videoGameInitChecking": "正在检查当前游戏…",
+    "videoGameInitTitle": "当前游戏尚未创建视频游戏",
+    "videoGameInitBody": "创建后会注入视频游戏蓝图和模板素材，并将当前游戏切换为视频游戏类型。",
+    "videoGameInitCancel": "返回编辑器",
+    "videoGameInitConfirm": "创建视频游戏",
+    "videoGameInitializing": "正在创建并注入素材…",
+    "videoGameInitFailed": "创建失败：{{error}}",
+    "videoGameInitContinueInMain": "请在主区确认是否创建"
   },
   "themes": {
     "classicLime": {

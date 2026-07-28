@@ -10,7 +10,7 @@ import './MainArea.css';
 // 2026-06-30: 'preview'/'edit' merged into single 'viewport' mode.
 // 2026-07-08 (v9): Scene workbench mode id renamed 'edit' → 'scene'.
 export function MainArea() {
-  // MainArea body is a 前L2 @forgeax/ai-workbench app injected via the
+  // MainArea body is the standalone @forgeax/ai-workbench application injected via the
   // slots.MainAreaBody slot (R4); interface holds no @forgeax/ai-workbench import.
   const MainAreaBody = usePanelRenderers().slots?.MainAreaBody;
   // The 'main' dock panel exists ONLY in the AI workbench layout (Scene uses a

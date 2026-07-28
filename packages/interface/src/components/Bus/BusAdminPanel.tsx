@@ -419,7 +419,7 @@ export function BusAdminPanel() {
   //查看 →" button. Consumed once on mount + whenever it flips non-null, then
   // cleared so a back-and-forth between Sidebar/Bus tab doesn't re-expand
   // (player may have manually collapsed it since).
-  // R5/P2 — deep-links moved off the L1 store onto the bus (retain semantics).
+  // R5/P2 — deep-links moved off the interface store onto the bus (retain semantics).
   const [pendingBusExpandId, clearBusExpandId] = useDeepLink('bus:expand-plugin');
   // P3.37 — sister deep-link to bus:expand-plugin: Sidebar BUS KINDS footer
   // chips emit this + setMode('bus'); consume it here once items have loaded by
@@ -1877,7 +1877,7 @@ function ExtensionDetail({
   const hasAgentLink = p.kind === 'agent';
   const hasWbLink = p.kind === 'workbench' && !!wb;
   const hasKindLink = !hasAgentLink && !hasWbLink;
-  // Flat L0 path hint from id — see extensionManifestPathHint (no kind bucket /
+  // Flat built-in extension path hint from id — see extensionManifestPathHint (no kind bucket /
   // PluginSourceDescriptor; those were reverted with the kind-layout experiment).
   const manifestHint = extensionManifestPathHint(p.id);
   const extensionRootHint = manifestHint.replace(/\/forgeax-extension\.json$/, '');
