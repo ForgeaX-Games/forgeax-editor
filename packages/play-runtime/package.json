@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-audio": "workspace:*",
@@ -60,6 +61,7 @@
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "lucide-react": "^0.460.0",
