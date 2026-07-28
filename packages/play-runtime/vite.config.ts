@@ -305,9 +305,19 @@ function gameAssetRoots(): string[] {
   const gamesDir = gamesDirRoot();
   if (!gamesDir) return [];
   if (!existsSync(gamesDir)) return [];
-  const roots: string[] = existsSync(engineTemplateUiFarmPath())
-    ? [engineTemplateUiFarmPath()]
-    : [];
+  // Deduplicate by absolute path. Every game gets the same implicit
+  // `@shared/template-game-default` root; pushing it once per slug makes
+  // scan() see sky.hdr.meta.json N times → pack-guid-collision → the
+  // union catalog degrades → installCatalogProjection fails closed to []
+  // → /__import 422 → defaultScene never instantiates (hellforge camp).
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  const push = (abs: string): void => {
+    if (seen.has(abs)) return;
+    seen.add(abs);
+    roots.push(abs);
+  };
+  if (existsSync(engineTemplateUiFarmPath())) push(engineTemplateUiFarmPath());
   for (const slug of readdirSync(gamesDir).filter(isRealGameSlug)) {
     const gameDir = join(gamesDir, slug);
     // resolveGameAssetRoots reads package.json#forgeax.assets.roots (SSOT),
@@ -315,7 +325,7 @@ function gameAssetRoots(): string[] {
     // existsSync-filters. farmPath redirects shared roots through the in-viteRoot
     // symlink so their scanned path (and thus relativeUrl) stays serveable.
     for (const r of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })) {
-      roots.push(farmPath(r));
+      push(farmPath(r));
     }
   }
   return roots;
@@ -531,9 +541,9 @@ export default defineConfig({
     // shared + per-game GUIDs alike. imageImporter is needed for the .hdr equirect
     // sidecar (else the bare .hdr is mislabeled rgba8unorm and
     // uploadCubemapFromEquirect rejects with `invalid-source-format`);
-    // gltfImporter for per-game .glb cooks. A cross-root duplicate GUID no longer
-    // collapses the catalog to []: buildCatalog (build-catalog.ts) degrades to a
-    // per-root scan + first-wins de-dup, dropping only the offending root.
+    // gltfImporter for per-game .glb cooks. gameAssetRoots() de-dupes shared
+    // roots so the union scan stays authoritative; a true cross-root GUID
+    // collision still degrades, and installCatalogProjection then fails closed.
     pluginPack({
       roots: gameAssetRoots(),
       base: '/preview/',
