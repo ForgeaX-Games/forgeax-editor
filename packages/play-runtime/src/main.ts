@@ -85,21 +85,47 @@ const qp = new URLSearchParams(location.search);
 const rawGameId = qp.get('game') ?? qp.get('slug');
 const gameId = (rawGameId && GAME_ID_RE.test(rawGameId)) ? rawGameId : '_template';
 const carrierRuntimeId = qp.get('runtimeId')?.trim() || null;
-const carrierProjectId = qp.get('projectId')?.trim() || null;
-const carrierGameId = rawGameId && GAME_ID_RE.test(rawGameId) ? rawGameId : null;
-const carrierScope = carrierProjectId ? { projectId: carrierProjectId, gameId: carrierGameId } : null;
+const carrierOwnershipChallenge = qp.get('ownershipChallenge')?.trim() || null;
+let carrierScope: { projectId: string; gameId: string | null } | null = null;
 const carrierPageNonce = crypto.randomUUID();
 const carrierCanvasId = `canvas-${carrierPageNonce}`;
-const carrierRendererId = `renderer-${carrierPageNonce}`;
+let carrierRendererId = 'renderer-pending';
 const carrierPageIdentity = `${location.origin}${location.pathname}`;
 canvas.id = carrierCanvasId;
 
 let carrierSentinel = 0;
 let carrierFailure: VagCarrierFailureDetail | null = null;
+
+async function resolveManagedCarrierScope(): Promise<void> {
+  if (!carrierRuntimeId || !carrierOwnershipChallenge) return;
+  try {
+    const [healthResponse, activeGameResponse] = await Promise.all([
+      fetch('/api/health', { cache: 'no-store' }),
+      fetch('/api/workbench/active-slug', { cache: 'no-store' }),
+    ]);
+    if (!healthResponse.ok || !activeGameResponse.ok) return;
+    const health = await healthResponse.json() as { projectRootAbs?: unknown };
+    const activeGame = await activeGameResponse.json() as { activeSlug?: unknown };
+    if (typeof health.projectRootAbs !== 'string' || health.projectRootAbs.length === 0) return;
+    carrierScope = {
+      projectId: health.projectRootAbs,
+      gameId: typeof activeGame.activeSlug === 'string' && GAME_ID_RE.test(activeGame.activeSlug)
+        ? activeGame.activeSlug
+        : null,
+    };
+  } catch {
+    // A managed page must fail its handshake when the producer facts cannot be
+    // read. Ordinary user-opened preview pages do not use the carrier protocol.
+  }
+}
+
+const carrierScopeReady = resolveManagedCarrierScope();
+
 function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', failure: VagCarrierFailureDetail | null = carrierFailure) {
   return {
     version: VAG_CARRIER_PROTOCOL_VERSION,
     runtimeId: carrierRuntimeId,
+    challengeResponse: carrierOwnershipChallenge,
     scope: carrierScope,
     pageNonce: carrierPageNonce,
     pageIdentity: carrierPageIdentity,
@@ -226,6 +252,17 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
+// Renderer identity belongs to the renderer producer, not to the page nonce.
+// Prefer an engine-provided identity/generation when available; otherwise mint
+// a producer-local token at the moment createApp returns the live renderer.
+const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
+const rendererProducerId = typeof rendererRecord.identity === 'string' && rendererRecord.identity.length > 0
+  ? rendererRecord.identity
+  : crypto.randomUUID();
+const rendererGeneration = typeof rendererRecord.generation === 'number'
+  ? rendererRecord.generation
+  : 0;
+carrierRendererId = `renderer-${rendererProducerId}-generation-${rendererGeneration}`;
 
 // ── Studio cylinder mesh (host-side registration) ─────────────────────────
 // The editor offers cube/sphere/cylinder primitives. cube + sphere are engine
@@ -469,6 +506,7 @@ if (entry) {
 app.value.start();
 
 try {
+  await carrierScopeReady;
   sendVagMessage(window.parent, VagCarrierHandshakeSchema, carrierPayload('pending', null));
 } catch { /* parent might be cross-origin */ }
 

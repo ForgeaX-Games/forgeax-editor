@@ -94,6 +94,9 @@ export type VagCarrierFailureDetail = z.infer<typeof VagCarrierFailureDetailSche
 const VagCarrierPayloadSchema = z.object({
   version: z.literal(VAG_CARRIER_PROTOCOL_VERSION),
   runtimeId: z.string().min(1).nullable(),
+  // Present for managed carrier pages; null for ordinary user-opened preview
+  // pages that are not owned by the server supervisor.
+  challengeResponse: z.string().min(1).nullable(),
   scope: VagCarrierScopeSchema.nullable(),
   pageNonce: z.string().min(1),
   pageIdentity: z.string().min(1),

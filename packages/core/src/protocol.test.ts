@@ -8,6 +8,7 @@ import {
 const basePayload = {
   version: 1 as const,
   runtimeId: 'runtime-a',
+  challengeResponse: null,
   scope: { projectId: 'project-a', gameId: 'game-a' },
   pageNonce: 'page-nonce-a',
   pageIdentity: 'http://localhost:18920/editor',
