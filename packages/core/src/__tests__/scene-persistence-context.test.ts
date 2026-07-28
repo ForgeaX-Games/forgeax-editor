@@ -55,6 +55,18 @@ describe('ScenePersistenceContext — single-instance state convergence (M1 / D-
     expect(fresh.isDirty).toBe(false);
   });
 
+  it('a fresh context starts with no recorded self-save', () => {
+    expect(sp.createScenePersistenceContext().lastSelfSave).toBeNull();
+  });
+
+  it('setLastSelfSave records the written bytes on the SAME live handle', () => {
+    const ref = sp.ctx;
+    const snap = { path: '/games/g1/scene.pack.json', content: '{"a":1}\n', at: 123 };
+    sp.ctx.setLastSelfSave(snap);
+    expect(ref.lastSelfSave).toEqual(snap);
+    sp.ctx.lastSelfSave = null; // reset so it does not leak into later suites
+  });
+
   it('the old export let singletons + setter pair are gone (AC-01)', () => {
     // The pre-M1 mechanism: `export let currentSceneGuid` / `export let _isDirty`
     // read cross-module + `_setCurrentSceneGuid` / `_setDirty` written cross-module.

@@ -3,12 +3,55 @@
 // document reload is intentionally not automatic here.
 //
 import { broadcastAssetsChanged } from './assets-changed';
-import { gateway } from './gateway';
 import {
   ctx,
   scenePath,
-  worldToPack,
+  type LastSelfSave,
 } from './scene-persistence';
+
+// A disk change that lands within this window after a self-save, on the same
+// path and with no edit made since, is treated as our own echo even if the
+// byte-compare fails (e.g. the server normalises newlines on Windows).
+export const SELF_SAVE_ECHO_WINDOW_MS = 3000;
+
+const normPath = (p: string): string => p.replace(/\\/g, '/');
+
+/** Inputs for {@link isSelfSaveEcho} — pure so the decision is unit-testable
+ *  without a WebSocket, timers, or the network. */
+export interface SelfSaveEchoInput {
+  /** Path the server watcher reported changed (may be undefined). */
+  eventPath: string | undefined;
+  /** The scene this window is currently editing (null when none). */
+  activeScenePath: string | null;
+  /** The last save this session recorded (null before any save). */
+  lastSelfSave: LastSelfSave | null;
+  /** True if an edit landed since the last save (self-echo then impossible). */
+  isDirty: boolean;
+  /** Current epoch ms (injected so the time-window is deterministic in tests). */
+  now: number;
+  /** Reads the current on-disk bytes for a path (null on any failure). */
+  readDisk: (path: string) => Promise<string | null>;
+  /** Echo time-window; defaults to {@link SELF_SAVE_ECHO_WINDOW_MS}. */
+  windowMs?: number;
+}
+
+/** Decide whether a reported file change is the echo of THIS window's own save.
+ *  Primary signal: the on-disk bytes equal exactly what we wrote. Fallback (for
+ *  server-side newline normalisation): same path, within the time-window, and no
+ *  edit landed since — so the change can only be our own write. */
+export async function isSelfSaveEcho(input: SelfSaveEchoInput): Promise<boolean> {
+  const { eventPath, activeScenePath, lastSelfSave, isDirty, now } = input;
+  if (!activeScenePath || !eventPath) return false;
+  if (normPath(eventPath) !== normPath(activeScenePath)) return false;
+  if (!lastSelfSave) return false; // never saved this session → treat as external
+  if (normPath(lastSelfSave.path) !== normPath(activeScenePath)) return false;
+  const disk = await input.readDisk(activeScenePath);
+  // Primary: the file on disk is byte-identical to what we wrote.
+  if (disk !== null && disk === lastSelfSave.content) return true;
+  // Fallback: within the echo window and no edit since our save.
+  const windowMs = input.windowMs ?? SELF_SAVE_ECHO_WINDOW_MS;
+  return !isDirty && now - lastSelfSave.at <= windowMs;
+}
 
 interface AssetDiskChangedEvent {
   type: 'asset-disk-changed';
@@ -34,25 +77,30 @@ export function initDiskWatch(): () => void {
   let stopped = false;
   let backoff = 1000;
 
-  const isSelfScenePackEcho = async (msg: AssetDiskChangedEvent): Promise<boolean> => {
-    const activeScenePath = scenePath();
-    if (!activeScenePath || !msg.path) return false;
-    if (msg.path.replace(/\\/g, '/') !== activeScenePath.replace(/\\/g, '/')) return false;
-    const currentPack = worldToPack(gateway.doc, ctx.currentSceneGuid ?? undefined);
-    if (currentPack === null) return false;
+  // Reads the current on-disk bytes for the active scene via the file API; the
+  // pure isSelfSaveEcho consumes this so the decision itself stays testable.
+  const readSceneFromDisk = async (path: string): Promise<string | null> => {
     try {
-      const r = await fetch(`/api/files?path=${encodeURIComponent(activeScenePath)}`);
-      if (!r.ok) return false;
+      const r = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+      if (!r.ok) return null;
       const j = (await r.json()) as { content?: string };
-      return j.content === currentPack;
+      return j.content ?? null;
     } catch {
-      return false;
+      return null;
     }
   };
 
   const onAssetDiskChanged = async (msg: AssetDiskChangedEvent): Promise<void> => {
     if (msg.gameSlug !== ctx.currentSceneId) return;
-    if (await isSelfScenePackEcho(msg)) return;
+    const echo = await isSelfSaveEcho({
+      eventPath: msg.path,
+      activeScenePath: scenePath(),
+      lastSelfSave: ctx.lastSelfSave,
+      isDirty: ctx.isDirty,
+      now: Date.now(),
+      readDisk: readSceneFromDisk,
+    });
+    if (echo) return;
     broadcastAssetsChanged('pack-changed', 'disk-watch');
   };
 

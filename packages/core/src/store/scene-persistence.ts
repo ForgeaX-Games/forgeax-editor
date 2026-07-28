@@ -100,8 +100,7 @@ export interface ScenePersistenceContext {
    *  it, Play's catalog resolves it) and must survive edits — moving an entity
    *  must not mint a new GUID. Saving re-uses this so the pack on disk keeps the
    *  GUID forge.json points at. Reset on every load attempt; null until known.
-   *  @internal-store — disk-watch READS this to content-compare a self-save echo
-   *  and WRITES it via setCurrentSceneGuid (D-6 seam). */
+   *  @internal-store — disk-watch WRITES it via setCurrentSceneGuid (D-6 seam). */
   currentSceneGuid: string | null;
   /** Top-level entity handles of the currently loaded scene. Opening a scene
    *  materialises it FLAT (loadSceneByGuid -> reg.instantiateFlat): no synthetic
@@ -136,11 +135,33 @@ export interface ScenePersistenceContext {
    *  entities using an empty-entity pack (e.g. after a failed reload). null = no
    *  scene loaded yet (first-time saves proceed). */
   loadedEntityFloor: number | null;
+  /** The exact bytes (+ path + timestamp) of the LAST successful self-save. The
+   *  disk watcher uses this to recognise its own echo: comparing the file the
+   *  server watcher reports against the precise content we wrote is robust where
+   *  re-serialising the live world is not (the world may have drifted since the
+   *  save, currentSceneGuid may have been null at save time, or the platform may
+   *  normalise newlines). null = we have not saved this session (a disk event is
+   *  then treated as a genuine external change). @internal-store — disk-watch
+   *  READS this and WRITES it via setLastSelfSave (D-6 seam). */
+  lastSelfSave: LastSelfSave | null;
   /** Cohesive dirty write — disk-watch's reverse-write seam (== deleted _setDirty). */
   setDirty(v: boolean): void;
   /** Cohesive scene-GUID write — disk-watch's reverse-write seam
    *  (== deleted _setCurrentSceneGuid). */
   setCurrentSceneGuid(guid: string): void;
+  /** Cohesive self-save write — the save path records what it wrote so disk-watch
+   *  can recognise the echo without re-serialising the live world (D-6 seam). */
+  setLastSelfSave(v: LastSelfSave): void;
+}
+
+/** Snapshot of the last successful self-save (disk-watch self-echo input). */
+export interface LastSelfSave {
+  /** Scene path written (compared against the watcher's reported path). */
+  path: string;
+  /** Exact bytes written to disk (byte-compared against the disk read-back). */
+  content: string;
+  /** Epoch ms of the write (time-window fallback for platform newline drift). */
+  at: number;
 }
 
 /** One non-scene asset entry snapshotted from a pack at load (orphan-merge input). */
@@ -165,8 +186,10 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
     loadedInlineAssetFloor: null,
     loadedInlineAssets: null,
     loadedEntityFloor: null,
+    lastSelfSave: null,
     setDirty(v: boolean): void { this.isDirty = v; },
     setCurrentSceneGuid(guid: string): void { this.currentSceneGuid = guid; },
+    setLastSelfSave(v: LastSelfSave): void { this.lastSelfSave = v; },
   };
 }
 
@@ -181,8 +204,8 @@ export interface SceneFileEntry { id: string; name?: string; pack: string; guid?
 // ONE of each factory with the real gateway / fetch / fetchWithTimeout /
 // resolveGamePath. The DAG is one-directional: disk-io + storage are leaves
 // (state via ctx + injected net), scene-list depends on them (via wired deps),
-// and this root wires + re-exports all four. disk-watch consumes worldToPack /
-// scenePath / loadSceneByGuid off diskIo (re-exported below).
+// and this root wires + re-exports all four. disk-watch consumes scenePath +
+// ctx (incl. ctx.lastSelfSave for self-echo detection) off the re-exports below.
 const diskIo = createDiskIo({
   ctx,
   gateway,
@@ -293,7 +316,8 @@ export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<
 export const loadDocFromStorage = storage.loadDocFromStorage;
 
 // ── High-side-effect surface: re-export the composed diskIo unit (D-3/D-6) ─────
-// disk-watch imports worldToPack / scenePath / loadSceneByGuid + ctx from HERE;
+// disk-watch imports scenePath + ctx from HERE (echo detection now reads
+// ctx.lastSelfSave rather than re-serialising via worldToPack);
 // the store.ts barrel forwards flushPendingSaveBeacon / replaceDoc /
 // instantiateSceneRefUnderWorld / stripEditorHiddenMarker / inlineAssetCount.
 /** @internal-store — disk-watch READS this (D-6 seam). Not in facade/barrel. */
@@ -303,7 +327,7 @@ export const scenePath = diskIo.scenePath;
 // without a static import cycle (pack-ops <- ... <- scene-persistence). One-way:
 // scene-persistence imports pack-ops (already, for its appliers), never the reverse.
 registerActiveScenePackResolver(() => diskIo.scenePath());
-/** @internal-store — disk-watch READS this to serialize for the echo compare. */
+/** @internal-store — the exact-bytes save path (serializedPack) uses this. */
 export const worldToPack = diskIo.worldToPack;
 /** @internal-store — disk-watch CALLS this to reload on a genuine external edit. */
 export const loadSceneByGuid = diskIo.loadSceneByGuid;

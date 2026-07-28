@@ -304,8 +304,9 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   }
 
   // ── engine-native world -> pack serialization ────────────────────────────────
-  /** @internal-store — disk-watch READS this to serialize the live world for the
-   *  self-save echo content-compare (D-6 seam). */
+  /** @internal-store — serializes the live world into the on-disk pack bytes;
+   *  used by serializedPack (the save path). disk-watch no longer re-serialises
+   *  here: it recognises a self-save echo via ctx.lastSelfSave instead. */
   function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
     const w: WorldType = doc.world;
     const reg: AssetRegistry | undefined = doc.registry;
@@ -579,8 +580,8 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   }
 
   // ── disk save ─────────────────────────────────────────────────────────────────
-  /** Invalidate the shared AssetRegistry cache for every GUID in a just-saved
-   *  pack so the next `loadByGuid` re-fetches fresh disk bytes.
+  /** Invalidate the shared AssetRegistry cache for the just-saved SCENE so the
+   *  next `loadByGuid` re-fetches fresh disk bytes.
    *
    *  Why (bug: ▶ Play loads the PRE-save scene): `doSaveDocToDisk` writes the new
    *  pack to disk, but the registry `gateway.doc.registry` — which is the SAME
@@ -588,24 +589,33 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  `gateway.doc.registry = renderer.assets`, and Play's `loadDefaultScene`
    *  calls `renderer.assets.loadByGuid`) — still holds the boot-time payload in
    *  its `assetCatalog` fast path. Without invalidation the next Play returns the
-   *  stale cached SceneAsset (old Transform.pos) even though disk is fresh. Save
-   *  is the exact "asset bytes changed" boundary at which a targeted per-GUID
-   *  invalidate is correct (never `invalidateAll` on a broad signal). We
-   *  invalidate every GUID we just wrote (scene + inline material/etc. bodies
-   *  live in this one pack file). `invalidate` is a no-op for un-catalogued GUIDs. */
-  function invalidateSavedGuids(parsedPack: unknown): void {
+   *  stale cached SceneAsset (old Transform.pos) even though disk is fresh.
+   *
+   *  Scope = SCENE GUID ONLY (never the inline material/mesh GUIDs):
+   *   1) Correctness — only the scene body goes stale. `rootsToSceneAsset`
+   *      collects the scene fresh from the live ECS world, so the on-disk scene
+   *      differs from the boot-time catalogued SceneAsset. Inline asset bodies
+   *      are written via `reg.lookup()` (sourced FROM the catalog), so the
+   *      on-disk body already equals the catalogued payload — invalidating them
+   *      buys nothing for Play freshness.
+   *   2) Safety — invalidating an inline asset ALSO drops the `assetCatalog`
+   *      entry the engine's handle→GUID reverse-lookup (`_guidForAsset`, called
+   *      by `rootsToSceneAsset`) needs on the NEXT collect. Self-save no longer
+   *      reloads the scene, so nothing repopulates that entry and the SECOND
+   *      Ctrl+S fails "serialize failed" (SceneCollectAssetGuidUnresolvedError).
+   *      See engine feedback 2026-07-28-invalidate-drops-handle-reverse-lookup.
+   *
+   *  `invalidate` is a no-op for un-catalogued GUIDs. */
+  function invalidateSavedScene(parsedPack: unknown): void {
     const reg = gateway.doc.registry as { invalidate?: (guid: string) => void } | undefined;
     if (!reg || typeof reg.invalidate !== 'function') return;
-    const assets = (parsedPack as { assets?: Array<{ guid?: unknown }> } | null)?.assets;
-    if (Array.isArray(assets)) {
-      for (const a of assets) {
-        if (typeof a?.guid === 'string' && a.guid.length > 0) reg.invalidate(a.guid);
-      }
-    }
-    // Belt-and-braces: the tracked scene GUID, in case the pack shape surprised us.
-    if (typeof ctx.currentSceneGuid === 'string' && ctx.currentSceneGuid.length > 0) {
-      reg.invalidate(ctx.currentSceneGuid);
-    }
+    const assets = (parsedPack as { assets?: Array<{ guid?: unknown; kind?: unknown }> } | null)
+      ?.assets;
+    const sceneGuid =
+      (Array.isArray(assets)
+        ? (assets.find((a) => a?.kind === 'scene')?.guid as string | undefined)
+        : undefined) ?? ctx.currentSceneGuid;
+    if (typeof sceneGuid === 'string' && sceneGuid.length > 0) reg.invalidate(sceneGuid);
   }
 
   /** Write the active game's scene to disk as a native engine scene pack. MANUAL
@@ -670,9 +680,13 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       });
       if (r.ok) {
         ctx.isDirty = false;
+        // Record the exact bytes we wrote so the disk watcher recognises the
+        // resulting file-change event as its OWN echo (and does not treat the
+        // save as an external edit that forces a full scene reload).
+        ctx.setLastSelfSave({ path: p, content, at: Date.now() });
         // Save is the "asset bytes changed" boundary: drop the stale registry
         // cache so the next ▶ Play (loadByGuid) re-reads the scene we just wrote.
-        invalidateSavedGuids(parsedNew);
+        invalidateSavedScene(parsedNew);
       }
       return r.ok;
     } catch {
@@ -715,6 +729,9 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       return; // keep ctx.isDirty; do not clobber the on-disk scene
     }
     ctx.isDirty = false;
+    // Record the beacon's bytes too so a watcher event it triggers is recognised
+    // as a self-save echo rather than an external edit (mirrors doSaveDocToDisk).
+    ctx.setLastSelfSave({ path: p, content, at: Date.now() });
     try {
       const blob = new Blob([JSON.stringify({ path: p, content })], { type: 'application/json' });
       const ok = navigator.sendBeacon('/api/files', blob);
