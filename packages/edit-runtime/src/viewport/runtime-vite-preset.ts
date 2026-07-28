@@ -493,6 +493,17 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
         roots: packRoots,
         base,
         importers: [imageImporter, gltfImporter, fbxImporter, fontImporter],
+        // No-op host refresh: the editor MUST NOT full-reload on a watched asset
+        // change. Importing an asset writes source bytes + `.meta.json` to disk,
+        // which the pluginPack watcher would otherwise answer with a Vite
+        // `full-reload` (an in-editor location.reload()), wiping unsaved scene
+        // edits, undo history, selection and panel state. The editor already
+        // refreshes incrementally via installAssetHmrBridge (forgeax:asset-changed
+        // / catalog-delta) + import-pipeline's broadcastAssetsChanged, so the
+        // imported asset still appears without a reload. Engine's own apps opt
+        // INTO the reload with `refresh: reloadAssetHost()`; the editor opts out.
+        // See forgeax-editor-harness/feedbacks/2026-07-13-asset-import-triggers-full-page-reload.md
+        refresh: () => {},
       }) as unknown as PluginOption,
     );
   }

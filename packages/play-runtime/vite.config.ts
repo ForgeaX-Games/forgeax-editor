@@ -437,12 +437,26 @@ function forgeaxGameRescan() {
       const gamesDir = gamesDirRoot();
       if (!gamesDir) return; // host injected no games dir → nothing to watch
       const gamesDirNorm = gamesDir.split('\\').join('/');
-      let known = new Set(gameAssetRoots());
+      // Gate the restart on the set of GAME SLUG directories, NOT on asset-root
+      // materialization. Importing an asset into the game the user is actively
+      // editing can create / first-populate that game's declared `assets/` root;
+      // the old `gameAssetRoots()` comparison then saw the root set grow and fired
+      // server.restart(), which drops :15173 /preview mid-edit → the Studio host
+      // page reloads and every unsaved scene edit / undo history / panel state is
+      // lost (this is the second, independent reload path besides pluginPack's
+      // full-reload). A restart is only truly needed when a brand-new game APPEARS
+      // (or is removed) so pluginPack can seed its roots at config time; assets
+      // added inside an already-known game are picked up by pluginPack's own
+      // watcher and served fresh by the per-game pack-index middleware, so they
+      // need no restart. Comparing slug sets restarts on game create/delete only.
+      const gameSlugSet = (): Set<string> =>
+        new Set(existsSync(gamesDir) ? readdirSync(gamesDir).filter(isRealGameSlug) : []);
+      let known = gameSlugSet();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const maybeRestart = (p: string) => {
         if (!p.split('\\').join('/').startsWith(gamesDirNorm)) return;
-        const next = new Set(gameAssetRoots());
-        const changed = next.size !== known.size || [...next].some((r) => !known.has(r));
+        const next = gameSlugSet();
+        const changed = next.size !== known.size || [...next].some((s) => !known.has(s));
         if (!changed) return;
         known = next;
         if (timer) clearTimeout(timer);
@@ -548,6 +562,19 @@ export default defineConfig({
       roots: gameAssetRoots(),
       base: '/preview/',
       importers: [imageImporter, gltfImporter, fbxImporter],
+      // No-op host refresh: importing an asset in the editor MUST NOT full-reload
+      // the page. In Studio single-realm the editor + engine boot IN the :18920
+      // window, and this play engine (:15173) is proxied in via /preview (ws:true),
+      // so pluginPack's default watcher answer — server.ws.send({type:'full-reload'})
+      // on a watched source/sidecar change — reaches the host window and reloads it,
+      // wiping unsaved scene edits, undo history, selection and panel state. (The
+      // reload fires on the source-only debounce batch: an import writes bytes +
+      // .meta.json, and a source-only batch hits the `!catalogChanged &&
+      // !hasCatalogSidecar` full-reload branch.) The imported asset still appears
+      // without a reload: the Content Browser refreshes via import-pipeline's
+      // broadcastAssetsChanged + the server /ws disk-watch channel, and pluginPack
+      // still emits its incremental catalog-delta / forgeax:asset-changed events.
+      refresh: () => {},
     }) as never,
     forgeaxPerGamePackIndex() as never,
     forgeaxGameRescan() as never,
