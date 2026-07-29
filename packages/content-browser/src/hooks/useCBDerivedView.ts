@@ -349,7 +349,10 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     for (const file of filesInPath) {
       items.push(file);
       const expanded = viewMode === 'asset' || expandedPacks.has(file.path);
-      if (!expanded || (file.family !== 'pack' && file.family !== 'meta' && file.family !== 'ui')) continue;
+      // A scene pack is classified as `scene` by the canonical asset kind, but
+      // it is still an asset-bearing file and must project its catalog rows in
+      // asset-root mode (and when manually expanded in file mode).
+      if (!expanded || file.assets.length === 0) continue;
       items.push(...nestedAssetsOf(file));
     }
     items.push(...registryOnlyAssets);

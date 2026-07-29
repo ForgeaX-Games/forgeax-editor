@@ -9,7 +9,7 @@
   },
   {
     "name": "assetCatalog",
-    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; relativeUrl: string; }[]"
+    "signature": "() => readonly (CatalogRecord & { guid: string; })[]"
   },
   {
     "name": "auditLog",

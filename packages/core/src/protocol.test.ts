@@ -13,6 +13,7 @@ const basePayload = {
   pageNonce: 'page-nonce-a',
   pageIdentity: 'http://localhost:18920/editor',
   canvasIdentity: 'canvas-a',
+  rendererGeneration: 4,
   rendererIdentity: 'renderer-a',
   sentinel: 12,
   liveness: 'alive' as const,
@@ -32,6 +33,7 @@ describe('carrier VAG protocol', () => {
       expect(result.data.payload.scope).toEqual({ projectId: 'project-a', gameId: 'game-a' });
       expect(result.data.payload.pageNonce).toBe('page-nonce-a');
       expect(result.data.payload.canvasIdentity).toBe('canvas-a');
+      expect(result.data.payload.rendererGeneration).toBe(4);
       expect(result.data.payload.rendererIdentity).toBe('renderer-a');
       expect(result.data.payload.renderReadiness).toBe('ready');
     }
@@ -92,5 +94,29 @@ describe('carrier VAG protocol', () => {
       expect(result.data.payload.failure?.hint).toContain('ensure');
       expect(result.data.payload.renderReadiness).toBe('unavailable');
     }
+  });
+
+  it('fails closed when the numeric renderer generation is absent', () => {
+    expect(VagCarrierHandshakeSchema.safeParse({
+      type: 'VAG_CARRIER_HANDSHAKE',
+      payload: { ...basePayload, rendererGeneration: undefined },
+    }).success).toBe(false);
+
+    const unavailable = VagCarrierHandshakeSchema.safeParse({
+      type: 'VAG_CARRIER_HANDSHAKE',
+      payload: {
+        ...basePayload,
+        rendererGeneration: null,
+        renderReadiness: 'unavailable',
+        failure: {
+          code: 'renderer-generation-unavailable',
+          stage: 'renderer',
+          retryable: true,
+          hint: 'wait for a numeric renderer generation',
+          at: '2026-07-29T00:00:00.000Z',
+        },
+      },
+    });
+    expect(unavailable.success).toBe(true);
   });
 });

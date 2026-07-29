@@ -27,6 +27,10 @@ import type { EntityHandle } from '../scene/scene-types';
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
 const TEXTURE_GUID = 'd1f2a3b4-c5d6-5e70-8901-234567890abc';
 
+type SameType<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends
+  (<Value>() => Value extends Right ? 1 : 2) ? true : false;
+
 // A tiny 2×2 RGBA texture — small enough to keep the test cheap, but its `data`
 // buffer is exactly what describeAssetByGuid must NOT return (the friction that
 // motivated this leg: lookupAsset drags the full pixel buffer into scope).
@@ -71,6 +75,7 @@ function material(): MaterialAsset {
 
 function setupBall(opts: { catalogMaterial?: boolean } = {}): {
   gateway: EditGateway;
+  registry: AssetRegistry;
   world: World;
   ball: EntityHandle;
 } {
@@ -101,7 +106,7 @@ function setupBall(opts: { catalogMaterial?: boolean } = {}): {
   const session = createEditSession();
   session.world = world as unknown as EditSession['world'];
   session.registry = registry;
-  return { gateway: new EditGateway(session), world, ball: ball.value };
+  return { gateway: new EditGateway(session), registry, world, ball: ball.value };
 }
 
 function materialCount(world: World, entity: EntityHandle): number {
@@ -365,6 +370,7 @@ describe('Gateway asset read surface', () => {
   // describe-by-guid summary path (shape metadata, no pixel buffer).
   function setup(): {
     gateway: EditGateway;
+    registry: AssetRegistry;
     ball: EntityHandle;
     meshHandle: number;
     matHandle: number;
@@ -398,6 +404,7 @@ describe('Gateway asset read surface', () => {
     session.registry = registry;
     return {
       gateway: new EditGateway(session),
+      registry,
       ball: spawned.value,
       meshHandle: HANDLE_CUBE as unknown as number,
       matHandle: matHandle as unknown as number,
@@ -458,6 +465,64 @@ describe('Gateway asset read surface', () => {
     expect(gateway.assetCatalog().some((e) => e.guid === MATERIAL_GUID)).toBe(true);
     const payload = gateway.lookupAsset(MATERIAL_GUID);
     expect((payload as { kind?: string } | undefined)?.kind).toBe('material');
+  });
+
+  it('assetCatalog returns the canonical Engine row without losing producer facts', () => {
+    const { gateway, registry } = setup();
+    const provenance = { provider: 'host-importer', version: '7.2.0' } as const;
+    const revision = { digest: 'sha256:catalog', observedAt: 42, rootId: 'game-root' } as const;
+    const relations = [
+      {
+        from: { type: 'asset', id: MATERIAL_GUID },
+        to: { type: 'resource', id: 'source/blob' },
+        type: 'produces',
+        provenance,
+      },
+    ] as const;
+    const diagnostics = [
+      {
+        code: 'producer-note',
+        severity: 'warning',
+        subject: { type: 'asset', id: MATERIAL_GUID },
+        expected: 'canonical-row',
+        actual: 'host-row',
+        hint: 'retain producer facts',
+        authority: 'producer',
+        evidence: [{ type: 'resource', id: 'source/blob' }],
+        recoveryIntents: ['inspect-source'],
+      },
+    ] as const;
+    const canonicalRow = {
+      relativeUrl: '/assets/material.pack.json',
+      sourcePath: 'materials/hero.material',
+      kind: 'host/material',
+      packageId: 'host-package',
+      provenance,
+      revision,
+      sourceKey: 'material/main',
+      sourceIndex: 1,
+      relations,
+      diagnostics,
+    } as const;
+    registry.assetCatalog.clear();
+    registry.packIndexCache = new Map([
+      [MATERIAL_GUID, canonicalRow],
+    ]);
+
+    const rows: ReturnType<AssetRegistry['listCatalog']> = gateway.assetCatalog();
+    const canonicalReturn: SameType<
+      ReturnType<EditGateway['assetCatalog']>,
+      ReturnType<AssetRegistry['listCatalog']>
+    > = true;
+    expect(canonicalReturn).toBe(true);
+    expect(rows).toEqual([{ guid: MATERIAL_GUID, ...canonicalRow }]);
+    expect(rows).toEqual(registry.listCatalog());
+  });
+
+  it('assetCatalog returns an empty readonly result without a registry', () => {
+    const session = createEditSession();
+    const gateway = new EditGateway(session);
+    expect(gateway.assetCatalog()).toEqual([]);
   });
 
   // ── describeAssetByGuid: the lightweight by-GUID leg (friction #4) ──────────

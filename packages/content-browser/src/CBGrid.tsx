@@ -75,7 +75,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
           );
         }
         if (item.type === 'file') {
-          const hasExpandableAssets = (item.family === 'pack' || item.family === 'meta' || item.family === 'ui') && item.assets.length > 0;
+          const hasExpandableAssets = item.assets.length > 0;
           return (
             <CBFileItem
               key={item.path}

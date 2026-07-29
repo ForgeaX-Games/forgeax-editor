@@ -4,7 +4,8 @@ import { useHost } from '@forgeax/interface/core/app-shell';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { generateAssetGuid, gateway, getSceneId, requestAddAssetsToChat, resolveGamePath, showContextMenu,
+import { generateAssetGuid, gateway, getSceneId, onSceneListChange, requestAddAssetsToChat, resolveGamePath, showContextMenu,
+  subscribeDocVersion,
   ResizeHandle, useLocalSize, getSceneList, validateAssetBasename } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
@@ -64,6 +65,7 @@ import './content-browser.css';
 // pluginPack, so the browser receives a projection instead of re-resolving disk
 // layout conventions itself.
 declare const __FORGEAX_CATALOG_ASSET_ROOTS__: readonly CatalogAssetRoot[];
+declare const __FORGEAX_GAME_SLUG__: string | null;
 
 const catalogAssetRoots: readonly CatalogAssetRoot[] =
   typeof __FORGEAX_CATALOG_ASSET_ROOTS__ === 'undefined'
@@ -86,7 +88,7 @@ const favoriteRef = (item: CBViewItem): CBFavoriteRef => (
 // bails on edits/play frames and fires only on a genuine doc swap. (The old bare
 // useDocVersion() over-fired at 60fps in Play and repainted the whole panel.)
 const getAssetRegistry = (): unknown => gateway.doc.registry;
-const subscribeAssetRegistry = (fn: () => void): () => void => gateway.subscribe(() => fn());
+const subscribeAssetRegistry = (fn: () => void): () => void => subscribeDocVersion(fn);
 function useAssetRegistryRef(): unknown {
   return useSyncExternalStore(subscribeAssetRegistry, getAssetRegistry, getAssetRegistry);
 }
@@ -96,7 +98,16 @@ export function ContentBrowser() {
   const { t } = useTranslation();
   useContentBrowserPanelContributions();
   useAssetRegistryRef();
-  const gameSlug = getSceneId();
+  // Host boot configures the game session asynchronously after the shell mounts.
+  // Subscribe to the existing scene-list signal so the read model is rebuilt
+  // from the real slug instead of remaining on the initial `default` guard.
+  const sessionGameSlug = useSyncExternalStore(onSceneListChange, getSceneId, getSceneId);
+  // The standalone host already has the authoritative slug at compile time;
+  // use it during the async host-session gap, then let the scene-list signal
+  // take over for scene switches and embedded hosts.
+  const gameSlug = sessionGameSlug === 'default' && typeof __FORGEAX_GAME_SLUG__ === 'string'
+    ? __FORGEAX_GAME_SLUG__
+    : sessionGameSlug;
   const { allAssets, loading, reload, diskTree, fetchDiskDirs } = useCBData(gameSlug, catalogAssetRoots);
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
@@ -324,7 +335,7 @@ export function ContentBrowser() {
   const handleActivate = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') { nav.navigate(item.path); return; }
     if (item.type === 'file') {
-      if (viewMode === 'file' && (item.family === 'pack' || item.family === 'meta' || item.family === 'ui') && item.assets.length > 0) {
+      if (viewMode === 'file' && item.assets.length > 0) {
         togglePackExpansion(item.path);
         return;
       }

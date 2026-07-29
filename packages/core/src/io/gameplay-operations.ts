@@ -1,25 +1,67 @@
 import type { EditGateway, DispatchResult } from './gateway';
+import {
+  GAMEPLAY_CARRIER_CONTRACT_VERSION,
+  GameplayCaptureArtifactSchema,
+  GameplayCaptureProvenanceSchema,
+  GameplayOperationRequestSchema,
+  GameplayOperationResultSchema,
+  sameGameplayIdentity,
+  type GameplayCaptureArtifact,
+  type GameplayCaptureProvenance,
+  type GameplayError,
+  type GameplayIdentity,
+  type GameplayInput,
+  type GameplayOperationName,
+  type GameplayOperationRequest,
+  type GameplayOperationResult as GameplayCarrierOperationResult,
+} from './gameplay-contract';
 
-export type GameplayInput = { type: 'key'; key: string; phase: 'down' | 'up' } | { type: 'pointer'; x: number; y: number; button?: 'left' | 'middle' | 'right' };
-export type GameplayCaptureProvenance = { runtimeId: string; pageIdentity: string; canvasIdentity: string; rendererGeneration: number };
-export type GameplayCaptureArtifact = { dataUrl: string; bytes: number; provenance: GameplayCaptureProvenance };
-export type GameplayOperationResult = { ok: true; state?: 'running' | 'stopped'; data?: unknown } | { ok: false; error: unknown };
-export type GameplayCaptureSurface = { canvas: HTMLCanvasElement; provenance: GameplayCaptureProvenance; focus: () => void };
+export type { GameplayCaptureArtifact, GameplayCaptureProvenance, GameplayInput } from './gameplay-contract';
+type GameplayProducerResult = { ok: true; state?: 'running' | 'stopped'; data?: unknown } | { ok: false; error: unknown };
+export type GameplayCaptureSurface = {
+  canvas: HTMLCanvasElement;
+  getProvenance: () => GameplayCaptureProvenance | null;
+  focus: () => void;
+};
 export type GameplayCaptureGateway = {
   captureGameplayFrame(): { ok: true; value: GameplayCaptureArtifact } | { ok: false; error: unknown };
   revealGameplayFrame(artifact: GameplayCaptureArtifact): { ok: true } | { ok: false; error: unknown };
 };
 
+function readSurfaceProvenance(surface: GameplayCaptureSurface): GameplayCaptureProvenance | null {
+  const candidate = surface.getProvenance();
+  const parsed = GameplayCaptureProvenanceSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
 export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): GameplayCaptureGateway {
   return {
     captureGameplayFrame() {
-      const dataUrl = surface.canvas.toDataURL('image/png');
+      const provenance = readSurfaceProvenance(surface);
+      if (!provenance) return { ok: false, error: { code: 'renderer-generation-unavailable', hint: 'live renderer did not publish a numeric generation' } };
+      let dataUrl: string;
+      try {
+        dataUrl = surface.canvas.toDataURL('image/png');
+      } catch (error) {
+        return { ok: false, error: { code: 'capture-failed', hint: error instanceof Error ? error.message : String(error) } };
+      }
       if (!dataUrl || !dataUrl.startsWith('data:image/')) return { ok: false, error: { code: 'surface-unavailable', hint: 'live canvas produced no readable artifact' } };
-      return { ok: true, value: { dataUrl, bytes: dataUrl.length, provenance: { ...surface.provenance } } };
+      const artifact = GameplayCaptureArtifactSchema.safeParse({ dataUrl, bytes: dataUrl.length, provenance });
+      if (!artifact.success) return { ok: false, error: { code: 'capture-invalid', hint: 'live canvas produced an invalid gameplay artifact', details: { issues: artifact.error.issues } } };
+      return { ok: true, value: artifact.data };
     },
     revealGameplayFrame(artifact) {
-      if (JSON.stringify(artifact.provenance) !== JSON.stringify(surface.provenance)) return { ok: false, error: { code: 'identity-mismatch', hint: 'capture again' } };
-      surface.focus();
+      const parsedArtifact = GameplayCaptureArtifactSchema.safeParse(artifact);
+      if (!parsedArtifact.success) return { ok: false, error: { code: 'invalid-capture-artifact', hint: 'capture a fresh valid gameplay artifact', details: { issues: parsedArtifact.error.issues } } };
+      const current = readSurfaceProvenance(surface);
+      if (!current) return { ok: false, error: { code: 'renderer-generation-unavailable', hint: 'live renderer did not publish a numeric generation' } };
+      const match = sameGameplayIdentity(current, parsedArtifact.data.provenance);
+      if (!match.matches) return { ok: false, error: { code: 'identity-mismatch', hint: 'capture again', details: match } };
+      try {
+        surface.focus();
+      } catch (error) {
+        return { ok: false, error: { code: 'reveal-failed', hint: error instanceof Error ? error.message : String(error) } };
+      }
       return { ok: true };
     },
   };
@@ -27,19 +69,128 @@ export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): G
 
 type GameplayGateway = Pick<EditGateway, 'dispatch' | 'invokeGameAction' | 'readGameState'> & { readonly playPhase: EditGateway['playPhase'] };
 
-const unavailable = (hint: string): GameplayOperationResult => ({ ok: false, error: { code: 'surface-unavailable', hint } });
+const unavailable = (hint: string): GameplayProducerResult => ({ ok: false, error: { code: 'surface-unavailable', hint } });
 
-function dispatchResult(result: DispatchResult): GameplayOperationResult {
+function dispatchResult(result: DispatchResult): GameplayProducerResult {
   return result.ok ? { ok: true } : result;
 }
 
 export interface GameplayOperations {
-  play(): Promise<GameplayOperationResult>;
-  gameplayStop(): Promise<GameplayOperationResult>;
-  input(action: GameplayInput): Promise<GameplayOperationResult>;
-  query(query: string): Promise<GameplayOperationResult>;
-  capture(): Promise<GameplayOperationResult>;
-  reveal(artifact: GameplayCaptureArtifact): Promise<GameplayOperationResult>;
+  play(): Promise<GameplayProducerResult>;
+  gameplayStop(): Promise<GameplayProducerResult>;
+  input(action: GameplayInput): Promise<GameplayProducerResult>;
+  query(query: string): Promise<GameplayProducerResult>;
+  capture(): Promise<GameplayProducerResult>;
+  reveal(artifact: GameplayCaptureArtifact): Promise<GameplayProducerResult>;
+}
+
+export interface GameplayCarrierBridge {
+  readonly version: typeof GAMEPLAY_CARRIER_CONTRACT_VERSION;
+  execute(request: unknown): Promise<GameplayCarrierOperationResult>;
+}
+
+function normalizeGameplayError(error: unknown, phase: GameplayError['phase']): GameplayError {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+  const code = typeof record?.code === 'string' && record.code.length > 0 ? record.code : 'operation-failed';
+  const hint = typeof record?.hint === 'string' && record.hint.length > 0 ? record.hint : 'retry the gameplay operation';
+  const retryable = typeof record?.retryable === 'boolean' ? record.retryable : false;
+  const details = record?.details && typeof record.details === 'object' && !Array.isArray(record.details)
+    ? record.details as Record<string, unknown>
+    : undefined;
+  return {
+    owner: typeof record?.owner === 'string' && record.owner.length > 0 ? record.owner : 'editor-gameplay-producer',
+    code,
+    phase,
+    retryable,
+    hint,
+    ...(details ? { details } : {}),
+  };
+}
+
+function bridgeFailure(operation: GameplayOperationName | null, error: GameplayError): GameplayCarrierOperationResult {
+  return { version: GAMEPLAY_CARRIER_CONTRACT_VERSION, operation, ok: false, error };
+}
+
+function contractFailure(operation: GameplayOperationName | null, code: string, hint: string, details?: Record<string, unknown>): GameplayCarrierOperationResult {
+  return bridgeFailure(operation, {
+    owner: 'editor-gameplay-contract', code, phase: 'contract', retryable: false, hint,
+    ...(details ? { details } : {}),
+  });
+}
+
+/**
+ * Add a versioned, schema-validated bridge around the live gameplay producer.
+ * The bridge accepts unknown wire data, validates it at entry, invokes the
+ * producer, validates its result at exit, and fails closed without a complete
+ * numeric renderer identity.
+ */
+export function createGameplayCarrierBridge(
+  operations: GameplayOperations,
+  getIdentity: () => GameplayIdentity | null,
+): GameplayCarrierBridge {
+  return {
+    version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
+    async execute(input) {
+      const parsedRequest = GameplayOperationRequestSchema.safeParse(input);
+      if (!parsedRequest.success) {
+        return contractFailure(null, 'invalid-request', 'send a version 1 gameplay operation request', { issues: parsedRequest.error.issues });
+      }
+      const request: GameplayOperationRequest = parsedRequest.data;
+      const before = getIdentity();
+      if (!before) {
+        return bridgeFailure(request.operation, {
+          owner: 'editor-gameplay-carrier',
+          code: 'identity-unavailable',
+          phase: 'identity',
+          retryable: true,
+          hint: 'wait for the live carrier to publish a numeric renderer generation',
+        });
+      }
+
+      let result: GameplayProducerResult;
+      try {
+        switch (request.operation) {
+          case 'play': result = await operations.play(); break;
+          case 'gameplayStop': result = await operations.gameplayStop(); break;
+          case 'input': result = await operations.input(request.action); break;
+          case 'query': result = await operations.query(request.query); break;
+          case 'capture': result = await operations.capture(); break;
+          case 'reveal': result = await operations.reveal(request.artifact); break;
+        }
+      } catch (error) {
+        return bridgeFailure(request.operation, normalizeGameplayError(error, request.operation === 'capture' ? 'capture' : request.operation === 'reveal' ? 'reveal' : 'producer'));
+      }
+
+      if (!result.ok) return bridgeFailure(request.operation, normalizeGameplayError(result.error, request.operation === 'capture' ? 'capture' : request.operation === 'reveal' ? 'reveal' : 'producer'));
+      const after = getIdentity();
+      if (!after) {
+        return bridgeFailure(request.operation, {
+          owner: 'editor-gameplay-carrier', code: 'identity-unavailable', phase: 'identity', retryable: true,
+          hint: 'the live renderer generation disappeared during the operation',
+        });
+      }
+      if (request.operation === 'capture' && result.data !== undefined) {
+        const artifact = GameplayCaptureArtifactSchema.safeParse(result.data);
+        if (!artifact.success) return contractFailure(request.operation, 'invalid-capture-artifact', 'the live producer returned an invalid capture artifact', { issues: artifact.error.issues });
+        const match = sameGameplayIdentity(after, artifact.data.provenance);
+        if (!match.matches) return bridgeFailure(request.operation, {
+          owner: 'editor-gameplay-carrier', code: 'identity-mismatch', phase: 'identity', retryable: true,
+          hint: 'capture again after the live renderer is stable', details: match,
+        });
+      }
+      const output = {
+        version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
+        operation: request.operation,
+        ok: true as const,
+        ...(result.state ? { state: result.state } : {}),
+        ...(result.data !== undefined ? { data: result.data } : {}),
+        identity: after,
+      };
+      const parsedResult = GameplayOperationResultSchema.safeParse(output);
+      if (!parsedResult.success) return contractFailure(request.operation, 'invalid-producer-result', 'the live producer returned data outside the gameplay contract', { issues: parsedResult.error.issues });
+      return parsedResult.data;
+    },
+  };
 }
 
 /** The typed producer for the already-connected live Gateway projection. */

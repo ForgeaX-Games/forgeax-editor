@@ -36,7 +36,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import { setActiveCamera } from '@forgeax/engine-render/internal';
-import { Entity, Update } from '@forgeax/engine-ecs';
+import { Entity, Update, type World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import {
   attachBrowserInputBackend,
@@ -50,8 +50,13 @@ import {
   getSceneId,
   getSelection,
   entComponents,
+  notifyDocChanged,
   switchSceneFile,
   createEvalChannel,
+  createGameplayCaptureGateway,
+  createGameplayCarrierBridge,
+  createGameplayOperations,
+  type GameplayIdentity,
 } from '@forgeax/editor-core';
 import {
   sendVagMessage,
@@ -75,6 +80,7 @@ import {
   installErrorOverlay,
   paintDiagnosticMessage,
 } from './viewport-runtime-bridges';
+import { setFps } from '../fps-store';
 import {
   getInputTarget,
   getViewportQuadrant,
@@ -110,43 +116,67 @@ function registerTeardown(fn: () => void): void {
   teardownFns.push(fn);
 }
 
+type ManagedCarrierHealth = {
+  readonly getIdentity: () => GameplayIdentity | null;
+  readonly dispose: () => void;
+};
+
+function readRendererGeneration(renderer: unknown): number | null {
+  const generation = (renderer as { generation?: unknown }).generation;
+  return typeof generation === 'number' && Number.isInteger(generation) && generation >= 0 ? generation : null;
+}
+
 async function installManagedCarrierHealth(
   canvas: HTMLCanvasElement,
   renderer: { readonly ready: Promise<{ ok: boolean; error?: { message?: string; hint?: string } }> },
   gameId: string | null,
-): Promise<() => void> {
+): Promise<ManagedCarrierHealth> {
   const params = new URLSearchParams(window.location.search);
   const runtimeId = params.get('runtimeId')?.trim() || null;
   const challengeResponse = params.get('ownershipChallenge')?.trim() || null;
-  if (!runtimeId || !challengeResponse) return () => {};
+  if (!runtimeId || !challengeResponse) return { getIdentity: () => null, dispose: () => {} };
 
   const healthResponse = await fetch('/api/health', { cache: 'no-store' });
   if (!healthResponse.ok) throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
-  const health = await healthResponse.json() as { projectRootAbs?: unknown };
-  if (typeof health.projectRootAbs !== 'string' || health.projectRootAbs.length === 0) {
-    throw new Error('carrier health response did not identify the project root');
+  const health = await healthResponse.json() as { instanceRootAbs?: unknown };
+  if (typeof health.instanceRootAbs !== 'string' || health.instanceRootAbs.length === 0) {
+    throw new Error('carrier health response did not identify the instance root');
   }
+  const instanceRootAbs = health.instanceRootAbs;
 
   const pageNonce = crypto.randomUUID();
   const pageIdentity = `${window.location.origin}${window.location.pathname}`;
   const canvasIdentity = `canvas-${pageNonce}`;
   const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
   const producerId = typeof rendererRecord.identity === 'string' && rendererRecord.identity.length > 0
-    ? rendererRecord.identity : crypto.randomUUID();
-  const generation = typeof rendererRecord.generation === 'number' ? rendererRecord.generation : 0;
-  const rendererIdentity = `renderer-${producerId}-generation-${generation}`;
+    ? rendererRecord.identity : 'renderer-unavailable';
+  const rendererIdentity = `renderer-${producerId}`;
+  const scope = { projectId: instanceRootAbs, gameId };
   canvas.dataset.forgeaxCarrierCanvas = canvasIdentity;
   let sentinel = 0;
-  let renderReadiness: 'pending' | 'ready' | 'unavailable' = 'pending';
+  let renderReadiness: 'pending' | 'ready' | 'unavailable' = readRendererGeneration(renderer) === null ? 'unavailable' : 'pending';
   let failure: { code: string; stage: 'renderer'; retryable: boolean; hint: string; at: string; message?: string } | null = null;
+  if (renderReadiness === 'unavailable') {
+    failure = {
+      code: 'renderer-generation-unavailable', stage: 'renderer', retryable: true,
+      hint: 'The renderer must publish a numeric generation before gameplay is available.',
+      at: new Date().toISOString(),
+    };
+  }
+  const getIdentity = (): GameplayIdentity | null => {
+    const generation = readRendererGeneration(renderer);
+    if (renderReadiness !== 'ready' || generation === null) return null;
+    return { runtimeId, scope, pageIdentity, canvasIdentity, rendererGeneration: generation };
+  };
   const payload = () => ({
     version: VAG_CARRIER_PROTOCOL_VERSION,
     runtimeId,
     challengeResponse,
-    scope: { projectId: health.projectRootAbs as string, gameId },
+    scope,
     pageNonce,
     pageIdentity,
     canvasIdentity,
+    rendererGeneration: readRendererGeneration(renderer),
     rendererIdentity,
     sentinel,
     liveness: 'alive' as const,
@@ -164,24 +194,29 @@ async function installManagedCarrierHealth(
     sendVagMessage(window.parent, VagCarrierHeartbeatSchema, publish());
   };
   sendHandshake();
+  if (failure) sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
   const heartbeat = window.setInterval(sendHeartbeat, 100);
   void renderer.ready.then((result) => {
-    if (result.ok) {
+    if (result.ok && readRendererGeneration(renderer) !== null) {
+      failure = null;
       renderReadiness = 'ready';
       sendHeartbeat();
       return;
     }
     renderReadiness = 'unavailable';
     failure = {
-      code: 'renderer-not-ready', stage: 'renderer', retryable: true,
-      hint: result.error?.hint ?? 'Inspect the renderer error, then ensure the carrier again.',
+      code: result.ok ? 'renderer-generation-unavailable' : 'renderer-not-ready', stage: 'renderer', retryable: true,
+      hint: result.ok ? 'The renderer must publish a numeric generation before gameplay is available.' : result.error?.hint ?? 'Inspect the renderer error, then ensure the carrier again.',
       at: new Date().toISOString(), message: result.error?.message,
     };
     sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
   });
-  return () => {
-    window.clearInterval(heartbeat);
-    if (canvas.dataset.forgeaxCarrierCanvas === canvasIdentity) delete canvas.dataset.forgeaxCarrierCanvas;
+  return {
+    getIdentity,
+    dispose: () => {
+      window.clearInterval(heartbeat);
+      if (canvas.dataset.forgeaxCarrierCanvas === canvasIdentity) delete canvas.dataset.forgeaxCarrierCanvas;
+    },
   };
 }
 
@@ -517,6 +552,10 @@ async function bootViewport(
   // shape that D-7 replaces with structural registration-surface removal.
   gateway.doc.world = world;
   gateway.doc.registry = renderer.assets;
+  // Registry binding is a document-state change, even though no authored world
+  // entity changed. Notify panel subscribers so a Content Browser mounted before
+  // engine boot can acquire the live registry instead of retaining an empty model.
+  notifyDocChanged();
 
   void renderer.ready.then((r: { ok: boolean; error?: { code?: string; expected?: unknown; hint?: string; detail?: unknown } }) => {
     if (!r.ok) console.error('[editor] renderer.ready err:', r.error?.code, r.error?.expected, r.error?.hint, r.error?.detail);
@@ -786,10 +825,16 @@ async function bootViewport(
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
-      onPlayStarted: () => {
+      onPlayStarted: (playWorld) => {
         // The lifecycle has already atomically moved gateway.activeWorld to the
         // play world. Publish the matching UI state only now, never during async
         // assembly, so Hierarchy cannot claim Play while showing the edit tree.
+        // The editor App is paused for Play, so the FPS reporter installed on
+        // the editor world would otherwise leave the toolbar showing its stale
+        // pre-Play value. Attach the reporter to the actual live play world.
+        setFps(0);
+        onFps(0);
+        installFpsReport(playWorld as World, onFps);
         canvas.focus({ preventScroll: true });
         canvasInput.grantGame();
         setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
@@ -937,30 +982,6 @@ async function bootViewport(
     playSimulation: () => actionsRef.current.playSimulation(),
     stopSimulation: () => actionsRef.current.stopSimulation(),
     readActiveWorld: () => gateway.activeWorld.inspect(),
-    dispatchGameplayInput: (action: unknown) => {
-      if (gateway.mode !== 'play') {
-        return { ok: false, error: { code: 'surface-unavailable', hint: 'input requires an active live Play projection' } };
-      }
-      if (!action || typeof action !== 'object') {
-        return { ok: false, error: { code: 'invalid-input', hint: 'input requires a typed key or pointer action' } };
-      }
-      const candidate = action as { type?: unknown; key?: unknown; phase?: unknown; x?: unknown; y?: unknown; button?: unknown };
-      canvas.focus({ preventScroll: true });
-      if (candidate.type === 'key' && typeof candidate.key === 'string' && (candidate.phase === 'down' || candidate.phase === 'up')) {
-        canvas.dispatchEvent(new KeyboardEvent(candidate.phase === 'down' ? 'keydown' : 'keyup', {
-          key: candidate.key, code: candidate.key, bubbles: true, cancelable: true,
-        }));
-        return { ok: true };
-      }
-      if (candidate.type === 'pointer' && typeof candidate.x === 'number' && typeof candidate.y === 'number') {
-        const button = candidate.button === 'right' ? 2 : candidate.button === 'middle' ? 1 : 0;
-        const init = { clientX: candidate.x, clientY: candidate.y, button, buttons: 1 << button, bubbles: true, cancelable: true };
-        canvas.dispatchEvent(new PointerEvent('pointerdown', init));
-        canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }));
-        return { ok: true };
-      }
-      return { ok: false, error: { code: 'invalid-input', hint: 'input requires a typed key or pointer action' } };
-    },
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
     // M5 (w29): expose the super coordination layer so out-of-frame scripts (AC-02
     // e2e) can witness the separate editorWorld (camera + gizmo) + query bindings.
@@ -983,8 +1004,26 @@ async function bootViewport(
   // W1-L1H producer: a managed Studio page is the editor viewport carrier.
   // Publish identity/readiness from this same canvas/renderer and keep the
   // heartbeat owned by this realm; ordinary Studio pages stay silent.
+  // The typed gameplay bridge is installed from the same live Gateway + canvas
+  // seam; it is the only gameplay transport exposed by the viewport.
   void installManagedCarrierHealth(canvas, renderer, gameSession.slug)
-    .then((dispose) => registerTeardown(dispose))
+    .then((health) => {
+      registerTeardown(health.dispose);
+      const capture = createGameplayCaptureGateway({
+        canvas,
+        getProvenance: health.getIdentity,
+        focus: () => canvas.focus({ preventScroll: true }),
+      });
+      const bridge = createGameplayCarrierBridge(
+        createGameplayOperations(gateway, capture),
+        health.getIdentity,
+      );
+      const host = globalThis as typeof globalThis & { __forgeax_editor_gameplay?: unknown };
+      host.__forgeax_editor_gameplay = bridge;
+      registerTeardown(() => {
+        if (host.__forgeax_editor_gameplay === bridge) delete host.__forgeax_editor_gameplay;
+      });
+    })
     .catch((error) => console.warn('[editor] managed carrier health unavailable:', error));
   // Cross-game teardown: stop the rAF loop + release the WebGPU device (app.stop()
   // chains into renderer.dispose()'s GPU-lifecycle cascade, feat-20260612-rhi-

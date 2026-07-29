@@ -54,6 +54,51 @@ export type { EngineFacade } from './io/engine-facade';
 // engine-facade.ts so the lint-unique-mutator single-write-gate invariant holds.
 export { createEngineFacade } from './io/engine-facade';
 
+// ── Versioned gameplay carrier ──
+// The Editor-owned contract and bridge are public so Server/host projections
+// can consume one schema without importing viewport internals.
+export {
+  GAMEPLAY_OPERATION_MANIFEST,
+  GAMEPLAY_CARRIER_CONTRACT_VERSION,
+  GameplayCaptureArtifactSchema,
+  GameplayCaptureProvenanceSchema,
+  GameplayErrorSchema,
+  GameplayIdentitySchema,
+  GameplayInputSchema,
+  GameplayOperationNameSchema,
+  GameplayOperationRequestSchema,
+  GameplayOperationResultSchema,
+  GameplayOperationSuccessSchema,
+  GameplayOperationFailureSchema,
+  GameplayScopeSchema,
+  sameGameplayIdentity,
+} from './io/gameplay-contract';
+export type {
+  GameplayCaptureArtifact,
+  GameplayCaptureProvenance,
+  GameplayError,
+  GameplayIdentity,
+  GameplayIdentityDimension,
+  GameplayIdentityMatch,
+  GameplayInput,
+  GameplayOperationName,
+  GameplayOperationManifestEntry,
+  GameplayOperationRequest,
+  GameplayOperationResult,
+  GameplayScope,
+} from './io/gameplay-contract';
+export {
+  createGameplayCaptureGateway,
+  createGameplayCarrierBridge,
+  createGameplayOperations,
+} from './io/gameplay-operations';
+export type {
+  GameplayCaptureGateway,
+  GameplayCaptureSurface,
+  GameplayCarrierBridge,
+  GameplayOperations,
+} from './io/gameplay-operations';
+
 // ── Eval channel (dev-accessible AI eval) ──
 // Consumed by edit-runtime to mount on globalThis.__forgeaxEval.
 export { createEvalChannel } from './io/channel';

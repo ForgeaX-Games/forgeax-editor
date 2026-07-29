@@ -108,7 +108,7 @@ export interface HostSessionContext {
    */
   readonly onPlayFrame?: () => void;
   /** The play world is now active; host commits its matching viewport quadrant. */
-  readonly onPlayStarted: () => void;
+  readonly onPlayStarted: (playWorld: unknown) => void;
   /** Play assembly failed and the gateway has returned to its edit-side state. */
   readonly onPlayFailed: () => void;
 }
@@ -360,15 +360,15 @@ export function createHostSession(deps: HostSessionDeps): {
     // the same helpers. `resolveGameFsBase` yields the `/@fs/…` base under the game
     // dir so a dynamically-imported game/plugin file's bare `@forgeax/*` imports
     // resolve to the editor's single engine instance (gameEngineResolve plugin).
-    let cachedProjectRootAbs: string | undefined;
-    const getProjectRootAbs = async (): Promise<string> => {
-      if (cachedProjectRootAbs !== undefined) return cachedProjectRootAbs;
+    let cachedInstanceRootAbs: string | undefined;
+    const getInstanceRootAbs = async (): Promise<string> => {
+      if (cachedInstanceRootAbs !== undefined) return cachedInstanceRootAbs;
       const r = await deps.fetch('/api/health', { cache: 'no-store' });
       if (!r.ok) throw new Error(`/api/health HTTP ${r.status}`);
-      const j = (await r.json()) as { projectRootAbs?: string };
-      if (!j.projectRootAbs) throw new Error('/api/health missing projectRootAbs');
-      cachedProjectRootAbs = j.projectRootAbs;
-      return cachedProjectRootAbs;
+      const j = (await r.json()) as { instanceRootAbs?: string };
+      if (!j.instanceRootAbs) throw new Error('/api/health missing instanceRootAbs');
+      cachedInstanceRootAbs = j.instanceRootAbs;
+      return cachedInstanceRootAbs;
     };
     const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
     const resolveGameFsBase = async (): Promise<string> => {
@@ -379,7 +379,7 @@ export function createHostSession(deps: HostSessionDeps): {
       if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {
         return toFsUrl(__FORGEAX_GAME_DIR_ABS__);
       }
-      const rootAbs = await getProjectRootAbs();
+      const rootAbs = await getInstanceRootAbs();
       // gameRoot comes from the host-installed path resolver (configureHostSession
       // always runs setPathResolver before boot; Play runs post-boot so it's set),
       // NOT from `?gameRoot=` — the single realm passes the game as props, so the

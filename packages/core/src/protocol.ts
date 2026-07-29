@@ -16,6 +16,7 @@
 // surface real divergence instead of silently accepting drift.
 
 import { z } from 'zod';
+import { GameplayScopeSchema, type GameplayScope } from './io/gameplay-contract';
 
 // ── 1. VAG_CONSOLE ───────────────────────────────────────────────────────────
 // Producer: editor-runtime/main.tsx:267,272,275 (console proxy + global error).
@@ -75,11 +76,10 @@ export type VagFpsStatsMessage = z.infer<typeof VagFpsStatsSchema>;
 // signals.
 export const VAG_CARRIER_PROTOCOL_VERSION = 1 as const;
 
-export const VagCarrierScopeSchema = z.object({
-  projectId: z.string().min(1),
-  gameId: z.string().min(1).nullable(),
-});
-export type VagCarrierScope = z.infer<typeof VagCarrierScopeSchema>;
+// Carrier health derives the scope shape from the gameplay contract. The VAG
+// transport remains compatible, but it no longer owns a second scope schema.
+export const VagCarrierScopeSchema = GameplayScopeSchema;
+export type VagCarrierScope = GameplayScope;
 
 export const VagCarrierFailureDetailSchema = z.object({
   code: z.string().min(1),
@@ -101,6 +101,10 @@ const VagCarrierPayloadSchema = z.object({
   pageNonce: z.string().min(1),
   pageIdentity: z.string().min(1),
   canvasIdentity: z.string().min(1),
+  // Numeric renderer fact published by the renderer producer. Null is only the
+  // structured unavailable state; consumers must never infer it from liveness
+  // or parse it from rendererIdentity.
+  rendererGeneration: z.number().int().nonnegative().nullable(),
   rendererIdentity: z.string().min(1),
   sentinel: z.number().int().nonnegative(),
   liveness: z.enum(['alive', 'unreachable', 'terminated']),

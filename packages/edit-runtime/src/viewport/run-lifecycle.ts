@@ -115,7 +115,7 @@ export interface RunLifecycleDeps {
    */
   readonly onPlayFrame?: () => void;
   /** Called only after the active-world pointer has changed to the live play world. */
-  readonly onPlayStarted?: () => void;
+  readonly onPlayStarted?: (playWorld: unknown) => void;
   /** Called after a failed assembly has thawed the edit App and recorded its error. */
   readonly onPlayFailed?: () => void;
 }
@@ -258,7 +258,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // The host exposes run='play' only after activeWorld points at this same live
     // world, so Hierarchy and viewport chrome never claim Play while still reading
     // the frozen edit document during asynchronous assembly.
-    deps.onPlayStarted?.();
+    deps.onPlayStarted?.(active.playWorld);
 
     // Host camera pickup (AC-12 hard cut). Omitted in headless.
     deps.onAfterPlay?.(active.playWorld);

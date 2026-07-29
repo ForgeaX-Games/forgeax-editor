@@ -90,6 +90,7 @@ let carrierScope: { projectId: string; gameId: string | null } | null = null;
 const carrierPageNonce = crypto.randomUUID();
 const carrierCanvasId = `canvas-${carrierPageNonce}`;
 let carrierRendererId = 'renderer-pending';
+let carrierRendererGeneration: number | null = null;
 const carrierPageIdentity = `${location.origin}${location.pathname}`;
 canvas.id = carrierCanvasId;
 
@@ -104,11 +105,11 @@ async function resolveManagedCarrierScope(): Promise<void> {
       fetch('/api/workbench/active-slug', { cache: 'no-store' }),
     ]);
     if (!healthResponse.ok || !activeGameResponse.ok) return;
-    const health = await healthResponse.json() as { projectRootAbs?: unknown };
+    const health = await healthResponse.json() as { instanceRootAbs?: unknown };
     const activeGame = await activeGameResponse.json() as { activeSlug?: unknown };
-    if (typeof health.projectRootAbs !== 'string' || health.projectRootAbs.length === 0) return;
+    if (typeof health.instanceRootAbs !== 'string' || health.instanceRootAbs.length === 0) return;
     carrierScope = {
-      projectId: health.projectRootAbs,
+      projectId: health.instanceRootAbs,
       gameId: typeof activeGame.activeSlug === 'string' && GAME_ID_RE.test(activeGame.activeSlug)
         ? activeGame.activeSlug
         : null,
@@ -122,6 +123,7 @@ async function resolveManagedCarrierScope(): Promise<void> {
 const carrierScopeReady = resolveManagedCarrierScope();
 
 function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', failure: VagCarrierFailureDetail | null = carrierFailure) {
+  const rendererUnavailable = carrierRendererGeneration === null;
   return {
     version: VAG_CARRIER_PROTOCOL_VERSION,
     runtimeId: carrierRuntimeId,
@@ -131,10 +133,17 @@ function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', fa
     pageIdentity: carrierPageIdentity,
     canvasIdentity: carrierCanvasId,
     rendererIdentity: carrierRendererId,
+    rendererGeneration: carrierRendererGeneration,
     sentinel: carrierSentinel,
     liveness: 'alive' as const,
-    renderReadiness,
-    failure,
+    renderReadiness: rendererUnavailable ? 'unavailable' as const : renderReadiness,
+    failure: failure ?? (rendererUnavailable ? {
+      code: 'renderer-generation-unavailable',
+      stage: 'renderer' as const,
+      retryable: true,
+      hint: 'The live renderer has not published a numeric generation.',
+      at: new Date().toISOString(),
+    } : null),
   };
 }
 
@@ -253,16 +262,19 @@ if (!app.ok) {
 
 const { world, renderer } = app.value;
 // Renderer identity belongs to the renderer producer, not to the page nonce.
-// Prefer an engine-provided identity/generation when available; otherwise mint
-// a producer-local token at the moment createApp returns the live renderer.
+// Prefer the renderer producer's explicit numeric generation. Missing generation
+// is unavailable; it must never be replaced by a random or heartbeat-derived value.
 const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
 const rendererProducerId = typeof rendererRecord.identity === 'string' && rendererRecord.identity.length > 0
   ? rendererRecord.identity
-  : crypto.randomUUID();
-const rendererGeneration = typeof rendererRecord.generation === 'number'
+  : 'unavailable';
+const rendererGeneration = typeof rendererRecord.generation === 'number' && Number.isInteger(rendererRecord.generation) && rendererRecord.generation >= 0
   ? rendererRecord.generation
-  : 0;
-carrierRendererId = `renderer-${rendererProducerId}-generation-${rendererGeneration}`;
+  : null;
+carrierRendererGeneration = rendererGeneration;
+carrierRendererId = rendererGeneration === null
+  ? 'renderer-unavailable'
+  : `renderer-${rendererProducerId}-generation-${rendererGeneration}`;
 
 // ── Studio cylinder mesh (host-side registration) ─────────────────────────
 // The editor offers cube/sphere/cylinder primitives. cube + sphere are engine

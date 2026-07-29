@@ -35,7 +35,7 @@ import type { EntityHandle } from '../scene/scene-types';
 // Asset read surface: resolveAssetHandle turns a shared<T> handle (query
 // returns it as opaque-handle.raw) into its live payload — covering both
 // builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets, O(1).
-import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle, type AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
 // Component read surface: same registry the query snapshot uses to resolve
 // component names, projected here so an AI can discover component names +
@@ -1197,12 +1197,14 @@ export class EditGateway {
   }
 
   /**
-   * List the asset catalog (GUID + kind + optional name + url). Projects the
-   * registry's own listCatalog() so an AI can enumerate assets without bypassing
-   * the gateway to doc.registry. Empty array when no registry is bound.
+   * List the asset catalog through the registry's canonical read-only surface.
+   * The Engine return type and row value are passed through unchanged, so
+   * producer-owned facts remain lossless. Empty array when no registry is bound.
    */
-  assetCatalog(): readonly { guid: string; kind: string; name?: string; relativeUrl: string }[] {
-    return this.doc.registry?.listCatalog() ?? [];
+  assetCatalog(): ReturnType<AssetRegistry['listCatalog']> {
+    const registry = this.doc.registry;
+    if (registry === undefined) return [];
+    return registry.listCatalog();
   }
 
   /** Read the terminal state of an accepted deleteSourceFile request. */
