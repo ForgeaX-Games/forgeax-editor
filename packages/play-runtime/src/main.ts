@@ -432,7 +432,6 @@ const ctx: BootstrapContext = {
   ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
   ...(defaultScene !== undefined ? { defaultScene } : {}),
 };
-
 // ── loadGame ──
 async function resolveGame(id: string): Promise<BootstrapEntry | null> {
   // id is already validated by GAME_ID_RE before reaching here.

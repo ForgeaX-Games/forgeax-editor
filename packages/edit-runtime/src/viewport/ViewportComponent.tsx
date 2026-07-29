@@ -53,6 +53,13 @@ import {
   switchSceneFile,
   createEvalChannel,
 } from '@forgeax/editor-core';
+import {
+  sendVagMessage,
+  VagCarrierHandshakeSchema,
+  VagCarrierHeartbeatSchema,
+  VagCarrierFailureSchema,
+  VAG_CARRIER_PROTOCOL_VERSION,
+} from '@forgeax/editor-core/protocol';
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
@@ -101,6 +108,81 @@ const teardownFns: Array<() => void> = [];
 let currentResetOptions: ResetEditRealmOptions = {};
 function registerTeardown(fn: () => void): void {
   teardownFns.push(fn);
+}
+
+async function installManagedCarrierHealth(
+  canvas: HTMLCanvasElement,
+  renderer: { readonly ready: Promise<{ ok: boolean; error?: { message?: string; hint?: string } }> },
+  gameId: string | null,
+): Promise<() => void> {
+  const params = new URLSearchParams(window.location.search);
+  const runtimeId = params.get('runtimeId')?.trim() || null;
+  const challengeResponse = params.get('ownershipChallenge')?.trim() || null;
+  if (!runtimeId || !challengeResponse) return () => {};
+
+  const healthResponse = await fetch('/api/health', { cache: 'no-store' });
+  if (!healthResponse.ok) throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
+  const health = await healthResponse.json() as { projectRootAbs?: unknown };
+  if (typeof health.projectRootAbs !== 'string' || health.projectRootAbs.length === 0) {
+    throw new Error('carrier health response did not identify the project root');
+  }
+
+  const pageNonce = crypto.randomUUID();
+  const pageIdentity = `${window.location.origin}${window.location.pathname}`;
+  const canvasIdentity = `canvas-${pageNonce}`;
+  const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
+  const producerId = typeof rendererRecord.identity === 'string' && rendererRecord.identity.length > 0
+    ? rendererRecord.identity : crypto.randomUUID();
+  const generation = typeof rendererRecord.generation === 'number' ? rendererRecord.generation : 0;
+  const rendererIdentity = `renderer-${producerId}-generation-${generation}`;
+  canvas.dataset.forgeaxCarrierCanvas = canvasIdentity;
+  let sentinel = 0;
+  let renderReadiness: 'pending' | 'ready' | 'unavailable' = 'pending';
+  let failure: { code: string; stage: 'renderer'; retryable: boolean; hint: string; at: string; message?: string } | null = null;
+  const payload = () => ({
+    version: VAG_CARRIER_PROTOCOL_VERSION,
+    runtimeId,
+    challengeResponse,
+    scope: { projectId: health.projectRootAbs as string, gameId },
+    pageNonce,
+    pageIdentity,
+    canvasIdentity,
+    rendererIdentity,
+    sentinel,
+    liveness: 'alive' as const,
+    renderReadiness,
+    failure,
+  });
+  const publish = () => {
+    const next = payload();
+    (window as unknown as Record<string, unknown>).__forgeax_carrier_health = next;
+    return next;
+  };
+  const sendHandshake = () => sendVagMessage(window.parent, VagCarrierHandshakeSchema, publish());
+  const sendHeartbeat = () => {
+    sentinel += 1;
+    sendVagMessage(window.parent, VagCarrierHeartbeatSchema, publish());
+  };
+  sendHandshake();
+  const heartbeat = window.setInterval(sendHeartbeat, 100);
+  void renderer.ready.then((result) => {
+    if (result.ok) {
+      renderReadiness = 'ready';
+      sendHeartbeat();
+      return;
+    }
+    renderReadiness = 'unavailable';
+    failure = {
+      code: 'renderer-not-ready', stage: 'renderer', retryable: true,
+      hint: result.error?.hint ?? 'Inspect the renderer error, then ensure the carrier again.',
+      at: new Date().toISOString(), message: result.error?.message,
+    };
+    sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
+  });
+  return () => {
+    window.clearInterval(heartbeat);
+    if (canvas.dataset.forgeaxCarrierCanvas === canvasIdentity) delete canvas.dataset.forgeaxCarrierCanvas;
+  };
 }
 
 export interface ResetEditRealmOptions {
@@ -854,6 +936,31 @@ async function bootViewport(
     app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
     playSimulation: () => actionsRef.current.playSimulation(),
     stopSimulation: () => actionsRef.current.stopSimulation(),
+    readActiveWorld: () => gateway.activeWorld.inspect(),
+    dispatchGameplayInput: (action: unknown) => {
+      if (gateway.mode !== 'play') {
+        return { ok: false, error: { code: 'surface-unavailable', hint: 'input requires an active live Play projection' } };
+      }
+      if (!action || typeof action !== 'object') {
+        return { ok: false, error: { code: 'invalid-input', hint: 'input requires a typed key or pointer action' } };
+      }
+      const candidate = action as { type?: unknown; key?: unknown; phase?: unknown; x?: unknown; y?: unknown; button?: unknown };
+      canvas.focus({ preventScroll: true });
+      if (candidate.type === 'key' && typeof candidate.key === 'string' && (candidate.phase === 'down' || candidate.phase === 'up')) {
+        canvas.dispatchEvent(new KeyboardEvent(candidate.phase === 'down' ? 'keydown' : 'keyup', {
+          key: candidate.key, code: candidate.key, bubbles: true, cancelable: true,
+        }));
+        return { ok: true };
+      }
+      if (candidate.type === 'pointer' && typeof candidate.x === 'number' && typeof candidate.y === 'number') {
+        const button = candidate.button === 'right' ? 2 : candidate.button === 'middle' ? 1 : 0;
+        const init = { clientX: candidate.x, clientY: candidate.y, button, buttons: 1 << button, bubbles: true, cancelable: true };
+        canvas.dispatchEvent(new PointerEvent('pointerdown', init));
+        canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }));
+        return { ok: true };
+      }
+      return { ok: false, error: { code: 'invalid-input', hint: 'input requires a typed key or pointer action' } };
+    },
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
     // M5 (w29): expose the super coordination layer so out-of-frame scripts (AC-02
     // e2e) can witness the separate editorWorld (camera + gizmo) + query bindings.
@@ -873,6 +980,12 @@ async function bootViewport(
 
   // start the live render loop + reporters (was :895).
   editorApp.start();
+  // W1-L1H producer: a managed Studio page is the editor viewport carrier.
+  // Publish identity/readiness from this same canvas/renderer and keep the
+  // heartbeat owned by this realm; ordinary Studio pages stay silent.
+  void installManagedCarrierHealth(canvas, renderer, gameSession.slug)
+    .then((dispose) => registerTeardown(dispose))
+    .catch((error) => console.warn('[editor] managed carrier health unavailable:', error));
   // Cross-game teardown: stop the rAF loop + release the WebGPU device (app.stop()
   // chains into renderer.dispose()'s GPU-lifecycle cascade, feat-20260612-rhi-
   // destroy-renderer-dispose-gpu-lifecycle) and drop the canvas so the next boot

@@ -242,6 +242,7 @@ export class EditGateway {
   // fresh play world is dropped, so stale game closures cannot outlive their world.
   private _gameProjection: GameProjectionRegistry | null = null;
 
+
   // ── Play-attempt observability (solo round-8, friction #3) ────────────────
   // ▶ Play assembly is ASYNC and fire-and-forget: `dispatch({kind:'play'})`
   // returns {ok:true} synchronously while run-lifecycle.playSimulation() spins
