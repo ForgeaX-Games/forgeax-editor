@@ -294,6 +294,7 @@ export {
   deleteAsset,
   createDirectory,
   deleteDirectory,
+  registerPostAssetWriteCatalogSync,
 } from './session/pack-ops';
 
 // ── Material ops — updateMaterialParams document applier registration ──
@@ -508,3 +509,4 @@ export type {
   RepairEntry,
 } from './scan/index';
 export { installAssetHmrBridge } from './assets/asset-hmr-bridge';
+export { ensureAssetCataloged } from './assets/ensure-asset-cataloged';

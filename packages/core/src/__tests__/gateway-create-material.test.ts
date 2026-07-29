@@ -160,3 +160,69 @@ describe('createMaterial applier builds a real Materials.standard() POD', () => 
     expect(payload.paramValues.roughness).toBe(0.25);
   });
 });
+
+// Post-write catalog-sync seam: the applier must await the host-registered
+// hook (pack-index row + envelope live) BEFORE broadcasting assetsChanged,
+// otherwise a follow-up updateMaterialParams on the fresh GUID finds no
+// envelope (the watcher rebuild races the broadcast).
+describe('createMaterial post-write catalog-sync seam', () => {
+  it('awaits the registered sync hook before broadcasting assetsChanged', async () => {
+    const { applyCreateMaterial, registerPostAssetWriteCatalogSync } = await import('../session/pack-ops');
+    const { panelBridge } = await import('../io/panel-bridge');
+
+    const events: string[] = [];
+    const dispose = panelBridge.on('assetsChanged', () => { events.push('broadcast'); });
+    registerPostAssetWriteCatalogSync(async (guid) => { events.push(`sync:${guid}`); });
+    try {
+      let resolveIo!: (value: { ok: boolean }) => void;
+      const fakeCtx = {
+        assetIO: {
+          createAssetInPack() {
+            return new Promise<{ ok: boolean }>((resolve) => { resolveIo = resolve; });
+          },
+        },
+      } as never;
+      const r = applyCreateMaterial(fakeCtx, {
+        kind: 'createMaterial',
+        guid: 'guid-sync-1',
+        name: 'Synced',
+        baseColor: [1, 1, 1, 1],
+        packPath: 'some/pack.pack.json',
+      } as never);
+      expect(r.ok).toBe(true);
+      resolveIo({ ok: true });
+      // Flush the applier's .then continuation + the awaited hook.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual(['sync:guid-sync-1', 'broadcast']);
+    } finally {
+      registerPostAssetWriteCatalogSync(null);
+      dispose();
+    }
+  });
+
+  it('broadcasts without a hook when none is registered (unit env / no host)', async () => {
+    const { applyCreateMaterial, registerPostAssetWriteCatalogSync } = await import('../session/pack-ops');
+    const { panelBridge } = await import('../io/panel-bridge');
+    registerPostAssetWriteCatalogSync(null);
+
+    const events: string[] = [];
+    const dispose = panelBridge.on('assetsChanged', () => { events.push('broadcast'); });
+    try {
+      const fakeCtx = {
+        assetIO: { createAssetInPack() { return Promise.resolve({ ok: true }); } },
+      } as never;
+      const r = applyCreateMaterial(fakeCtx, {
+        kind: 'createMaterial',
+        guid: 'guid-sync-2',
+        name: 'NoHook',
+        baseColor: [1, 1, 1, 1],
+        packPath: 'some/pack.pack.json',
+      } as never);
+      expect(r.ok).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual(['broadcast']);
+    } finally {
+      dispose();
+    }
+  });
+});

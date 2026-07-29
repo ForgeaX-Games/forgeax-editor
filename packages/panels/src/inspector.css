@@ -215,3 +215,58 @@
 .fx-inspector [role="button"]:active { transform: none !important; box-shadow: none !important; }
 .fx-inspector button:hover > svg,
 .fx-inspector [role="button"]:hover > svg { transform: none !important; }
+
+/* ════════════════ Material Texture Slots ════════════════ */
+.mat-tex-section { margin-top: 8px; padding: 4px 0; }
+.mat-tex-section-title { font-size: 11px; font-weight: 600; color: var(--color-text-secondary); padding: 4px 0 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.mat-tex-slot {
+  border: 1px dashed var(--color-border-subtle, var(--border, #444));
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.mat-tex-slot.drop-hot {
+  border-color: var(--color-brand-primary, #d4ff48);
+  background: var(--color-interaction-hover, rgba(255,255,255,0.04));
+}
+.mat-tex-slot-header { margin-bottom: 2px; }
+.mat-tex-slot-label { font-size: 11px; color: var(--color-text-secondary, #aaa); }
+.mat-tex-slot-bound { display: flex; align-items: center; gap: 6px; }
+.mat-tex-slot-icon { font-size: 14px; }
+.mat-tex-slot-guid { font-size: 0.82em; font-family: monospace; color: var(--color-text-tertiary, #888); }
+.mat-tex-empty {
+  font-size: 0.82em;
+  color: var(--color-text-tertiary, #777);
+  padding: 4px 0;
+}
+.mat-clear-btn {
+  font-size: 0.75em;
+  cursor: pointer;
+  border: 1px solid var(--color-border-subtle, var(--border, #555));
+  border-radius: 3px;
+  padding: 1px 4px;
+  background: transparent;
+  color: var(--color-text-secondary, var(--text-muted, #aaa));
+  line-height: 1;
+}
+.mat-clear-btn:hover {
+  background: var(--color-interaction-hover, rgba(255,255,255,0.06));
+  color: var(--color-text-primary, #fff);
+}
+.mat-browse-btn {
+  font-size: 0.75em;
+  cursor: pointer;
+  border: 1px solid var(--color-border-subtle, var(--border, #555));
+  border-radius: 3px;
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--color-text-secondary, #aaa);
+  margin-top: 4px;
+  display: inline-block;
+}
+.mat-browse-btn:hover {
+  background: var(--color-interaction-hover, rgba(255,255,255,0.06));
+  color: var(--color-text-primary, #fff);
+}

@@ -63,6 +63,29 @@ export function registerActiveScenePackResolver(fn: (() => string | null) | null
   activeScenePackResolver = fn;
 }
 
+// ── Post-write catalog-sync seam (same one-way seam pattern as above) ────────
+// createMaterial's pack write lands on disk BEFORE the pack-index reflects it:
+// the vite-plugin-pack watcher rebuilds the served catalog asynchronously
+// (~150 ms debounce), while the applier's broadcastAssetsChanged() fires the
+// moment the write resolves. That race made a freshly created material
+// invisible to the catalog — and to updateMaterialParams' synchronous
+// _preFillMaterialOp envelope lookup (registry.assetCatalog is only populated
+// by loadByGuid, never by refreshCatalog) — until a later watcher tick or a
+// page reload. The host (edit-runtime, which owns gateway.doc.registry)
+// registers an async hook here that (a) waits until the pack-index row for the
+// new GUID is actually served and (b) catalogs the payload envelope, and the
+// applier awaits it BEFORE broadcasting. Null until registered (unit env /
+// no host): the applier then broadcasts immediately, as before.
+let postAssetWriteCatalogSync: ((guid: string) => Promise<void>) | null = null;
+
+/** Host seam: edit-runtime registers a hook that waits for the pack-index row
+ *  of a freshly written asset and catalogs its envelope, so the post-write
+ *  broadcast never races the watcher rebuild. Pass null to clear (tests /
+ *  realm teardown). */
+export function registerPostAssetWriteCatalogSync(fn: ((guid: string) => Promise<void>) | null): void {
+  postAssetWriteCatalogSync = fn;
+}
+
 // ── Dangling refs check ──────────────────────────────────────────────────────
 
 /** Find assets in `pack` that reference `removingGuid` in their refs[]. */
@@ -535,8 +558,19 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   // Fire-and-forget async IO through the asset gate (mirrors createAsset). The
   // document-applier contract is synchronous: return the inverse immediately; IO
   // completes in background; broadcastAssetsChanged() refreshes the catalog.
+  // Before broadcasting, await the host's catalog-sync hook (if registered) so
+  // the pack-index row + payload envelope for the new GUID are actually live —
+  // otherwise the broadcast races the vite-plugin-pack watcher rebuild and a
+  // follow-up updateMaterialParams finds no envelope (see the seam above).
   void ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs: assetRefs } })
-    .then(() => broadcastAssetsChanged())
+    .then(async () => {
+      try {
+        await postAssetWriteCatalogSync?.(guid);
+      } catch (e) {
+        console.warn('[editor-core] createMaterial catalog sync failed (non-fatal):', e);
+      }
+      broadcastAssetsChanged();
+    })
     .catch((e) => console.warn('[editor-core] createMaterial IO failed:', e));
   return { ok: true, inverse: { kind: 'destroyAsset', packPath: targetPack, guid } as unknown as EditorOp, created: [] };
 }

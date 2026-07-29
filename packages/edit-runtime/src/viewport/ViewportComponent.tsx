@@ -57,7 +57,9 @@ import {
   createGameplayCarrierBridge,
   createGameplayOperations,
   type GameplayIdentity,
+  registerPostAssetWriteCatalogSync,
 } from '@forgeax/editor-core';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   sendVagMessage,
   VagCarrierHandshakeSchema,
@@ -552,6 +554,29 @@ async function bootViewport(
   // shape that D-7 replaces with structural registration-surface removal.
   gateway.doc.world = world;
   gateway.doc.registry = renderer.assets;
+  // Post-write catalog-sync seam (editor-core pack-ops): createMaterial's pack
+  // write resolves BEFORE the vite-plugin-pack watcher rebuilds the served
+  // pack-index (~150 ms debounce), so an immediate broadcastAssetsChanged()
+  // would race the rebuild and leave the fresh GUID invisible — and
+  // updateMaterialParams' synchronous _preFillMaterialOp reads
+  // registry.assetCatalog, which only loadByGuid populates. Await the row,
+  // then catalog the envelope, THEN let the applier broadcast.
+  registerPostAssetWriteCatalogSync(async (guid: string) => {
+    const reg = gateway.doc.registry;
+    if (!reg) return;
+    const key = guid.toLowerCase();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      await reg.refreshCatalog?.().catch(() => false);
+      if (reg.packIndexCache?.has(key)) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const parsed = AssetGuid.parse(guid);
+    if (parsed.ok) {
+      await reg.loadByGuid(parsed.value).catch(() => undefined);
+    }
+  });
+  registerTeardown(() => registerPostAssetWriteCatalogSync(null));
   // Registry binding is a document-state change, even though no authored world
   // entity changed. Notify panel subscribers so a Content Browser mounted before
   // engine boot can acquire the live registry instead of retaining an empty model.
