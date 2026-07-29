@@ -24,6 +24,7 @@
     "./play": "./src/play.ts",
     "./protocol": "./src/protocol.ts",
     "./gameplay": "./src/gameplay.ts",
+    "./compatibility-adapter": "./src/compatibility-adapter.ts",
     "./ui": "./packages/ui/src/index.ts",
     "./ui/badge": "./packages/ui/src/components/badge.tsx",
     "./ui/button": "./packages/ui/src/components/button.tsx",
@@ -85,6 +86,7 @@
     "lint:engine-shim": "node scripts/lint-no-bare-engine-shim.mjs",
     "lint:dep": "dependency-cruiser --output-type err-html -c .dependency-cruiser.cjs packages",
     "selfcheck:b2": "bun scripts/selfcheck-standalone-b2.mjs",
+    "selfcheck:compatibility": "bun run selfcheck:b2 && bun run test:e2e e2e/public-compatibility.spec.ts",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
     "selfcheck": "node scripts/selfcheck.mjs"

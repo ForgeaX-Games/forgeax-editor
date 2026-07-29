@@ -443,6 +443,8 @@ function install(): void {
   // are example apps that need extra fixtures and are NOT needed here.
   sh('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: ENGINE_DIR });
   ok('engine dist built');
+  sh('pnpm', ['exec', 'tsc', '-b'], { cwd: ENGINE_DIR });
+  ok('engine declarations built');
 
   step('verifying critical artifacts ...');
   let missing = false;

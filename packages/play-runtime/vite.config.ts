@@ -372,6 +372,37 @@ function forgeaxPerGamePackBaseStrip() {
   };
 }
 
+// Decode percent-encoded request URLs before pluginPack's dev middleware runs
+// its urlToAbs lookup. The map is keyed by catalog relativeUrl values verbatim
+// (literal spaces / non-ASCII, e.g. "GT_MC_Large Building.glb"), while the
+// runtime's fetch arrives percent-encoded (%20). Without decoding, the lookup
+// misses and the request falls through to Vite's SPA fallback — the runtime
+// then receives text/html where it expected a zstd .bin, surfacing as
+// `asset-parse-failed: zstd decompression` and a failed Add-to-Scene.
+// Editor-side workaround for the engine bug tracked in
+// forgeax-engine-harness/feedbacks/2026-07-22-vite-plugin-pack-unicode-url-mismatch.md
+// (engine fix pending release); prescribed by
+// Forgeax-editor-harness/feedbacks/2026-07-22-editor-url-decode-middleware-workaround.md.
+// Dev-only and additive: URLs without '%' pass through untouched, and a
+// malformed escape is left verbatim for downstream middleware to handle.
+function forgeaxDecodeAssetUrl() {
+  return {
+    name: 'forgeax:decode-asset-url',
+    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
+      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
+        if (req.url !== undefined && req.url.includes('%')) {
+          try {
+            req.url = decodeURIComponent(req.url);
+          } catch {
+            // Malformed escape — leave the URL untouched.
+          }
+        }
+        next();
+      });
+    },
+  };
+}
+
 // Per-game pack-index plugin: dev middleware serves /pack-index/<slug>.json
 // by calling buildPerGameCatalog; prod generateBundle emits independent
 // per-game pack-index files.
@@ -540,6 +571,9 @@ export default defineConfig({
     gameEngineResolve() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
+    // URL-decode MUST precede pluginPack: its urlToAbs keys are verbatim
+    // catalog relativeUrls (literal spaces), requests arrive percent-encoded.
+    forgeaxDecodeAssetUrl() as never,
     // SINGLE pluginPack instance over every game's roots — LOCAL and `@shared/…`
     // alike (gameAssetRoots() now farm-rewrites shared roots into this one list;
     // there is no longer a separate sharedAssetRoots() appender — §1 SSOT).
