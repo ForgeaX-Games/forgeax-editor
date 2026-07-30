@@ -12,6 +12,7 @@ import { ResizeHandle } from '@forgeax/editor-core';
 import { AssetThumbnail } from '@forgeax/editor-ui';
 import { colorForAssetKind, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind } from './content-browser-icons';
 import { CBUiAssetPreview } from './CBUiAssetPreview';
+import { CBFontPreview } from './CBFontPreview';
 import { dirOfPath, type PreviewFileInfo } from './content-browser-format';
 import { realPayload } from './hooks';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
@@ -116,6 +117,8 @@ export function CBPreviewPanel({
       body = <div className="cb-preview-media"><img src={rawUrl} alt={previewItem.name} /></div>;
     } else if (previewItem.family === 'audio') {
       body = <div className="cb-preview-media"><audio controls src={rawUrl} /></div>;
+    } else if (previewItem.family === 'font') {
+      body = <CBFontPreview rawUrl={rawUrl} name={previewItem.name} />;
     } else if (previewInfo?.content != null) {
       body = <pre className="cb-preview-code">{previewInfo.content}</pre>;
     } else {

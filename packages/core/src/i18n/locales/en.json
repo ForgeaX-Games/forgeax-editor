@@ -308,7 +308,10 @@
         "items": "{{count}} items",
         "assetCount": "→ {{count}} assets",
         "uiPreview": "UI preview",
-        "uiPayloadUnavailable": "UI payload is not available yet"
+        "uiPayloadUnavailable": "UI payload is not available yet",
+        "fontLoading": "Loading font…",
+        "fontUnavailable": "Unable to preview this font",
+        "fontSample": "The quick brown fox jumps over the lazy dog"
       },
       "empty": {
         "noGame": "Open a game to browse assets",

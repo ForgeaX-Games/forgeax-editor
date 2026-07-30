@@ -124,7 +124,7 @@ export function fileFamilyOf(name: string): CBFileFamily {
   if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'ico', 'hdr'].includes(ext)) return 'image';
   if (['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'opus'].includes(ext)) return 'audio';
   if (['glb', 'gltf', 'fbx'].includes(ext)) return 'model';
-  if (['ttf', 'otf', 'woff2'].includes(ext)) return 'font';
+  if (['ttf', 'otf', 'woff', 'woff2'].includes(ext)) return 'font';
   return 'other';
 }
 

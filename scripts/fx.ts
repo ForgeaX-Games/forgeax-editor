@@ -32,7 +32,15 @@
 //           PLAY_RUNTIME_PORT below: studio's superrepo stack owns 15173)
 
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, openSync, realpathSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +58,10 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
 const ENGINE_DIR = join(ROOT, 'packages', 'engine');
+// Gitignored freshness marker shared with forgeax-studio. Engine packages export
+// built `dist/`, so a submodule pointer bump after setup otherwise leaves Vite
+// happily serving the previous revision's JavaScript.
+const ENGINE_DIST_SHA_FILE = join(ENGINE_DIR, '.dist-sha');
 const WASM_DIR = join(ENGINE_DIR, 'packages', 'wgpu-wasm');
 const WASM_FILE = join(WASM_DIR, 'pkg', 'wgpu_wasm_bg.wasm');
 // fbx wasm: ufbx compiled by emcc; pkg/ is gitignored (zero-binary invariant)
@@ -113,6 +125,38 @@ function trySh(cmd: string, args: string[], opts: ShOptions = {}): boolean {
     env: opts.env ?? process.env,
   });
   return r.status === 0;
+}
+
+/** Resolve the exact Engine source revision that the current checkout pins. */
+function engineHead(): string {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: ENGINE_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    die('could not resolve the engine submodule revision. Run: bun fx setup');
+  }
+}
+
+/** Record that every Engine dist artifact was built for the current gitlink. */
+function writeEngineDistSha(): void {
+  writeFileSync(ENGINE_DIST_SHA_FILE, `${engineHead()}\n`);
+}
+
+/** Refuse to start/CI against dist emitted for a different Engine revision. */
+function requireFreshEngineDist(): void {
+  const current = engineHead();
+  const builtFor = existsSync(ENGINE_DIST_SHA_FILE)
+    ? readFileSync(ENGINE_DIST_SHA_FILE, 'utf8').trim()
+    : '';
+  if (builtFor !== current) {
+    die(
+      'engine dist is stale for the current submodule pin. Run: bun fx setup ' +
+        `(built ${builtFor || 'unknown'}, current ${current}).`,
+    );
+  }
 }
 
 // ── git helpers (update / clean) ─────────────────────────────────────────────
@@ -443,6 +487,11 @@ function install(): void {
   // are example apps that need extra fixtures and are NOT needed here.
   sh('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: ENGINE_DIR });
   ok('engine dist built');
+  // Some package declarations share their dist/ directory with tsup's JS
+  // output.  A repeated setup must clear only the prior TypeScript emit before
+  // rebuilding declarations, otherwise tsc treats those .d.ts files as inputs
+  // and fails with TS5055 (cannot overwrite input file).
+  sh('pnpm', ['exec', 'tsc', '-b', '--clean'], { cwd: ENGINE_DIR });
   sh('pnpm', ['exec', 'tsc', '-b'], { cwd: ENGINE_DIR });
   ok('engine declarations built');
 
@@ -463,6 +512,9 @@ function install(): void {
     missing = true;
   }
   if (missing) die("install incomplete — see warnings above. Re-run 'bun fx setup'.");
+
+  writeEngineDistSha();
+  ok(`engine dist matches ${engineHead().slice(0, 12)}`);
 
   ok('install complete — run: bun fx start');
 }
@@ -537,6 +589,7 @@ async function run(argv: string[]): Promise<void> {
   ) {
     die('engine not built (dist/wasm missing). Run first: bun fx setup');
   }
+  requireFreshEngineDist();
 
   // Always start from a clean slate, but only sweep editor-owned ports. In
   // particular, never use Studio's :15295 as the editor relay default.
@@ -696,6 +749,7 @@ function ci(argv: string[]): void {
   if (requiredArtifacts.some((path) => !existsSync(path))) {
     die('engine dist/wasm artefacts missing. Run `bun fx setup` before `bun fx ci`.');
   }
+  requireFreshEngineDist();
 
   const steps: readonly [string, string, string[]][] = [
     ['platform-io unit tests', 'bun', ['-F', '@forgeax/platform-io', 'test']],

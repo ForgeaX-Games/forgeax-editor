@@ -308,7 +308,10 @@
         "items": "{{count}} 项",
         "assetCount": "→ {{count}} 资产",
         "uiPreview": "UI 预览",
-        "uiPayloadUnavailable": "UI 资产内容暂不可用"
+        "uiPayloadUnavailable": "UI 资产内容暂不可用",
+        "fontLoading": "正在加载字体…",
+        "fontUnavailable": "无法预览该字体",
+        "fontSample": "The quick brown fox 敏捷的棕色狐狸 0123456789"
       },
       "empty": {
         "noGame": "打开游戏后浏览资产",

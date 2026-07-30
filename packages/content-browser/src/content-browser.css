@@ -750,6 +750,32 @@
   font-size: 11px;
   line-height: 1.6;
 }
+.cb-preview-font {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--color-text-secondary, #ccc);
+  word-break: break-word;
+}
+.cb-preview-font-hero {
+  font-size: 44px;
+  line-height: 1.1;
+}
+.cb-preview-font-sample {
+  font-size: 20px;
+  line-height: 1.4;
+}
+.cb-preview-font-glyphs {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-dim, var(--color-text-disabled, #9a9a9a));
+}
+.cb-preview-font-name {
+  margin-top: 2px;
+  font-family: var(--font-mono, var(--prim-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace));
+  font-size: 10px;
+  color: var(--text-dim, var(--color-text-disabled, #6f6f6f));
+}
 
 /* ── File item (file-browser mode) ── */
 .cb-file-thumb {

@@ -26,6 +26,7 @@
 //   env FORGEAX_GAME_API_PORT overrides the port (default 15281).
 
 import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@forgeax/platform-io';
+import { basename, resolve } from 'node:path';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
 if (!gameDir) {
@@ -34,6 +35,20 @@ if (!gameDir) {
 }
 
 const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
+const gameSlug = basename(resolve(gameDir));
+
+/**
+ * Engine catalog rows can retain Studio's project-space `games/<slug>/...`
+ * source path. The standalone backend deliberately accepts the narrower
+ * `<slug>/...` client coordinate, so normalize that legacy alias at the host
+ * boundary before the shared platform router applies its confinement check.
+ */
+function singleGameClientPath(path: string): string {
+  const studioPrefix = `games/${gameSlug}`;
+  if (path === studioPrefix) return gameSlug;
+  if (path.startsWith(`${studioPrefix}/`)) return `${gameSlug}/${path.slice(studioPrefix.length + 1)}`;
+  return path;
+}
 
 // Read editor version from package.json at startup for /api/version endpoint.
 let editorVersion = '0.0.0';
@@ -81,6 +96,13 @@ const server = Bun.serve({
       if (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)) {
         // Re-root `<prefix>/...` -> `/...` for the router's own route table.
         url.pathname = url.pathname.slice(prefix.length) || '/';
+        // Accept the catalog's project-space source coordinate in the
+        // standalone one-game boundary. Both file reads/writes (`path`) and
+        // tree refreshes (`root`) use the same client path contract.
+        for (const key of ['path', 'root'] as const) {
+          const value = url.searchParams.get(key);
+          if (value) url.searchParams.set(key, singleGameClientPath(value));
+        }
         return router.fetch(new Request(url.href, req));
       }
     }
