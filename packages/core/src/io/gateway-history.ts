@@ -27,6 +27,7 @@
 //            src/io/gateway.ts).
 
 import type { EditorOp } from '../types';
+import { recordRuntimeUiDomainPublish } from './runtime-ui-diagnostics';
 
 /** Who issued a command — human UI action vs AI tool-call. */
 export type CommandOrigin = 'human' | 'ai';
@@ -58,6 +59,7 @@ export function step(
   future: boolean,
   entity: number | undefined,
 ): HistoryStep {
+  recordRuntimeUiDomainPublish('history');
   return entity === undefined ? { label, origin, future } : { label, origin, future, entity };
 }
 

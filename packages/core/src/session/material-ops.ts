@@ -81,7 +81,7 @@ function invertTextureGuids(
   return inv;
 }
 
-function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   const cmd = _cmd as unknown as UpdateMaterialParamsOp;
   const { packPath, guid, paramPatch, textureGuids, _oldPatch, _oldRefs, _oldEntry } = cmd;
 
@@ -117,10 +117,37 @@ function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
     refs: nextRefs,
   };
 
+  // Build the IN-MEMORY paramValues for the live catalogue/sharedRef payload.
+  // On disk texture fields are refs[] indices (nextParams, via encodeTextureRefs);
+  // the loaded/live form uses GUID strings (materialLoader index→GUID), so mirror
+  // that here from textureGuids. Scalars (baseColor/metallic/roughness) are
+  // identical in both forms.
+  const liveParams: Record<string, unknown> = { ...nextParams };
+  if (textureGuids) {
+    for (const [key, texGuid] of Object.entries(textureGuids)) {
+      if (texGuid === null) delete liveParams[key];
+      else liveParams[key] = texGuid;
+    }
+  }
+
   const engine = ctx.engine;
   void ctx.assetIO.writePackEntry(packPath, nextEntry as never)
-    .then(() => {
-      engine.invalidateAsset(guid);
+    .then((written) => {
+      // writePackEntry resolves false (not throw) when the pack read/write
+      // failed (e.g. the file backend rejected the path with HTTP 400) —
+      // without this guard the op looked successful while nothing hit disk.
+      if (!written) {
+        broadcastAssetsError({ op: 'updateMaterialParams', path: packPath, hint: _ioFailHint('updateMaterialParams', packPath, new Error('writePackEntry returned false (pack read/write failed)')) });
+        return;
+      }
+      // Hot-reload: mutate the live material payload in place so the viewport
+      // reflects the change on the next frame WITHOUT a scene reload, and so the
+      // save path (appendInlineAssets → reg.lookup) serialises the new values
+      // instead of clobbering them from the load-time snapshot. patchLiveMaterialParams
+      // also evicts the stale pack-body cache so a save-triggered refresh re-reads the
+      // fresh disk bytes. Replaces the old invalidateAsset(guid), which dropped the
+      // catalogue entry and left the sharedRef stale (viewport unchanged).
+      engine.patchLiveMaterialParams(guid, liveParams);
       broadcastAssetsChanged();
     })
     .catch((e) => broadcastAssetsError({ op: 'updateMaterialParams', path: packPath, hint: _ioFailHint('updateMaterialParams', packPath, e) }));

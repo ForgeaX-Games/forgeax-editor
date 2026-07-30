@@ -1,0 +1,39 @@
+{
+  "name": "@forgeax/editor-product",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "UI-free versioned Editor product contracts and availability projection",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./contracts/manifest": {
+      "types": "./src/contracts/manifest.ts",
+      "import": "./src/contracts/manifest.ts"
+    },
+    "./manifest": {
+      "types": "./src/contracts/manifest.ts",
+      "import": "./src/contracts/manifest.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.13",
+    "typescript": "^5.6.3"
+  }
+}

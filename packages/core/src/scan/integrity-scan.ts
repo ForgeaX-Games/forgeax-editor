@@ -19,6 +19,7 @@ import { assetIO } from '../io/asset-io-facade';
 import { isImportable } from './ext-importer-map';
 import { resolveGamePath } from '../util/path-resolver';
 import type { ScanDiagnostic } from './scan-diagnostic';
+import type { AssetWorkspaceObservation } from '@forgeax/editor-product';
 
 // ── Result types ────────────────────────────────────────────────────────────
 
@@ -48,6 +49,8 @@ export interface IntegrityScanResult {
   skipped: string[];
   /** Diagnostic messages accumulated during the scan. */
   diagnostics: ScanDiagnostic[];
+  /** Observe-only facts for the workspace; no repair is performed here. */
+  observations: AssetWorkspaceObservation[];
 }
 
 // ── Scanner ─────────────────────────────────────────────────────────────────
@@ -68,6 +71,7 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
     ok: [],
     skipped: [],
     diagnostics: [],
+    observations: [],
   };
 
   let assetsRoot: string;
@@ -123,6 +127,7 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
     } else {
       console.warn('[integrity-scan] source without sidecar:', { sourcePath, expectedMeta });
       result.needsMeta.push({ sourcePath, sourceName: basename });
+      result.observations.push({ kind: 'source-meta', sourcePath, sourcePresent: true, metaPresent: false, logicalBatchId: `scan:${sourcePath}` });
       result.diagnostics.push({
         file: sourcePath,
         severity: 'warn',
@@ -142,6 +147,7 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
     const basename = expectedSource.slice(expectedSource.lastIndexOf('/') + 1);
     if (isImportable(basename) && !sourceFiles.includes(expectedSource)) {
       result.orphanedSidecar.push({ metaPath, expectedSourcePath: expectedSource });
+      result.observations.push({ kind: 'source-meta', sourcePath: expectedSource, sourcePresent: false, metaPresent: true, logicalBatchId: `scan:${metaPath}` });
       result.diagnostics.push({
         file: metaPath,
         severity: 'warn',

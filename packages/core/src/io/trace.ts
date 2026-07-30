@@ -1,4 +1,4 @@
-// io/trace — module-level span stack + ring-buffer root-tree retention
+// io/trace — diagnostic span stack + ring-buffer root-tree retention
 //
 // feat-20260707-editor-trace-ioc M2 t9/t11:
 // Module-level pushSpan/popSpan stack (NOT AsyncLocalStorage — F-2 verified
@@ -54,7 +54,8 @@ export type EngineInterfaceName =
   | 'assetIO.triggerCook'
   | 'assetIO.readSourceBytes'
   | 'assetIO.deleteSourceFile'
-  | 'registry.invalidate';
+  | 'registry.invalidate'
+  | 'registry.patchMaterial';
 
 /** Record an asset-IO interface leaf onto the current active span's engineCalls
  *  list (symmetric to engine-facade's _recordLeaf, AC-D4). Used by AssetIOFacade.
@@ -189,6 +190,11 @@ const RING_CAPACITY = 256;
 /** Ring buffer of completed root span trees. Oldest at index 0. */
 const _rootTrees: SpanNode[] = [];
 
+// Run lifecycle truth lives in the durable OperationRun journal. These links
+// make the bounded trace useful for diagnostics without making trace retention
+// or a detached promise the source of terminal state.
+const _runTraceLinks = new Map<string, string>();
+
 /** Count of root trees evicted from the ring buffer. Always monotonic. */
 let _droppedTraces = 0;
 
@@ -216,4 +222,17 @@ export function recentRoots(n: number = 1): SpanNode[] {
 /** Programming read: return the most recent single root span tree. */
 export function lastRoot(): SpanNode | null {
   return _rootTrees.length > 0 ? _rootTrees[_rootTrees.length - 1]! : null;
+}
+
+export function linkTraceToRun(runId: string, traceId: string): void {
+  if (runId.trim() === '' || traceId.trim() === '') return;
+  _runTraceLinks.set(runId, traceId);
+}
+
+export function traceIdForRun(runId: string): string | null {
+  return _runTraceLinks.get(runId) ?? null;
+}
+
+export function clearTraceRunLink(runId: string): void {
+  _runTraceLinks.delete(runId);
 }

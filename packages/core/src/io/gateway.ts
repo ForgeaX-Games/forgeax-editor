@@ -209,6 +209,43 @@ export class EditGateway {
    */
   transientMode = false;
 
+  // Async authored operations hold their history entry until the canonical
+  // resource/effect promise succeeds. This is deliberately one slot, matching
+  // the existing async session-op capture seam in scene-persistence.
+  private deferHistory = false;
+  private deferredEntry: { cmd: EditorOp; inverse?: EditorOp; origin: CommandOrigin } | null = null;
+
+  dispatchDeferred(cmd: EditorOp, origin: CommandOrigin = 'human'): DispatchResult {
+    if (this.deferHistory || this.deferredEntry !== null) {
+      return { ok: false, error: { code: 'OP_INTERRUPTED', hint: 'An authored commit is already waiting for its canonical effect.' } };
+    }
+    this.deferHistory = true;
+    this.deferredEntry = null;
+    const result = this.dispatch(cmd, origin);
+    this.deferHistory = false;
+    if (!result.ok) this.deferredEntry = null;
+    return result;
+  }
+
+  publishDeferred(cmd: EditorOp): boolean {
+    const entry = this.deferredEntry;
+    if (entry === null || entry.cmd !== cmd) return false;
+    if (entry.inverse !== undefined) {
+      this.undoStack.push({ cmd: entry.cmd, inverse: entry.inverse, origin: entry.origin });
+      this.redoStack.length = 0;
+    }
+    this.ledger.push(entry.cmd);
+    this.origins.push(entry.origin);
+    this.deferredEntry = null;
+    return true;
+  }
+
+  discardDeferred(cmd: EditorOp): boolean {
+    if (this.deferredEntry?.cmd !== cmd) return false;
+    this.deferredEntry = null;
+    return true;
+  }
+
   // ── Scan-phase lock (north-star §8 infrastructure, not an op) ──────────────
   // During startup asset scan, dispatch() rejects ALL ops so the catalog stays
   // consistent. The UI shows a blocking overlay. This is NOT an op — it's a
@@ -733,11 +770,13 @@ export class EditGateway {
       if (!r.ok) return r;
       // transientMode (play·scene): still apply + emit for immediate feedback,
       // but skip undo/ledger writes (AC-09) — the non-committing edit mode.
-      if (!this.transientMode) {
+      if (!this.transientMode && !this.deferHistory) {
         this.undoStack.push({ cmd, inverse: r.inverse, origin });
         this.redoStack.length = 0;
         this.ledger.push(cmd);
         this.origins.push(origin);
+      } else if (!this.transientMode && this.deferHistory) {
+        this.deferredEntry = { cmd, inverse: r.inverse, origin };
       }
       // emit() fires the bus subscribers (docVersion re-render + _isDirty tracker
       // + engine sync repaint) — the World changed, so panels/disk must react.
@@ -788,12 +827,15 @@ export class EditGateway {
     // M4 t28: defineOp-cast session ops push their sub-ops to ledger inside
     // the applier itself (D-7: each sub-op gets its own flat entry). Skip the
     // top-level dispatch-level push to avoid double-counting.
-    if (!this.transientMode && domain === 'session') {
+    if (!this.transientMode && !this.deferHistory && domain === 'session') {
       const desc = getOp(kind);
       if (!(desc && desc.source === 'defined')) {
         this.ledger.push(cmd);
         this.origins.push(origin);
       }
+    } else if (!this.transientMode && this.deferHistory && domain === 'session') {
+      const desc = getOp(kind);
+      if (!(desc && desc.source === 'defined')) this.deferredEntry = { cmd, origin };
     }
     return { ok: true };
   }
@@ -1103,8 +1145,16 @@ export class EditGateway {
     if (!envelope) return;
     const payload = envelope.payload as unknown as Record<string, unknown>;
     cmd._oldPatch = (payload.paramValues ?? {}) as Record<string, unknown>;
-    cmd._oldRefs = [...(envelope.refs ?? [])];
-    cmd._oldEntry = { guid: envelope.guid, kind: envelope.kind, name: (envelope as unknown as { name?: string }).name, payload, refs: [...(envelope.refs ?? [])] };
+    // Engine-memory → wire-format projection: envelope.refs are AssetRef
+    // OBJECTS ({ guid, sourceField?, sceneEntityId? }), but the pack on disk
+    // stores refs as GUID STRINGS (zod: refs: z.array(z.string())), and the
+    // applier's encodeTextureRefs/invertTextureGuids operate on strings
+    // (indexOf / numeric-index lookup). Copying the objects through made
+    // writePack reject the entry (PACK_SHELL_INVALID at assets.N.refs.0).
+    // The typeof guard tolerates either runtime form.
+    const refGuids = (envelope.refs ?? []).map((r: { guid: string } | string) => (typeof r === 'string' ? r : r.guid));
+    cmd._oldRefs = refGuids;
+    cmd._oldEntry = { guid: envelope.guid, kind: envelope.kind, name: (envelope as unknown as { name?: string }).name, payload, refs: [...refGuids] };
   }
 
   // ── Asset read surface (Part 4) ────────────────────────────────────────────

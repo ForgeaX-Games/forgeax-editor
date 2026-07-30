@@ -18,10 +18,14 @@
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
 import { sessionAppliers } from '../io/appliers';
+import { panelBridge } from '../io/panel-bridge';
 // Single-active-selection-domain: selecting an asset clears any entity selection
 // so Delete / blank-click resolve to one target. Direct clear (guarded on
-// non-empty); circular ref resolves at call time.
-import { clearSelection } from './selection';
+// non-empty) goes through the shared selection-domain seam.
+import {
+  clearSelectionDomains,
+  registerSelectionDomainClear,
+} from './selection-domain-clears';
 
 export interface SelectedAsset {
   guid: string;
@@ -30,11 +34,29 @@ export interface SelectedAsset {
   payload: Record<string, unknown>;
   packPath: string;
 }
+export interface SelectedAssetIdentity extends SelectedAsset {
+  readonly status: 'available' | 'missing';
+}
+export interface AssetIdentityRecord { readonly kind: string; readonly name?: string; readonly packPath?: string }
+let identityReader: ((guid: string) => AssetIdentityRecord | undefined) | null = null;
+export function registerAssetIdentityReader(reader: (guid: string) => AssetIdentityRecord | undefined): () => void {
+  identityReader = reader;
+  notifyIdentityConsumers();
+  return () => { if (identityReader === reader) identityReader = null; };
+}
 
 let selectedAssets: SelectedAsset[] = [];
 let primaryAsset: SelectedAsset | null = null;
 const assetSelListeners = new Set<() => void>();
+let identityRevision = 0;
+let identityCache: { revision: number; value: SelectedAssetIdentity | null } | null = null;
 function emitAssetSel(): void { for (const fn of assetSelListeners) fn(); }
+function notifyIdentityConsumers(): void {
+  identityRevision += 1;
+  identityCache = null;
+  emitAssetSel();
+}
+panelBridge.on('assetsChanged', notifyIdentityConsumers);
 
 /** Set equality by guid (order-independent) — dedup guard so an unchanged
  *  selection does not re-emit or re-push to the ledger (T0-1). */
@@ -61,10 +83,10 @@ function applySetAssetSelection(op: EditorOp): { ok: true } {
   // Only a forward (non-empty) asset selection is the active domain — clear the
   // entity selection FIRST, then emit assets LAST so lastSelectionDomain = 'asset'.
   // An empty set (deselect) must NOT clear the entity selection.
-  if (assets.length > 0) clearSelection();
+  if (assets.length > 0) clearSelectionDomains('entity');
   selectedAssets = assets;
   primaryAsset = primary;
-  emitAssetSel();
+  notifyIdentityConsumers();
   return { ok: true };
 }
 sessionAppliers.set('setAssetSelection', applySetAssetSelection);
@@ -91,9 +113,11 @@ export function clearAssetSelection(): void {
   if (selectedAssets.length !== 0 || primaryAsset !== null) {
     selectedAssets = [];
     primaryAsset = null;
-    emitAssetSel();
+    notifyIdentityConsumers();
   }
 }
+
+registerSelectionDomainClear('asset', clearAssetSelection);
 
 /** The full selected-asset list (live reference — treat as read-only). */
 export function getAssetSelectionList(): SelectedAsset[] { return selectedAssets; }
@@ -119,4 +143,26 @@ export function useAssetSelectionList(): SelectedAsset[] {
 /** Reactive primary asset (legacy single-asset consumers). */
 export function useAssetSelection(): SelectedAsset | null {
   return useSyncExternalStore(subscribeAssetSel, getAssetSelection, getAssetSelection);
+}
+
+export function getSelectedAssetIdentity(): SelectedAssetIdentity | null {
+  if (identityCache?.revision === identityRevision) return identityCache.value;
+  if (!primaryAsset) {
+    identityCache = { revision: identityRevision, value: null };
+    return null;
+  }
+  const entry = identityReader?.(primaryAsset.guid);
+  const value: SelectedAssetIdentity = {
+    ...primaryAsset,
+    kind: entry?.kind ?? primaryAsset.kind,
+    name: entry?.name ?? primaryAsset.name,
+    packPath: entry?.packPath ?? primaryAsset.packPath,
+    status: entry ? 'available' : 'missing',
+  };
+  identityCache = { revision: identityRevision, value };
+  return value;
+}
+
+export function useSelectedAssetIdentity(): SelectedAssetIdentity | null {
+  return useSyncExternalStore(subscribeAssetSel, getSelectedAssetIdentity, getSelectedAssetIdentity);
 }

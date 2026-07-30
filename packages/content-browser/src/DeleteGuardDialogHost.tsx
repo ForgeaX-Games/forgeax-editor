@@ -10,9 +10,7 @@
 // delete does.
 
 import { useEffect, useMemo, useState } from 'react';
-import { gateway } from '@forgeax/editor-core';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
-import { buildAssetGraph, type AssetGraphNode } from './hooks/useAssetGraph';
 import { computeDeleteImpact, type DeleteImpact } from './delete-guard';
 import {
   subscribeDeleteGuard,
@@ -20,17 +18,6 @@ import {
   type DeleteGuardRequest,
 } from './delete-guard-bus';
 import type { CBAsset } from './types';
-
-// Registry surface we consume; kept local since content-browser has no direct
-// type dep on the engine (the same shape appears in ContentBrowser.tsx).
-interface RegistryCatalogEntry {
-  guid: string;
-  name?: string;
-  refs?: readonly string[];
-}
-interface RegistrySurface {
-  listCatalog?: () => readonly RegistryCatalogEntry[];
-}
 
 const EMPTY_IMPACT: DeleteImpact = {
   externalReferencers: new Map(),
@@ -61,20 +48,10 @@ export function DeleteGuardDialogHost() {
     [req],
   );
 
-  // Snapshot the current catalog when the request opens. The dialog is short-
-  // lived and the underlying registry rarely mutates during a confirm; sampling
-  // once keeps the render pure and avoids subscribing to registry-change
-  // notifications from a modal.
   const { impact, catalogNameByGuid } = useMemo(() => {
-    if (!req) return { impact: EMPTY_IMPACT, catalogNameByGuid: new Map<string, string>() };
-    const registry = gateway.doc.registry as RegistrySurface | undefined;
-    const entries = registry?.listCatalog?.() ?? [];
-    const nodes: AssetGraphNode[] = entries.map((e) => ({ guid: e.guid, refs: e.refs ?? [] }));
-    const graph = buildAssetGraph(nodes);
     const nameByGuid = new Map<string, string>();
-    for (const e of entries) if (e.name) nameByGuid.set(e.guid, e.name);
-    for (const a of req.assets) nameByGuid.set(a.guid, a.name);
-    return { impact: computeDeleteImpact(req.assets.map((a) => a.guid), graph), catalogNameByGuid: nameByGuid };
+    for (const a of req?.assets ?? []) nameByGuid.set(a.guid, a.name);
+    return { impact: EMPTY_IMPACT, catalogNameByGuid: nameByGuid };
   }, [req]);
 
   if (!req) return null;

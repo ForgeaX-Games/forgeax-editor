@@ -81,5 +81,6 @@ export type {
   AppManifestPanel,
   DefinedApp,
 } from './app-kit';
+export { defineEditorHost } from './app-kit';
 
 export default editorApp;

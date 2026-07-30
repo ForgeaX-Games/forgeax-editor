@@ -15,7 +15,7 @@ describe('UI asset Content Browser support', () => {
       guid: 'ui-guid',
       kind: 'ui',
       name: 'HUD',
-      relativeUrl: '/__forgeax-ddc/ui-guid.pack.json',
+      packageUrl: '/__forgeax-ddc/ui-guid.pack.json',
       sourcePath: 'assets/ui/hud.ui.html',
     }, 0);
     expect(asset.sourcePath).toBe('assets/ui/hud.ui.html');

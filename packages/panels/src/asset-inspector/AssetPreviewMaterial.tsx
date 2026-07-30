@@ -199,13 +199,19 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   }) => {
     if (!asset) return;
     void (async () => {
-      await ensureAssetCataloged(gateway.doc.registry, asset.guid);
-      gateway.dispatch({
+      const cataloged = await ensureAssetCataloged(gateway.doc.registry, asset.guid);
+      const result = gateway.dispatch({
         kind: 'updateMaterialParams',
         packPath: asset.packPath,
         guid: asset.guid,
         ...op,
       }, 'human');
+      if (!result.ok) {
+        console.info('[mat-tex-drop]', 'dispatch rejected', {
+          guid: asset.guid, packPath: asset.packPath, cataloged,
+          error: (result as { error?: unknown }).error,
+        });
+      }
     })();
   }, [asset]);
 

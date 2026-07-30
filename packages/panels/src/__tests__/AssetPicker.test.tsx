@@ -16,9 +16,9 @@ import { gateway } from '@forgeax/editor-core';
 import { AssetPicker } from '../AssetPicker';
 
 const fakeCatalog = [
-  { guid: 'g-cube', kind: 'mesh', name: 'Cube', relativeUrl: 'cube.mesh' },
-  { guid: 'g-sphere', kind: 'mesh', name: 'Sphere', relativeUrl: 'sphere.mesh' },
-  { guid: 'g-red', kind: 'material', name: 'RedMat', relativeUrl: 'red.mat' },
+  { guid: 'g-cube', kind: 'mesh', name: 'Cube', packageUrl: 'cube.mesh' },
+  { guid: 'g-sphere', kind: 'mesh', name: 'Sphere', packageUrl: 'sphere.mesh' },
+  { guid: 'g-red', kind: 'material', name: 'RedMat', packageUrl: 'red.mat' },
 ];
 
 const gw = gateway as unknown as { assetCatalog: unknown; describeAssetByGuid: unknown };
@@ -72,7 +72,7 @@ describe('AssetPicker', () => {
   it('AudioClipAsset field → only audio rows', () => {
     gw.assetCatalog = () => [
       ...fakeCatalog,
-      { guid: 'g-sfx', kind: 'audio', name: 'test_mp3', relativeUrl: 'assets/test_mp3.mp3' },
+      { guid: 'g-sfx', kind: 'audio', name: 'test_mp3', packageUrl: 'assets/test_mp3.mp3' },
     ];
     const html = renderToStaticMarkup(
       <AssetPicker assetType="AudioClipAsset" onPick={() => {}} onClose={() => {}} />,

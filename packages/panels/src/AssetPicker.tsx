@@ -7,7 +7,7 @@
 //
 // Self-contained overlay (no portal / no AssetThumbnail dependency — this editor
 // copy has none). Data comes from the gateway read surface the drop path uses:
-//   - gateway.assetCatalog()          → { guid, kind, name, relativeUrl }[]
+//   - gateway.assetCatalog()          → { guid, kind, name, packageUrl }[]
 //   - gateway.describeAssetByGuid(g)  → { kind, meta } for a lightweight swatch
 // Filtering is by assetKindToType(entry.kind) === the field's expected asset type
 // (parsed from the engine schema's shared<T> keyword by the caller), so the picker
@@ -56,7 +56,7 @@ interface Row {
   guid: string;
   kind: string;
   name: string;
-  relativeUrl: string;
+  packageUrl: string;
 }
 
 // A never-empty display label. The engine's listCatalog returns `name: ''` for
@@ -71,19 +71,19 @@ function baseName(path: string | undefined): string {
   const last = path.split('/').pop() ?? '';
   return last.replace(/\.(pack\.json|meta\.json)$/i, '').replace(/\.[^.]+$/, '');
 }
-function catalogEntryName(e: { name?: string; guid: string; kind: string; relativeUrl: string; sourcePath?: string }): string {
+function catalogEntryName(e: { name?: string; guid: string; kind: string; packageUrl: string; sourcePath?: string }): string {
   if (e.name && e.name.trim()) return e.name.trim();
-  return baseName(e.sourcePath) || baseName(e.relativeUrl) || `${e.kind} ${e.guid.slice(0, 8)}`;
+  return baseName(e.sourcePath) || baseName(e.packageUrl) || `${e.kind} ${e.guid.slice(0, 8)}`;
 }
 
 // Real asset preview via the shared editor-ui primitive: image thumbnail for
 // texture/image, material baseColor sphere, kind-tinted glyph otherwise. The
 // POD payload (baseColor, source, …) comes from the by-guid describe leg; the
-// catalog relativeUrl lets texture kinds resolve an image URL.
-function Swatch({ guid, kind, relativeUrl }: { guid: string; kind: string; relativeUrl?: string }) {
+// catalog packageUrl lets texture kinds resolve an image URL.
+function Swatch({ guid, kind, packageUrl }: { guid: string; kind: string; packageUrl?: string }) {
   const desc = gateway.describeAssetByGuid(guid);
   const meta = desc?.ok ? (desc.meta as Record<string, unknown> | undefined) : undefined;
-  return <AssetThumbnail kind={kind} payload={meta} packPath={relativeUrl} size={20} />;
+  return <AssetThumbnail kind={kind} payload={meta} packPath={packageUrl} size={20} />;
 }
 
 export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }: AssetPickerProps) {
@@ -96,7 +96,7 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
     const out: Row[] = [];
     for (const e of catalog) {
       if (assetKindToType(e.kind) !== assetType) continue;
-      out.push({ guid: e.guid, kind: e.kind, name: catalogEntryName(e), relativeUrl: e.relativeUrl });
+      out.push({ guid: e.guid, kind: e.kind, name: catalogEntryName(e), packageUrl: e.packageUrl });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
@@ -193,7 +193,7 @@ function PickerRow({ row, active, focused, onHover, onClick }: { row: Row; activ
       title={`${row.name}\n${row.kind} · ${row.guid}`}
       style={rowStyle(active, focused)}
     >
-      <Swatch guid={row.guid} kind={row.kind} relativeUrl={row.relativeUrl} />
+      <Swatch guid={row.guid} kind={row.kind} packageUrl={row.packageUrl} />
       <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.name}
       </span>

@@ -15,6 +15,19 @@ export { resolveFolderMenuItems } from './folder-menu';
 export { DeleteGuardDialog, type DeleteGuardDialogProps } from './DeleteGuardDialog';
 export { DeleteGuardDialogHost } from './DeleteGuardDialogHost';
 export { computeDeleteImpact, type DeleteImpact } from './delete-guard';
+export { summarizeDeletePreflight, type DeletePreflightSummary } from './delete-guard';
+export {
+  authorizeSubjectAction,
+  preflightSubjectAction,
+  type SubjectActionGate,
+  type SubjectActionRequest,
+} from './workspace/subject-actions';
+export {
+  projectWorkspaceFacts,
+  projectWorkspaceSnapshot,
+  useWorkspaceSnapshot,
+  workspaceSnapshotFromBrowserSnapshot,
+} from './workspace/useWorkspaceSnapshot';
 export {
   requestDeleteGuard,
   subscribeDeleteGuard,

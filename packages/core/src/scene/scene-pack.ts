@@ -50,6 +50,13 @@ export type PackFile = z.infer<typeof packFileSchema>;
 /** Legacy alias — converged onto PackFile (SSOT). */
 export type ScenePack = PackFile;
 
+/** Stable content revision used by the persistence collar. The revision is
+ * derived from the validated pack bytes, never from path or asset ordering. */
+export function canonicalScenePackRevision(raw: unknown): string | null {
+  const validated = validatePackShell(raw);
+  return validated.ok ? stableGuid(`scene-pack|${JSON.stringify(validated.pack)}`) : null;
+}
+
 /** Legacy alias — converged onto the zod-derived asset entry shape. */
 type PackAsset = z.infer<typeof packAssetEntrySchema>;
 

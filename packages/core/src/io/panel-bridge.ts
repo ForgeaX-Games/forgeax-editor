@@ -43,6 +43,18 @@ export interface PanelBridgeEvents {
     hint: string;
     ts: number;
   };
+  /**
+   * A Content Browser asset card scrolled into view; the host should ensure the
+   * asset's payload is catalogued (loadByGuid) so its thumbnail + edit path
+   * resolve WITHOUT a manual click. Standalone-pack materials aren't catalogued
+   * after a hard refresh (the scene-load loadByGuid recursion only visits
+   * scene-referenced GUIDs), so their card stays a grey placeholder until touched.
+   * Emitted by CBAssetItem's IntersectionObserver — only for kinds whose live
+   * meta comes from the registry (currently material) — and consumed by
+   * host-session's installAssetPrefetchHook. Coordination-only: it does NOT
+   * change ledger-visible state.
+   */
+  requestAssetPrefetch: { guid: string; kind: string };
   /** In-process edit-runtime diagnostics; play keeps its real iframe VAG wire. */
   editorHealth: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number };
   editorConsole: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number };

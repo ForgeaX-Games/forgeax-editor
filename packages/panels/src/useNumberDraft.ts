@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { clampToField, type FieldSchema } from '@forgeax/editor-core';
 
 // Permissive intermediate typing states — "", "-", ".", "12.", "-0.5" — that a
@@ -29,13 +29,22 @@ export interface NumberDraftHandlers {
 // Callers must give the owning element an identity-bearing `key` (entity id +
 // field key) so React remounts — and resets this hook's state — when the
 // field's identity changes, instead of leaking a draft across entities.
-export function useNumberDraft(display: number, fs: FieldSchema | undefined, onCommit: (n: number) => void): NumberDraftHandlers {
+export function useNumberDraft(display: number, fs: FieldSchema | undefined, onCommit: (n: number) => void, generation?: string | number): NumberDraftHandlers {
   const [draft, setDraft] = useState<string | null>(null);
   // `abort.current` (not state) matters: Escape needs to suppress the *next*
   // blur commit inside the same synchronous event, before React has re-run
   // this hook with a fresh `draft` closure.
   const abort = useRef(false);
   const arrowStep = fs?.step ?? 1;
+
+  // A selection or World generation change invalidates the local draft. The
+  // owning panel supplies the identity so a live pulse cannot replace the
+  // user's text while the same field is focused, but a new source cannot
+  // inherit an edit from the old source.
+  useEffect(() => {
+    abort.current = false;
+    setDraft(null);
+  }, [generation]);
 
   function flush() {
     if (draft === null) return;

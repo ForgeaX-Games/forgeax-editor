@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forgeax.dev/schemas/runtime-ui-diagnostics.schema.json",
+  "title": "Runtime UI diagnostics",
+  "type": "object",
+  "required": ["schemaVersion", "status", "provenance"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["success", "unbound", "stale", "unsupported", "read-failed"] },
+    "provenance": {
+      "type": "object",
+      "required": ["worldGeneration", "source", "evidenceId"],
+      "additionalProperties": false,
+      "properties": {
+        "worldGeneration": { "type": "integer", "minimum": 0 },
+        "source": { "type": "string", "minLength": 1 },
+        "evidenceId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "code": { "type": "string", "minLength": 1 },
+    "hint": { "type": "string", "minLength": 1 },
+    "expected": {},
+    "actual": {},
+    "retryable": { "type": "boolean" },
+    "capabilities": { "type": "object", "additionalProperties": false },
+    "counters": { "type": "object", "additionalProperties": false }
+  }
+}

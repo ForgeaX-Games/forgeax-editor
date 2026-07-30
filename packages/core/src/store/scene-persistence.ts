@@ -377,9 +377,17 @@ function registerAsyncSessionOp(kind: string, impl: () => Promise<boolean>): voi
 }
 function dispatchAsyncSessionOp(op: EditorOp): Promise<boolean> {
   ctx.asyncOpResult = Promise.resolve(false);
-  const r = gateway.dispatch(op);
+  const r = gateway.dispatchDeferred(op);
   if (!r.ok) return Promise.resolve(false);
-  return ctx.asyncOpResult ?? Promise.resolve(false);
+  const result = ctx.asyncOpResult ?? Promise.resolve(false);
+  return result.then((succeeded) => {
+    if (succeeded) gateway.publishDeferred(op);
+    else gateway.discardDeferred(op);
+    return succeeded;
+  }).catch(() => {
+    gateway.discardDeferred(op);
+    return false;
+  });
 }
 
 // ── Dirty flag: the toolbar's save-indicator source ───────────────────────────

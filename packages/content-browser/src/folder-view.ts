@@ -4,7 +4,7 @@ import { isHiddenDir } from './view-mode';
 /**
  * A catalog asset paired with its game-relative `.pack.json` path.
  *
- * `rel` is the engine registry `relativeUrl` reduced to game scope
+ * `rel` is the engine registry `packageUrl` reduced to game scope
  * (e.g. `assets/characters/hero.pack.json`). This is the SAME value the
  * ContentBrowser already computes for its source-panel folder list — folders
  * are DERIVED from it, so no new persisted data format is introduced.

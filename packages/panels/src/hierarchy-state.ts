@@ -2,11 +2,13 @@ import {
   childrenOf,
   entName,
   entParent,
+  entComponentsPresent,
   gateway,
   listComponentSchemas,
   worldComponentNames,
   worldEntityHandles,
   type EntityHandle,
+  type RuntimeUiGraph,
 } from '@forgeax/editor-core';
 
 export const HIERARCHY_SCENE_FOLDER_ID = -1 as EntityHandle;
@@ -28,6 +30,115 @@ export interface HierarchyFilterOption {
   readonly id: string;
   readonly label: string;
   readonly count: number;
+}
+
+export interface HierarchyEntitySummary {
+  readonly id: EntityHandle;
+  readonly name: string;
+  readonly typeId: string;
+  readonly hidden?: boolean;
+  readonly mobility: 'static' | 'movable' | 'stationary' | '';
+  readonly childIds: readonly EntityHandle[];
+}
+
+export interface HierarchyStructureProjection {
+  readonly structureEpoch: number;
+  readonly rows: readonly HierarchyEntitySummary[];
+}
+
+export interface HierarchyStructureSelector {
+  mount(): {
+    getSnapshot(): HierarchyStructureProjection | undefined;
+    subscribe(listener: () => void): () => void;
+    unsubscribe(): void;
+  };
+  stats(): { readonly projectionRebuilds: number };
+  resolveSelection(id: EntityHandle):
+    | { readonly ok: true; readonly id: EntityHandle }
+    | { readonly ok: false; readonly code: 'stale-entity-selection'; readonly retryable: true };
+}
+
+type StructureReader = (world: unknown) => HierarchyStructureProjection;
+
+function hierarchyMobility(components: Record<string, unknown>): HierarchyEntitySummary['mobility'] {
+  const explicit = Object.values(components)
+    .map((component) => {
+      if (typeof component !== 'object' || component === null) return undefined;
+      const value = (component as { mobility?: unknown; Mobility?: unknown }).mobility
+        ?? (component as { mobility?: unknown; Mobility?: unknown }).Mobility;
+      return typeof value === 'string' ? value.toLowerCase() : undefined;
+    })
+    .find(Boolean);
+  if (explicit === 'static' || explicit === 'movable' || explicit === 'stationary') return explicit;
+  if ('RigidBody' in components || 'Rigidbody' in components) return 'movable';
+  if ('Transform' in components) return 'static';
+  return '';
+}
+
+function readWorldStructure(world: unknown): HierarchyStructureProjection {
+  const typedWorld = world as Parameters<typeof worldEntityHandles>[0];
+  const structureEpoch = typeof (typedWorld as { getStructureEpoch?: unknown }).getStructureEpoch === 'function'
+    ? Number((typedWorld as { getStructureEpoch: () => number }).getStructureEpoch())
+    : 0;
+  const namesByEntity = worldComponentNames(typedWorld);
+  const rows = worldEntityHandles(typedWorld).map((id) => {
+    const names = namesByEntity.get(id) ?? [];
+    return {
+      id,
+      name: entName(typedWorld, id),
+      typeId: getHierarchyEntityType(names, typedWorld, id).id,
+      hidden: names.includes('EditorHidden'),
+      mobility: hierarchyMobility(entComponentsPresent(typedWorld, id, names)),
+      childIds: childrenOf(typedWorld, id),
+    };
+  });
+  return { structureEpoch, rows: Object.freeze(rows) };
+}
+
+export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: StructureReader = readWorldStructure): HierarchyStructureSelector {
+  let projection: HierarchyStructureProjection | undefined;
+  let projectionRebuilds = 0;
+  let mounted = 0;
+  const mountedSelector = graph.mount({
+    key: 'panels.hierarchy.structure',
+    schema: {
+      kind: 'pod',
+      fields: {
+        structureEpoch: { kind: 'primitive' },
+        rows: { kind: 'array', item: { kind: 'pod', fields: {
+          id: { kind: 'primitive' }, name: { kind: 'primitive' }, typeId: { kind: 'primitive' }, hidden: { kind: 'primitive' },
+          mobility: { kind: 'primitive' }, childIds: { kind: 'array', item: { kind: 'primitive' } },
+        } } },
+      },
+    },
+    read: (world) => {
+      const next = reader(world);
+      if (projection?.structureEpoch === next.structureEpoch) return projection;
+      projection = { structureEpoch: next.structureEpoch, rows: next.rows };
+      projectionRebuilds += 1;
+      return projection;
+    },
+  });
+  return {
+    mount() {
+      mounted += 1;
+      let released = false;
+      return {
+        getSnapshot: () => mountedSelector.getSnapshot(),
+        subscribe: (listener) => mountedSelector.subscribe(listener),
+        unsubscribe: () => {
+          if (released) return;
+          released = true;
+          mounted -= 1;
+          if (mounted === 0) mountedSelector.unsubscribe();
+        },
+      };
+    },
+    stats: () => ({ projectionRebuilds }),
+    resolveSelection: (id) => projection?.rows.some((row) => row.id === id)
+      ? { ok: true, id }
+      : { ok: false, code: 'stale-entity-selection', retryable: true },
+  };
 }
 
 // The hierarchy "type" is DERIVED from an entity's live components (engine

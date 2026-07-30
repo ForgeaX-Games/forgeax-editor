@@ -76,6 +76,8 @@ const ENGINE_SIDE_EFFECT_HINTS: Partial<Record<EngineInterfaceName, string>> = {
     'by contract may spawn a collected SceneAsset subtree as live world entities, re-acquiring shared asset (material/mesh) handles from their GUIDs',
   'registry.invalidate':
     'by contract clears the pack-body cache + catalogue entry for a single GUID, forcing a fresh loadByGuid on next access',
+  'registry.patchMaterial':
+    'by contract mutates a catalogued material payload in place so the live world.sharedRef (and save serialization) observe the new params on the next frame',
 };
 
 // M3 t16 (CI-typecheck fix feat-20260707): the facade's write methods forward the
@@ -132,10 +134,22 @@ export class EngineFacade {
    *  world-manager editorWorld facade) have no registry and cannot instantiate
    *  scene assets — the method returns a structured NO_REGISTRY error there. */
   private _registry: AssetRegistry | undefined;
+  private _canonicalRevision = 0;
 
   constructor(world: World, registry?: AssetRegistry) {
     this._world = world;
     this._registry = registry;
+  }
+
+  /** Monotonic canonical effect revision for the current world binding. */
+  get canonicalRevision(): string {
+    return `engine-revision-${this._canonicalRevision}`;
+  }
+
+  /** Mark the effect boundary after a successful gateway mutation. */
+  commitCanonicalEffect(): string {
+    this._canonicalRevision += 1;
+    return this.canonicalRevision;
   }
 
   /** Read a component value from an entity. Does NOT record a leaf — reads
@@ -295,6 +309,48 @@ export class EngineFacade {
   invalidateAsset(guid: string): void {
     _recordLeaf('registry.invalidate');
     this._registry?.invalidate(guid);
+  }
+
+  /** Hot-patch a LIVE material's `paramValues` in place (updateMaterialParams
+   *  hot-reload path). The material payload object is shared BY IDENTITY between
+   *  the registry catalogue and every `world.sharedRef` minted for it at
+   *  instantiate (`asset-registry._resolveSceneGuids` passes `envelope.payload`
+   *  straight into `world.allocSharedRef`), so mutating it here makes the render
+   *  extract read the new values on the very NEXT frame without a scene reload —
+   *  fixing "material edits need a save to take effect". It also keeps
+   *  `reg.lookup()` (used by the save path's `appendInlineAssets`) in sync, so a
+   *  later Ctrl+S serialises the new values instead of the load-time snapshot
+   *  clobbering them back to the old colour.
+   *
+   *  In-place mutation preserves object identity, so the handle→GUID reverse scan
+   *  (`_guidForAsset`) and the catalogue envelope stay valid — unlike
+   *  `invalidate()`, which drops the entry and leaves the sharedRef stale. No-op
+   *  when the facade has no registry or the GUID is not a catalogued material.
+   *  Records 'registry.patchMaterial' leaf. */
+  patchLiveMaterialParams(guid: string, paramValues: Record<string, unknown>): void {
+    _recordLeaf('registry.patchMaterial');
+    const registry = this._registry;
+    if (!registry) return;
+    const key = guid.toLowerCase();
+    const envelope = registry.assetCatalog.get(key);
+    if (envelope === undefined) return;
+    const payload = envelope.payload as unknown as {
+      kind?: string;
+      paramValues?: Record<string, unknown>;
+    };
+    if (payload.kind !== 'material') return;
+    payload.paramValues = paramValues;
+    // Drop the stale pack-body cache for this GUID's pack. writePackEntry already
+    // wrote the fresh bytes to disk and we updated the live catalogue above, but the
+    // registry's packFileCache still holds the LOAD-TIME body. If a later Ctrl+S
+    // scene reload tears down and drops this material's catalogue entry (common for
+    // a standalone-pack material the scene never references), the next loadByGuid
+    // would re-fetch from that stale cached body and REVERT the colour to the old
+    // value. Clearing it forces a fresh disk read. The catalogue entry (mutated
+    // above) is kept so consecutive edits + _preFillMaterialOp resolve without a
+    // reload — unlike invalidate(), which drops the entry.
+    const idx = registry.packIndexCache?.get(key);
+    if (idx !== undefined) registry.packFileCache.delete(idx.packageUrl);
   }
 
   /** Internal: access the raw world for backward-compatible document applier

@@ -35,6 +35,7 @@ import { Time, Update, type EntityHandle } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
+import { createPlayProductRuntimeAdapter } from './product-runtime-adapter';
 
 // TODO 004: When this Play/preview viewport is embedded as a studio iframe,
 // forward global shortcuts to the studio shell. Standalone mode is a no-op.
@@ -786,12 +787,13 @@ if (import.meta.hot) {
 // Origin-gated via onVagMessage: ONLY the embedding shell may drive the engine.
 // Previously this accepted these commands from ANY window with no origin/source
 // check — any embedder could pause/reload the running game.
-onVagMessage(window, {
+createPlayProductRuntimeAdapter({
+  target: window,
   allowedOrigins: allowedParentOrigins(),
-  handlers: {
-    VAG_PREVIEW_PAUSE: () => app.value.pause(),
-    VAG_PREVIEW_PLAY: () => app.value.resume(),
-    VAG_PREVIEW_RELOAD: () => location.reload(),
+  controls: {
+    pause: () => { void app.value.pause(); },
+    play: () => { void app.value.resume(); },
+    reload: () => location.reload(),
   },
 });
 

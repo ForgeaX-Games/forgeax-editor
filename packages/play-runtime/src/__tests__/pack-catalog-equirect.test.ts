@@ -2,9 +2,8 @@
 
 // Regression guard for the skybox-not-rendering bug: an `.hdr` sidecar whose
 // sub-asset declares kind:'equirect' (feat-20260630 internalized IBL) must fold
-// to a kind:'equirect' catalog row backed by a baked rgba16float `.bin` — NOT a
-// raw-.hdr fallback row (rgba8unorm, no .bin) that the runtime equirectLoader
-// cannot decode.
+// to a kind:'equirect' catalog row backed by a cooked Pack v2 URL — never a
+// raw `.hdr` locator, which assets-runtime rejects before attempting a load.
 //
 // Root cause this pins: bakeHdrEquirect's importer ctx requested kind:'image',
 // but the migrated image-importer `.hdr` arm folds ONLY kind:'equirect'
@@ -35,7 +34,7 @@ const skip = SKY_HDR === undefined;
 
 const SKY_GUID = '81eec382-392f-5a93-8998-0ecf11ef7990';
 
-describe('pack-catalog equirect .hdr bake (feat-20260630 internalized IBL)', () => {
+describe('pack-catalog equirect Pack v2 navigation', () => {
   let tmpDir: string | null = null;
   let entries: Array<Record<string, unknown>> = [];
 
@@ -63,12 +62,12 @@ describe('pack-catalog equirect .hdr bake (feat-20260630 internalized IBL)', () 
     expect(row!.kind).toBe('equirect');
   });
 
-  it.skipIf(skip)('row points at a baked .bin with rgba16float metadata (bake succeeded)', () => {
+  it.skipIf(skip)('row points at the cooked Pack v2 package', () => {
     const row = entries.find((e) => e.guid === SKY_GUID)!;
-    expect(row.relativeUrl, 'must point at the baked .bin, not the raw .hdr').toMatch(/\.bin$/);
-    const meta = row.metadata as Record<string, unknown>;
-    expect(meta.format).toBe('rgba16float');
-    expect(meta.colorSpace).toBe('linear');
+    expect(row.packageUrl, 'must point at a cooked package, not the raw .hdr').toBe(
+      `/__forgeax-ddc/${SKY_GUID}.pack.json`,
+    );
+    expect(row.metadata).toBeUndefined();
   });
 
   it.skipIf(skip)('cleanup temp dir', () => {

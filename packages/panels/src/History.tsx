@@ -1,5 +1,24 @@
-import { gateway, useDocVersion } from '@forgeax/editor-core';
+import { useSyncExternalStore } from 'react';
+import { gateway } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
+import { OperationCenter } from './operations/OperationCenter';
+
+let historyRevision = 0;
+const historyListeners = new Set<() => void>();
+gateway.subscribe((_doc, command) => {
+  if (command === null) return;
+  historyRevision += 1;
+  for (const listener of historyListeners) listener();
+});
+
+function subscribeHistory(listener: () => void): () => void {
+  historyListeners.add(listener);
+  return () => historyListeners.delete(listener);
+}
+
+function getHistoryRevision(): number {
+  return historyRevision;
+}
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
 // mutation (human UI OR AI tool-call) is one EditorOp on the gateway, so this is
@@ -8,12 +27,13 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 // human vs AI — the editor's whole point is that both go through the same path.
 export function HistoryPanel() {
   const { t } = useTranslation();
-  useDocVersion(); // re-render on every gateway change
+  useSyncExternalStore(subscribeHistory, getHistoryRevision, getHistoryRevision);
   const steps = gateway.historySteps();
   const head = gateway.appliedCount();
 
   return (
     <div className="panel" data-testid="panel-history">
+      <OperationCenter />
       <h3>History</h3>
       <div className="hist-list" data-testid="hist-list">
         {steps.length === 0 ? (

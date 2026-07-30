@@ -8,7 +8,7 @@
 //
 // Parallel to asset-selection and entity-selection: clicks dispatch a
 // `setFolderSelection` session op through the one gateway door, keeping AI
-// parity (北极星合规). The applier writes module-level state and emits an
+// parity (charter compliance). The applier writes module-level state and emits an
 // event that `last-selection-domain` listens to for triple-domain routing.
 //
 // Anchors:
@@ -19,9 +19,12 @@
 import { useSyncExternalStore } from 'react';
 import { sessionAppliers } from '../io/appliers';
 // Single-active-selection-domain: selecting a path clears any entity selection so
-// Delete / blank-click resolve to one target. Direct clear (guarded on non-empty);
-// circular ref resolves at call time.
-import { clearSelection } from './selection';
+// Delete / blank-click resolve to one target. Direct clear (guarded on non-empty)
+// goes through the shared selection-domain seam.
+import {
+  clearSelectionDomains,
+  registerSelectionDomainClear,
+} from './selection-domain-clears';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -105,7 +108,7 @@ sessionAppliers.set('setFolderSelection', (op) => {
   // Only a forward (non-empty) path selection is the active domain — clear the
   // entity selection FIRST, then emit paths LAST so lastSelectionDomain = 'folder'.
   // An empty set (deselect) must NOT clear the entity selection.
-  if (next.length > 0) clearSelection();
+  if (next.length > 0) clearSelectionDomains('entity');
   selectedItems = next;
   emit();
   return { ok: true };
@@ -123,3 +126,5 @@ export function clearFolderSelection(): void {
     emit();
   }
 }
+
+registerSelectionDomainClear('folder', clearFolderSelection);

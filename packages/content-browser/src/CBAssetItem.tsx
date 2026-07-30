@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
@@ -22,6 +22,17 @@ interface Props {
 const TIP_W = 260;
 const TIP_GAP = 8;
 
+// GUIDs already handed to the host for a visible-card prefetch this session.
+// Standalone-pack materials are NOT catalogued after a hard refresh (the
+// scene-load loadByGuid recursion only visits scene-referenced GUIDs), so their
+// card renders a grey placeholder and an edit silently no-ops until the material
+// is clicked. Requesting a prefetch the moment the card scrolls into view warms
+// exactly the visible ones — no eager full-catalog load. Module-scoped so a
+// catalog-refresh re-render (broadcastAssetsChanged) never re-emits for the same
+// GUID. Only material is prefetched: textures load via <img>, and eagerly
+// loadByGuid-ing meshes on scroll would pull heavy geometry the card never shows.
+const prefetchRequested = new Set<string>();
+
 function CBAssetItemImpl({
   asset,
   index,
@@ -36,7 +47,29 @@ function CBAssetItemImpl({
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [tipXY, setTipXY] = useState<{ left: number; top: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const thumb = getThumbnailData(asset);
+
+  // Prefetch the material into the registry catalog once its card is on screen,
+  // so the thumbnail resolves to the real colour and a following edit finds
+  // _oldEntry — matching the click-to-load behaviour, but click-free. The host
+  // (edit-runtime) owns loadByGuid; we only signal intent over panelBridge.
+  useEffect(() => {
+    if (asset.kind !== 'material') return;
+    const key = asset.guid.toLowerCase();
+    if (prefetchRequested.has(key)) return;
+    const el = rootRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      if (prefetchRequested.has(key)) return;
+      prefetchRequested.add(key);
+      panelBridge.emit('requestAssetPrefetch', { guid: asset.guid, kind: asset.kind });
+    }, { rootMargin: '100px', threshold: 0.01 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [asset.guid, asset.kind]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     onSelect(asset);
@@ -71,6 +104,7 @@ function CBAssetItemImpl({
 
   return (
     <div
+      ref={rootRef}
       className={`cb-grid-item cb-fe-card${selected ? ' sel' : ''}`}
       data-testid="cb-asset-item"
       data-asset-name={asset.name}

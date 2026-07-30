@@ -8,7 +8,7 @@
 // per-game catalog. This pins the property that a silent regression could break
 // (current CI misses it — b2 uses a scratch game with no assets, smoke-play uses
 // games/sample with no equirect): a shared root folds into buildPerGameCatalog
-// with a SERVEABLE relativeUrl — one under /preview with NO leading `../` (the
+// with a SERVEABLE packageUrl — one under /preview with NO leading `../` (the
 // withBase posix.resolve('/',…) clamp that would mangle a naive external abs
 // path into a 404). The farm is what makes relative(cwd, farmed) a clean subpath;
 // this test reproduces its shape (shared scope symlinked under the scan cwd).
@@ -46,7 +46,7 @@ const skip = !existsSync(FOX_GLB) || !existsSync(FOX_META);
 // The Fox scene sub-asset GUID (pinned in Fox.glb.meta.json).
 const FOX_SCENE_GUID = '019f56f2-0ac0-776a-9d28-50eb5a9edeb8';
 
-describe('external asset roots — shared GLB folds with a serveable relativeUrl', () => {
+describe('external asset roots — shared GLB folds with a serveable packageUrl', () => {
   let tmpRoot: string | null = null;
   let entries: Array<Record<string, unknown>> = [];
 
@@ -89,15 +89,13 @@ describe('external asset roots — shared GLB folds with a serveable relativeUrl
     expect(row!.kind).toBe('scene');
   });
 
-  it.skipIf(skip)('every shared row has a serveable /preview relativeUrl with NO ../', () => {
-    const foxRows = entries.filter((e) =>
-      String((e as { relativeUrl?: string }).relativeUrl ?? '').includes('Fox.glb'),
-    );
+  it.skipIf(skip)('every shared row has a serveable /preview cooked packageUrl', () => {
+    const foxRows = entries.filter((e) => String(e.sourcePath ?? '').endsWith('/shared-roots/characters/Fox.glb'));
     expect(foxRows.length, 'Fox sub-assets present').toBeGreaterThan(0);
     for (const row of foxRows) {
-      const url = String(row.relativeUrl);
-      expect(url.startsWith('/preview/'), `served under /preview: ${url}`).toBe(true);
-      expect(url.includes('../'), `no clamped ../ in URL: ${url}`).toBe(false);
+      const url = String(row.packageUrl);
+      expect(url.startsWith('/preview/__forgeax-ddc/'), `served as a cooked package: ${url}`).toBe(true);
+      expect(url.endsWith('.pack.json'), `Pack v2 package URL: ${url}`).toBe(true);
     }
   });
 });

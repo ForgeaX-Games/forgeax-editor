@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "kind": "internal-text-package",
   "assets": [
     {
@@ -254,6 +254,7 @@
           }
         ]
       },
+      "artifacts": {},
       "refs": [
         "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
         "3a000001-0000-5000-8000-000000000001",
@@ -296,6 +297,7 @@
           "roughness": 0.95
         }
       },
+      "artifacts": {},
       "refs": []
     },
     {
@@ -331,6 +333,7 @@
           "roughness": 0.6
         }
       },
+      "artifacts": {},
       "refs": []
     },
     {
@@ -366,6 +369,7 @@
           "roughness": 0.5
         }
       },
+      "artifacts": {},
       "refs": []
     }
   ]

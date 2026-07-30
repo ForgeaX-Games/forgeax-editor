@@ -301,7 +301,7 @@ function cleanOrphanMetasInDir(dir: string): void {
 //   <base>/pack-index.json            -> /pack-index.json          (catalog)
 //   <base>/__import/<guid>            -> /__import/<guid>          (lazy cook)
 //   <base>/__forgeax-ddc/<guid>...    -> /__forgeax-ddc/...        (meta pack body)
-// Asset URLs pluginPack emits already carry the base (relativeUrl prefixed at
+// Asset URLs pluginPack emits already carry the base (packageUrl prefixed at
 // build), so they resolve as-is. Only needed when base !== '/'.
 const PACK_ROUTE_PREFIXES = ['/pack-index.json', '/__import/', '/__forgeax-ddc/', '/__pack/'];
 function packBaseStrip(base: string): PluginOption {

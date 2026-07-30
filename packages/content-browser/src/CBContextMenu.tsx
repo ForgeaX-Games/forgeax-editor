@@ -12,6 +12,7 @@ import { t as tr } from '@forgeax/editor-core/i18n';
 // it always routes through the host's reliable cb-dialog delete guards
 // (onDelete / onDeleteFolder), which paint correctly in the standalone host.
 import { prompt as promptDialog } from '@forgeax/editor-ui';
+import type { SubjectActionRequest } from './workspace/subject-actions';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
  *  material/mesh: direct bindAssetRef op. texture/image: createMaterial + bindAssetRef.
@@ -77,6 +78,7 @@ function getAssetsInSelection(selection: CBSelection): CBAsset[] {
 }
 
 export interface CRUDCallbacks {
+  onSubjectAction?: (request: Omit<SubjectActionRequest, 'snapshot'>) => void;
   onRename?: (asset: CBAsset) => void;
   onNewFolder?: (parentPath: string) => void;
   onReload?: () => void;
@@ -133,6 +135,12 @@ export function buildAssetContextMenu(
           }
         })();
       }
+    }},
+    { id: 'replace', label: 'Replace asset', action: () => {
+      callbacks?.onSubjectAction?.({ operation: 'replace', asset });
+    }},
+    { id: 'reimport', label: 'Reimport asset', action: () => {
+      callbacks?.onSubjectAction?.({ operation: 'reimport', asset });
     }},
     { id: 'duplicate', label: tr('editor.contentBrowser.contextMenu.duplicate'), shortcut: 'Ctrl+D', action: () => {
       for (const a of targets) {

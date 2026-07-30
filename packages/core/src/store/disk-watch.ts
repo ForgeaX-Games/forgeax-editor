@@ -3,6 +3,7 @@
 // document reload is intentionally not automatic here.
 //
 import { broadcastAssetsChanged } from './assets-changed';
+import { createAssetObserverAdapter } from '../product/asset-producer-adapter';
 import {
   ctx,
   scenePath,
@@ -72,6 +73,7 @@ interface AssetDiskChangedEvent {
  * decide how to refetch and render their own data.
  */
 export function initDiskWatch(): () => void {
+  const observer = createAssetObserverAdapter();
   let ws: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
@@ -101,6 +103,12 @@ export function initDiskWatch(): () => void {
       readDisk: readSceneFromDisk,
     });
     if (echo) return;
+    observer.observe({
+      kind: 'asset-change',
+      rootId: msg.gameSlug ?? ctx.currentSceneId,
+      scope: msg.path ?? msg.gamePath ?? 'assets',
+      resourceRevision: msg.change ?? 'external-change',
+    });
     broadcastAssetsChanged('pack-changed', 'disk-watch');
   };
 

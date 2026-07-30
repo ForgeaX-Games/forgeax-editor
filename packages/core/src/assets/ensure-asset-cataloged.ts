@@ -29,6 +29,16 @@ export async function ensureAssetCataloged(
   if (registry.lookup(guid) !== undefined) return true;
   const parsed = AssetGuid.parse(guid);
   if (!parsed.ok) return false;
-  const result = await registry.loadByGuid(parsed.value).catch(() => null);
-  return result !== null && result.ok;
+  const result = await registry.loadByGuid(parsed.value).catch((err: unknown) => {
+    console.info('[mat-tex-drop]', 'ensureAssetCataloged: loadByGuid threw', { guid, err });
+    return null;
+  });
+  if (result === null || !result.ok) {
+    console.info('[mat-tex-drop]', 'ensureAssetCataloged: loadByGuid failed', {
+      guid,
+      error: result === null ? null : (result as { error?: unknown }).error,
+    });
+    return false;
+  }
+  return true;
 }

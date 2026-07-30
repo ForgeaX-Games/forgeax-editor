@@ -16,7 +16,7 @@ export interface ProjectedGatewayAction {
   readonly description: string;
   readonly schema?: Record<string, unknown>;
   readonly capability: 'delete' | 'write' | 'other';
-  readonly surface: 'ui';
+  readonly surface: 'both';
   readonly run: (args: Record<string, unknown>) => { status: 'completed' | 'rejected'; reason?: string };
 }
 
@@ -28,19 +28,23 @@ function capabilityFor(descriptor: OpDescriptor): ProjectedGatewayAction['capabi
   return 'other';
 }
 
-export function projectGatewayOps(source: GatewayActionSource, register: RegisterGatewayAction): () => void {
-  const disposers = source.listOps().map((descriptor) => register({
+export function projectGatewayActions(source: GatewayActionSource): readonly ProjectedGatewayAction[] {
+  return Object.freeze(source.listOps().map((descriptor): ProjectedGatewayAction => ({
     id: descriptor.id,
     title: descriptor.title ?? descriptor.id,
     description: `Dispatch editor operation ${descriptor.id}.`,
     ...(descriptor.argsSchema ? { schema: descriptor.argsSchema as unknown as Record<string, unknown> } : {}),
     capability: capabilityFor(descriptor),
-    surface: 'ui',
-    run: (args) => {
+    surface: 'both',
+    run: (args: Record<string, unknown>) => {
       const result = source.dispatch({ kind: descriptor.id, ...args }, 'human');
       return result.ok ? { status: 'completed' } : { status: 'rejected', reason: result.error.hint ?? result.error.code };
     },
-  }));
+  })));
+}
+
+export function projectGatewayOps(source: GatewayActionSource, register: RegisterGatewayAction): () => void {
+  const disposers = projectGatewayActions(source).map((action) => register(action));
   return () => {
     for (let i = disposers.length - 1; i >= 0; i--) disposers[i]!();
   };

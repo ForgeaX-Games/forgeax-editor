@@ -34,6 +34,22 @@ function gitRevision(cwd: string): string {
   return result.stdout.trim();
 }
 
+function gitCommitExists(cwd: string, revision: string): boolean {
+  const result = spawnSync('git', ['cat-file', '-e', `${revision}^{commit}`], {
+    cwd,
+    encoding: 'utf8',
+  });
+  return result.status === 0;
+}
+
+function gitIsAncestor(cwd: string, ancestor: string, descendant: string): boolean {
+  const result = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+    cwd,
+    encoding: 'utf8',
+  });
+  return result.status === 0;
+}
+
 function run(command: string, args: string[]): CommandResult {
   const result = spawnSync(command, args, {
     cwd: editorRoot,
@@ -55,6 +71,13 @@ function run(command: string, args: string[]): CommandResult {
 export function createAdapter() {
   const productRevision = gitRevision(editorRoot);
   const contractRevision = gitRevision(process.cwd());
+  const adapterRevision = productRevision;
+  const immutable =
+    gitCommitExists(editorRoot, productRevision) &&
+    gitCommitExists(editorRoot, contractRevision) &&
+    gitCommitExists(editorRoot, adapterRevision);
+  const isAncestor =
+    immutable && gitIsAncestor(editorRoot, adapterRevision, contractRevision);
   let storageResult: CommandResult | undefined;
   let gameplayResult: CommandResult | undefined;
 
@@ -63,9 +86,9 @@ export function createAdapter() {
       product: 'standalone-editor' as const,
       productRevision,
       contractRevision,
-      adapterRevision: productRevision,
+      adapterRevision,
       publicManifest: manifest,
-      revisionEvidence: { immutable: true, isAncestor: true },
+      revisionEvidence: { immutable, isAncestor },
     },
     manifest,
     smoke(step: SmokeStep): SmokeObservation {

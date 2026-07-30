@@ -1,5 +1,4 @@
-// source-file-ops — deleteSourceFile session applier (editor data-operation-
-// view convergence M1).
+// source-file-ops — deleteSourceFile session applier and legacy run projection.
 
 import { registerApplier, type SessionApplier } from '../io/appliers';
 import { assetIO } from '../io/asset-io-facade';
@@ -12,6 +11,10 @@ import {
   markSourceFileDeleted,
   hasSourceFileDeleteStatus,
 } from './source-file-delete-status';
+
+// The async continuation remains an IO implementation detail. Product callers
+// should use the OperationRun query; source-file-delete-status is compatibility
+// display data and never decides whether the operation completed.
 
 type DeleteSourceFileCommand = Extract<EditorOp, { kind: 'deleteSourceFile' }>;
 

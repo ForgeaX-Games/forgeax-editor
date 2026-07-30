@@ -8,6 +8,8 @@ import type { AssetBrowserCatalogRoot, AssetBrowserSnapshot } from '@forgeax/edi
 import type { CBAsset } from '../types';
 import { registryEntryToCBAsset, type DiskTreeNode } from '../content-browser-format';
 import { useAssetBrowserSnapshot } from './useAssetBrowserSnapshot';
+import { useWorkspaceSnapshot } from '../workspace/useWorkspaceSnapshot';
+import type { AssetWorkspaceSnapshot } from '@forgeax/editor-core';
 
 export interface CBDataResult {
   allAssets: CBAsset[];
@@ -15,6 +17,7 @@ export interface CBDataResult {
   reload: () => void;
   diskTree: DiskTreeNode | null;
   fetchDiskDirs: () => Promise<void>;
+  workspaceSnapshot: AssetWorkspaceSnapshot;
 }
 
 function relativeDir(path: string): string {
@@ -26,13 +29,25 @@ function relativeDir(path: string): string {
  *  vite-plugin-pack can return paths in several non-standard forms:
  *    - relative with `../`: `../Forgeax-games/<slug>/assets/foo.mp3`
  *    - absolute: `E:/ForgeaxEditor/Forgeax-games/<slug>/assets/foo.mp3`
+ *    - full URL: `http://127.0.0.1:15290/Forgeax-games/<slug>/assets/foo.pack.json`
+ *      (the engine's resolveCatalogAssetUrl resolves every pack-index row's
+ *      packageUrl against packIndexUrl via `new URL(rel, base).href` — correct
+ *      for the engine's own fetch() domain, but the file backend rejects it)
  *  Both standalone (`singleGameFileBackend`) and studio (`studioFileBackend`)
  *  expect a relative path rooted at the slug (e.g. `<slug>/assets/foo.mp3`).
  *
  *  **Safe**: normal relative paths already starting with `<slug>/` or `games/<slug>/`
- *  (no `..`, no drive letter) pass through unchanged. */
-function normalizeStoragePath(path: string | undefined, slug: string): string | undefined {
+ *  (no `..`, no drive letter, no URL scheme) pass through unchanged.
+ *  Exported for unit tests (pure function). */
+export function normalizeStoragePath(path: string | undefined, slug: string): string | undefined {
   if (!path) return path;
+  // Unwrap a full URL to its pathname so the slug search below reduces it to
+  // `<slug>/<rel>` (the origin is a runtime-load detail, not a disk address).
+  if (path.includes('://')) {
+    try {
+      path = new URL(path).pathname;
+    } catch { /* unparseable — fall through with the raw value */ }
+  }
   // Already a normal relative path (no `..`, no absolute drive/UNC prefix)
   const isAbsolute = /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('/');
   if (!isAbsolute && !path.includes('..')) return path;
@@ -87,6 +102,7 @@ export function useCBData(
   catalogRoots: readonly AssetBrowserCatalogRoot[],
 ): CBDataResult {
   const { snapshot, loading, reload } = useAssetBrowserSnapshot(gameSlug, catalogRoots);
+  const workspaceSnapshot = useWorkspaceSnapshot(snapshot);
   const allAssets = useMemo<CBAsset[]>(
     // The read model's sourcePath is intentionally projected for UI navigation
     // (e.g. catalog/assets → assets). CRUD must retain the original catalog
@@ -96,7 +112,7 @@ export function useCBData(
     // → `<slug>/...`) so standalone's singleGameFileBackend can resolve them.
     () => snapshot.assets.map((asset, index) => registryEntryToCBAsset({
       ...asset,
-      relativeUrl: normalizeStoragePath(asset.storageRelativeUrl, gameSlug) ?? asset.storageRelativeUrl,
+      packageUrl: normalizeStoragePath(asset.storagePackageUrl, gameSlug) ?? asset.storagePackageUrl,
       sourcePath: normalizeStoragePath(asset.storageSourcePath, gameSlug) ?? normalizeStoragePath(asset.sourcePath, gameSlug),
       refs: asset.refs,
     }, index)),
@@ -109,5 +125,6 @@ export function useCBData(
     reload,
     diskTree,
     fetchDiskDirs: async () => { await reload(); },
+    workspaceSnapshot,
   };
 }

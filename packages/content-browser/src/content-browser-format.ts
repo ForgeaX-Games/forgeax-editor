@@ -42,7 +42,7 @@ export interface RegistryCatalogEntry {
   guid: string;
   kind: string;
   name?: string;
-  relativeUrl: string;
+  packageUrl: string;
   refs?: readonly string[];
   sourcePath?: string;
 }
@@ -295,20 +295,26 @@ export function fileSpecificMenuItems(
 
 export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): CBAsset {
   // packPath is the CRUD target on disk — NOT the runtime load URL. For an
-  // internal `.pack.json` asset the two coincide (relativeUrl IS the pack). For
-  // an external import (FBX/GLB/HDR/audio/font) relativeUrl points at a DDC
-  // artefact (`*.{guid}.bin` or `/__forgeax-ddc/{guid}.pack.json`) that has no
-  // stable mapping back to the source; the CRUD target is the `.meta.json`
-  // sidecar beside the source file. The engine surfaces that source location as
-  // `sourcePath`; derive the sidecar path from it. Fallback to relativeUrl for
-  // inline/dev entries that never went through pack-index (no sidecar, no CRUD).
-  const packPath = (e.relativeUrl.includes('__forgeax-ddc'))
-    ? (e.sourcePath ? metaPathForSource(e.sourcePath.replace(/^\//, '')) : e.relativeUrl)
-    : e.relativeUrl.endsWith('.pack.json')
-      ? e.relativeUrl
+  // internal `.pack.json` asset the CRUD target is the pack's SOURCE path. In a
+  // standalone editor packageUrl and sourcePath coincide (both game-relative), but
+  // in a host that serves assets through a preview route (Studio) packageUrl is a
+  // serve URL under the host's preview games directory (e.g.
+  // `/preview/<games-dir>/<slug>/assets/Materials.pack.json`) that
+  // the `/api/files` write gate REJECTS (400) — so a material color edit would
+  // read/write-fail silently and revert on the next reload/save. Prefer sourcePath
+  // (the real, writable path the pack-index reports) and fall back to packageUrl
+  // only for inline/dev entries with no sourcePath. For an external import
+  // (FBX/GLB/HDR/audio/font) packageUrl points at a DDC artefact
+  // (`*.{guid}.bin` or `/__forgeax-ddc/{guid}.pack.json`) that has no stable
+  // mapping back to the source; the CRUD target is the `.meta.json` sidecar beside
+  // the source file, derived from sourcePath.
+  const packPath = (e.packageUrl.includes('__forgeax-ddc'))
+    ? (e.sourcePath ? metaPathForSource(e.sourcePath.replace(/^\//, '')) : e.packageUrl)
+    : e.packageUrl.endsWith('.pack.json')
+      ? (e.sourcePath ? e.sourcePath.replace(/^\//, '') : e.packageUrl)
       : e.sourcePath
         ? metaPathForSource(e.sourcePath.replace(/^\//, ''))
-        : e.relativeUrl;
+        : e.packageUrl;
   return {
     type: 'asset',
     guid: e.guid,

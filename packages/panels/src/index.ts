@@ -24,3 +24,18 @@ export { InspectorPanel } from './Inspector';
 // MatGraph/Anim equivalent). See plan-strategy S2 D-3, requirements AC-13.
 export { LauncherPanel } from './Launcher';
 export { AssetInspectorPanel } from './AssetInspector';
+export {
+  buildOperationCenterRows,
+  getOperationCenterRows,
+  getOperationProjectionSource,
+  installOperationProjectionSource,
+  projectRunFacts,
+  subscribeOperationProjection,
+} from './operations/run-view-model';
+export type {
+  OperationCenterAction,
+  OperationCenterProjectionInput,
+  OperationCenterRow,
+  OperationProjectionSource,
+  OperationRunFactProjection,
+} from './operations/run-view-model';

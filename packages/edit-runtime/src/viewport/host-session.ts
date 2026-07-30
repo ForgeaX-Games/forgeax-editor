@@ -18,9 +18,9 @@
 import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
-import { entComponent, notifyDocChanged, publishMeshStats } from '@forgeax/editor-core';
+import { createRuntimeUiGraph, entComponent, panelBridge, publishMeshStats } from '@forgeax/editor-core';
 import type { EngineFacade, EntityHandle, SelectedAsset } from '@forgeax/editor-core';
-import { createRunLifecycle, type RunLifecycle } from './run-lifecycle';
+import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
 import { ensureGamePluginsLoaded, addGamePluginSystems, type GamePluginLoad } from './game-plugins';
@@ -547,9 +547,17 @@ export function createHostSession(deps: HostSessionDeps): {
       return undefined;
     };
 
+    const runtimeUiGraph = createRuntimeUiGraph();
+    const liveWorldPublisher = createLiveWorldFrameEndPublisher(runtimeUiGraph);
+    const canPublishFrameEnd = typeof (ctx.world as unknown as { addSystem?: unknown }).addSystem === 'function'
+      && typeof (ctx.world as unknown as { removeSystem?: unknown }).removeSystem === 'function';
+    if (canPublishFrameEnd) liveWorldPublisher.bind(ctx.world as never);
+
     runLifecycle = createRunLifecycle({
       editorApp: app,
       gateway,
+      publisher: canPublishFrameEnd ? liveWorldPublisher : undefined,
+      editWorld: ctx.world,
       assemble: async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> => {
         // Load asset-resident plugins BEFORE assembling so every plugin component
         // is registered when the defaultScene instantiates (a scene entity carrying
@@ -593,16 +601,11 @@ export function createHostSession(deps: HostSessionDeps): {
       onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
       onPlayStarted: ctx.onPlayStarted,
       onPlayFailed: ctx.onPlayFailed,
-      // DEV bridge follow-the-live-world: register the eval-queue drain on the play
-      // world so a CLI eval submitted during play still drains while the edit App is
-      // paused (undefined in production/headless — bridge is DEV-only). See
-      // run-lifecycle onPlayFrame + ViewportComponent bridge block.
+      // DEV bridge only: register the eval-queue drain on the play world so a CLI
+      // eval submitted during play still drains while the edit App is paused.
+      // This callback is not a runtime UI invalidation channel.
       onPlayFrame: () => {
         ctx.onPlayFrame?.();
-        // The transient play world mutates through gameplay systems rather than
-        // document ops. Notify active-world panels (Hierarchy/Inspector) once per
-        // live frame without recording an authored-document mutation.
-        notifyDocChanged();
       },
       onDirtyPlayHint: () => {
         // D-10: play re-instantiates the last-SAVED scene from disk; unsaved
@@ -633,6 +636,19 @@ export function createHostSession(deps: HostSessionDeps): {
     // ── Mesh-stats publish (was bootEditor :1105) ───────────────────────────────
     installMeshStatsPublisher(renderer);
 
+    // ── Selected-material catalog hook ──────────────────────────────────────────
+    // Ensure a Content-Browser-selected material is present in the registry catalog
+    // so it stays editable after a reload (fix: standalone-pack material color edit
+    // silently no-ops after refresh — see installSelectedMaterialCatalogHook).
+    installSelectedMaterialCatalogHook(renderer);
+
+    // ── Visible-card material prefetch hook ─────────────────────────────────────
+    // Companion to the selected-material hook: warm a standalone-pack material's
+    // catalogue entry as soon as its Content Browser card scrolls into view
+    // (panelBridge 'requestAssetPrefetch' from CBAssetItem's IntersectionObserver),
+    // so the thumbnail shows the real colour and an edit resolves WITHOUT a click.
+    const stopAssetPrefetch = installAssetPrefetchHook(renderer);
+
     // M3: single-realm — no cross-window sync needed, engine is in-process.
     // initSync() is deleted (plan-strategy S7 M3, requirements AC-06).
 
@@ -651,6 +667,9 @@ export function createHostSession(deps: HostSessionDeps): {
 
     const dispose = (options: { flushPendingSave?: boolean } = {}): void => {
       runLifecycle?.dispose();
+      if (canPublishFrameEnd) {
+        try { liveWorldPublisher.unbind(ctx.world as never); } catch { /* best effort */ }
+      }
       // Flush any pending save one last time before tearing the session down so a
       // cross-game switch never drops the previous game's unsaved edits. Asset-
       // driven reloads pass flushPendingSave:false because the disk change is the
@@ -661,6 +680,7 @@ export function createHostSession(deps: HostSessionDeps): {
       }
       stopDiskWatch();
       disposeSaveBeacons();
+      stopAssetPrefetch();
     };
 
     return {
@@ -749,6 +769,87 @@ export function createHostSession(deps: HostSessionDeps): {
     onSelectionChange(() => { void publishForActiveMesh(); });
     gateway.subscribe(() => { void publishForActiveMesh(); });
     void publishForActiveMesh();
+  }
+
+  // ── selected-material catalog hook ────────────────────────────────────────────
+  // A material created in the Content Browser lives in a STANDALONE pack (e.g.
+  // Materials.pack.json) and is not referenced by the scene graph until it is
+  // applied to an object. In the SAME session the createMaterial post-write
+  // catalog-sync hook (registerPostAssetWriteCatalogSync) catalogs it, so it is
+  // immediately editable. After a reload, however, nothing loads such a material
+  // into the registry's assetCatalog — the scene-load loadByGuid recursion only
+  // visits GUIDs the scene actually references.
+  //
+  // The gateway's _preFillMaterialOp reads assetCatalog SYNCHRONOUSLY (catalog-only,
+  // no fetch); when the selected material is absent it cannot fill _oldEntry/_oldPatch
+  // and applyUpdateMaterialParams rejects the edit with "_oldPatch missing" — the
+  // color change silently does nothing (the reported "刷新后编辑不生效").
+  //
+  // Fix: mirror the mesh-stats publisher — when a material becomes the MAIN-window
+  // asset selection, loadByGuid it (idempotent: loadByGuid fast-paths an already
+  // catalogued GUID). This re-establishes the catalog entry the edit needs, matching
+  // the same-session post-write catalog-sync behaviour.
+  function installSelectedMaterialCatalogHook(renderer: RendererLike): void {
+    let lastGuid: string | null = null;
+    const ensureSelectedMaterialCatalogued = async (): Promise<void> => {
+      const a = getAssetSelection();
+      const guid = a?.kind === 'material' ? a.guid : null;
+      if (guid === null || guid === lastGuid) return;
+      lastGuid = guid;
+      try {
+        const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+        const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(guid);
+        if (!parsed.ok || parsed.value === undefined) return;
+        // Re-check after the await: selection may have changed while importing.
+        const cur = getAssetSelection();
+        if (!(cur?.kind === 'material' && cur.guid === guid)) return;
+        await renderer.assets.loadByGuid(parsed.value);
+      } catch {
+        /* best effort — the edit path still surfaces a structured error if needed */
+      }
+    };
+    onAssetSelectionChange(() => { void ensureSelectedMaterialCatalogued(); });
+    void ensureSelectedMaterialCatalogued();
+  }
+
+  // ── visible-card material prefetch (companion to the selection hook) ──────────
+  // CBAssetItem fires panelBridge 'requestAssetPrefetch' when a material card
+  // enters the viewport. We loadByGuid it so the registry catalogue (and thus the
+  // thumbnail meta + _preFillMaterialOp) is warm before the user clicks. loadByGuid
+  // is idempotent and fast-paths an already-catalogued GUID, so re-emits are cheap;
+  // we still de-dupe per GUID. The catalogue-refresh broadcast is COALESCED — a
+  // screenful of new materials triggers ONE Content Browser reload, not one per
+  // card. Returns an unsubscribe so the session dispose drops the singleton
+  // panelBridge listener (else a cross-game switch leaks a stale renderer closure).
+  function installAssetPrefetchHook(renderer: RendererLike): () => void {
+    const done = new Set<string>();
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let loadedSinceFlush = false;
+    const scheduleBroadcast = (): void => {
+      if (flushTimer !== null) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        if (loadedSinceFlush) { loadedSinceFlush = false; broadcastAssetsChanged(); }
+      }, 60);
+    };
+    const off = panelBridge.on('requestAssetPrefetch', ({ guid, kind }) => {
+      if (kind !== 'material') return;
+      const key = guid.toLowerCase();
+      if (done.has(key)) return;
+      done.add(key);
+      void (async () => {
+        try {
+          const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+          const parsed = (AssetGuid as { parse: (s: string) => { ok: boolean; value?: unknown } }).parse(guid);
+          if (!parsed.ok || parsed.value === undefined) return;
+          const res = await renderer.assets.loadByGuid(parsed.value);
+          if (res.ok) { loadedSinceFlush = true; scheduleBroadcast(); }
+        } catch {
+          /* best effort — the selection hook + edit path still surface errors */
+        }
+      })();
+    });
+    return () => { if (flushTimer !== null) clearTimeout(flushTimer); off(); };
   }
 
   // ── preview-skin + animation hook (was bootEditor :1217) ──────────────────────

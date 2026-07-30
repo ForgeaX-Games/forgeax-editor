@@ -10,6 +10,7 @@
 //   requirements AC-09: pure structural migration.
 
 import { panelBridge } from '../io/panel-bridge';
+import { recordRuntimeUiDomainPublish } from '../io/runtime-ui-diagnostics';
 
 export type AssetsChangedHint = 'directory-only' | 'pack-changed';
 export type AssetsChangedSource = 'local-op' | 'disk-watch';
@@ -18,5 +19,6 @@ export type AssetsChangedSource = 'local-op' | 'disk-watch';
  *  `hint` allows receivers to skip work: 'directory-only' means no pack changed
  *  (only folder CRUD), so viewport refreshCatalog can be skipped. */
 export function broadcastAssetsChanged(hint?: AssetsChangedHint, source?: AssetsChangedSource): void {
+  recordRuntimeUiDomainPublish('asset');
   panelBridge.emit('assetsChanged', { ...(hint === undefined ? {} : { hint }), ...(source === undefined ? {} : { source }) });
 }

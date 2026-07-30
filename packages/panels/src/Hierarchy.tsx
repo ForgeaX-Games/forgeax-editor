@@ -27,7 +27,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useIsHoverEntity, useIsSelected, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -42,6 +42,8 @@ import {
   expandHierarchyAll,
   getHierarchyPanelSnapshot,
   getHierarchyVisibleMatches,
+  createHierarchyStructureSelector,
+  type HierarchyStructureProjection,
   hasHierarchyViewFilter,
   revealHierarchyEntity,
   subscribeHierarchyPanelState,
@@ -351,9 +353,11 @@ function subscribeRowVm(fn: () => void): () => void {
     fn();
   });
 }
-function useHierarchyRowVM(id: EntityHandle): HierarchyRowVM {
-  const getSnapshot = useCallback(() => rowVmSnapshot(id), [id]);
-  return useSyncExternalStore(subscribeRowVm, getSnapshot, getSnapshot);
+const projectionVmCache = new WeakMap<object, Map<EntityHandle, HierarchyRowVM>>();
+function useHierarchyRowVM(id: EntityHandle, projection?: HierarchyStructureProjection): HierarchyRowVM {
+  const getSnapshot = useCallback(() => projection ? (projectionRow(projection, id) ?? MISSING_ROW_VM) : rowVmSnapshot(id), [id, projection]);
+  const subscribe = useCallback((listener: () => void) => projection ? (() => undefined) : subscribeRowVm(listener), [projection]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 // Per-row collapse subscription: toggling one node's collapse re-renders only
 // the rows whose own collapsed flag flips, not the whole tree.
@@ -370,6 +374,41 @@ function useStableIds(ids: readonly EntityHandle[]): readonly EntityHandle[] {
   return ref.current;
 }
 
+function useHierarchyStructureProjection(): HierarchyStructureProjection | undefined {
+  const graph = getActiveRuntimeUiGraph();
+  const holder = useRef<{ graph: unknown; generation: number; selector: ReturnType<typeof createHierarchyStructureSelector>; mounted: ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']> } | null>(null);
+  const generation = graph?.stats().worldGeneration ?? 0;
+  if (graph && (holder.current?.graph !== graph || holder.current.generation !== generation)) {
+    const selector = createHierarchyStructureSelector(graph);
+    holder.current = { graph, generation, selector, mounted: selector.mount() };
+  }
+  const binding = holder.current;
+  const getSnapshot = useCallback(() => binding?.mounted.getSnapshot(), [binding]);
+  const subscribe = useCallback((listener: () => void) => binding?.mounted.subscribe(listener) ?? (() => undefined), [binding]);
+  useEffect(() => () => binding?.mounted.unsubscribe(), [binding]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function projectionRow(projection: HierarchyStructureProjection | undefined, id: EntityHandle): HierarchyRowVM | undefined {
+  if (!projection) return undefined;
+  const row = projection?.rows.find((candidate) => candidate.id === id);
+  if (!row) return undefined;
+  const cache = projectionVmCache.get(projection) ?? new Map<EntityHandle, HierarchyRowVM>();
+  projectionVmCache.set(projection, cache);
+  const previous = cache.get(id);
+  if (previous) return previous;
+  const value = {
+    exists: true,
+    name: row.name,
+    typeId: row.typeId,
+    hidden: row.hidden ?? false,
+    mobilityKey: row.mobility,
+    childIds: row.childIds,
+  };
+  cache.set(id, value);
+  return value;
+}
+
 const Row = memo(function Row({
   id,
   depth,
@@ -379,6 +418,7 @@ const Row = memo(function Row({
   highlight,
   readOnly,
   columns,
+  projection,
 }: {
   id: EntityHandle;
   depth: number;
@@ -388,13 +428,14 @@ const Row = memo(function Row({
   highlight?: string | undefined;
   readOnly?: boolean | undefined;
   columns: HierarchyColumns;
+  projection?: HierarchyStructureProjection | undefined;
 }) {
   const { t } = useTranslation();
   // Per-row subscriptions: each source (structural VM / selection / hover /
   // collapse) re-renders ONLY the rows whose own value actually flips
   // (useSyncExternalStore bails on Object.is), so a doc churn or a hover move
   // no longer repaints the whole tree.
-  const vm = useHierarchyRowVM(id);
+  const vm = useHierarchyRowVM(id, projection);
   const isSelected = useIsSelected(id);
   const isHovered = useIsHoverEntity(id);
   const isCollapsed = useIsHierarchyCollapsed(id);
@@ -568,7 +609,7 @@ const Row = memo(function Row({
       </div>
       {!isCollapsed &&
         kids.map((k) => (
-          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} />
+          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} projection={projection} />
         ))}
     </>
   );
@@ -619,6 +660,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
   toggleCollapse,
   readOnly,
   columns,
+  projection,
 }: {
   childrenIds: readonly EntityHandle[];
   visibilityIds?: readonly EntityHandle[] | undefined;
@@ -629,6 +671,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
   toggleCollapse: (id: EntityHandle) => void;
   readOnly: boolean;
   columns: HierarchyColumns;
+  projection?: HierarchyStructureProjection | undefined;
 }) {
   const { t } = useTranslation();
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
@@ -719,6 +762,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
           highlight={highlight}
           readOnly={readOnly}
           columns={columns}
+          projection={projection}
         />
       ))}
     </>
@@ -727,7 +771,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
 
 export function HierarchyPanel() {
   const { t } = useTranslation();
-  const docVersion = useDocVersion();
+  const projection = useHierarchyStructureProjection();
   const view = useSyncExternalStore(
     subscribeHierarchyPanelState,
     getHierarchyPanelSnapshot,
@@ -754,8 +798,10 @@ export function HierarchyPanel() {
   // so the SceneFolderRow memo (and therefore the rows) stay put across a 60fps
   // churn. Each Row otherwise self-subscribes to its own structural snapshot —
   // no whole-tree component index is threaded down anymore.
-  void docVersion;
-  const roots = useStableIds(worldReady ? stableDisplayOrder(childrenOf(activeWorld, null)) : EMPTY_IDS);
+  const projectedRoots = projection
+    ? projection.rows.filter((row) => !projection.rows.some((candidate) => candidate.childIds.includes(row.id))).map((row) => row.id)
+    : worldReady ? childrenOf(activeWorld, null) : EMPTY_IDS;
+  const roots = useStableIds(worldReady ? stableDisplayOrder(projectedRoots) : EMPTY_IDS);
   const toggleCollapse = useCallback((id: EntityHandle) => toggleHierarchyCollapsed(id), []);
   const spawnEntity = () => {
     if (readOnly) return;
@@ -943,6 +989,7 @@ export function HierarchyPanel() {
               toggleCollapse={toggleCollapse}
               readOnly={readOnly}
               columns={view.columns}
+              projection={projection}
             />
           )}
         </div>
@@ -985,6 +1032,7 @@ export function HierarchyPanel() {
             toggleCollapse={toggleCollapse}
             readOnly={readOnly}
             columns={view.columns}
+            projection={projection}
           />
         </div>
       )}

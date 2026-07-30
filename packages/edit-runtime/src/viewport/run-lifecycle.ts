@@ -48,7 +48,49 @@
 //   requirements section 8 (progressive-disclosure header — proposition first)
 
 import type { PlayAssembly } from './play-assemble';
-import { Update, type World } from '@forgeax/engine-ecs';
+import { FrameEnd, Update, type World } from '@forgeax/engine-ecs';
+
+export interface LiveWorldPublisherGraph {
+  bindWorld(world: unknown): number;
+  unbindWorld(expectedWorld?: unknown): boolean;
+  publish(options?: { readonly world?: unknown; readonly worldGeneration?: number }): unknown;
+}
+
+export interface LiveWorldFrameEndWorld {
+  addSystem: (schedule: typeof FrameEnd, descriptor: { name: string; queries: readonly []; fn: () => void }) => unknown;
+  removeSystem: (schedule: typeof FrameEnd, name: string) => unknown;
+}
+
+export interface LiveWorldFrameEndPublisher {
+  bind(world: LiveWorldFrameEndWorld): void;
+  publishFrameEnd(): void;
+  unbind(world: LiveWorldFrameEndWorld): void;
+}
+
+export function createLiveWorldFrameEndPublisher(graph: LiveWorldPublisherGraph): LiveWorldFrameEndPublisher {
+  let activeWorld: LiveWorldFrameEndWorld | null = null;
+  let generation = 0;
+  const systemName = 'editor-runtime-ui-publisher';
+  return {
+    bind(world) {
+      if (activeWorld === world) return;
+      if (activeWorld !== null) {
+        try { graph.unbindWorld(activeWorld); } catch { /* preserve the new bind */ }
+      }
+      generation = graph.bindWorld(world);
+      world.addSystem(FrameEnd, { name: systemName, queries: [], fn: () => graph.publish({ world, worldGeneration: generation }) });
+      activeWorld = world;
+    },
+    publishFrameEnd() {
+      if (activeWorld !== null) graph.publish({ world: activeWorld, worldGeneration: generation });
+    },
+    unbind(world) {
+      try { world.removeSystem(FrameEnd, systemName); } catch { /* cleanup continues */ }
+      try { graph.unbindWorld(world); } catch { /* adjacent teardown cannot block unbind */ }
+      if (activeWorld === world) activeWorld = null;
+    },
+  };
+}
 
 // ── loose engine handles (the ECS/App/renderer types evolve independently; keep
 // the `as never`/structural discipline used across this package) ──────────────
@@ -73,6 +115,15 @@ export interface RunGateway {
   failPlayAttempt?(error: { code: string; hint?: string }): void;
 }
 
+/** Optional OperationRun projection supplied by the product host. */
+export interface RunLifecycleRunProjection {
+  accepted(operationId: string): string;
+  running(runId: string): void;
+  succeeded(runId: string, result?: unknown): void;
+  failed(runId: string, error: { code: string; hint: string; retryable?: boolean; recoveryActions?: readonly string[] }): void;
+  cancelled(runId: string): void;
+}
+
 /** The assembly result the lifecycle drives (from play-assemble.ts). */
 type AssembleResult = { ok: true; value: PlayAssembly } | { ok: false; error: unknown };
 
@@ -86,6 +137,12 @@ export interface RunLifecycleDeps {
   readonly editorApp: EditorAppHandle;
   /** The gateway — enterPlay/exitPlay switch the single active-world pointer (D-3). */
   readonly gateway: RunGateway;
+  /** Editor-owned FrameEnd publisher; Studio never owns this lifecycle state. */
+  readonly publisher?: LiveWorldFrameEndPublisher;
+  /** The edit World restored after stopping a play World. */
+  readonly editWorld?: unknown;
+  /** Optional run projection; omitted by older viewport-only hosts. */
+  readonly runProjection?: RunLifecycleRunProjection;
   /**
    * Assemble a fresh play world + App for one ▶ Play (play-assemble.ts). Called
    * on every ▶ (level-load — a new world each time, never restored). Returns a
@@ -105,13 +162,13 @@ export interface RunLifecycleDeps {
    */
   readonly onDirtyPlayHint?: () => void;
   /**
-   * Optional: a per-frame callback to register on the PLAY App's frame loop right
+   * Optional DEV bridge callback to register on the PLAY App's frame loop right
    * after it starts. The edit App is paused during play (editorApp.pause, AC-07),
    * so anything bound to the editor world's Update schedule stops ticking — most importantly
    * the DEV bridge's eval-queue drain, which would otherwise leave a CLI eval
    * submitted during play queued forever. Threading it here lets the drain follow
    * the live app: it is registered on the play App on ▶ and dropped with that app
-   * on ■ (GC, no leak). Omitted in headless and in production (bridge is DEV-only).
+   * on ■ (GC, no leak). It is not a runtime UI invalidation signal.
    */
   readonly onPlayFrame?: () => void;
   /** Called only after the active-world pointer has changed to the live play world. */
@@ -134,6 +191,7 @@ export interface RunLifecycle {
    *  Used by installVisibilityPause to pause the correct app when the viewport
    *  is hidden during Play mode. */
   getPlayPauseHandle(): { pause(): void; resume(): void } | null;
+  currentPlayRunId(): string | null;
 }
 
 /**
@@ -152,6 +210,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   let disposed = false;
   let generation = 0;
   let editorPaused = false;
+  let playRunId: string | null = null;
 
   function resumeEditorIfLive(): void {
     if (!editorPaused || disposed) return;
@@ -183,6 +242,8 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     if (active !== null) return; // already playing — ▶ is a no-op (idempotent)
     const token = ++generation;
     starting = true;
+    playRunId = deps.runProjection?.accepted('play') ?? null;
+    if (playRunId !== null) deps.runProjection?.running(playRunId);
 
     // solo round-8 #3: mark the async assemble in flight so the gateway's
     // playPhase reads 'starting' — a front-door poller can distinguish
@@ -220,16 +281,20 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       // anything else is stringified.
       const err = res.error;
       const structured = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : null;
-      const hint = structured && typeof structured.hint === 'string'
-        ? structured.hint
-        : err instanceof Error
-          ? err.message
-          : String(err);
+      let hint = String(err);
+      if (err instanceof Error) hint = err.message;
+      if (structured && typeof structured.hint === 'string') hint = structured.hint;
       deps.gateway.failPlayAttempt?.({ code: 'play-assemble-failed', hint });
+      if (playRunId !== null) {
+        deps.runProjection?.failed(playRunId, { code: 'play-assemble-failed', hint, retryable: true, recoveryActions: ['operation.retry'] });
+        playRunId = null;
+      }
       deps.onPlayFailed?.();
       return;
     }
     active = res.value;
+
+    deps.publisher?.bind(active.playWorld as LiveWorldFrameEndWorld);
 
     // Start the play App's frame loop — now the single live rAF driving the
     // play world (D-2). The shared renderer draws the play world per-frame (D-1).
@@ -238,8 +303,9 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       console.warn('[editor] ▶ Play playApp.start() failed:', startR.error);
     }
 
-    // Follow-the-live-world: the edit app is paused, so attach the bridge drain
-    // to the play world's Update schedule for the duration of this play assembly.
+    // Follow-the-live-world bridge: the edit app is paused, so attach the eval
+    // drain to the play world's Update schedule for the duration of this assembly.
+    // Runtime UI refresh is owned by the FrameEnd publisher below.
     if (deps.onPlayFrame) {
       (active.playWorld as World).addSystem(Update, {
         name: 'editor-play-bridge-eval-drain',
@@ -259,6 +325,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // world, so Hierarchy and viewport chrome never claim Play while still reading
     // the frozen edit document during asynchronous assembly.
     deps.onPlayStarted?.(active.playWorld);
+    if (playRunId !== null) {
+      deps.runProjection?.succeeded(playRunId, { phase: 'play' });
+      playRunId = null;
+    }
 
     // Host camera pickup (AC-12 hard cut). Omitted in headless.
     deps.onAfterPlay?.(active.playWorld);
@@ -269,6 +339,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       generation++;
       starting = false;
       try { deps.gateway.exitPlay(); } catch { /* best effort while canceling start */ }
+      if (playRunId !== null) {
+        deps.runProjection?.cancelled(playRunId);
+        playRunId = null;
+      }
       resumeEditorIfLive();
       deps.onPlayFailed?.();
       return;
@@ -284,10 +358,13 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // dispose-shield (play-assemble.ts) keeps the SHARED renderer alive through
     // stop()'s unconditional renderer.dispose() (R-N2).
     stopAssembly(assembly, '■ Stop');
+    deps.publisher?.unbind(assembly.playWorld as LiveWorldFrameEndWorld);
+    if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);
 
     // D-3: pointer back to the edit world (clears selection + emits so panels
     // re-read the edit world's hierarchy).
     deps.gateway.exitPlay();
+    playRunId = null;
 
     // D-2 / AC-07: thaw the edit world — resume its frame loop.
     resumeEditorIfLive();
@@ -307,10 +384,14 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     active = null;
     if (assembly !== null) {
       stopAssembly(assembly, 'run-lifecycle dispose');
+      deps.publisher?.unbind(assembly.playWorld as LiveWorldFrameEndWorld);
+      if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
     } else if (wasStarting) {
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
+      if (playRunId !== null) deps.runProjection?.cancelled(playRunId);
     }
+    playRunId = null;
     editorPaused = false;
     if (wasPlaying) deps.onPlayFailed?.();
   }
@@ -328,5 +409,9 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     };
   }
 
-  return { playSimulation, stopSimulation, dispose, currentPlayWorld, getPlayPauseHandle };
+  function currentPlayRunId(): string | null {
+    return playRunId;
+  }
+
+  return { playSimulation, stopSimulation, dispose, currentPlayWorld, getPlayPauseHandle, currentPlayRunId };
 }

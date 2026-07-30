@@ -55,6 +55,11 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
                 id: 'g-history',
               },
             },
+            {
+              type: 'leaf',
+              size: 200,
+              data: { views: ['ep:history'], activeView: 'ep:history', id: 'g-operation-center' },
+            },
           ],
         },
         {
@@ -70,6 +75,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
     'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
     'ep:asset-inspector': { id: 'ep:asset-inspector', contentComponent: 'ep:asset-inspector', title: 'Asset Inspector' },
+    'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     info: { id: 'info', contentComponent: 'info', title: 'Info' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },

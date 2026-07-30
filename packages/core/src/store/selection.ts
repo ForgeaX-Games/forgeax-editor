@@ -37,12 +37,14 @@ import type { EntityHandle } from '../scene/scene-types';
 import type { HandlePair } from './handle-pair';
 import { sessionAppliers } from '../io/appliers';
 // Single-active-selection-domain: selecting an entity clears the asset/path
-// domains so Delete / blank-click resolve to exactly one target. These are direct
-// clears (not dispatched, guarded on non-empty) — circular refs resolve at call
-// time, and clearing an already-empty store is a no-op that never advances
+// domains so Delete / blank-click resolve to exactly one target. These are
+// direct clears (not dispatched, guarded on non-empty) through the shared seam;
+// clearing an already-empty store is a no-op that never advances
 // lastSelectionDomain.
-import { clearAssetSelection } from './asset-selection';
-import { clearFolderSelection } from './folder-selection';
+import {
+  clearSelectionDomains,
+  registerSelectionDomainClear,
+} from './selection-domain-clears';
 
 // The scene worldRef used for the headless fallback (no binding provider). Mirrors
 // edit-runtime WorldBinding's WORLD_REF_SCENE (the SSOT); core cannot import that
@@ -160,8 +162,7 @@ function applySetSelection(op: EditorOp): { ok: true } {
     // Selecting an entity is the active domain: drop any lingering asset/path
     // selection FIRST (these clears are empty→no-op guarded and don't advance the
     // domain), then emit the entity change LAST so lastSelectionDomain = 'entity'.
-    clearAssetSelection();
-    clearFolderSelection();
+    clearSelectionDomains('asset', 'folder');
     selectionSet = new Set([mint(id)]);
     emitSelection();
   }
@@ -265,3 +266,5 @@ export function clearSelection(): void {
     emitSelection();
   }
 }
+
+registerSelectionDomainClear('entity', clearSelection);

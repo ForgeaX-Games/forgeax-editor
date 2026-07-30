@@ -5,6 +5,8 @@
 // has no React dependency and never creates an AssetRegistry. Asset identity is
 // catalog-only; sidecars contribute source/indexing state and diagnostics.
 
+import { createAssetWorkspace, type AssetWorkspaceSnapshot, type AssetWorkspaceIssue } from '@forgeax/editor-product';
+
 export interface AssetBrowserCatalogRoot {
   readonly root: string;
   readonly catalogPrefix: string;
@@ -14,7 +16,7 @@ export interface AssetBrowserRegistryEntry {
   readonly guid: string;
   readonly kind: string;
   readonly name?: string;
-  readonly relativeUrl: string;
+  readonly packageUrl: string;
   readonly refs?: readonly string[];
   readonly sourcePath?: string;
 }
@@ -47,9 +49,9 @@ export interface AssetBrowserAsset {
   readonly guid: string;
   readonly kind: string;
   readonly name: string;
-  readonly relativeUrl: string;
+  readonly packageUrl: string;
   /** Original catalog coordinate for an inline `.pack.json` CRUD target. */
-  readonly storageRelativeUrl: string;
+  readonly storagePackageUrl: string;
   readonly sourcePath?: string;
   /** Original catalog coordinate for file mutations. `sourcePath` is projected
    * into the browser's declared-root coordinate space for joining and display;
@@ -81,6 +83,7 @@ export interface AssetBrowserSnapshot {
   readonly assets: readonly AssetBrowserAsset[];
   readonly sources: readonly AssetSourceState[];
   readonly diagnostics: readonly AssetBrowserDiagnostic[];
+  readonly workspace?: AssetWorkspaceSnapshot;
 }
 
 export interface AssetBrowserReadModel {
@@ -94,6 +97,40 @@ export interface CreateAssetBrowserReadModelDeps {
   registry: AssetBrowserRegistry;
   resolveGamePath: (relativePath: string) => string;
   catalogRoots: readonly AssetBrowserCatalogRoot[];
+}
+
+/** Project the workspace SSOT into the legacy browser shape without owning it. */
+export function assetWorkspaceSnapshotToBrowserSnapshot(
+  workspace: AssetWorkspaceSnapshot,
+): AssetBrowserSnapshot {
+  const relations = workspace.relations;
+  const refsBySubject = new Map<string, string[]>();
+  for (const relation of relations) {
+    if (relation.kind !== 'depends-on') continue;
+    refsBySubject.set(relation.from, [...(refsBySubject.get(relation.from) ?? []), relation.to]);
+  }
+  return Object.freeze({
+    generation: Number(workspace.revision.split(':r')[1] ?? 0),
+    files: Object.freeze([]),
+    directories: Object.freeze([]),
+    assets: Object.freeze(workspace.subjects.map((subject) => ({
+      guid: subject.id,
+      kind: subject.kind,
+      name: subject.name ?? subject.id,
+      packageUrl: subject.path,
+      storagePackageUrl: subject.path,
+      sourcePath: subject.path,
+      storageSourcePath: subject.path,
+      refs: Object.freeze(refsBySubject.get(subject.id) ?? []),
+    }))),
+    sources: Object.freeze([]),
+    diagnostics: Object.freeze(workspace.issues.map((issue) => ({
+      code: 'INVALID_META' as const,
+      path: issue.subjectId,
+      message: issue.message,
+    }))),
+    workspace,
+  });
 }
 
 interface SidecarObservation {
@@ -166,6 +203,7 @@ function diagnosticsForError(
 }
 
 export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDeps): AssetBrowserReadModel {
+  const workspace = createAssetWorkspace();
   let current: AssetBrowserSnapshot = {
     generation: 0,
     files: [],
@@ -219,14 +257,14 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       const guid = row.guid.toLowerCase();
       if (seenGuids.has(guid)) continue;
       seenGuids.add(guid);
-      const relativeUrl = projectCatalogPath(row.relativeUrl, deps.catalogRoots);
+      const packageUrl = projectCatalogPath(row.packageUrl, deps.catalogRoots);
       const sourcePath = row.sourcePath === undefined ? undefined : projectCatalogPath(row.sourcePath, deps.catalogRoots);
       assets.push({
         guid,
         kind: row.kind,
         name: row.name ?? guid.slice(0, 8),
-        relativeUrl,
-        storageRelativeUrl: row.relativeUrl,
+        packageUrl,
+        storagePackageUrl: row.packageUrl,
         ...(sourcePath ? { sourcePath } : {}),
         ...(row.sourcePath ? { storageSourcePath: row.sourcePath } : {}),
         refs: [...(row.refs ?? [])],
@@ -283,8 +321,8 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
           guid: subAsset.guid,
           kind: 'ui',
           name: sidecar.sourcePath.split('/').pop()?.replace(/\.ui\.html$/i, '') ?? subAsset.guid.slice(0, 8),
-          relativeUrl: sidecar.metaPath,
-          storageRelativeUrl: sidecar.metaPath,
+          packageUrl: sidecar.metaPath,
+          storagePackageUrl: sidecar.metaPath,
           sourcePath: sidecar.sourcePath,
           storageSourcePath: sidecar.sourcePath,
           refs: [],
@@ -311,6 +349,29 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
     }
     sources.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
 
+    const workspaceResult = workspace.reconcile({
+      resourceRevision: `browser:${generation}`,
+      logicalCommitId: `browser-refresh:${generation}`,
+      subjects: assets.map((asset) => ({
+        id: asset.guid,
+        kind: 'imported-output' as const,
+        provenance: { owner: 'engine' as const, source: 'asset-producer', packageId: asset.storagePackageUrl },
+        resourceId: asset.storagePackageUrl,
+        path: asset.packageUrl,
+        capabilities: { canImport: false, canMove: true, canDelete: true, canPreflight: true },
+        name: asset.name,
+      })),
+      relations: assets.flatMap((asset) => asset.refs.map((ref) => ({
+        kind: 'depends-on' as const,
+        from: asset.guid,
+        to: ref,
+      }))),
+      issues: sidecarDiagnostics.map<AssetWorkspaceIssue>((diagnostic) => ({
+        code: 'malformed-package',
+        severity: 'warning',
+        message: diagnostic.message,
+      })),
+    });
     const snapshot: AssetBrowserSnapshot = Object.freeze({
       generation,
       files: Object.freeze(files),
@@ -318,6 +379,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       assets: Object.freeze(assets),
       sources: Object.freeze(sources),
       diagnostics: Object.freeze([...diagnostics, ...sidecarDiagnostics]),
+      workspace: workspaceResult.snapshot,
     });
     if (generation === latestGeneration) publish(snapshot);
     return generation === latestGeneration ? snapshot : current;

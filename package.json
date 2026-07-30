@@ -16,6 +16,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./product": "./src/product.ts",
     "./app-kit": "./src/app-kit.ts",
     "./bridge": "./src/bridge.ts",
     "./default-dock-layout": "./src/default-dock-layout.ts",
@@ -24,6 +25,7 @@
     "./play": "./src/play.ts",
     "./protocol": "./src/protocol.ts",
     "./gameplay": "./src/gameplay.ts",
+    "./runtime-ui-diagnostics": "./src/runtime-ui-diagnostics.ts",
     "./compatibility-adapter": "./src/compatibility-adapter.ts",
     "./ui": "./packages/ui/src/index.ts",
     "./ui/badge": "./packages/ui/src/components/badge.tsx",
@@ -89,11 +91,15 @@
     "selfcheck:compatibility": "bun run selfcheck:b2 && bun run test:e2e e2e/public-compatibility.spec.ts",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install --with-deps chromium",
-    "selfcheck": "node scripts/selfcheck.mjs"
+    "selfcheck": "node scripts/selfcheck.mjs",
+    "test:product-headless": "bun scripts/product-conformance.ts --headless",
+    "test:product-conformance": "bun scripts/product-conformance.ts",
+    "test:product-evidence": "bun scripts/product-evidence-matrix.ts"
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-edit-runtime": "workspace:*",
+    "@forgeax/editor-product": "workspace:*",
     "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
     "@forgeax/interface": "workspace:*",

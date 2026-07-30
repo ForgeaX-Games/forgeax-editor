@@ -120,7 +120,7 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
 //
 // WHY A SYMLINK IS STILL REQUIRED (not just an abs path in roots):
 //   play-runtime's process.cwd() == viteRoot == this package dir, and every
-//   catalog entry's relativeUrl = withBase('/preview', relative(cwd, assetAbs))
+//   catalog entry's packageUrl = withBase('/preview', relative(cwd, assetAbs))
 //   (pack-catalog.ts). withBase does posix.resolve('/', rel), which CLAMPS
 //   leading `../` — so an external abs path (forgeax-editor-assets lives ABOVE
 //   viteRoot) yields a mangled `/preview/forgeax-editor-assets/...` URL that
@@ -251,7 +251,7 @@ const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
 // `/preview/pack-index.json`. Mirror forgeaxShaderBaseStrip: strip the base
 // prefix before pluginPack's middleware (registered after) sees the request.
 // (Individual pack-file URLs do NOT need stripping — pluginPack serves them by
-// matching the base-prefixed catalog `relativeUrl`, which equals the proxied
+// matching the base-prefixed catalog `packageUrl`, which equals the proxied
 // req.url verbatim.)
 function forgeaxPackBaseStrip() {
   return {
@@ -323,7 +323,7 @@ function gameAssetRoots(): string[] {
     // resolveGameAssetRoots reads package.json#forgeax.assets.roots (SSOT),
     // resolves `@shared/<sub>` external roots against SHARED_BASE, and
     // existsSync-filters. farmPath redirects shared roots through the in-viteRoot
-    // symlink so their scanned path (and thus relativeUrl) stays serveable.
+    // symlink so their scanned path (and thus packageUrl) stays serveable.
     for (const r of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })) {
       push(farmPath(r));
     }
@@ -373,7 +373,7 @@ function forgeaxPerGamePackBaseStrip() {
 }
 
 // Decode percent-encoded request URLs before pluginPack's dev middleware runs
-// its urlToAbs lookup. The map is keyed by catalog relativeUrl values verbatim
+// its urlToAbs lookup. The map is keyed by catalog packageUrl values verbatim
 // (literal spaces / non-ASCII, e.g. "GT_MC_Large Building.glb"), while the
 // runtime's fetch arrives percent-encoded (%20). Without decoding, the lookup
 // misses and the request falls through to Vite's SPA fallback — the runtime
@@ -572,7 +572,7 @@ export default defineConfig({
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
     // URL-decode MUST precede pluginPack: its urlToAbs keys are verbatim
-    // catalog relativeUrls (literal spaces), requests arrive percent-encoded.
+    // catalog packageUrls (literal spaces), requests arrive percent-encoded.
     forgeaxDecodeAssetUrl() as never,
     // SINGLE pluginPack instance over every game's roots — LOCAL and `@shared/…`
     // alike (gameAssetRoots() now farm-rewrites shared roots into this one list;

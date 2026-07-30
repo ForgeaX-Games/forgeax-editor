@@ -4,7 +4,7 @@ import type { CBAsset } from './types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 // A scoped asset carries its game-relative `.pack.json` path (`rel`), exactly as
-// ContentBrowser derives it from the engine registry `relativeUrl`. No new data
+// ContentBrowser derives it from the engine registry `packageUrl`. No new data
 // format — folders are purely derived from these rels + packDirs.
 
 let guidSeq = 0;

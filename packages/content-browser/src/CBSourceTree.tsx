@@ -4,6 +4,7 @@
 
 import { useCallback, type ReactNode } from 'react';
 import { useTranslation, type TFunction } from '@forgeax/editor-core/i18n';
+import { gateway } from '@forgeax/editor-core';
 import { ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
 import {
   dirOfPath,
@@ -22,6 +23,19 @@ interface ContextMenuPos {
   clientX: number;
   clientY: number;
   preventDefault: () => void;
+}
+
+// Selection is a session op — tree clicks dispatch it through the one gateway
+// door (north-star parity: the folder-selection store's contract states clicks
+// dispatch `setFolderSelection`, keeping AI parity). Mirrors the grid's
+// useMultiSelect.dispatchSet dual-dispatch: empty the asset domain FIRST so a
+// previously grid-selected asset doesn't stay highlighted alongside the tree
+// selection (single active CB selection), then set the path selection LAST so
+// lastSelectionDomain derives to 'folder' (empty dispatches are dedup-guarded
+// and never advance the domain).
+function selectTreePath(path: string, kind: 'dir' | 'file'): void {
+  gateway.dispatch({ kind: 'setAssetSelection', assets: [], primary: null });
+  gateway.dispatch({ kind: 'setFolderSelection', items: [{ path, kind }] });
 }
 
 export interface CBSourceTreeProps {
@@ -79,11 +93,13 @@ function renderRows(
       if (file) {
         nav.navigate(dirOfPath(file.path));
         setPreviewItem(file);
+        selectTreePath(file.path, 'file');
         return;
       }
       setCollapsedSourceFolders(prev => ({ ...prev, [node.path]: open }));
       nav.navigate(node.path);
       setPreviewItem(folder);
+      selectTreePath(folder.path, 'dir');
     };
     const handleRowContextMenu = (e: React.MouseEvent) => {
       e.preventDefault();

@@ -146,7 +146,12 @@ export function CBPreviewPanel({
   return (
     <>
       <ResizeHandle orientation="col" onDrag={onDrag} onDragEnd={onDragEnd} title={t('editor.contentBrowser.actions.resizePreview')} />
-      <aside className="cb-preview-panel">
+      <aside
+        className="cb-preview-panel"
+        data-facts="product"
+        data-projection-source="editor-product"
+        data-subject-id={previewItem.type === 'asset' ? previewItem.guid : previewItem.path}
+      >
         <div className="cb-preview-head">
           <span className="cb-preview-ico">{icon}</span>
           <div className="cb-preview-title">

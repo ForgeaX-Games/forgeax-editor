@@ -160,15 +160,33 @@ if (diffFileIdx >= 0) {
     return null;
   }
 
-  const range = resolveRange(baseRef);
-  if (range === null) {
-    console.error(`[lint-op-via-gateway] cannot compute diff range from base ${baseRef} -- refusing to pass blind`);
-    process.exit(2);
+  let range = resolveRange(baseRef);
+  let diffResult = range === null ? null : gitSafe(['diff', range, '--', '*.ts', '*.tsx']);
+
+  // A shallow PR checkout can retain an origin/main ref whose commit object is
+  // not usable for a tree diff. Re-fetch the target branch and retry with the
+  // fetched SHA instead of treating the runner's stale ref as the base. This
+  // keeps the gate fail-closed while making the documented shallow-checkout
+  // recovery path effective for PR events as well as push events.
+  if (diffResult === null) {
+    const baseBranch = process.env.GITHUB_BASE_REF || 'main';
+    const fetched = gitSafe([
+      'fetch', '--depth=1', 'origin',
+      `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+    ]) !== null
+      || gitSafe(['fetch', '--depth=1', 'origin', baseBranch]) !== null;
+    const fetchedBase = fetched
+      ? gitSafe(['rev-parse', '--verify', '--quiet', 'FETCH_HEAD'])
+      : null;
+    if (fetchedBase !== null) {
+      baseRef = fetchedBase;
+      range = resolveRange(baseRef);
+      diffResult = range === null ? null : gitSafe(['diff', range, '--', '*.ts', '*.tsx']);
+    }
   }
 
-  const diffResult = gitSafe(['diff', range, '--', '*.ts', '*.tsx']);
-  if (diffResult === null) {
-    console.error(`[lint-op-via-gateway] git diff failed for range ${range}`);
+  if (range === null || diffResult === null) {
+    console.error(`[lint-op-via-gateway] cannot compute diff range from base ${baseRef} -- refusing to pass blind`);
     process.exit(2);
   }
   diffText = diffResult;

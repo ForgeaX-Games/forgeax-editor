@@ -18,6 +18,7 @@ import { HistoryPanel } from './History';
 import { InspectorPanel } from './Inspector';
 import { LauncherPanel } from './Launcher';
 import { AssetInspectorPanel } from './AssetInspector';
+import { OperationCenter } from './operations/OperationCenter';
 
 // D5 (plan-strategy §2): renamed PANEL_COMPONENTS -> EDITOR_PANEL_COMPONENTS to
 // disambiguate from interface's own same-named PANEL_COMPONENTS
@@ -37,4 +38,5 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   capabilities: CapabilitiesPanel,
   launcher: LauncherPanel,
   'asset-inspector': AssetInspectorPanel,
+  'operation-center': OperationCenter,
 };

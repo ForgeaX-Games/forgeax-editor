@@ -2,11 +2,12 @@
 // deleteSourceFile session op (editor data-operation-view convergence M1).
 
 import type { CommandError } from '../types';
+import type { OperationRun } from '@forgeax/editor-product';
 
 export type SourceFileDeleteStatus =
-  | { phase: 'pending'; path: string }
-  | { phase: 'deleted'; path: string }
-  | { phase: 'failed'; path: string; error: CommandError };
+  | { phase: 'pending'; path: string; runId?: string }
+  | { phase: 'deleted'; path: string; runId?: string }
+  | { phase: 'failed'; path: string; error: CommandError; runId?: string };
 
 const MAX_STATUS_ENTRIES = 64;
 const statuses = new Map<string, SourceFileDeleteStatus>();
@@ -47,4 +48,32 @@ export function hasSourceFileDeleteStatus(requestId: string): boolean {
 /** Test-only reset; not exported from the public barrel. */
 export function clearSourceFileDeleteStatuses(): void {
   statuses.clear();
+}
+
+/**
+ * Compatibility projection for callers that still ask about a delete by path.
+ * OperationRun is the lifecycle owner; this function does not create or mutate
+ * a second terminal state.
+ */
+export function projectSourceFileDeleteStatus(
+  run: OperationRun,
+  path: string,
+): SourceFileDeleteStatus {
+  if (run.status === 'succeeded') return { phase: 'deleted', path, runId: run.runId };
+  if (run.status === 'failed' || run.status === 'cancelled') {
+    const runError = run.error;
+    return {
+      phase: 'failed',
+      path,
+      runId: run.runId,
+      error: runError === undefined ? {
+        code: (run.status === 'cancelled' ? 'run-cancelled' : 'run-failed') as CommandError['code'],
+        hint: `The source file delete run ${run.status}.`,
+      } : {
+        code: runError.code as CommandError['code'],
+        hint: runError.hint,
+      },
+    };
+  }
+  return { phase: 'pending', path, runId: run.runId };
 }

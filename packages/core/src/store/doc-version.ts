@@ -1,10 +1,10 @@
-// store/doc-version — the re-render version counter bumped on every gateway change.
+// store/doc-version — authored document invalidation only.
 //
 // State: `docVersion` (let) + `docListeners` (Set), both PRIVATE to this module.
-// Consumers: panels re-read the doc via useDocVersion; scene-persistence and
-// disk-watch signal a direct (non-gateway) mutation by CALLING the public
-// notifyDocChanged() — they never touch docVersion/docListeners directly, so no
-// internal seam is exported here.
+// Consumers: authored panels re-read the document via useDocVersion;
+// scene-persistence and disk-watch signal direct authored mutations by calling
+// the public notifyDocChanged() entry. Runtime World frames never call this
+// module.
 //
 // R3 (plan-strategy §4 / research F-4): the top-level `gateway.subscribe(...)` below
 // is an EVAL-TIME side effect and MUST stay a top-level statement (executed once
@@ -18,35 +18,55 @@
 import { useSyncExternalStore } from 'react';
 import { gateway } from './gateway';
 
-// Re-render hook: bumps a version on every gateway change so panels re-read doc.
+type RuntimeUiTestGate = { disableRuntimeUiPulse?: boolean };
+function runtimeUiPulseEnabled(): boolean {
+  return (globalThis as typeof globalThis & { __forgeaxRuntimeUiTestGate?: RuntimeUiTestGate })
+    .__forgeaxRuntimeUiTestGate?.disableRuntimeUiPulse !== true;
+}
+
+// Re-render hook: bumps a version on authored gateway commands so panels can
+// re-read the authored document.
 let docVersion = 0;
 const docListeners = new Set<() => void>();
-gateway.subscribe(() => {
+let authoredVersion = 0;
+const authoredListeners = new Set<() => void>();
+gateway.subscribe((_doc, command) => {
+  if (!runtimeUiPulseEnabled() || command === null) return;
   docVersion++;
   for (const fn of docListeners) fn();
+});
+gateway.subscribe((_doc, command) => {
+  if (!runtimeUiPulseEnabled() || command === null) return;
+  authoredVersion++;
+  for (const fn of authoredListeners) fn();
 });
 function subscribeDoc(fn: () => void): () => void {
   docListeners.add(fn);
   return () => docListeners.delete(fn);
 }
-/** Raw doc-change subscription (add listener → unsubscribe). Same signal
- *  useDocVersion rides, but WITHOUT forcing a version-number re-render: a
- *  consumer can subscribe here and pair it with a value-compared snapshot
- *  (useSyncExternalStore) so it re-renders ONLY when its own derived data
- *  actually changed — even while the doc churns every frame (▶ Play mirrors
- *  the live world via notifyDocChanged() per frame). This is the per-row
- *  Hierarchy path: a row subscribes to doc changes but bails on Object.is when
- *  its structural snapshot is unchanged, so a 60fps doc churn costs zero row
- *  re-renders. */
+/** Authored document subscription. Consumers may pair it with a value-compared
+ *  snapshot, but runtime World frames do not notify this signal. */
 export function subscribeDocVersion(fn: () => void): () => void {
   return subscribeDoc(fn);
 }
-/** Bump docVersion + fire listeners so panels re-read the doc after a direct
- *  (non-gateway) world mutation — e.g. a nested GLB SceneInstance added by
- *  instantiateSceneRefUnderWorld, which the gateway never sees. */
+/** Notify authored-side consumers after a direct producer mutation that is not
+ *  represented by a gateway command, such as a scene asset instantiation. */
 export function notifyDocChanged(): void {
+  if (!runtimeUiPulseEnabled()) return;
   docVersion++;
   for (const fn of docListeners) fn();
+}
+export function notifyAuthoredChanged(): void {
+  authoredVersion++;
+  for (const fn of authoredListeners) fn();
+}
+export function getAuthoredVersion(): number { return authoredVersion; }
+export function subscribeAuthoredChanges(fn: () => void): () => void {
+  authoredListeners.add(fn);
+  return () => authoredListeners.delete(fn);
+}
+export function useAuthoredVersion(): number {
+  return useSyncExternalStore(subscribeAuthoredChanges, getAuthoredVersion, getAuthoredVersion);
 }
 export function useDocVersion(): number {
   return useSyncExternalStore(subscribeDoc, () => docVersion, () => docVersion);

@@ -36,6 +36,13 @@ export type SourceFileDeleteResult =
   | { ok: true }
   | { ok: false; error: CommandError };
 
+export interface AssetResourceTransactionPort<TInput = unknown> {
+  readonly prepare: (input: TInput) => Promise<{
+    readonly commit: () => Promise<{ readonly revision: string; readonly result?: unknown }>;
+    readonly rollback?: () => Promise<void>;
+  }>;
+}
+
 const isMetaPath = (packPath: string): boolean => packPath.endsWith('.meta.json');
 
 /**
@@ -80,6 +87,18 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
  * same-name same-shape surface (plan-strategy §4 AC-06).
  */
 export class AssetIOFacade {
+  private resourceTransaction: AssetResourceTransactionPort | undefined;
+
+  /** Install the public resource port supplied by platform-io. */
+  setResourceTransactionPort(port: AssetResourceTransactionPort | undefined): void {
+    this.resourceTransaction = port;
+  }
+
+  async prepareResourceTransaction(input: unknown): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
+    if (this.resourceTransaction === undefined) return null;
+    return this.resourceTransaction.prepare(input);
+  }
+
   /** Delete exactly one resolved source file. This is separate from pack-entry
    * deletion and intentionally does not infer or cascade to sidecars/DDC. */
   async deleteSourceFile(resolvedPath: string): Promise<SourceFileDeleteResult> {

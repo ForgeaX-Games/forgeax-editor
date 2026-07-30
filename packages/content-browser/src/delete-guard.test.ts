@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'bun:test';
-import { buildAssetGraph } from './hooks/useAssetGraph';
 import { computeDeleteImpact } from './delete-guard';
 
 // tex ← mat ← mesh ; standalone has no referencers.
-const graph = buildAssetGraph([
-  { guid: 'mesh', refs: ['mat'] },
-  { guid: 'mat', refs: ['tex'] },
-  { guid: 'tex', refs: [] },
-  { guid: 'standalone', refs: [] },
-]);
+const graph = {
+  schemaVersion: 'asset-workspace/v1' as const,
+  revision: 'workspace:r1',
+  resourceRevision: 'resource:r1',
+  identity: 'workspace-snapshot:test',
+  subjects: [],
+  relations: [
+    { kind: 'depends-on' as const, from: 'mesh', to: 'mat' },
+    { kind: 'depends-on' as const, from: 'mat', to: 'tex' },
+  ],
+  issues: [],
+};
 
 describe('computeDeleteImpact', () => {
   it('flags a target still referenced from outside the batch', () => {
@@ -36,11 +41,10 @@ describe('computeDeleteImpact', () => {
   });
 
   it('counts distinct external referencers across targets', () => {
-    const g = buildAssetGraph([
-      { guid: 'consumer', refs: ['x', 'y'] },
-      { guid: 'x', refs: [] },
-      { guid: 'y', refs: [] },
-    ]);
+    const g = { ...graph, relations: [
+      { kind: 'depends-on' as const, from: 'consumer', to: 'x' },
+      { kind: 'depends-on' as const, from: 'consumer', to: 'y' },
+    ] };
     const impact = computeDeleteImpact(['x', 'y'], g);
     // Both x and y are referenced by the same consumer → distinct count is 1.
     expect(impact.externalReferencerCount).toBe(1);

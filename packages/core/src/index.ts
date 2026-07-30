@@ -32,72 +32,32 @@ export {
 } from './scene/scene-pack';
 export type { ScenePack, PackFile, ValidatePackShellResult } from './scene/scene-pack';
 
-// ── Gateway ──
-export { EditGateway } from './io/gateway';
+// ── Product-neutral public slices ──
+export * from './public/gateway';
+export * from './public/runtime';
+export * from './public/assets';
+// Keep type names explicit in the root source surface as well as through the
+// public slices. This makes consumer-driven barrel checks inspect the same
+// contract that TypeScript resolves through export-star re-exports.
 export type {
-  BusListener,
-  DispatchResult,
-  AssetSummary,
-  AssetSummaryResult,
-  CommandOrigin,
-  HistoryStep,
+  EngineFacade,
+  OpDescriptor,
   OpHandle,
-  ApplierCtx,
-} from './io/gateway';
-export type { CollectSceneAssetResult } from './io/scene-asset-collect';
-// EngineFacade is the controlled-write-proxy the view scaffold types itself
-// against (ViewportDeps.engine, preview-skin, drag-spawn). Type-only.
-export type { EngineFacade } from './io/engine-facade';
-// createEngineFacade is used by world-manager to mint a DEDICATED EngineFacade
-// bound to editorWorld — the gateway's engineFacade() binds to sceneWorld
-// (doc.world) and must not be repurposed. Raw `new EngineFacade` stays inside
-// engine-facade.ts so the lint-unique-mutator single-write-gate invariant holds.
-export { createEngineFacade } from './io/engine-facade';
-
-// ── Versioned gameplay carrier ──
-// The Editor-owned contract and bridge are public so Server/host projections
-// can consume one schema without importing viewport internals.
-export {
-  GAMEPLAY_OPERATION_MANIFEST,
-  GAMEPLAY_CARRIER_CONTRACT_VERSION,
-  GameplayCaptureArtifactSchema,
-  GameplayCaptureProvenanceSchema,
-  GameplayErrorSchema,
-  GameplayIdentitySchema,
-  GameplayInputSchema,
-  GameplayOperationNameSchema,
-  GameplayOperationRequestSchema,
-  GameplayOperationResultSchema,
-  GameplayOperationSuccessSchema,
-  GameplayOperationFailureSchema,
-  GameplayScopeSchema,
-  sameGameplayIdentity,
-} from './io/gameplay-contract';
+  SessionApplier,
+} from './public/gateway';
+export type { GameplayIdentity } from './public/runtime';
 export type {
-  GameplayCaptureArtifact,
-  GameplayCaptureProvenance,
-  GameplayError,
-  GameplayIdentity,
-  GameplayIdentityDimension,
-  GameplayIdentityMatch,
-  GameplayInput,
-  GameplayOperationName,
-  GameplayOperationManifestEntry,
-  GameplayOperationRequest,
-  GameplayOperationResult,
-  GameplayScope,
-} from './io/gameplay-contract';
-export {
-  createGameplayCaptureGateway,
-  createGameplayCarrierBridge,
-  createGameplayOperations,
-} from './io/gameplay-operations';
-export type {
-  GameplayCaptureGateway,
-  GameplayCaptureSurface,
-  GameplayCarrierBridge,
-  GameplayOperations,
-} from './io/gameplay-operations';
+  AssetBrowserCatalogRoot,
+  AssetBrowserRegistry,
+  AssetBrowserSnapshot,
+  AssetMutationOperation,
+  AssetMutationRequest,
+  AssetPreflightResult,
+  AssetWorkspaceSnapshot,
+  DragAssetRef,
+  ImportFileResult,
+  PackAsset,
+} from './public/assets';
 
 // ── Eval channel (dev-accessible AI eval) ──
 // Consumed by edit-runtime to mount on globalThis.__forgeaxEval.
@@ -116,34 +76,38 @@ export type {
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
 
-// ── Catalog (listOps / argsSchema / OpDescriptor) ──
-export type { OpDescriptor, ArgsSchema } from './io/catalog';
-
-// ── Downstream session-applier seam ──
-// edit-runtime registers the real play/stop applier at boot through this seam
-// (injection direction edit-runtime→core; does not violate the DAG).
-export { registerSessionApplier } from './io/appliers';
-export type { SessionApplier, SessionApplierMeta } from './io/appliers';
+// Runtime UI diagnostics are the typed read-only Gateway contract. The graph
+// remains internal; consumers receive only schema-valid status and counters.
+export {
+  createRuntimeUiOperations,
+  createRuntimeUiGraph,
+  getActiveRuntimeUiGraph,
+  parseRuntimeUiDiagnostics,
+  RUNTIME_UI_OPERATION_MANIFEST,
+} from './io/runtime-ui-diagnostics';
+export { default as RUNTIME_UI_DIAGNOSTICS_SCHEMA } from './io/runtime-ui-diagnostics.schema.json';
+export type {
+  RuntimeUiCapabilities,
+  RuntimeUiDiagnostics,
+  RuntimeUiError,
+  RuntimeUiOperations,
+  RuntimeUiProvenance,
+  RuntimeUiStats,
+  RuntimeUiGraph,
+} from './io/runtime-ui-diagnostics';
+export { createInspectorFieldSelector } from './store/live-world-field-selectors';
+export type {
+  InspectorFieldAvailable,
+  InspectorFieldSelector,
+  InspectorFieldSelectorOptions,
+  InspectorFieldShape,
+  InspectorFieldSnapshot,
+  InspectorFieldSubscription,
+  InspectorFieldUnavailable,
+} from './store/live-world-field-selectors';
 
 // ── Edit session (authoring working state) ──
 export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './session/document';
-
-// ── Asset filesystem basename validation (SSOT for folder/rename ops) ──
-// One rule set shared by (1) session appliers in pack-ops.ts (HARD gate:
-// INVALID_ARGS on failure) and (2) UI prompt validators (SOFT gate for UX).
-// Barrel-exported so a UI-layer prompt call site can consume the SAME
-// validator the applier enforces — no second rule source to drift
-// (north-star §9 by construction). See
-// feedbacks/2026-07-23-assets-create-folder-name-validation-*.
-export {
-  validateAssetBasename,
-  checkPathNotJailbreak,
-  ASSET_BASENAME_MAX_LENGTH,
-} from './session/asset-basename';
-export type {
-  BasenameValidation,
-  PathJailbreakCheck,
-} from './session/asset-basename';
 
 // ── Entity state (activeWorld read face, handle IS identity) ──
 // Panels/consumers read entity name/parent/components/existence through these
@@ -244,68 +208,9 @@ import './store/folder-selection';
 // deleteSourceFile session applier (M1).
 import './session/source-file-ops';
 
-// ── Assets ──
-export {
-  loadRawAssets,
-  materialSwatch,
-  extractPackDirs,
-} from './assets/assets';
-export type { PackAsset, RawAsset } from './assets/assets';
-
-// ── Drag-to-scene (Content Browser → viewport spawn) ──
-export { buildSpawnEntityFromDragRef, recoverMeshOriginalMaterialGuids } from './assets/drag-asset-spawn';
-export type { DragAssetRef, SpawnRefEntity } from './assets/drag-asset-spawn';
-export { spawnAssetRefToScene, requestAddAssetToScene } from './scene/spawn-asset-ref';
-
-// ── Imported mesh → original per-submesh materials (drag / Add to Scene) ──
-export { resolveMeshOriginalMaterials, _clearMeshMaterialCache } from './scene/mesh-original-materials';
-export type { MeshMaterialResolveDeps, MeshAssetRef } from './scene/mesh-original-materials';
-
-// ── glTF import cook (frontend SSOT reuse — engine toAssetPack) ──
-export { cookGltfMeta } from './assets/gltf-cook';
-export { cookFbxMeta, type FbxCookResult } from './assets/fbx-cook';
-export type { GltfCookResult } from './assets/gltf-cook';
-export { createAssetBrowserReadModel } from './assets/asset-browser-read-model';
-export type {
-  AssetBrowserAsset,
-  AssetBrowserCatalogRoot,
-  AssetBrowserDiagnostic,
-  AssetBrowserDirectory,
-  AssetBrowserFile,
-  AssetBrowserReadModel,
-  AssetBrowserRegistry,
-  AssetBrowserRegistryEntry,
-  AssetBrowserSnapshot,
-  AssetBrowserTreeNode,
-  AssetSourcePhase,
-  AssetSourceState,
-  CreateAssetBrowserReadModelDeps,
-} from './assets/asset-browser-read-model';
-
-// ── Pack CRUD — applier-gated ──
-// Direct pack writes (createPack / addAssetToPack / etc.) are NOT exported;
-// go through the ctx.assetIO seam instead.
-export { assetIO, AssetIOFacade } from './io/asset-io-facade';
-export type { SourceFileDeleteResult } from './io/asset-io-facade';
-export type { SourceFileDeleteStatus } from './session/source-file-delete-status';
-export {
-  generateAssetGuid,
-  renameAssetInPack,
-  deleteAsset,
-  createDirectory,
-  deleteDirectory,
-  registerPostAssetWriteCatalogSync,
-} from './session/pack-ops';
-
 // ── Material ops — updateMaterialParams document applier registration ──
 // Side-effect import: registers the document applier into the gateway table.
 import './session/material-ops';
-
-// ── Asset import — executor + importAsset session op ──
-// Importing this module also runs its side-effect: registering the importAsset
-// session applier into the one-door table.
-export { executeAssetImport } from './session/import-ops';
-export type { AssetImportSpec, ImportFileResult, ImportFileStatus } from './session/import-ops';
 
 // ── Scene presets (blank-create templates) ──
 export {
@@ -508,5 +413,3 @@ export type {
   RepairReport,
   RepairEntry,
 } from './scan/index';
-export { installAssetHmrBridge } from './assets/asset-hmr-bridge';
-export { ensureAssetCataloged } from './assets/ensure-asset-cataloged';

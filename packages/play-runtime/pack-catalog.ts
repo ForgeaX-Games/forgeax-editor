@@ -1,201 +1,58 @@
-// pack-catalog.ts - per-root catalog builder (path c)
+// pack-catalog.ts - per-game Pack v2 catalog projection.
 //
-// Builds a PackIndexEntry[] for a single asset root, reusing
-// @forgeax/engine-pack/scanner + /schema (open sub-path exports) to
-// avoid touching the engine repository.
-//
-// Two-arm dispatch (replicating build-catalog.ts:128-334):
-//   - .pack.json  -- legacy arm: one 4-field entry per assets[] row
-//   - .meta.json  -- external arm: image/gltf/audio subAssets with metadata
-//
-// Scan errors degrade to [] + console.warn (matching existing buildCatalog
-// behavior; the GUID-collision silent-degrade is a charter-P3 gap tracked
-// as OOS-5 and not addressed here).
+// The editor's per-game route must emit the same navigation-only catalog
+// contract as the engine's global vite-pack plugin. Payload facts belong inside
+// Pack v2; rows therefore contain a GUID, a cooked package URL, and source
+// navigation metadata only.
 
-/** Dedupe scan-failure logs per root-set for this process (HTTP hot path). */
-const loggedScanFailureKeys = new Set<string>();
-
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, posix, relative, resolve } from 'node:path';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
-import { imageImporter } from '@forgeax/engine-image/image-importer';
-import type { ImageMetadata, PackIndexEntry, TextureAsset } from '@forgeax/engine-types';
+import type { PackIndexEntry } from '@forgeax/engine-types';
 
-// The engine retired its `CubeTextureMetadata` type (cube-texture → equirect
-// internalization). This catalog still emits a cube-texture sidecar row for
-// legacy sky.hdr assets; keep the historical metadata shape as a LOCAL type so
-// the emitted JSON is byte-identical to before (it was `any`-typed via the old
-// engine shim). PackIndexEntry.metadata only types ImageMetadata, so the row's
-// metadata is cast at the push below.
-interface CubeTextureMetadata {
-  readonly kind: 'cube-texture';
-  readonly width: number;
-  readonly height: number;
-  readonly format: string;
-  readonly colorSpace: 'srgb' | 'linear';
-  readonly mipLevels: number;
-}
-
-// ── Types ──────────────────────────────────────────────────────────────
+/** Dedupe scan-failure logs per root-set for this process (HTTP hot path). */
+const loggedScanFailureKeys = new Set<string>();
 
 interface PackJson {
-  readonly assets?: ReadonlyArray<{ guid: string; kind: string; name?: string }>;
+  readonly assets?: ReadonlyArray<{
+    readonly guid: string;
+    readonly kind: string;
+    readonly name?: string;
+    readonly refs?: readonly string[];
+  }>;
 }
 
 interface ExternalAssetMetaJson {
   readonly schemaVersion: string | number;
   readonly kind: 'external-asset-package';
-  // feat-20260603-asset-import-loader-injection M2: the engine replaced the
-  // closed `assetType` enum with the open `importer` key (one-cut migration,
-  // no shim). This replica must read `importer` to match meta.schema.json and
-  // the engine's build-catalog.ts; reading `assetType` rejected every sidecar.
-  readonly importer: 'image' | 'gltf' | 'fbx' | 'audio' | 'font';
+  readonly importer: string;
   readonly source: string;
-  readonly importSettings: {
-    readonly colorSpace?: 'srgb' | 'linear';
-    readonly mipmap?: 'auto' | 'none';
-    readonly cubeFaceSize?: number;
-    readonly specularMipLevels?: number;
-  };
   readonly subAssets: ReadonlyArray<{
     readonly guid: string;
     readonly sourceIndex: number;
     readonly kind: string;
-    /** Optional display name from the source (e.g. glTF mesh.name); derived from
-     *  the source basename when absent (deriveAssetName), mirroring the engine's
-     *  build-catalog.ts so a runtime-imported GLB's sub-assets are not blank in
-     *  the Content Browser. */
     readonly name?: string;
   }>;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function mipmapTokenToBoolean(token: 'auto' | 'none' | undefined): boolean {
-  return token === 'auto';
-}
-
-function colorSpaceToFormat(colorSpace: 'srgb' | 'linear' | undefined): GPUTextureFormat {
-  return colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm';
-}
-
-function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
-  const colorSpace: 'srgb' | 'linear' = meta.importSettings.colorSpace ?? 'linear';
-  return {
-    kind: 'texture',
-    format: colorSpaceToFormat(colorSpace),
-    colorSpace,
-    mipmap: mipmapTokenToBoolean(meta.importSettings.mipmap),
-  };
-}
-
-// Bake an `.hdr` equirect source into the rgba16float RGBA `.bin` the runtime
-// requires (it no longer decodes `.hdr` inline -- it reads ONLY a build-time
-// imported `.bin`; see asset-registry loadFromUpstreamEntry). We cook it HERE,
-// at per-game catalog build, via the same imageImporter the engine uses, then
-// point the catalog row directly at the `.bin` with the CORRECT rgba16float
-// metadata. This avoids the dev `POST /__import` round-trip whose engine-side
-// importTextureEntry mislabels the imported HDR as rgba8unorm -- which makes
-// uploadCubemapFromEquirect reject the source with `invalid-source-format`.
-// Cached on disk (cook only when the `.bin` + its dims sidecar are absent).
-async function bakeHdrEquirect(
-  sourceAbsPath: string,
-  guid: string,
-): Promise<{ binAbsPath: string; width: number; height: number } | null> {
-  const guidLower = guid.toLowerCase();
-  const binAbsPath = `${sourceAbsPath}.${guidLower}.bin`;
-  const dimsPath = `${binAbsPath}.dims.json`;
-  try {
-    const [binStat, dimsRaw] = await Promise.all([stat(binAbsPath), readFile(dimsPath, 'utf-8')]);
-    if (binStat.size > 0) {
-      const dims = JSON.parse(dimsRaw) as { width: number; height: number };
-      return { binAbsPath, width: dims.width, height: dims.height };
-    }
-  } catch {
-    // No cached .bin/dims -> cook below.
-  }
-
-  let src: Uint8Array;
-  try {
-    src = new Uint8Array(await readFile(sourceAbsPath));
-  } catch (e) {
-    console.warn(`[forgeax-pack] hdr bake: cannot read ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  }
-  const ctx = {
-    source: sourceAbsPath,
-    readSource: async () => ({ ok: true as const, value: src }),
-    readSibling: async () => ({ ok: true as const, value: new Uint8Array() }),
-    decodeImage: async () => {
-      throw new Error('decodeImage seam unused on the .hdr bare-source bake path');
-    },
-    // Post feat-20260630 the image-importer's `.hdr` arm folds ONLY
-    // `kind:'equirect'` sub-assets (image-importer.ts: `if (sub.kind !==
-    // 'equirect') continue`) into a 2D rgba16float EquirectAsset POD. Requesting
-    // `kind:'image'` here made the importer produce nothing ("importer produced
-    // no asset"), so every HDR bake silently failed and the equirect arm fell
-    // through to a raw-.hdr row (rgba8unorm, no .bin). The runtime equirectLoader
-    // needs the baked .bin, so the skybox never loaded and the preview viewport
-    // fell back to the camera clear-color.
-    subAssets: [{ guid, sourceIndex: 0, kind: 'equirect' as const }],
-    importSettings: { colorSpace: 'linear' as const, mipmap: false },
-  };
-  let produced: readonly { guid: string; payload: unknown }[];
-  try {
-    // Importers return a Result<ImportOutput>, not the asset array itself.
-    // Keep this catalog builder on the same contract as vite-plugin-pack's
-    // importTextureEntry: a failed HDR cook degrades to the raw-source row
-    // below instead of taking down the whole per-game pack-index request.
-    const result = await imageImporter.import(ctx as never);
-    if (!result.ok) {
-      console.warn(`[forgeax-pack] hdr bake: importer failed for ${sourceAbsPath}`);
-      return null;
-    }
-    produced = result.value.assets;
-  } catch (e) {
-    console.warn(`[forgeax-pack] hdr bake: importer threw for ${sourceAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  }
-  // EquirectAsset mirrors TextureAsset's 2D-image surface (width/height/format/
-  // data), so the byte extraction below is identical for either payload shape.
-  const tex = produced.find((a) => a.guid.toLowerCase() === guidLower)?.payload as TextureAsset | undefined;
-  if (tex === undefined) {
-    console.warn(`[forgeax-pack] hdr bake: importer produced no asset for ${sourceAbsPath}`);
-    return null;
-  }
-  const bytes =
-    tex.data instanceof Uint8Array
-      ? tex.data
-      : new Uint8Array(tex.data.buffer, tex.data.byteOffset, tex.data.byteLength);
-  try {
-    await mkdir(dirname(binAbsPath), { recursive: true });
-    await writeFile(binAbsPath, bytes);
-    await writeFile(dimsPath, JSON.stringify({ width: tex.width, height: tex.height }));
-  } catch (e) {
-    console.warn(`[forgeax-pack] hdr bake: write failed for ${binAbsPath}: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  }
-  return { binAbsPath, width: tex.width, height: tex.height };
-}
-
-// ── URL base prefixing ─────────────────────────────────────────────────
-// The engine vite root uses `base: '/preview/'`, and the interface dev server
-// only proxies `/preview/*` to the engine (packages/interface/vite.config:
-// "Engine vite has base '/preview/', so ALL its asset/dep URLs are already
-// prefixed"). The runtime fetches each catalog entry's `relativeUrl` verbatim
-// from the iframe origin, so that URL MUST carry the `/preview` prefix —
-// otherwise the game-relative asset URL is not matched by the proxy,
-// falls through to the interface SPA, returns index.html, and loadByGuid fails
-// with `asset-fetch-failed`. Prefix the root-absolute source path with `base`.
+/** Prefix a root-absolute path with the engine Vite base. */
 function withBase(base: string, sourceRel: string): string {
-  const rootAbs = posix.resolve('/', sourceRel); // root-absolute game asset path
-  const prefix = base.replace(/\/$/, ''); // '/preview/' -> '/preview'
+  const rootAbs = posix.resolve('/', sourceRel);
+  const prefix = base.replace(/\/$/, '');
   return prefix ? `${prefix}${rootAbs}` : rootAbs;
 }
 
-// ── Sidecar processor ──────────────────────────────────────────────────
+/**
+ * Every external source is represented by the cooked package that the global
+ * pluginPack instance exposes. A source file must never appear as a catalog
+ * locator: assets-runtime rejects raw locators before attempting a load.
+ */
+function metaPackageUrl(base: string, firstGuid: string | undefined): string {
+  const packageName = firstGuid === undefined ? 'pack' : firstGuid.toLowerCase();
+  return withBase(base, `__forgeax-ddc/${packageName}.pack.json`);
+}
 
 async function processMetaSidecar(
   rawPath: string,
@@ -205,186 +62,44 @@ async function processMetaSidecar(
 ): Promise<string | null> {
   let metaRaw: unknown;
   try {
-    const content = await readFile(rawPath, 'utf-8');
-    metaRaw = JSON.parse(content);
-  } catch (e) {
-    return `failed to read or parse sidecar ${rawPath}: ${e instanceof Error ? e.message : String(e)}`;
+    metaRaw = JSON.parse(await readFile(rawPath, 'utf-8'));
+  } catch (error) {
+    return `failed to read or parse sidecar ${rawPath}: ${error instanceof Error ? error.message : String(error)}`;
   }
 
   const metaObj = (metaRaw ?? {}) as Record<string, unknown>;
   if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
     return `sidecar ${rawPath} missing required 'importer' field`;
   }
-  if (metaObj.importer !== 'image' && metaObj.importer !== 'gltf' && metaObj.importer !== 'fbx' && metaObj.importer !== 'audio' && metaObj.importer !== 'font') {
-    return `sidecar ${rawPath} has unfoldable importer: ${JSON.stringify(metaObj.importer)}`;
+  if (!validateMeta(metaRaw)) {
+    const errors = (validateMeta.errors ?? []).map((error) => `${error.instancePath ?? '/'} ${error.message ?? ''}`);
+    return `sidecar ${rawPath} fails meta.schema.json validation: ${errors.join('; ')}`;
   }
 
-  const valid = validateMeta(metaRaw);
-  if (!valid) {
-    const ajvErrs = (validateMeta.errors ?? []).map(
-      (e) => `${e.instancePath ?? '/'} ${e.message ?? ''}`,
-    );
-    return `sidecar ${rawPath} fails meta.schema.json validation: ${ajvErrs.join('; ')}`;
-  }
-
-  const meta = metaRaw as ExternalAssetMetaJson;
-  const sidecarDir = dirname(rawPath);
-  const sourceAbsPath = resolve(sidecarDir, meta.source);
+  const meta = metaRaw as unknown as ExternalAssetMetaJson;
+  const sourceAbsPath = resolve(dirname(rawPath), meta.source);
   const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
-  const normalizedUrl = withBase(base, sourceRel);
-
-  // Mirror the engine's build-catalog.ts: the source file is the "package", each
-  // subAsset an artifact from it. deriveAssetName applies the XOR name rule
-  // (single-/no-storedName sub-asset -> source basename), so a GLB's 1000+
-  // sub-assets show as "<file>.glb" in the Content Browser instead of blank.
+  const packageUrl = metaPackageUrl(base, meta.subAssets[0]?.guid);
   const subAssetCount = meta.subAssets.length;
-  const subName = (sub: { readonly name?: string }): string =>
-    deriveAssetName(sourceAbsPath, subAssetCount, sub.name);
 
-  if (meta.importer === 'image') {
-    const metadata = buildImageMetadata(meta);
-    const isHdr = meta.source.toLowerCase().endsWith('.hdr');
-    let cubeMetadata: CubeTextureMetadata | undefined;
-    for (const sub of meta.subAssets) {
-      if (sub.kind === 'equirect') {
-        // feat-20260630-equirect-kind-internalized-ibl: an .hdr equirect
-        // sub-asset folds to a kind:'equirect' row carrying rgba16float
-        // ImageMetadata (mirrors the engine SSOT build-catalog.ts equirect arm).
-        // The engine build-catalog leaves relativeUrl at the raw .hdr and relies
-        // on pluginPack's importer to emit the .bin; this dev per-game route has
-        // NO importer emit step, so we bake the rgba16float .bin here (cached)
-        // and point the row directly at it, exactly like the pre-feat image+HDR
-        // path did. Without this branch the sub-asset was silently dropped (the
-        // old loop only knew 'image'/'cube-texture'), leaving Skylight.equirect
-        // with no catalog row -> load-failed:asset-not-imported.
-        const baked = isHdr ? await bakeHdrEquirect(sourceAbsPath, sub.guid) : null;
-        if (baked !== null) {
-          const binRel = relative(cwd, baked.binAbsPath).replace(/\\/g, '/');
-          out.push({
-            guid: sub.guid,
-            relativeUrl: withBase(base, binRel),
-            kind: 'equirect',
-            sourcePath: sourceRel,
-            metadata: {
-              kind: 'texture',
-              width: baked.width,
-              height: baked.height,
-              format: 'rgba16float',
-              colorSpace: 'linear',
-              mipmap: false,
-            },
-          });
-        } else {
-          // Bake failed / non-.hdr source -> raw equirect row (loadByGuid then
-          // tries the dev /__import cook as a best-effort fallback).
-          out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'equirect', sourcePath: sourceRel, metadata });
-        }
-      } else if (sub.kind === 'image') {
-        if (isHdr) {
-          const baked = await bakeHdrEquirect(sourceAbsPath, sub.guid);
-          if (baked !== null) {
-            const binRel = relative(cwd, baked.binAbsPath).replace(/\\/g, '/');
-            out.push({
-              guid: sub.guid,
-              relativeUrl: withBase(base, binRel),
-              kind: 'texture',
-              sourcePath: sourceRel,
-              name: subName(sub),
-              metadata: {
-                kind: 'texture',
-                width: baked.width,
-                height: baked.height,
-                format: 'rgba16float',
-                colorSpace: 'linear',
-                mipmap: false,
-              },
-            });
-            continue;
-          }
-          // Bake failed -> fall through to the raw .hdr row (loadByGuid then
-          // tries the dev /__import cook as a best-effort fallback).
-        }
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'texture', sourcePath: sourceRel, name: subName(sub), metadata });
-      } else if (sub.kind === 'cube-texture') {
-        if (cubeMetadata === undefined) {
-          const faceSize = meta.importSettings.cubeFaceSize ?? 256;
-          cubeMetadata = { kind: 'cube-texture', width: faceSize, height: faceSize, format: 'rgba16float', colorSpace: 'linear', mipLevels: 1 };
-        }
-        // metadata is a cube-texture shape (see CubeTextureMetadata above); the
-        // PackIndexEntry.metadata field types only ImageMetadata, so cast to keep
-        // the emitted row identical to the pre-typecheck (any-shim) output.
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'cube-texture', sourcePath: sourceRel, name: subName(sub), metadata: cubeMetadata as unknown as ImageMetadata });
-      }
-    }
+  for (const sub of meta.subAssets) {
+    out.push({
+      guid: sub.guid,
+      packageUrl,
+      kind: sub.kind,
+      sourcePath: sourceRel,
+      name: deriveAssetName(sourceAbsPath, subAssetCount, sub.name),
+    });
   }
-
-  if (meta.importer === 'audio') {
-    for (const sub of meta.subAssets) {
-      if (sub.kind === 'audio') {
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'audio', sourcePath: sourceRel, name: subName(sub) });
-      }
-    }
-  }
-
-  if (meta.importer === 'gltf' || meta.importer === 'fbx') {
-    // gltf/fbx importers emit the same 7 sub-asset kind families: mesh /
-    // material / scene / texture / skeleton / skin + N animation-clip. The
-    // runtime resolves them all through the same source URL — the importer's
-    // transform hook re-parses the file and emits the right POD per
-    // (guid, sourceIndex) lookup. Without listing every kind here, loadByGuid
-    // for the missing rows would hit asset-not-imported, defeating
-    // skinned-mesh + animation playback.
-    const MODEL_KINDS = new Set(['mesh', 'material', 'scene', 'texture', 'skeleton', 'skin', 'animation-clip']);
-    for (const sub of meta.subAssets) {
-      if (MODEL_KINDS.has(sub.kind)) {
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: sub.kind, sourcePath: sourceRel, name: subName(sub) });
-      }
-    }
-  }
-
-  // importer === 'font': a `.ttf` font sidecar declares three sub-assets (MSDF
-  // atlas texture / sampler / glyph-metrics font). Fold the atlas (kind:'texture')
-  // and the FontAsset (kind:'font') rows so GlyphText's shared<FontAsset> field
-  // finds the asset in the Inspector AssetPicker; without this the per-game
-  // catalog carries no kind:'font' row and the picker shows "No FontAsset in
-  // project". The sampler sub-asset is intentionally NOT folded (the runtime
-  // resolves the atlas/sampler handles off the FontAsset payload). Mirrors the
-  // engine SSOT build-catalog.ts font arm.
-  if (meta.importer === 'font') {
-    const atlasMetadata = buildImageMetadata(meta);
-    for (const sub of meta.subAssets) {
-      if (sub.kind === 'texture') {
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'texture', sourcePath: sourceRel, name: subName(sub), metadata: atlasMetadata });
-      } else if (sub.kind === 'font') {
-        out.push({ guid: sub.guid, relativeUrl: normalizedUrl, kind: 'font', sourcePath: sourceRel, name: subName(sub) });
-      }
-    }
-  }
-
   return null;
 }
 
-// ── Public API ─────────────────────────────────────────────────────────
-
 /**
- * Build a pack-index catalog for a single asset root.
+ * Build a Pack v2 catalog for a single game's declared asset roots.
  *
- * Two-arm dispatch:
- *   - .pack.json -> legacy 4-field entry per assets[] row
- *   - .meta.json -> image/gltf/fbx/audio arm with metadata sub-structure
- *
- * Returns [] on scan error (dev-mode degrade over crash).
- *
- * `base` is the engine vite root's base (default `/preview`). Every entry's
- * `relativeUrl` is prefixed with it so the runtime's `fetch(relativeUrl)` from
- * the iframe origin hits the engine through the interface's `/preview/*` proxy
- * (see withBase). Pass '' to emit unprefixed root-absolute URLs.
- *
- * `extraRoots` are SHARED asset dirs (e.g. the template's sky.hdr cube-texture)
- * folded into every game's per-game catalog so template-provided assets resolve
- * by GUID without being duplicated into each game's assets/ dir. Their sources
- * must live under the engine vite root so `relative(cwd, ...)` + base yields a
- * URL vite can serve.
+ * Pack files retain their own URLs. External sidecars point every sub-asset at
+ * the cooked `/__forgeax-ddc/<first-guid>.pack.json` package emitted by the
+ * shared global pluginPack instance, mirroring the engine's catalog builder.
  */
 export async function buildPerGameCatalog(
   root: string,
@@ -407,37 +122,31 @@ export async function buildPerGameCatalog(
   const errors: string[] = [];
   for (const rawPath of result.value) {
     if (rawPath.endsWith('.meta.json') && !rawPath.endsWith('.pack.json')) {
-      const err = await processMetaSidecar(rawPath, cwd, catalog, base);
-      if (err) errors.push(err);
+      const error = await processMetaSidecar(rawPath, cwd, catalog, base);
+      if (error) errors.push(error);
       continue;
     }
-
     if (!rawPath.endsWith('.pack.json')) continue;
     try {
-      const content = await readFile(rawPath, 'utf-8');
-      const parsed = JSON.parse(content) as PackJson;
-      const rel = relative(cwd, rawPath).replace(/\\/g, '/');
-      const normalizedUrl = withBase(base, rel);
-      const assetList = parsed.assets ?? [];
-      // .pack.json arm: the pack file IS the package (deriveAssetName rule 1/2/3
-      // keyed on assetList.length), mirroring engine build-catalog.ts foldPaths.
-      for (const asset of assetList) {
+      const parsed = JSON.parse(await readFile(rawPath, 'utf-8')) as PackJson;
+      const sourcePath = relative(cwd, rawPath).replace(/\\/g, '/');
+      const packageUrl = withBase(base, sourcePath);
+      const assets = parsed.assets ?? [];
+      for (const asset of assets) {
         catalog.push({
           guid: asset.guid,
-          relativeUrl: normalizedUrl,
+          packageUrl,
           kind: asset.kind,
-          sourcePath: rel,
-          name: deriveAssetName(rawPath, assetList.length, asset.name),
+          sourcePath,
+          name: deriveAssetName(rawPath, assets.length, asset.name),
+          ...(asset.refs === undefined ? {} : { refs: asset.refs }),
         });
       }
     } catch {
-      // Skip malformed pack files in dev mode.
+      // A malformed source pack is ignored in the development route; the
+      // global plugin reports its structured catalog diagnostic independently.
     }
   }
-  if (errors.length > 0) {
-    for (const e of errors) {
-      console.warn(`[forgeax-pack] catalog meta error: ${e}`);
-    }
-  }
+  for (const error of errors) console.warn(`[forgeax-pack] catalog meta error: ${error}`);
   return catalog;
 }

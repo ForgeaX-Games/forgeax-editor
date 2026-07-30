@@ -1,4 +1,4 @@
-import type { AssetGraph } from './hooks/useAssetGraph';
+import type { AssetWorkspaceSnapshot, AssetPreflightResult } from '@forgeax/editor-core';
 
 /**
  * Delete-guard impact analysis (C3) — before destroying assets we ask the
@@ -16,20 +16,39 @@ export interface DeleteImpact {
   externalReferencerCount: number;
 }
 
+export interface DeletePreflightSummary {
+  readonly currentRevision: string;
+  readonly recoveryActions: readonly string[];
+  readonly blocked: boolean;
+}
+
+export function summarizeDeletePreflight(
+  preflights: readonly AssetPreflightResult[],
+): DeletePreflightSummary {
+  const blocked = preflights.some((entry) => !entry.ok);
+  return {
+    currentRevision: preflights[0]?.currentRevision ?? 'unknown',
+    recoveryActions: [...new Set(preflights.flatMap((entry) => entry.recoveryActions))].sort(),
+    blocked,
+  };
+}
+
 /**
  * Compute which of `targetGuids` are still referenced by assets outside the
  * delete batch. Pure and side-effect free for unit testing.
  */
 export function computeDeleteImpact(
   targetGuids: readonly string[],
-  graph: AssetGraph,
+  workspace: AssetWorkspaceSnapshot,
 ): DeleteImpact {
   const batch = new Set(targetGuids);
   const externalReferencers = new Map<string, string[]>();
   const distinctExternal = new Set<string>();
 
   for (const guid of targetGuids) {
-    const refs = graph.referencers.get(guid) ?? [];
+    const refs = workspace.relations
+      .filter((relation) => relation.kind === 'depends-on' && relation.to === guid)
+      .map((relation) => relation.from);
     const external = refs.filter((r) => !batch.has(r));
     if (external.length > 0) {
       externalReferencers.set(guid, external);

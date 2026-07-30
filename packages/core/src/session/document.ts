@@ -34,6 +34,18 @@ import { worldRootHandles } from '../store/entity-state';
 
 export { createEditSession } from './edit-session';
 
+/** Apply one document operation and expose its inverse as a canonical effect.
+ * The gateway uses the same result for deferred history publication, so an
+ * effect cannot be published without a concrete inverse from this applier. */
+export function applyCanonicalDocumentEffect(
+  session: EditSession,
+  command: EditorOp,
+  revision: string,
+): ApplyResult & { readonly revision?: string } {
+  const result = applyCommand(session, command);
+  return result.ok ? { ...result, revision } : result;
+}
+
 // ── IoC context for document appliers ────────────────────────────────────────
 // Document appliers receive a `DocApplierCtx` whose ONLY world access is the
 // controlled `engine` proxy (routes every write through EngineFacade →
@@ -48,7 +60,7 @@ export { createEditSession } from './edit-session';
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset'
+  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.

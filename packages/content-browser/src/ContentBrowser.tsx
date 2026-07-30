@@ -5,7 +5,6 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
 import { generateAssetGuid, gateway, getSceneId, onSceneListChange, requestAddAssetsToChat, resolveGamePath, showContextMenu,
-  subscribeDocVersion,
   ResizeHandle, useLocalSize, getSceneList, validateAssetBasename } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
@@ -21,11 +20,11 @@ import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
 import { useNavHistory } from './hooks/useNavHistory';
 import { useFavorites, type CBFavoriteRef } from './hooks/useFavorites';
-import { useAssetGraph } from './hooks/useAssetGraph';
 import { useCBData } from './hooks/useCBData';
 import { useCBDerivedView } from './hooks/useCBDerivedView';
 import { useContentBrowserCommands } from './hooks/useContentBrowserCommands';
 import { computeDeleteImpact } from './delete-guard';
+import { authorizeSubjectAction, preflightSubjectAction, type SubjectActionRequest } from './workspace/subject-actions';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
@@ -55,7 +54,7 @@ import './content-browser.css';
 // (plan-strategy S2 D1, S3.1 component map, requirements AC-03).
 // The engine AssetRegistry is the SSOT for asset enumeration; the ContentBrowser
 // reads directly from it via gateway.doc.registry.listCatalog().
-// registry entries carry {guid, kind, name?, relativeUrl, refs?} — no
+// registry entries carry {guid, kind, name?, packageUrl, refs?} — no
 // payload/packPath, so import-mode filtering and payload-derived fields are
 // removed. `refs` (forward dependency GUID edges) is surfaced by the engine
 // AssetRegistry.listCatalog() (engine refs-through-listCatalog); it powers the
@@ -78,26 +77,13 @@ const favoriteRef = (item: CBViewItem): CBFavoriteRef => (
   item.type === 'asset' ? { kind: 'asset', guid: item.guid } : { kind: 'path', path: item.path }
 );
 
-// The Content Browser mirrors the FILE SYSTEM — a low-frequency source — not the
-// scene document. Its only doc-side dependency is the bound asset registry
-// reference (read at render by useAssetBrowserSnapshot), which swaps on a
-// scene/game switch (replaceDoc). So it must repaint ONLY when that reference
-// changes — never on entity edits, and never on the per-frame ▶ Play mirror
-// (notifyDocChanged bumps docVersion but does NOT run gateway.subscribe). A
-// gateway subscription with a registry-ref snapshot gives exactly that: Object.is
-// bails on edits/play frames and fires only on a genuine doc swap. (The old bare
-// useDocVersion() over-fired at 60fps in Play and repainted the whole panel.)
-const getAssetRegistry = (): unknown => gateway.doc.registry;
-const subscribeAssetRegistry = (fn: () => void): () => void => subscribeDocVersion(fn);
-function useAssetRegistryRef(): unknown {
-  return useSyncExternalStore(subscribeAssetRegistry, getAssetRegistry, getAssetRegistry);
-}
+// Asset invalidation is owned by useAssetBrowserSnapshot via assetsChanged; this
+// component only consumes the resulting read model through useCBData.
 
 export function ContentBrowser() {
   const host = useHost();
   const { t } = useTranslation();
   useContentBrowserPanelContributions();
-  useAssetRegistryRef();
   // Host boot configures the game session asynchronously after the shell mounts.
   // Subscribe to the existing scene-list signal so the read model is rebuilt
   // from the real slug instead of remaining on the initial `default` guard.
@@ -108,7 +94,7 @@ export function ContentBrowser() {
   const gameSlug = sessionGameSlug === 'default' && typeof __FORGEAX_GAME_SLUG__ === 'string'
     ? __FORGEAX_GAME_SLUG__
     : sessionGameSlug;
-  const { allAssets, loading, reload, diskTree, fetchDiskDirs } = useCBData(gameSlug, catalogAssetRoots);
+  const { allAssets, loading, reload, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -262,10 +248,6 @@ export function ContentBrowser() {
     });
   }, [viewItems, previewItem]);
 
-  // Dependency graph (C2) is built over the FULL catalog, not the scoped view:
-  // an asset can be referenced from another root (scenes/, other packs), and the
-  // delete guard (C3) must see those cross-root referencers to warn correctly.
-  const assetGraph = useAssetGraph(allAssets);
   const nameByGuid = useCallback(
     (guid: string) => allAssets.find(a => a.guid === guid)?.name ?? `${guid.slice(0, 8)}…`,
     [allAssets],
@@ -279,13 +261,21 @@ export function ContentBrowser() {
   const performDelete = useCallback(() => {
     setDeleteTargets(current => {
       if (current) {
+        const gates = current.map((asset) => preflightSubjectAction({
+          operation: 'delete',
+          asset,
+          snapshot: workspaceSnapshot,
+        }));
+        if (gates.some((gate) => !gate.preflight.ok)) return null;
         for (const a of current) {
+          const gate = gates.find((entry) => entry.request.subjectId === a.guid);
+          if (!gate || !authorizeSubjectAction(gate).ok) return null;
           gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
         }
       }
       return null;
     });
-  }, []);
+  }, [workspaceSnapshot]);
 
   // Path-domain delete confirm (folders / source files) — mirrors the asset
   // DeleteGuardDialog but for filesystem paths, using the same reliable cb-dialog
@@ -369,12 +359,29 @@ export function ContentBrowser() {
           cancelText: t('editor.contentBrowser.dialogs.cancel'),
         });
         if (newName && newName !== asset.name) {
+          const gate = preflightSubjectAction({
+            operation: 'rename',
+            asset,
+            snapshot: workspaceSnapshot,
+            payload: { newName },
+          });
+          if (!gate.preflight.ok || !authorizeSubjectAction(gate).ok) return;
           // D6: rename routes through the ONE gateway door (document op, undoable).
           // The applier reaches pack IO via ctx.assetIO and fires the in-process
           // assetsChanged notification; the Content Browser listener reloads.
           gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
         }
       })();
+    },
+    onSubjectAction: (request: Omit<SubjectActionRequest, 'snapshot'>) => {
+      if (request.operation === 'rename') return;
+      const gate = preflightSubjectAction({ ...request, snapshot: workspaceSnapshot });
+      if (!gate.preflight.ok || !authorizeSubjectAction(gate).ok) return;
+      void host.commands.execute(`asset.${request.operation}`, {
+        subjectId: gate.request.subjectId,
+        expectedRevision: gate.preflight.currentRevision,
+        confirmationToken: gate.preflight.confirmation.token,
+      });
     },
     onNewFolder: (parentPath: string) => {
       void (async () => {
@@ -389,7 +396,7 @@ export function ContentBrowser() {
         gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
       })();
     },
-  }), [reload, requestDelete, t]);
+  }), [host, reload, requestDelete, t, workspaceSnapshot]);
 
   const createFolderInCurrentPath = useCallback(() => {
     void (async () => {
@@ -810,6 +817,10 @@ export function ContentBrowser() {
   return (
     <div
       className={`cb-root${dragOver ? ' cb-drag-over' : ''}`}
+      data-testid="cb-root"
+      data-facts="product"
+      data-projection-source="editor-product"
+      data-revision={workspaceSnapshot.revision}
       onWheel={handleWheel}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
@@ -920,7 +931,12 @@ export function ContentBrowser() {
       {deleteTargets && createPortal(
         <DeleteGuardDialog
           targets={deleteTargets}
-          impact={computeDeleteImpact(deleteTargets.map(t => t.guid), assetGraph)}
+          impact={computeDeleteImpact(deleteTargets.map(t => t.guid), workspaceSnapshot)}
+          preflight={preflightSubjectAction({
+            operation: 'delete',
+            asset: deleteTargets[0]!,
+            snapshot: workspaceSnapshot,
+          }).preflight}
           nameByGuid={nameByGuid}
           onConfirm={performDelete}
           onCancel={() => setDeleteTargets(null)}

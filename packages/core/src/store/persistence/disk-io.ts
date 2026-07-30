@@ -39,15 +39,17 @@
 //   (backward) extracted from store/scene-persistence.ts (this loop's target),
 //     itself split out of store.ts by historical feat
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose.
-import { isScenePack, stableGuid, validatePackShell } from '../../scene/scene-pack';
+import { canonicalScenePackRevision, isScenePack, stableGuid, validatePackShell } from '../../scene/scene-pack';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
 import { createEditSession } from '../../session/document';
+import { createPackResourceChange } from '../../session/pack-ops';
 import { worldRootHandles } from '../entity-state';
 import type { ScenePersistenceContext, LoadedInlineSnapshot } from '../scene-persistence';
 import type { EditorOp, EditSession } from '../../types';
 import type { EntityHandle, WorldType } from '../../scene/scene-types';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
+import { assetIO } from '../../io/asset-io-facade';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -673,12 +675,21 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       return false;
     }
     try {
-      const r = await deps.fetch('/api/files', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: p, content }),
+      const canonicalRevision = canonicalScenePackRevision(parsedNew);
+      const preparedResource = await assetIO.prepareResourceTransaction({
+        path: p,
+        content,
+        canonicalRevision,
+        changes: [createPackResourceChange(p, content)],
       });
-      if (r.ok) {
+      const committed = preparedResource === null
+        ? (await deps.fetch('/api/files', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: p, content }),
+        })).ok
+        : (await preparedResource.commit()).revision.length > 0;
+      if (committed) {
         ctx.isDirty = false;
         // Record the exact bytes we wrote so the disk watcher recognises the
         // resulting file-change event as its OWN echo (and does not treat the
@@ -688,7 +699,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
         // cache so the next ▶ Play (loadByGuid) re-reads the scene we just wrote.
         invalidateSavedScene(parsedNew);
       }
-      return r.ok;
+      return committed;
     } catch {
       return false;
     }

@@ -16,13 +16,28 @@
 //   requirements-decisions #5: manual-save — dirty indicator shows pending state
 //   plan-strategy D-7: store.ts isDirty/hasPendingDiskSave semantics
 
-import { useEffect, useState, type ReactNode } from 'react';
-import { hasPendingDiskSave } from '@forgeax/editor-core';
-import { useDocVersion } from '@forgeax/editor-core';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { gateway, hasPendingDiskSave } from '@forgeax/editor-core';
+
+let authoredRevision = 0;
+const authoredListeners = new Set<() => void>();
+gateway.subscribe((_doc, command) => {
+  if (command === null) return;
+  authoredRevision += 1;
+  for (const listener of authoredListeners) listener();
+});
+
+function subscribeAuthored(listener: () => void): () => void {
+  authoredListeners.add(listener);
+  return () => authoredListeners.delete(listener);
+}
+
+function getAuthoredRevision(): number {
+  return authoredRevision;
+}
 
 export function DirtyIndicator(): ReactNode {
-  // useDocVersion re-renders on every command — so the dirty state is live.
-  useDocVersion();
+  useSyncExternalStore(subscribeAuthored, getAuthoredRevision, getAuthoredRevision);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {

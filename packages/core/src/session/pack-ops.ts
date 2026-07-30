@@ -30,6 +30,16 @@ export type { MetaSubAsset } from '../io/asset-io-primitives';
 
 type PackAssetEntry = PackFile['assets'][number];
 
+/** Build the opaque resource change consumed by the platform resource port.
+ * Pack-ops owns the pack representation; it does not perform a second write. */
+export function createPackResourceChange(path: string, content: string): {
+  readonly kind: 'put';
+  readonly resourceId: string;
+  readonly bytes: Uint8Array;
+} {
+  return { kind: 'put', resourceId: path, bytes: new TextEncoder().encode(content) };
+}
+
 // ── async-IO failure hint text (shared by fire-and-forget catch blocks) ────
 // The applier synchronously returned `ok:true` (INVALID_ARGS was gated at
 // entry), but the disk/network write later failed. Emit through the

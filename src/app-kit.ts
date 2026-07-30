@@ -29,3 +29,17 @@ export type {
   DefinedApp,
   MountOptions,
 } from '@forgeax/interface/app-kit';
+
+/**
+ * Host-side composition seam. The host supplies already-derived panel and
+ * action projections; this helper intentionally does not create a registry or
+ * execute an operation.
+ */
+export interface EditorHostInjection<Panel = unknown, Action = unknown> {
+  readonly panels: Readonly<Record<string, Panel>>;
+  readonly actions?: readonly Action[];
+}
+
+export function defineEditorHost<T extends EditorHostInjection>(host: T): T {
+  return host;
+}

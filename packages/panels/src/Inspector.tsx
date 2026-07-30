@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, isComponentHidden, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
@@ -8,7 +8,7 @@ import { componentTypeLabel } from './hierarchy-state';
 // M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
-import { gateway, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
+import { createInspectorFieldSelector, gateway, getActiveRuntimeUiGraph, requestRefComponent, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entComponent, entComponents } from '@forgeax/editor-core';
 // VERIFY finding-3 (defense-in-depth): the world-bound handle-pair + the live
 // active-read-world binding, so the primary Inspector reads run the three-layer
@@ -51,6 +51,7 @@ import {
 import { useNumberDraft } from './useNumberDraft';
 import { AssetPicker } from './AssetPicker';
 import './inspector.css';
+import { getOperationProjectionSource } from './operations/run-view-model';
 
 // Component → header/section glyph (interaction spec). Falls back to `box`.
 const COMP_ICON: Record<string, ForgeaxIconName> = {
@@ -161,7 +162,7 @@ function NameField({ value, onCommit }: { value: string; onCommit: (name: string
 // Playwright's .fill()+.blur() path (used by super-four e2e on insp-Transform-pos-*)
 // is unaffected — it focuses+types+blurs and never crosses the drag threshold.
 function ScrubInput({
-  value, fs, testid, className, title, onCommit,
+  value, fs, testid, className, title, onCommit, liveField, axis,
 }: {
   value: number;
   fs?: FieldSchema | undefined;
@@ -169,12 +170,18 @@ function ScrubInput({
   className: string;
   title?: string | undefined;
   onCommit: (n: number) => void;
+  liveField?: { entity: EntityHandle; component: string; field: string; read: (world: unknown) => unknown } | undefined;
+  axis?: number | undefined;
 }) {
   const [drag, setDrag] = useState<{ ox: number; base: number; v: number } | null>(null);
   const start = useRef<{ x: number } | null>(null);
   const step = fs?.step ?? 0.1;
-  const shown = drag ? drag.v : value;
-  const num = useNumberDraft(shown, fs, onCommit);
+  const liveValue = useLiveFieldNumber(value, liveField, axis);
+  const shown = drag ? drag.v : liveValue;
+  const isScrubbing = drag !== null;
+  const isFocused = document.activeElement?.getAttribute('data-testid') === testid;
+  const generation = `${liveField?.entity ?? 'rotation'}:${getActiveRuntimeUiGraph()?.stats().worldGeneration ?? 0}`;
+  const num = useNumberDraft(shown, fs, onCommit, generation);
   // spinner / arrow-key parity: shift = ×10, alt = ×0.1 (mirrors useNumberDraft).
   const stepBy = (dir: 1 | -1, e: { shiftKey: boolean; altKey: boolean }) => {
     const mult = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
@@ -188,6 +195,8 @@ function ScrubInput({
         inputMode="decimal"
         className={`${className} scrubbable`}
         data-testid={testid}
+        data-focused={isFocused}
+        data-scrubbing={isScrubbing}
         title={title ?? fs?.tooltip ?? 'drag horizontally to scrub · scroll / ▲▼ to step'}
         value={num.value}
         onFocus={num.onFocus}
@@ -250,7 +259,7 @@ function AssetPreview({ bound, kind, meta, guid }: { bound: boolean; kind?: stri
   if (!kind) return <span className="ab" />;
   // packPath lets the deriver resolve a real image URL for texture/image kinds;
   // the catalog is the only place that carries it. Missing → glyph fallback.
-  const packPath = guid ? (gateway.assetCatalog().find((e) => e.guid === guid)?.relativeUrl ?? '') : '';
+  const packPath = guid ? (gateway.assetCatalog().find((e) => e.guid === guid)?.packageUrl ?? '') : '';
   return <AssetThumbnail kind={kind} payload={meta} packPath={packPath} size={15} />;
 }
 
@@ -504,6 +513,12 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                                 fs={{ key: f.key, type: 'number', step: f.step, tooltip: f.tooltip }}
                                 testid={`batch-${comp}-${f.key}-${i}`}
                                 className="box-i"
+                                liveField={{ entity: primary, component: comp, field: f.key, read: (world) => {
+                                  const result = entComponent(world as Parameters<typeof entComponent>[0], primary, comp);
+                                  if (!result.ok) throw new Error(result.error.code);
+                                  return result.value[f.key];
+                                } }}
+                                axis={i}
                                 onCommit={(n) => {
                                   const commands: EditorOp[] = ids.map((id) => {
                                     const cur = entComponent(gateway.activeWorld, id, comp);
@@ -568,12 +583,50 @@ function readOptsFor(sel: EntityHandle): HandleCheckOpts | undefined {
   return { binding, pair: { worldRef: pair.worldRef, epoch: pair.epoch } };
 }
 
+function useLiveFieldNumber(
+  fallback: number,
+  field: { entity: EntityHandle; component: string; field: string; read: (world: unknown) => unknown } | undefined,
+  axis: number | undefined,
+): number {
+  const graph = getActiveRuntimeUiGraph();
+  const holder = useRef<{ graph: typeof graph; key: string; mounted: ReturnType<ReturnType<typeof createInspectorFieldSelector>['mount']> } | null>(null);
+  const worldGeneration = graph?.stats().worldGeneration ?? 0;
+  const key = field === undefined ? '' : `${field.entity}:${field.component}:${field.field}:${worldGeneration}`;
+  if (field !== undefined && graph !== null && (holder.current?.graph !== graph || holder.current.key !== key)) {
+    holder.current?.mounted.unsubscribe();
+    const selector = createInspectorFieldSelector(graph, {
+      entity: field.entity,
+      component: field.component,
+      field: field.field,
+      shape: { kind: axis === undefined ? 'scalar' : 'array' },
+      read: field.read,
+    });
+    holder.current = { graph, key, mounted: selector.mount() };
+  }
+  const subscribe = (listener: () => void) => holder.current?.mounted.subscribe(listener) ?? (() => undefined);
+  const getSnapshot = () => {
+    const snapshot = holder.current?.mounted.getSnapshot();
+    if (snapshot?.status !== 'available') return fallback;
+    const raw = snapshot.value;
+    return axis === undefined ? (typeof raw === 'number' ? raw : fallback) : Number((raw as ArrayLike<unknown>)[axis] ?? fallback);
+  };
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 export function InspectorPanel() {
   const { t } = useTranslation();
-  useDocVersion();
   const sel = useSelection();
   const selList = useSelectionList();
   const fieldPrev = useFieldPreview();
+  const readOnly = gateway.mode === 'play';
+  const dispatchMutation = (op: EditorOp) => {
+    if (readOnly) return;
+    gateway.dispatch(op);
+  };
+  const runtimeUiGraph = getActiveRuntimeUiGraph();
+  const worldGeneration = runtimeUiGraph?.stats().worldGeneration ?? 0;
+  const selectionGeneration = `${sel ?? 'none'}:${worldGeneration}:${gateway.mode}`;
+  const projectionSource = getOperationProjectionSource();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
   const [query, setQuery] = useState('');
@@ -581,14 +634,23 @@ export function InspectorPanel() {
   // modal is bound to. null = closed.
   const [picker, setPicker] = useState<{ comp: string; field: string; assetType: string; slot?: number; currentGuid?: string | null } | null>(null);
   // euler React state — scheme B: quat SSOT in world, euler is transient overlay.
-  const [euler, setEuler] = useState<{ rotX: number; rotY: number; rotZ: number }>({ rotX: 0, rotY: 0, rotZ: 0 });
-  useEffect(() => {
-    if (sel === null) return;
+  const [rotationDraft, setRotationDraft] = useState<{ rotX: number; rotY: number; rotZ: number }>({ rotX: 0, rotY: 0, rotZ: 0 });
+  const cancelDraft = () => {
+    if (sel === null) {
+      setRotationDraft({ rotX: 0, rotY: 0, rotZ: 0 });
+      return;
+    }
     const tv = entComponent(gateway.activeWorld, sel, 'Transform', readOptsFor(sel));
-    if (!tv.ok) return;
+    if (!tv.ok) {
+      setRotationDraft({ rotX: 0, rotY: 0, rotZ: 0 });
+      return;
+    }
     const q = readVec(fieldSchema('Transform', 'quat'), (tv.value as Record<string, unknown>).quat);
-    setEuler(quatToEuler(q[0]!, q[1]!, q[2]!, q[3]!));
-  }, [sel]);
+    setRotationDraft(quatToEuler(q[0]!, q[1]!, q[2]!, q[3]!));
+  };
+  useEffect(() => {
+    cancelDraft();
+  }, [sel, worldGeneration]);
   // Per-component section DOM refs → clicking a chip in the Components strip
   // expands the section and scrolls it into the panel's viewport.
   const catRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -605,7 +667,7 @@ export function InspectorPanel() {
     });
   const bindPicked = (guid: string): void => {
     if (!picker || sel === null) return;
-    gateway.dispatch({
+    dispatchMutation({
       kind: 'bindAssetRef',
       entity: sel,
       component: picker.comp,
@@ -618,13 +680,13 @@ export function InspectorPanel() {
   const clearPicked = (): void => {
     if (!picker || sel === null) return;
     if (picker.slot === undefined) {
-      gateway.dispatch({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: '' } });
+      dispatchMutation({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: '' } });
       return;
     }
     const cur = entComponent(gateway.activeWorld, sel, picker.comp);
     const arr = cur.ok ? Array.from((((cur.value as Record<string, unknown>)[picker.field] ?? []) as ArrayLike<unknown>)) : [];
     arr[picker.slot] = 0;
-    gateway.dispatch({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: arr } });
+    dispatchMutation({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: arr } });
   };
   if (selList.size > 1) {
     return <BatchPanel ids={[...selList]} />;
@@ -632,6 +694,7 @@ export function InspectorPanel() {
   if (sel === null || !entExists(gateway.activeWorld, sel)) {
     return (
       <div className="fx-inspector" data-testid="panel-inspector">
+        <div data-testid="inspector-product-projection" data-revision={projectionSource.getRevision?.() ?? 'projection:r0'} />
         <div className="dp-empty">{t('editor.inspector.noSelection')}</div>
       </div>
     );
@@ -663,10 +726,11 @@ export function InspectorPanel() {
 
   return (
     <div className="fx-inspector" data-testid="panel-inspector">
+      <div data-testid="inspector-product-projection" data-revision={projectionSource.getRevision?.() ?? 'projection:r0'} />
       {/* ── Header ───────────────────────────────────────────────── */}
       <div className="dp-name">
         <span className="tico"><ForgeaxIcon name={headerIcon(nodeComponents)} size={15} /></span>
-        <NameField key={sel} value={nodeName} onCommit={(name) => { if (name && name !== nodeName) gateway.dispatch({ kind: 'rename', entity: sel, name }); }} />
+        <NameField key={sel} value={nodeName} onCommit={(name) => { if (name && name !== nodeName) dispatchMutation({ kind: 'rename', entity: sel, name }); }} />
         <span className="idbadge" data-testid="insp-id">#{sel}</span>
         <span className="badge">{deriveKind(nodeComponents)}</span>
         <button type="button" className="tico2" data-testid="insp-focus" title={t('editor.inspector.focus')} onClick={() => gateway.dispatch({ kind: 'requestFrame' })}>
@@ -726,7 +790,7 @@ export function InspectorPanel() {
                 const commands: EditorOp[] = bodyComponents
                   .filter(([comp]) => getComponentSchema(comp) !== undefined)
                   .map(([comp]) => ({ kind: 'setComponent', entity: sel, component: comp, patch: defaultComponentData(comp) }));
-                if (commands.length) gateway.dispatch({ kind: 'transaction', label: `reset all on #${sel}`, commands });
+                if (commands.length) dispatchMutation({ kind: 'transaction', label: `reset all on #${sel}`, commands });
               }}
             >
               <span className="mi"><ForgeaxIcon name="reset" size={14} /></span>{t('editor.inspector.resetAll')}
@@ -752,7 +816,7 @@ export function InspectorPanel() {
                   key={c}
                   className="fx-insp-menu-item"
                   data-testid={`insp-add-${c}`}
-                  onSelect={() => gateway.dispatch({ kind: 'addComponent', entity: sel, component: c, value: defaultComponentData(c) })}
+                  onSelect={() => dispatchMutation({ kind: 'addComponent', entity: sel, component: c, value: defaultComponentData(c) })}
                 >
                   <span className="mi"><ForgeaxIcon name={compIcon(c)} size={14} /></span>{componentTypeLabel(c, t)}
                 </DropdownMenuItem>
@@ -777,7 +841,7 @@ export function InspectorPanel() {
               className="comp-del"
               data-testid={`insp-comprow-remove-${comp}`}
               title="remove component"
-              onClick={(e) => { e.stopPropagation(); gateway.dispatch({ kind: 'removeComponent', entity: sel, component: comp }); }}
+              onClick={(e) => { e.stopPropagation(); dispatchMutation({ kind: 'removeComponent', entity: sel, component: comp }); }}
             >
               <ForgeaxIcon name="trash" size={12} />
             </button>
@@ -824,7 +888,7 @@ export function InspectorPanel() {
                       className="cact"
                       title="reset to default values"
                       data-testid={`insp-reset-${comp}`}
-                      onClick={(e) => { e.stopPropagation(); gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: defaultComponentData(comp) }); }}
+                      onClick={(e) => { e.stopPropagation(); dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: defaultComponentData(comp) }); }}
                     >
                       <ForgeaxIcon name="reset" size={13} />
                     </button>
@@ -835,7 +899,7 @@ export function InspectorPanel() {
                       className="cact danger"
                       title="remove component"
                       data-testid={`insp-remove-${comp}`}
-                      onClick={(e) => { e.stopPropagation(); gateway.dispatch({ kind: 'removeComponent', entity: sel, component: comp }); }}
+                      onClick={(e) => { e.stopPropagation(); dispatchMutation({ kind: 'removeComponent', entity: sel, component: comp }); }}
                     >
                       <ForgeaxIcon name="trash" size={13} />
                     </button>
@@ -888,10 +952,10 @@ export function InspectorPanel() {
                                 className="swatch"
                                 data-testid={`insp-${comp}-${f.key}`}
                                 value={hex}
-                                onChange={(e) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: srgbHexToLinear(e.target.value) } })}
+                                onChange={(e) => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: srgbHexToLinear(e.target.value) } })}
                               />
                               <span className="hexval" data-testid={`insp-${comp}-${f.key}-hex`}>{hex}</span>
-                              {resetBtn(f.key, data[f.key], () => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: defaults[f.key] } }))}
+                              {resetBtn(f.key, data[f.key], () => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: defaults[f.key] } }))}
                             </span>
                           </div>,
                         );
@@ -910,15 +974,21 @@ export function InspectorPanel() {
                                   fs={{ key: f.key, type: 'number', step: f.step, tooltip: f.tooltip }}
                                   testid={`insp-${comp}-${f.key}-${i}`}
                                   className="box-i"
+                                  liveField={{ entity: sel, component: comp, field: f.key, read: (world) => {
+                                    const result = entComponent(world as Parameters<typeof entComponent>[0], sel, comp, readOptsFor(sel));
+                                    if (!result.ok) throw new Error(result.error.code);
+                                    return result.value[f.key];
+                                  } }}
+                                  axis={i}
                                   onCommit={(val) => {
                                     const next = readVec(f, data[f.key]);
                                     next[i] = val;
-                                    gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
+                                    dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
                                   }}
                                 />
                               </span>
                             ))}
-                            {resetBtn(f.key, data[f.key], () => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: defaults[f.key] } }))}
+                            {resetBtn(f.key, data[f.key], () => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: defaults[f.key] } }))}
                           </span>
                         </div>,
                       );
@@ -927,10 +997,10 @@ export function InspectorPanel() {
                     // Transform euler overlay (scheme B): edit degrees, write quat.
                     if (comp === 'Transform' && fieldMatches(comp, 'rotation')) {
                       const commitEuler = (key: string, deg: number) => {
-                        const next = { ...euler, [key]: deg };
-                        setEuler(next);
+                        const next = { ...rotationDraft, [key]: deg };
+                        setRotationDraft(next);
                         const [qx, qy, qz, qw] = eulerToQuat(next.rotX, next.rotY, next.rotZ);
-                        gateway.dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [qx, qy, qz, qw] } });
+                        dispatchMutation({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [qx, qy, qz, qw] } });
                       };
                       const ROTATIONS = [
                         { key: 'rotX', axis: 'x', tooltip: 'rotation around X (degrees)', testid: 'insp-Transform-rotX' },
@@ -944,8 +1014,8 @@ export function InspectorPanel() {
                             {ROTATIONS.map((r) => (
                               <span className={`vcell ${r.axis}`} key={r.key}>
                                 <ScrubInput
-                                  key={`${sel}:${r.key}`}
-                                  value={euler[r.key as keyof typeof euler]}
+                                  key={`${selectionGeneration}:${r.key}`}
+                                  value={rotationDraft[r.key as keyof typeof rotationDraft]}
                                   fs={{ key: r.key, type: 'number', step: 1, tooltip: r.tooltip }}
                                   testid={r.testid}
                                   className="box-i"
@@ -954,7 +1024,7 @@ export function InspectorPanel() {
                               </span>
                             ))}
                             {(() => {
-                              const rotDirty = Math.abs(euler.rotX) > 1e-4 || Math.abs(euler.rotY) > 1e-4 || Math.abs(euler.rotZ) > 1e-4;
+                              const rotDirty = Math.abs(rotationDraft.rotX) > 1e-4 || Math.abs(rotationDraft.rotY) > 1e-4 || Math.abs(rotationDraft.rotZ) > 1e-4;
                               return (
                                 <button
                                   type="button"
@@ -962,7 +1032,7 @@ export function InspectorPanel() {
                                   data-testid="insp-Transform-rotation-reset"
                                   title="reset rotation to default"
                                   tabIndex={rotDirty ? 0 : -1}
-                                  onClick={rotDirty ? () => { setEuler({ rotX: 0, rotY: 0, rotZ: 0 }); gateway.dispatch({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [0, 0, 0, 1] } }); } : undefined}
+                                  onClick={rotDirty ? () => { setRotationDraft({ rotX: 0, rotY: 0, rotZ: 0 }); dispatchMutation({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [0, 0, 0, 1] } }); } : undefined}
                                 >
                                   <ForgeaxIcon name="reset" size={11} />
                                 </button>
@@ -996,13 +1066,13 @@ export function InspectorPanel() {
                         if (sel === null) return;
                         if (locked) {
                           if (items.length !== slotCount) {
-                            gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
+                            dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
                           }
                           setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid });
                           return;
                         }
                         const at = items.length;
-                        gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                        dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
                         setPicker({ comp, field: f.key, assetType: arrType, slot: at });
                       };
                       const rowCount = locked ? slotCount : Math.max(items.length, 1);
@@ -1019,7 +1089,7 @@ export function InspectorPanel() {
                                   type="button"
                                   className="asset-fix"
                                   data-testid={`insp-${comp}-${f.key}-fix`}
-                                  onClick={() => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } })}
+                                  onClick={() => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } })}
                                   title={`materials (${items.length}) must equal submeshes (${slotCount}) — click to fix`}
                                 >
                                   <ForgeaxIcon name="flag" size={11} /> {items.length} / {slotCount} submeshes — click to fix
@@ -1055,11 +1125,11 @@ export function InspectorPanel() {
                                       try { ref = JSON.parse(assetJson); } catch { return; }
                                       if (!ref.guid) return;
                                       if (locked && items.length !== slotCount) {
-                                        gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
+                                        dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
                                       } else if (virtual) {
-                                        gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                                        dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
                                       }
-                                      gateway.dispatch({
+                                      dispatchMutation({
                                         kind: 'bindAssetRef',
                                         entity: sel,
                                         component: comp,
@@ -1079,14 +1149,14 @@ export function InspectorPanel() {
                                       {locked && handleNum > 0 && (
                                         <button type="button" title="clear slot" onClick={(e) => {
                                           e.stopPropagation();
-                                          gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount).map((h, j) => (j === i ? 0 : h)) } });
+                                          dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount).map((h, j) => (j === i ? 0 : h)) } });
                                         }}><ForgeaxIcon name="x" size={12} /></button>
                                       )}
                                       {!locked && !virtual && (
                                         <button type="button" title="remove slot" onClick={(e) => {
                                           e.stopPropagation();
                                           const next = items.filter((_, j) => j !== i);
-                                          gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
+                                          dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
                                         }}><ForgeaxIcon name="x" size={12} /></button>
                                       )}
                                     </span>
@@ -1100,7 +1170,7 @@ export function InspectorPanel() {
                                   <button type="button" className="fbtn" data-testid={`insp-${comp}-${f.key}-pick`} onClick={() => pickSlot(items.length)}>
                                     <ForgeaxIcon name="folder" size={11} /> pick
                                   </button>
-                                  <button type="button" className="fbtn" onClick={() => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } })}>
+                                  <button type="button" className="fbtn" onClick={() => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } })}>
                                     <ForgeaxIcon name="plus" size={11} /> slot
                                   </button>
                                 </div>
@@ -1117,7 +1187,10 @@ export function InspectorPanel() {
                       if (fieldSchema(comp, k)?.type === 'vec') continue;
                       if (v !== null && typeof v === 'object') continue;
                       const fs = fieldSchema(comp, k);
-                      const setField = (val: unknown) => gateway.dispatch({ kind: 'setComponent', entity: sel, component: comp, patch: { [k]: val } });
+                      const setField = (val: unknown) => {
+                        if (readOnly) return;
+                        dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [k]: val } });
+                      };
                       const type = fs?.type ?? (typeof v === 'number' ? 'number' : 'string');
                       const reset = resetBtn(k, v, () => setField(defaults[k]));
                       if (type === 'number') {
@@ -1130,7 +1203,19 @@ export function InspectorPanel() {
                               {ranged && (
                                 <input type="range" min={fs!.min} max={fs!.max} step={fs?.step ?? 0.01} data-testid={`insp-${comp}-${k}-slider`} value={liveNum} onChange={(e) => setField(Number(e.target.value))} />
                               )}
-                              <ScrubInput value={liveNum} fs={fs} testid={`insp-${comp}-${k}`} className="box-i num" onCommit={setField} />
+                              <ScrubInput
+                                key={`${selectionGeneration}:${comp}:${k}`}
+                                value={liveNum}
+                                fs={fs}
+                                testid={`insp-${comp}-${k}`}
+                                className="box-i num"
+                                liveField={{ entity: sel, component: comp, field: k, read: (world) => {
+                                  const result = entComponent(world as Parameters<typeof entComponent>[0], sel, comp, readOptsFor(sel));
+                                  if (!result.ok) throw new Error(result.error.code);
+                                  return result.value[k];
+                                } }}
+                                onCommit={setField}
+                              />
                               {reset}
                             </span>
                           </div>,
@@ -1184,7 +1269,7 @@ export function InspectorPanel() {
                                       try {
                                         const ref = JSON.parse(assetJson);
                                         if (ref.guid) {
-                                          gateway.dispatch({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: scalarType, guids: [ref.guid] });
+                                          dispatchMutation({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: scalarType, guids: [ref.guid] });
                                         }
                                       } catch { /* noop */ }
                                     }}

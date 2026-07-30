@@ -9,7 +9,7 @@
   },
   {
     "name": "assetCatalog",
-    "signature": "() => readonly (CatalogRecord & { guid: string; })[]"
+    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; sourcePath?: string | undefined; }[]"
   },
   {
     "name": "auditLog",
@@ -68,6 +68,10 @@
     "signature": "(spec: { id: string; domain: \"document\" | \"session\"; argsSchema: Record<string, unknown> | null; plan: PlanFn; }) => { ok: true; } | { ok: false; error: CommandError; }"
   },
   {
+    "name": "discardDeferred",
+    "signature": "(cmd: EditorOp) => boolean"
+  },
+  {
     "name": "describeAsset",
     "signature": "(handle: number) => AssetSummaryResult"
   },
@@ -81,6 +85,10 @@
   },
   {
     "name": "dispatch",
+    "signature": "(cmd: EditorOp, origin?: CommandOrigin) => DispatchResult"
+  },
+  {
+    "name": "dispatchDeferred",
     "signature": "(cmd: EditorOp, origin?: CommandOrigin) => DispatchResult"
   },
   {
@@ -177,7 +185,11 @@
   },
   {
     "name": "playPhase",
-    "signature": "\"play\" | \"failed\" | \"edit\" | \"starting\""
+    "signature": "\"play\" | \"edit\" | \"failed\" | \"starting\""
+  },
+  {
+    "name": "publishDeferred",
+    "signature": "(cmd: EditorOp) => boolean"
   },
   {
     "name": "readGameState",
@@ -205,7 +217,7 @@
   },
   {
     "name": "sceneMountPhase",
-    "signature": "\"pending\" | \"failed\" | \"idle\" | \"mounted\""
+    "signature": "\"failed\" | \"pending\" | \"idle\" | \"mounted\""
   },
   {
     "name": "sourceFileDeleteStatus",

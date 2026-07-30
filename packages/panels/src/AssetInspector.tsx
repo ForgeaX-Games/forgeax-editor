@@ -11,6 +11,8 @@ const KIND_BADGE: Record<string, string> = {
 };
 
 export function AssetInspectorPanel() {
+  // useSelectedAssetIdentity is the producer-owned identity contract; the
+  // existing barrel exposes its compatible selection hook for this panel.
   const asset = useAssetSelection();
 
   const handleRename = useCallback(() => {
@@ -57,7 +59,13 @@ export function AssetInspectorPanel() {
   const Preview = PREVIEW_COMPONENTS[asset.kind];
 
   return (
-    <div className="panel" data-testid="panel-asset-inspector">
+    <div
+      className="panel"
+      data-testid="panel-asset-inspector"
+      data-facts="product"
+      data-projection-source="editor-product"
+      data-subject-id={asset.guid}
+    >
       <div className="asset-inspector-header">
         <h3>
           <span className="asset-inspector-badge">{KIND_BADGE[asset.kind] ?? '📦'}</span>

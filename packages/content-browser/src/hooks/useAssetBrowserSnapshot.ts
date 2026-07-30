@@ -30,6 +30,7 @@ export function useAssetBrowserSnapshot(
   gameSlug: string,
   catalogRoots: readonly AssetBrowserCatalogRoot[],
 ): UseAssetBrowserSnapshotResult {
+  const [registryRevision, setRegistryRevision] = useState(0);
   const registry = gateway.doc.registry as AssetBrowserRegistry | undefined;
   const model = useMemo(() => {
     if (!gameSlug || gameSlug === 'default' || !registry) return null;
@@ -39,7 +40,7 @@ export function useAssetBrowserSnapshot(
       resolveGamePath,
       catalogRoots,
     });
-  }, [catalogRoots, gameSlug, registry]);
+  }, [catalogRoots, gameSlug, registry, registryRevision]);
   const [snapshot, setSnapshot] = useState<AssetBrowserSnapshot>(() => model?.snapshot() ?? EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(false);
 
@@ -50,16 +51,12 @@ export function useAssetBrowserSnapshot(
   }, [model]);
 
   useEffect(() => {
-    if (!model) {
-      setSnapshot(EMPTY_SNAPSHOT);
-      setLoading(false);
-      return;
-    }
-    setSnapshot(model.snapshot());
-    const offModel = model.subscribe(setSnapshot);
-    reload();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const offBridge = panelBridge.on('assetsChanged', ({ hint }) => {
+      if (!model) {
+        setRegistryRevision(revision => revision + 1);
+        return;
+      }
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
@@ -67,6 +64,17 @@ export function useAssetBrowserSnapshot(
         void model.refresh(hint).finally(() => setLoading(false));
       }, 200);
     });
+    if (!model) {
+      setSnapshot(EMPTY_SNAPSHOT);
+      setLoading(false);
+      return () => {
+        offBridge();
+        if (timer) clearTimeout(timer);
+      };
+    }
+    setSnapshot(model.snapshot());
+    const offModel = model.subscribe(setSnapshot);
+    reload();
     return () => {
       offModel();
       offBridge();

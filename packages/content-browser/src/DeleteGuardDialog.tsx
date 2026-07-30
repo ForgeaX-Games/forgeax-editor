@@ -3,12 +3,14 @@ import { Button } from '@forgeax/editor-ui';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import type { CBAsset } from './types';
 import type { DeleteImpact } from './delete-guard';
+import type { AssetPreflightResult } from '@forgeax/editor-core';
 
 export interface DeleteGuardDialogProps {
   /** Assets queued for deletion. */
   targets: readonly CBAsset[];
   /** Reference impact from {@link computeDeleteImpact}. */
   impact: DeleteImpact;
+  preflight?: AssetPreflightResult;
   /** Resolve a guid to a human-readable label for the referencer list. */
   nameByGuid: (guid: string) => string;
   onConfirm: () => void;
@@ -25,6 +27,7 @@ export interface DeleteGuardDialogProps {
 export function DeleteGuardDialog({
   targets,
   impact,
+  preflight,
   nameByGuid,
   onConfirm,
   onCancel,
@@ -83,6 +86,11 @@ export function DeleteGuardDialog({
             </p>
           ) : (
             <p className="cb-dialog-note">{t('editor.contentBrowser.deleteGuard.note')}</p>
+          )}
+          {preflight && (
+            <p className="cb-dialog-note" data-testid="cb-delete-guard-revision">
+              Revision {preflight.currentRevision}; recovery: {preflight.recoveryActions.join(', ')}
+            </p>
           )}
         </div>
 

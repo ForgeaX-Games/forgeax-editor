@@ -17,7 +17,7 @@ export { ViewportHints } from './ViewportHints';
 
 // ── Engine ──
 export { createViewport } from './viewport/viewport';
-export { projectGatewayOps } from './gateway-action-projection';
+export { projectGatewayActions, projectGatewayOps } from './gateway-action-projection';
 export type { GatewayActionSource, ProjectedGatewayAction, RegisterGatewayAction } from './gateway-action-projection';
 
 // ── Hot reload (two-tier) ──

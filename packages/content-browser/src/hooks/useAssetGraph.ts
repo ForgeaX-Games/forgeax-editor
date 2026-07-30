@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { AssetWorkspaceSnapshot } from '@forgeax/editor-core';
 
 /**
  * Asset dependency graph (C2) — derived in-memory from the forward `refs`
@@ -21,46 +22,26 @@ export interface AssetGraph {
   referencers: Map<string, string[]>;
 }
 
-/** Minimal shape a graph node needs — any object carrying a guid + refs. */
-export interface AssetGraphNode {
-  guid: string;
-  refs: readonly string[];
-}
-
 /**
- * Build the forward (dependencies) + reverse (referencers) dependency graph
- * from a flat asset list. Pure and side-effect free so it can be unit tested
- * and memoised. Self-references and duplicate edges are de-duplicated; a
- * self-reference never lists a node as its own referencer.
+ * Compatibility projection from the workspace relations. The Content Browser
+ * no longer constructs graph facts from catalog rows.
  */
-export function buildAssetGraph(assets: readonly AssetGraphNode[]): AssetGraph {
+export function buildAssetGraph(snapshot: AssetWorkspaceSnapshot): AssetGraph {
   const dependencies = new Map<string, string[]>();
   const referencers = new Map<string, string[]>();
 
-  for (const asset of assets) {
-    // Forward edges: de-dup + drop self-reference for a clean dependency set.
-    const deps: string[] = [];
-    for (const dep of asset.refs) {
-      if (dep === asset.guid || deps.includes(dep)) continue;
-      deps.push(dep);
-    }
-    dependencies.set(asset.guid, deps);
-
-    // Reverse edges: each dependency gains `asset.guid` as a referencer.
-    for (const dep of deps) {
-      const arr = referencers.get(dep);
-      if (arr === undefined) {
-        referencers.set(dep, [asset.guid]);
-      } else if (!arr.includes(asset.guid)) {
-        arr.push(asset.guid);
-      }
-    }
+  for (const subject of snapshot.subjects) dependencies.set(subject.id, []);
+  for (const relation of snapshot.relations) {
+    if (relation.kind !== 'depends-on' || relation.from === relation.to) continue;
+    const deps = dependencies.get(relation.from) ?? [];
+    if (!deps.includes(relation.to)) dependencies.set(relation.from, [...deps, relation.to]);
+    const refs = referencers.get(relation.to) ?? [];
+    if (!refs.includes(relation.from)) referencers.set(relation.to, [...refs, relation.from]);
   }
-
   return { dependencies, referencers };
 }
 
-/** React hook wrapper — memoises {@link buildAssetGraph} over the asset list. */
-export function useAssetGraph(assets: readonly AssetGraphNode[]): AssetGraph {
-  return useMemo(() => buildAssetGraph(assets), [assets]);
+/** React hook wrapper — memoises the workspace projection. */
+export function useAssetGraph(snapshot: AssetWorkspaceSnapshot): AssetGraph {
+  return useMemo(() => buildAssetGraph(snapshot), [snapshot]);
 }

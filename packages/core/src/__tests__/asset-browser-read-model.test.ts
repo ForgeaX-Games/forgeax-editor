@@ -47,12 +47,12 @@ function makeModel(options: {
 describe('AssetBrowserSnapshot read model (M2)', () => {
   it('deduplicates catalog GUIDs and keeps sidecar-only GUIDs out of assets', async () => {
     const { model } = makeModel({ rows: [
-      { guid: 'GUID-CATALOG', kind: 'mesh', relativeUrl: 'catalog/assets/Fox.glb.pack.json', sourcePath: 'catalog/assets/Fox.glb' },
-      { guid: 'guid-catalog', kind: 'mesh', relativeUrl: 'catalog/assets/duplicate.pack.json' },
+      { guid: 'GUID-CATALOG', kind: 'mesh', packageUrl: 'catalog/assets/Fox.glb.pack.json', sourcePath: 'catalog/assets/Fox.glb' },
+      { guid: 'guid-catalog', kind: 'mesh', packageUrl: 'catalog/assets/duplicate.pack.json' },
     ] });
     const snapshot = await model.refresh();
     expect(snapshot.assets.map(asset => asset.guid)).toEqual(['guid-catalog']);
-    expect(snapshot.assets[0]?.storageRelativeUrl).toBe('catalog/assets/Fox.glb.pack.json');
+    expect(snapshot.assets[0]?.storagePackageUrl).toBe('catalog/assets/Fox.glb.pack.json');
     expect(snapshot.assets[0]?.storageSourcePath).toBe('catalog/assets/Fox.glb');
     expect(snapshot.sources).toContainEqual(expect.objectContaining({ sourcePath: 'assets/Fox.glb', phase: 'indexed' }));
     expect(snapshot.assets.some(asset => asset.guid === 'guid-sidecar')).toBe(false);
@@ -93,7 +93,7 @@ describe('AssetBrowserSnapshot read model (M2)', () => {
     });
     const snapshot = await model.refresh();
     expect(snapshot.assets).toContainEqual(expect.objectContaining({
-      guid: 'guid-ui', kind: 'ui', sourcePath: 'assets/ui/hud.ui.html', storageRelativeUrl: 'assets/ui/hud.meta.json',
+      guid: 'guid-ui', kind: 'ui', sourcePath: 'assets/ui/hud.ui.html', storagePackageUrl: 'assets/ui/hud.meta.json',
     }));
     expect(snapshot.sources).toContainEqual(expect.objectContaining({ sourcePath: 'assets/ui/hud.ui.html', phase: 'indexed' }));
   });

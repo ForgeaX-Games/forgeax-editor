@@ -493,7 +493,7 @@ describe('Gateway asset read surface', () => {
       },
     ] as const;
     const canonicalRow = {
-      relativeUrl: '/assets/material.pack.json',
+      packageUrl: '/assets/material.pack.json',
       sourcePath: 'materials/hero.material',
       kind: 'host/material',
       packageId: 'host-package',
