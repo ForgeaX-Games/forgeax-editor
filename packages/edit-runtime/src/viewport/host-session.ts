@@ -524,7 +524,18 @@ export function createHostSession(deps: HostSessionDeps): {
       await renderer.ready.catch(() => null);
       const assetRes = await renderer.assets.loadByGuid(parsed.value);
       if (!assetRes.ok) {
-        console.info('[editor] ▶ Play defaultScene load skipped:', (assetRes.error as { code?: string })?.code);
+        const error = assetRes.error as {
+          code?: string;
+          expected?: string;
+          hint?: string;
+          detail?: unknown;
+        };
+        console.info('[editor] ▶ Play defaultScene load skipped:', JSON.stringify({
+          code: error.code,
+          expected: error.expected,
+          hint: error.hint,
+          detail: error.detail,
+        }));
         return null;
       }
       return assetRes.value;

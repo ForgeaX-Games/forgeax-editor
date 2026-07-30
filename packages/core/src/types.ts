@@ -81,8 +81,8 @@ export type BuiltinEditorOp =
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
-  // paramValues in-place. DOCUMENT-domain (undoable — inverse carries old patch).
-  // Shallow-merges paramPatch into the asset's paramValues; writes the new entry
+  // values in-place. DOCUMENT-domain (undoable — inverse carries old patch).
+  // Shallow-merges paramPatch into the asset's values; writes the new entry
   // through ctx.assetIO then invalidates the registry cache for hot viewport reload.
   // Gateway fills _oldPatch / _oldRefs / _oldEntry synchronously from the catalog.
   | { kind: 'updateMaterialParams'; packPath: string; guid: string; paramPatch: Record<string, unknown>; textureGuids?: Record<string, string | null>; _oldPatch?: Record<string, unknown>; _oldRefs?: string[]; _oldEntry?: unknown }
@@ -97,7 +97,7 @@ export type BuiltinEditorOp =
   | { kind: 'setSceneId'; id: string | null | undefined }
   | { kind: 'switchSceneFile'; id: string }
   | { kind: 'createSceneFile'; id: string; duplicateCurrent: boolean }
-  | { kind: 'saveDocToDisk' }
+  | { kind: 'saveDocToDisk'; requestId?: string; retryOfRequestId?: string }
   | { kind: 'loadDocFromDisk' }
   | { kind: 'createDirectory'; parentPath: string; name: string }
   | { kind: 'deleteDirectory'; path: string }
@@ -265,8 +265,30 @@ export interface CommandError {
     | 'game-projection-id-conflict'
     | 'unknown-game-projection'
     | 'game-action-failed'
-    | 'game-read-failed';
+    | 'game-read-failed'
+    // OperationRun save adopter (M1): structured lifecycle/control failures.
+    | 'save-already-running'
+    | 'operation-request-id-conflict'
+    | 'operation-not-retryable'
+    | 'run-not-cancellable'
+    | 'run-not-found'
+    | 'run-expired'
+    | 'operation-failed'
+    // Save persistence effect failures (M2): stable codes for data-protecting
+    // refusal and canonical commit outcomes. Callers branch on these fields,
+    // never on console/message text.
+    | 'save-serialization-failed'
+    | 'save-pack-validation-failed'
+    | 'save-inline-assets-missing'
+    | 'save-entities-missing'
+    | 'save-write-failed'
+    | 'save-unexpected-failure';
   hint: string;
+  readonly expected?: unknown;
+  readonly current?: unknown;
+  readonly subjectRef?: { readonly kind: string; readonly id: string };
+  readonly retryable?: boolean;
+  readonly recoveryActions?: readonly string[];
 }
 
 export type ApplyResult =

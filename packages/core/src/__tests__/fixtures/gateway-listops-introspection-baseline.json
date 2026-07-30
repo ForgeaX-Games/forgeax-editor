@@ -884,7 +884,28 @@
     "id": "saveDocToDisk",
     "domain": "session",
     "source": "builtin",
-    "argsSchema": null,
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Caller-minted request identity. Read the same save run with getOperationRun/waitOperationRun; accepted is not persisted."
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Optional failed requestId being retried; the new requestId remains the public identity of the new attempt."
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
     "title": "Save to Disk"
   },
   {
@@ -1241,7 +1262,7 @@
         },
         "paramPatch": {
           "type": "object",
-          "description": "Shallow merge into MaterialAsset.paramValues. Keys should come from the shader's paramSchema. undefined deletes the key. Example: {\"baseColor\":[1,0,0,1],\"metallic\":0.2,\"roughness\":0.4}"
+          "description": "Shallow merge into MaterialAsset.values. Keys should come from the shader's paramSchema. undefined deletes the key. Example: {\"baseColor\":[1,0,0,1],\"metallic\":0.2,\"roughness\":0.4}"
         },
         "textureGuids": {
           "type": "object",

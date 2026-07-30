@@ -10,6 +10,7 @@ import { useCallback, useMemo } from 'react';
 import { resolveGamePath } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { deriveContentView } from '../folder-view';
+import { isMetaSidecarFile } from '../folder-view';
 import { catalogPathToRoot, type CatalogAssetRoot } from '../catalog-root';
 import { resolveViewMode, type CBViewMode2 } from '../view-mode';
 import {
@@ -98,7 +99,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     const files: CBFile[] = [];
     const walk = (node: DiskTreeNode) => {
       const rel = normalizeGameRelativePath(node.path, gameRootPath, gameSlug);
-      if (node.type === 'file' && rel) {
+      if (node.type === 'file' && rel && !isMetaSidecarFile(node.name)) {
         // #292: fall back to the `<rel>.meta.json` sidecar so meta-backed disk
         // files still surface their engine asset(s).
         const assets = assetsByRel.get(rel) ?? assetsByRel.get(`${rel}.meta.json`) ?? [];
@@ -167,6 +168,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
         const rel = normalizeGameRelativePath(node.path, gameRootPath, gameSlug);
         if (!rel && node !== diskTree) return null;
         if (node.type === 'file') {
+          if (isMetaSidecarFile(node.name)) return null;
           const assets = assetsByRel.get(rel) ?? assetsByRel.get(`${rel}.meta.json`) ?? [];
           const family = fileFamilyOfWithAssets(node.name, assets);
           return {

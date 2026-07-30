@@ -89,7 +89,7 @@
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
-.fsb-badge.fsb-badge-games {
+.fsb-badge.fsb-badge-game {
   background: rgba(212,255,72,0.12);
   color: var(--primary);
 }

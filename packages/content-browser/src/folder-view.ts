@@ -1,5 +1,36 @@
 import type { CBAsset, CBFile, CBFileFamily, CBFolder } from './types';
-import { isHiddenDir } from './view-mode';
+import { isHiddenDir, type CBViewMode2 } from './view-mode';
+
+/** `.meta.json` sidecars are engine-owned import metadata (mirrors the
+ *  exclusion in core's `loadRawAssets`) — they are never author-facing files,
+ *  so the browser hides them everywhere a disk tree is projected. The source
+ *  file still surfaces the sidecar's sub-assets via the `<rel>.meta.json`
+ *  fallback in useCBDerivedView. */
+export function isMetaSidecarFile(name: string): boolean {
+  return name.toLowerCase().endsWith('.meta.json');
+}
+
+/** What a double-click (activate) on a FILE item should do. Pure so the
+ *  routing rule is unit-testable without rendering the panel. */
+export type FileActivateAction =
+  | { type: 'open-asset'; asset: CBAsset }
+  | { type: 'toggle-expand' }
+  | { type: 'preview' };
+
+export function resolveFileActivateAction(
+  file: Pick<CBFile, 'assets'>,
+  viewMode: CBViewMode2,
+): FileActivateAction {
+  // Scene first — the same rule as the context menu's setCurrentScene and
+  // openAsset's switch condition. A scene pack must switch the scene on
+  // double-click even in file mode; falling through to pack-expansion left
+  // scene files dead on double-click.
+  const sceneAsset = file.assets.find((a) => a.kind === 'scene');
+  if (sceneAsset) return { type: 'open-asset', asset: sceneAsset };
+  if (viewMode === 'file' && file.assets.length > 0) return { type: 'toggle-expand' };
+  if (file.assets[0]) return { type: 'open-asset', asset: file.assets[0] };
+  return { type: 'preview' };
+}
 
 /**
  * A catalog asset paired with its game-relative `.pack.json` path.
@@ -137,7 +168,7 @@ export function deriveFileView(params: {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const files: CBFile[] = children
-    .filter(n => n.type === 'file')
+    .filter(n => n.type === 'file' && !isMetaSidecarFile(n.name))
     .map(n => {
       const filePath = currentPath ? `${currentPath}/${n.name}` : n.name;
       const family = fileFamilyOf(n.name);
@@ -200,7 +231,7 @@ function countDescendantFiles(node: ProjectTreeNode): number {
   if (!node.children) return 0;
   let count = 0;
   for (const child of node.children) {
-    if (child.type === 'file') count++;
+    if (child.type === 'file') { if (!isMetaSidecarFile(child.name)) count++; }
     else count += countDescendantFiles(child);
   }
   return count;

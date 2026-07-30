@@ -16,7 +16,7 @@
   "onboarding": {
     "step": {
       "welcome": "Welcome · Language · Connect",
-      "project": "Set up workspace",
+      "project": "Choose a game",
       "home": "Enter home"
     },
     "welcome": {
@@ -57,35 +57,31 @@
     "back": "Back",
     "skip": "Skip setup",
     "project": {
-      "title": "Set up your workspace",
-      "root": "Project root",
-      "rootHint": "Projects are created as games under this workspace (~/ is your home). Changing the root only picks the path; create/switch happens when you click New.",
-      "changeRoot": "Change",
-      "rootPickTitle": "Choose workspace directory",
-      "name": "Project name",
+      "title": "Choose your game",
+      "name": "Game name",
       "namePlaceholder": "Optional; leave blank for untitled-1",
       "nameRequired": "Enter a project name (≥1 char, lowercase/digits/hyphens).",
-      "willCreate": "Will create project: {{name}}",
+      "willCreate": "Will create game: {{name}}",
       "busy": {
         "new": "Creating your project…",
         "template": "Copying the template into your project… this can take a few seconds",
         "open": "Opening the directory…"
       },
       "newTitle": "New empty project",
-      "newDesc": "Create an empty project under the current workspace (default game template).",
+      "newDesc": "Create an empty game from the default template.",
       "newCta": "Create",
       "existingTitle": "Open an existing project",
-      "existingDesc": "This workspace already has {{count}} project(s) — pick one to enter directly, no need to create a new one.",
+      "existingDesc": "{{count}} game(s) already exist — pick one to enter directly.",
       "existingOpen": "Open",
       "openTitle": "Open a directory",
-      "openDesc": "Pick any folder to mount into this workspace (outside the root is fine). Empty folders are auto-initialized as a game project.",
+      "openDesc": "Use any folder as a game directory. Empty folders are auto-initialized.",
       "openCta": "Choose directory",
       "errNotGame": "That folder is not a game and is not empty. Pick an empty folder (auto-initialized) or one that already has forge.json / main.ts.",
       "sampleTitle": "From a template",
-      "sampleDesc": "Copy a built-in game as a new project in this workspace.",
+      "sampleDesc": "Copy a built-in game as a new game.",
       "sampleCta": "Choose template",
       "select": "Select",
-      "footer": "Any option creates/opens a workspace and enters the home screen."
+      "footer": "Any option creates or opens a game and enters the home screen."
     },
     "template": {
       "title": "Pick a built-in template",
@@ -321,7 +317,7 @@
     },
     "upload": {
       "title": "Upload",
-      "hint": "Upload this workspace's .forgeax creative content to a GitHub repo (same as the /upload chat command).",
+      "hint": "Upload this project's .forgeax creative content to a GitHub repo (same as the /upload chat command).",
       "tokenPlaceholder": "Paste a GitHub token (classic or fine-grained, shared or personal)",
       "tokenNotSetHint": "Built-in shared token · paste your own to override",
       "resetTokenTitle": "Clear override and restore the built-in shared token",
@@ -543,9 +539,9 @@
     "source": "Source",
     "components": "Components",
     "asset": "Asset",
-    "workspace": "Workspace",
-    "workspace_ref": "Workspace reference",
-    "workspace_context_hint": "Right-click to rename or delete this workspace",
+    "workspace": "Workbench",
+    "workspace_ref": "Workbench reference",
+    "workspace_context_hint": "Right-click to rename or delete this workbench",
     "component_property": "Component property"
   },
   "workbench": {
@@ -601,7 +597,7 @@
     "deleteFailedTitle": "Delete failed",
     "switchTooltip": "Switch game (each game = one game)",
     "listTitle": "Open game",
-    "newGameTooltip": "Create a new .forgeax/games/<slug>/ under the current workspace (Iori/Suzu design + Forge writes code)",
+    "newGameTooltip": "Create a new game at .forgeax/games/<slug>/ (Iori/Suzu design + Forge writes code)",
     "newGame": "New game",
     "empty": "No games yet · click + above to create",
     "switchToTooltip": "Switch to games/{{slug}}/",
@@ -610,8 +606,8 @@
     "unpin": "Unpin — follow latest",
     "slugError": "slug: 1-41 chars / lowercase ASCII / digits / hyphens",
     "kickoffMessage": "Just created games/{{slug}}/, brief: {{brief}}. Please run the full pipeline: Iori → Suzu → you write the code.",
-    "modalTitle": "New project",
-    "slugLabel": "slug (project directory name)",
+    "modalTitle": "New game",
+    "slugLabel": "slug (game directory name)",
     "nameLabel": "Display name (optional)",
     "namePlaceholder": "Leave blank to use slug",
     "briefLabel": "brief (optional — leave one and Forge dispatches Iori immediately)",
@@ -833,29 +829,8 @@
       "unread": "{{count}} new messages"
     }
   },
-  "projectSwitcher": {
-    "triggerTooltip": "project (agentic working dir) · switching hot-restarts engine + cli",
-    "switching": "Switching…",
-    "newProjectTooltip": "Create a new project (agentic working dir)",
-    "newProject": "New project",
-    "empty": "No projects yet",
-    "currentSuffix": "· current",
-    "extSourceTooltip": "From ~/.forgeax/known-projects.json",
-    "deleteCurrentDisabledTooltip": "Can't delete the current project (switch to another first)",
-    "removeFromListTooltip": "Remove from known list (won't delete dir)",
-    "deleteProjectTooltip": "Delete project",
-    "openExisting": "Open existing directory",
-    "removeRegisteredConfirm": "Remove \"{{name}}\" from the known list?\n\nThis only removes the entry from ~/.forgeax/known-projects.json; the directory {{path}} on disk won't be deleted.",
-    "deleteProjectConfirm": "Delete project {{id}}/ ? This deletes the entire working directory (games + .forgeax).",
-    "idError": "id: 2-41 chars / lowercase ascii / digits / -_",
-    "tabNew": "New project",
-    "tabOpen": "Open existing directory",
-    "idLabel": "id (working dir name)",
-    "displayNameLabel": "Display name (optional)",
-    "displayNamePlaceholder": "Leave blank to use id",
-    "creating": "Creating...",
-    "create": "Create",
-    "openGameDirectory": "Open Game Directory"
+  "gameDirectory": {
+    "openTitle": "Open game directory"
   },
   "dashboard": {
     "busKindRegistering": "{{kind}} · registering extensions…",
@@ -925,7 +900,7 @@
   },
   "store": {
     "openFile": {
-      "notInWorkspace": "Cannot open \"{path}\"\n\nThis file is not in the editable workspace (usually read-only source from the engine / dependency libraries that the agent merely read).\nStudio can only open files under .forgeax/games/** and packages/**.",
+      "notInWorkspace": "Cannot open \"{path}\"\n\nThis file is outside the editable game and is usually read-only engine or dependency source.\nStudio can only open files under .forgeax/games/** and packages/**.",
       "serverDetail": "\n\nServer: {serverMsg}",
       "notFound": "File does not exist: \"{path}\"\n\nIt may have been moved / renamed / deleted, or this game's entry file is actually named differently (e.g. main.ts instead of index.ts).",
       "failed": "Cannot open \"{path}\": {status} {statusText}"
@@ -1290,9 +1265,10 @@
     "browse": "Browse… (open the system folder picker)",
     "addrHint": "Type a path and press Enter to jump",
     "emptyDir": "Empty directory",
+    "initWorkspaceWhenNoGame": "Initialize a default game when no game exists",
     "selectDir": "Select {{dir}}",
     "processing": "Processing…",
-    "selectThisDir": "Open this game directory"
+    "selectThisDir": "Select this directory"
   },
   "subAgent": {
     "status": {
@@ -1465,15 +1441,7 @@
     "noEntryPrefix": "Extension",
     "noEntryMiddle": "has no",
     "noEntrySuffix": "entry.",
-    "iframeLoadFailed": "iframe failed to load: {{error}}",
-    "videoGameInitChecking": "Checking the current game…",
-    "videoGameInitTitle": "This game has no video game yet",
-    "videoGameInitBody": "Creating it injects the video-game blueprint and template media, then marks the current game as a video game.",
-    "videoGameInitCancel": "Back to editor",
-    "videoGameInitConfirm": "Create video game",
-    "videoGameInitializing": "Creating and injecting media…",
-    "videoGameInitFailed": "Creation failed: {{error}}",
-    "videoGameInitContinueInMain": "Confirm creation in the main panel"
+    "iframeLoadFailed": "iframe failed to load: {{error}}"
   },
   "themes": {
     "classicLime": {
@@ -1533,11 +1501,11 @@
       "checkUpdate": "Check for Updates"
     },
     "file": {
-      "newProject": "New Project…",
-      "openProject": "Open Project…",
+      "newGame": "New Game…",
+      "openGameDirectory": "Open Game Directory…",
       "openRecent": "Open Recent",
       "openRecentEmpty": "No recent items",
-      "closeProject": "Close Project",
+      "closeGame": "Close Game",
       "save": "Save",
       "saveAll": "Save All",
       "reveal": "Show in System",

@@ -6,7 +6,7 @@
 //
 //   { schemaVersion, kind:'internal-text-package', assets: [
 //       { guid, kind:'scene',    payload:{kind:'scene', entities}, refs:[guid…] },
-//       { guid, kind:'material', payload:{kind:'material', passes, paramValues}, refs:[] },
+//       { guid, kind:'material', payload:{kind:'material', passes, values}, refs:[] },
 //       …
 //   ] }
 //
@@ -140,6 +140,26 @@ export function validatePackShell(raw: unknown): ValidatePackShellResult {
     return { ok: true, pack: obj as PackFile };
   }
   return { ok: false, error: new PackShellValidationError(result.error.issues) };
+}
+
+/** Normalize editor writeback to the runtime Pack v2 envelope.
+ *
+ * The engine collector still returns its historical v1 envelope, while the
+ * runtime loader intentionally accepts only Pack v2. The editor owns disk
+ * persistence, so it upgrades the envelope here instead of weakening the
+ * engine compatibility boundary. Unknown asset fields remain untouched.
+ */
+export function normalizePackForRuntime(raw: Record<string, unknown>): Record<string, unknown> {
+  raw.schemaVersion = '2.0.0';
+  const assets = raw.assets;
+  if (Array.isArray(assets)) {
+    for (const asset of assets) {
+      if (!asset || typeof asset !== 'object' || Array.isArray(asset)) continue;
+      const entry = asset as Record<string, unknown>;
+      if (entry.artifacts === undefined) entry.artifacts = {};
+    }
+  }
+  return raw;
 }
 
 /** Deterministic UUID-shaped string from a key (stable material GUIDs across

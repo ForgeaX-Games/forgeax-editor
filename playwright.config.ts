@@ -15,6 +15,22 @@
 //   research F-4 (webServer array + 10s expect.poll fallback)
 
 import { defineConfig } from '@playwright/test';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+// The fixed defaults preserve the normal developer entry points. CI/fix-up
+// evidence may supply private ports so a fresh current-HEAD server never
+// reuses or terminates an unrelated root/studio service.
+const e2eHostPort = process.env.FORGEAX_E2E_PORT ?? '15290';
+const e2eApiPort = process.env.FORGEAX_E2E_API_PORT ?? '15281';
+const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
+// Save E2E must exercise real file IO without rewriting the tracked sample.
+// The copy is exact, isolated to this Playwright process, and removed only at
+// process exit; the browser still addresses it as the game slug "sample".
+const e2eTempRoot = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'forgeax-save-e2e-'));
+const e2eGameDir = join(e2eTempRoot, 'sample');
+cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
+process.once('exit', () => rmSync(e2eTempRoot, { recursive: true, force: true }));
 
 export default defineConfig({
   testDir: './e2e',
@@ -35,7 +51,7 @@ export default defineConfig({
     timeout: 10_000,
   },
   use: {
-    baseURL: 'http://127.0.0.1:15290',
+    baseURL: `http://127.0.0.1:${e2eHostPort}`,
     headless: true,
     trace: 'off',
   },
@@ -55,11 +71,13 @@ export default defineConfig({
       command: 'bun run dev',
       cwd: '.',
       env: {
-        FORGEAX_GAME_DIR: 'games/sample',
-        FORGEAX_INTERFACE_PORT: '15290',
         ...process.env as Record<string, string>,
+        FORGEAX_GAME_DIR: e2eGameDir,
+        FORGEAX_INTERFACE_PORT: e2eHostPort,
+        FORGEAX_STANDALONE_PORT: e2eHostPort,
+        FORGEAX_GAME_API_PORT: e2eApiPort,
       },
-      url: 'http://127.0.0.1:15290',
+      url: `http://127.0.0.1:${e2eHostPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
       stdout: 'pipe',
@@ -69,10 +87,10 @@ export default defineConfig({
       // engine vite dev server on :15173 — serves play-runtime preview at
       // /preview/?game=<slug> (fullscreen play path). OOS-4: play-runtime is
       // untouched by M2. Port 15173 is the play-runtime vite.config.ts default.
-      command: 'bunx vite --port 15173 --strictPort',
+      command: `bunx vite --port ${e2eEnginePort} --strictPort`,
       cwd: './packages/play-runtime',
-      env: { ...process.env, FORGEAX_ENGINE_PORT: '15173' },
-      url: 'http://127.0.0.1:15173/preview/',
+      env: { ...process.env, FORGEAX_ENGINE_PORT: e2eEnginePort },
+      url: `http://127.0.0.1:${e2eEnginePort}/preview/`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
     },
@@ -85,8 +103,8 @@ export default defineConfig({
       // health check — this is why M3 precedes M5 in the milestone graph).
       command: 'bun standalone/game-backend.ts',
       cwd: '.',
-      env: { FORGEAX_GAME_DIR: 'games/sample' },
-      url: 'http://127.0.0.1:15281/api/health',
+      env: { ...process.env, FORGEAX_GAME_DIR: e2eGameDir, FORGEAX_GAME_API_PORT: e2eApiPort },
+      url: `http://127.0.0.1:${e2eApiPort}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
     },

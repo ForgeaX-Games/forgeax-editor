@@ -36,6 +36,10 @@
     "signature": "(handle: OpHandle) => DispatchResult"
   },
   {
+    "name": "cancelOperationRun",
+    "signature": "(requestId: string) => OperationRunReadResult<never>"
+  },
+  {
     "name": "canRedo",
     "signature": "() => boolean"
   },
@@ -98,6 +102,14 @@
   {
     "name": "engineFacade",
     "signature": "() => EngineFacade"
+  },
+  {
+    "name": "getOperationRun",
+    "signature": "(requestId: string) => OperationRun | undefined"
+  },
+  {
+    "name": "getOperationRunResult",
+    "signature": "(requestId: string) => OperationRunReadResult"
   },
   {
     "name": "enterPlay",
@@ -180,12 +192,20 @@
     "signature": "CommandOrigin[]"
   },
   {
+    "name": "operationRunSnapshot",
+    "signature": "() => OperationRunSnapshot"
+  },
+  {
+    "name": "operationRuns",
+    "signature": "OperationRunRegistry"
+  },
+  {
     "name": "peekUndoInverse",
     "signature": "() => EditorOp | undefined"
   },
   {
     "name": "playPhase",
-    "signature": "\"play\" | \"edit\" | \"failed\" | \"starting\""
+    "signature": "\"play\" | \"failed\" | \"edit\" | \"starting\""
   },
   {
     "name": "publishDeferred",
@@ -198,6 +218,10 @@
   {
     "name": "redo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "retryOperationRun",
+    "signature": "(requestId: string, retryRequestId: string, origin?: CommandOrigin) => DispatchResult"
   },
   {
     "name": "replaceDoc",
@@ -224,6 +248,14 @@
     "signature": "(requestId: string) => SourceFileDeleteStatus | null"
   },
   {
+    "name": "subscribeOperationRun",
+    "signature": "(requestId: string, listener: OperationRunListener) => () => void"
+  },
+  {
+    "name": "subscribeOperationRuns",
+    "signature": "(listener: OperationRunListener) => () => void"
+  },
+  {
     "name": "static registerBuiltinOp",
     "signature": "(op: Readonly<OpDescriptor>) => void"
   },
@@ -242,6 +274,10 @@
   {
     "name": "undo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "waitOperationRun",
+    "signature": "(requestId: string) => Promise<OperationRunReadResult>"
   },
   {
     "name": "unlockAfterScan",

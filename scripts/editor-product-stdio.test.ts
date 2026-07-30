@@ -14,6 +14,9 @@ test('production stdio journey is UI-free and matches non-display product facts'
     runParity: true,
     assetParity: true,
     saveReopenParity: true,
+    saveRequestId: expect.stringMatching(/^stdio-save-/),
+    saveTerminalStatus: 'failed',
+    saveRunParity: true,
     playParity: true,
   });
   expect(report.steps).toEqual([

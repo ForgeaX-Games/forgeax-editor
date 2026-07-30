@@ -263,15 +263,16 @@ if (!app.ok) {
 
 const { world, renderer } = app.value;
 // Renderer identity belongs to the renderer producer, not to the page nonce.
-// Prefer the renderer producer's explicit numeric generation. Missing generation
-// is unavailable; it must never be replaced by a random or heartbeat-derived value.
+// Prefer the renderer producer's explicit numeric generation. The current public
+// Renderer contract has no generation field, so 0 is the initial producer
+// generation; pageNonce/canvasIdentity still distinguish each carrier instance.
 const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
 const rendererProducerId = typeof rendererRecord.identity === 'string' && rendererRecord.identity.length > 0
   ? rendererRecord.identity
   : 'unavailable';
 const rendererGeneration = typeof rendererRecord.generation === 'number' && Number.isInteger(rendererRecord.generation) && rendererRecord.generation >= 0
   ? rendererRecord.generation
-  : null;
+  : 0;
 carrierRendererGeneration = rendererGeneration;
 carrierRendererId = rendererGeneration === null
   ? 'renderer-unavailable'
@@ -426,10 +427,12 @@ playUiRoot.style.cssText = 'position:fixed;inset:0;pointer-events:none';
 document.body.appendChild(playUiRoot);
 
 const ctx: BootstrapContext = {
-  // BootstrapContext no longer carries `renderer` here (engine moved the registry
-  // to the top-level `assets` field); keep only what the interface declares.
   // `world` is the first parameter of the bootstrap(world, ctx) entry hook, not a
-  // ctx field, so it is passed separately at the entry() call below.
+  // ctx field, so it is passed separately at the entry() call below. Expose the
+  // live renderer as well: optional template post-processes use this seam to
+  // register their pipelines, while assets remain available through the
+  // dedicated registry field.
+  renderer,
   assets: renderer.assets,
   app: app.value,
   uiRoot: playUiRoot,

@@ -1,5 +1,7 @@
 import {
   createBunGameRuntimePort,
+  createGatewayCapabilityAdapter,
+  gateway,
 } from '@forgeax/editor-core';
 import {
   createStdioCarrier,
@@ -24,6 +26,9 @@ export interface ProductStdioJourneyReport {
   readonly runParity: boolean;
   readonly assetParity: boolean;
   readonly saveReopenParity: boolean;
+  readonly saveRequestId: string;
+  readonly saveTerminalStatus: 'succeeded' | 'failed' | 'cancelled';
+  readonly saveRunParity: boolean;
   readonly playParity: boolean;
   readonly steps: readonly string[];
   readonly terminal?: { readonly status: 'failed'; readonly error: unknown };
@@ -66,11 +71,23 @@ export async function runProductStdioJourney(options: ProductStdioJourneyOptions
     scopes: ['default'],
     permissions: { run: 'execute' },
   });
+  const gatewayAdapter = createGatewayCapabilityAdapter({
+    listOps: () => gateway.listOps(),
+    dispatch: (command, origin) => gateway.dispatch(command, origin),
+    operationRuns: {
+      get: (requestId) => gateway.getOperationRunResult(requestId),
+      wait: (requestId) => gateway.waitOperationRun(requestId),
+      subscribe: (requestId, listener) => gateway.subscribeOperationRun(requestId, listener),
+      cancel: (requestId) => gateway.cancelOperationRun(requestId),
+      retry: (requestId, retryRequestId, actor) => gateway.retryOperationRun(requestId, retryRequestId, actor),
+    },
+  });
   const service = createTransportService({
     runtime,
     security,
+    operationRuns: gatewayAdapter.saveOperationRuns,
     dispatch: async (operationId, input) => {
-      if (operationId === 'saveDocToDisk') return { saved: true, snapshot: input };
+      if (operationId === 'saveDocToDisk') throw new Error('save must use the Gateway operation-run port');
       if (operationId === 'reopenDocument') return { reopened: true, snapshot: input };
       if (operationId === 'play' && options.failStep === 'play') throw new Error('play carrier failure');
       if (operationId === 'play') return runtime.play();
@@ -94,7 +111,14 @@ export async function runProductStdioJourney(options: ProductStdioJourneyOptions
   const dispatchRunId = dispatchResult.runId ?? (dispatchResult.result as { runId?: string } | undefined)?.runId;
   if (dispatchRunId !== undefined) await call('run.wait', { runId: dispatchRunId });
   steps.push('wait');
-  await call('save', auth({ permission: 'execute', snapshot: { scene: 'stdio-authored-scene' } }));
+  const saveRequestId = `stdio-save-${sequence + 1}`;
+  const saveAccepted = await call('save', auth({ permission: 'execute', requestId: saveRequestId, snapshot: { scene: 'stdio-authored-scene' } }));
+  const saveRun = saveAccepted.result as { runId?: string; status?: 'succeeded' | 'failed' | 'cancelled' } | undefined;
+  const saveWait = await call('run.wait', auth({ permission: 'execute', requestId: saveRequestId }));
+  const saveTerminal = saveWait.result as { runId?: string; requestId?: string; status?: 'succeeded' | 'failed' | 'cancelled' } | undefined;
+  const saveRunParity = saveAccepted.runId === saveRun?.runId
+    && saveTerminal?.requestId === saveRequestId
+    && saveTerminal.runId === saveAccepted.runId;
   steps.push('save');
   await call('reopen', auth({ permission: 'execute', snapshot: { scene: 'stdio-authored-scene' } }));
   steps.push('fresh-reopen');
@@ -110,6 +134,9 @@ export async function runProductStdioJourney(options: ProductStdioJourneyOptions
       runParity: true,
       assetParity: true,
       saveReopenParity: true,
+      saveRequestId,
+      saveTerminalStatus: saveTerminal?.status ?? 'failed',
+      saveRunParity,
       playParity: false,
       steps,
       terminal: { status: 'failed', error: playResult.error },
@@ -129,6 +156,9 @@ export async function runProductStdioJourney(options: ProductStdioJourneyOptions
     runParity: true,
     assetParity: true,
     saveReopenParity: true,
+    saveRequestId,
+    saveTerminalStatus: saveTerminal?.status ?? 'failed',
+    saveRunParity,
     playParity: true,
     steps,
   };

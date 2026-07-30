@@ -7,6 +7,7 @@ import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
 import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
+import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
@@ -76,6 +77,7 @@ function gameEngineResolve() {
 // resolveGameAssetRoots). See the farm comment below for why the real path is
 // then rewritten to the in-viteRoot symlink before scanning.
 const SHARED_BASE = resolve(here, '..', '..', 'forgeax-editor-assets');
+const ENGINE_ASSETS_BASE = resolve(here, '..', 'engine', 'forgeax-engine-assets');
 
 // The engine template's shipped UI is a canonical self-contained pack, not a
 // game-local `.ui.html`/`.meta.json` authoring pair. Keep it in the engine
@@ -156,6 +158,7 @@ function setupExternalRootFarm(linkName: string, targetPath: string): void {
 }
 
 setupExternalRootFarm('shared-assets', SHARED_BASE);
+setupExternalRootFarm('engine-assets', ENGINE_ASSETS_BASE);
 
 // Rewrite a resolved root to the path the scanner should see. Local roots pass
 // through as their abs path; shared (`@shared/<sub>`) roots are redirected to the
@@ -169,6 +172,18 @@ function farmPath(r: ResolvedRoot): string {
 
 function engineTemplateUiFarmPath(): string {
   return resolve(here, 'engine-template-ui');
+}
+
+// The default game template references these engine-authored audio clips by
+// GUID. They are not game-local assets, so mount the two small template scopes
+// into the same pack/import pipeline as the implicit template sky. Keeping the
+// roots explicit avoids scanning every binary asset in forgeax-engine-assets
+// for every game while ensuring new default games have working audio.
+function templateAudioRoots(): string[] {
+  return [
+    resolve(here, 'engine-assets', 'sfx'),
+    resolve(here, 'engine-assets', 'collectathon-audio'),
+  ].filter(existsSync);
 }
 
 // Self-contained vite root: the engine directory itself. Pre-2026-05-13 the
@@ -254,12 +269,17 @@ const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
 // matching the base-prefixed catalog `packageUrl`, which equals the proxied
 // req.url verbatim.)
 function forgeaxPackBaseStrip() {
+  const PREFIX = '/preview/';
+  const ROUTES = ['/pack-index.json', '/pack-index/', '/__import/', '/__forgeax-ddc/', '/__pack/'];
   return {
     name: 'forgeax:pack-base-strip',
     configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
       server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
-        if (req.url === '/preview/pack-index.json') {
-          req.url = '/pack-index.json';
+        if (req.url?.startsWith(PREFIX)) {
+          const stripped = req.url.slice(PREFIX.length - 1);
+          if (ROUTES.some((route) => stripped === route || stripped.startsWith(route))) {
+            req.url = stripped;
+          }
         }
         next();
       });
@@ -318,6 +338,7 @@ function gameAssetRoots(): string[] {
     roots.push(abs);
   };
   if (existsSync(engineTemplateUiFarmPath())) push(engineTemplateUiFarmPath());
+  for (const root of templateAudioRoots()) push(root);
   for (const slug of readdirSync(gamesDir).filter(isRealGameSlug)) {
     const gameDir = join(gamesDir, slug);
     // resolveGameAssetRoots reads package.json#forgeax.assets.roots (SSOT),
@@ -338,7 +359,11 @@ function gameAssetRoots(): string[] {
 function perGamePackRoots(slug: string): string[] {
   const gameDir = join(gamesDirRoot(), slug);
   const roots = resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS }).map(farmPath);
-  return existsSync(engineTemplateUiFarmPath()) ? [engineTemplateUiFarmPath(), ...roots] : roots;
+  return [
+    ...(existsSync(engineTemplateUiFarmPath()) ? [engineTemplateUiFarmPath()] : []),
+    ...templateAudioRoots(),
+    ...roots,
+  ];
 }
 
 // Return slugs for every game directory under the host-injected games dir that
@@ -591,11 +616,11 @@ export default defineConfig({
     // uploadCubemapFromEquirect rejects with `invalid-source-format`);
     // gltfImporter for per-game .glb cooks. gameAssetRoots() de-dupes shared
     // roots so the union scan stays authoritative; a true cross-root GUID
-    // collision still degrades, and installCatalogProjection then fails closed.
+    // collision still fails closed so duplicate authored GUIDs remain visible.
     pluginPack({
       roots: gameAssetRoots(),
       base: '/preview/',
-      importers: [imageImporter, gltfImporter, fbxImporter],
+      importers: [audioImporter, imageImporter, gltfImporter, fbxImporter],
       // No-op host refresh: importing an asset in the editor MUST NOT full-reload
       // the page. In Studio single-realm the editor + engine boot IN the :18920
       // window, and this play engine (:15173) is proxied in via /preview (ws:true),

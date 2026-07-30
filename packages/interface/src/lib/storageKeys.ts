@@ -91,7 +91,7 @@ export const wsLayoutKey = (workbenchId: string): string => `${STORAGE_KEYS.wsLa
 // Post-v8, workbench state is namespaced under the current project id so
 // switching projects re-reads a per-project list + per-project layouts. The
 // project id is set by `setCurrentProject(projId)` (workbenches.ts), driven by
-// ProjectSwitcher.tsx after `/api/projects` returns.
+// GameDirectoryModalHost after `/api/workbench/games` returns.
 /** Per-project workbench list + active selection. { list: Workbench[]; activeId } */
 export const workbenchesKeyForProject = (projId: string): string =>
   `forgeax:project:${projId}:workbenches`;
@@ -106,20 +106,14 @@ export const workbenchSchemaVersionKey = 'forgeax:workbench-schema-version';
  *  so the migration can reference it by name. */
 export const legacyPanelLocationsKey = 'forgeax:panel-locations';
 
-// Session-scoped keys (sessionStorage, per-tab — NOT persisted like the above).
-export const SESSION_KEYS = {
-  /** last-activated workspace absPath — dedups the `workspace-changed` reload
-   *  (see boot/broadcast.ts + lib/workspace-reload.ts) so a re-broadcast of the
-   *  current root can't loop, and so the acting tab reloads only once. */
-  activeRoot: 'forgeax.activeRoot',
-} as const;
-
 // Cross-component window CustomEvent names (NOT storage, but same "stringly-typed
 // global namespace" footgun — centralized here so they can't drift either).
 export const APP_EVENTS = {
   dockLayoutToggle: 'forgeax:shell:dock-layout-toggle',
   dockReset: 'forgeax:shell:dock-reset',
   animHandoff: 'forgeax:anim-handoff',
+  /** Viewport run axis changed. detail: { running: boolean }. */
+  viewportRunChanged: 'forgeax:viewport-run-changed',
   /** Open (or focus, if already open) a dock panel by id. detail: { id: string } */
   openPanel: 'forgeax:shell:open-panel',
   /** Focus a dock panel by id ONLY if it already exists (no reopen / no force-insert). detail: { id: string } */

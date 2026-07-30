@@ -20,7 +20,7 @@ import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/plat
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { getLastModel } from './lib/model-prefs';
 import { resolveKernelForAgent } from './lib/agent-cli-provider';
-import { waitForEngineSettled } from './lib/workspace-reload';
+import { waitForEngineSettled } from './lib/game-reload';
 
 export { configureSessionClient, type SessionClient } from './store-parts/session-client';
 export {
@@ -499,16 +499,15 @@ export interface AppState {
   closeOverlay: () => void;
 
   // ── Open-game-directory modal ──
-  //  File → 打开项目 links an existing game directory into this Studio instance.
+  // File → 打开游戏目录 binds one game directory as the active game.
   gameDirectoryModalOpen: boolean;
   openGameDirectoryModal: () => void;
   closeGameDirectoryModal: () => void;
 
   // ── Game switcher / new-game modal (driven from the File menu) ──
-  //  The File menu's 新建项目 / 打开项目 / 打开最近 now open GAME flows (a project
-  //  is a game here). `openGameModal` → the new-game dialog; `gameSwitcherOpen`
-  //  → the "open game" list modal (its body is the game list). Driven by menu
-  //  commands (game.new / game.open); rendered by GameModalHost in App.tsx.
+  //  `openGameModal` → the new-game dialog; `gameSwitcherOpen` → the "open game"
+  //  list modal (its body is the game list). Game flows remain separate from
+  //  the game-directory modal above and are rendered by GameModalHost.
   gameSwitcherOpen: boolean;
   setGameSwitcherOpen: (v: boolean) => void;
   gameModalOpen: boolean;
@@ -602,7 +601,7 @@ if (typeof window !== 'undefined') {
 // R5/P1 — the broadcast `/ws` daemon socket moved OUT of the store's module-load
 // side-effect into the shared `lib/broadcast-stream` primitive, wired at boot by
 // `boot/broadcast.ts` (`bootBroadcast()`). Importing the store no longer opens a
-// socket. telemetry / workspace-changed handling lives in bootBroadcast; daemon-tick
+// socket. telemetry handling lives in bootBroadcast; daemon-tick
 // is chat's (subscribeDaemonTick). See docs 17b §7.2.
 
 // ── Sessions persistence ───────────────────────────────────────────────────
@@ -724,9 +723,8 @@ const _initialMirror = {
   providerOverride: loadProviderOverride(),
 };
 
-// R5/P1 — daemon-tick/telemetry/workspace-changed WS handling moved off the store
-// module-load side-effect. telemetry + workspace-changed now wired via
-// `boot/broadcast.ts` (bootBroadcast); daemon-tick is chat's (subscribeDaemonTick).
+// R5/P1 — daemon-tick/telemetry WS handling moved off the store module-load
+// side-effect. telemetry is wired via `boot/broadcast.ts`; daemon-tick is chat's.
 
 export const useShellStore = create<AppState>((set, get) => ({
   ...createShellState(set, get),
@@ -883,8 +881,20 @@ export const useShellStore = create<AppState>((set, get) => ({
     _initSessionsPending = (async () => {
       const { fetchSessionList, createSession, connectForgeaXWs } = getSessionClient();
       try {
-        // 列表恒按当前 game 收口（pinnedSlug；null 时 server 回落 active game）。
+        // The server active game is the durable startup binding. A local pin is
+        // only a client-side cache of the last selection; if the server was
+        // started with a different active-game.json, keeping the stale pin
+        // silently opens the wrong project (often an old untitled game).
         let scope = get().pinnedSlug ?? undefined;
+        if (hasWorkbenchClient()) {
+          const activeSlug = await getWorkbenchClient().getActiveSlug()
+            .then((r) => r.activeSlug)
+            .catch(() => null);
+          if (activeSlug && activeSlug !== scope) {
+            get().setPinnedSlug(activeSlug);
+            scope = activeSlug;
+          }
+        }
         let metas = await fetchSessionList(scope);
         if (metas.length === 0 && scope && hasWorkbenchClient()) {
           // 收口为空且带着本地 pin —— pin 可能已陈旧（game 被删/改名后 localStorage

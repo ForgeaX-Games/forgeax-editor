@@ -562,7 +562,7 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   if (baseColorTexture) {
     const texRefIndex = assetRefs.length;
     assetRefs.push(baseColorTexture);
-    (payload.paramValues as Record<string, unknown>).baseColorTexture = texRefIndex;
+    (payload.values as Record<string, unknown>).baseColorTexture = texRefIndex;
   }
 
   // Fire-and-forget async IO through the asset gate (mirrors createAsset). The

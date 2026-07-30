@@ -12,6 +12,7 @@
 
 import { describe, expect, it, beforeAll } from 'bun:test';
 import { EditGateway } from '../io/gateway';
+import type { OpDescriptor } from '../io/catalog';
 import { createEditSession } from '../session/document';
 
 // ── Fixture ────────────────────────────────────────────────────────────────
@@ -221,5 +222,51 @@ describe('transaction forward-reference contract is projected (solo round-23)', 
     expect(desc).toMatch(/_id/);            // names the field
     expect(desc).toMatch(/negative/i);      // names the convention
     expect(desc).toMatch(/created/);        // points at the result.created[] read-back
+  });
+});
+
+describe('save OperationRun manifest (M1-T5, RED)', () => {
+  it('exposes the request contract and terminal read/control policy', () => {
+    const save = gw.listOps().find((op) => op.id === 'saveDocToDisk') as OpDescriptor & {
+      operationRun?: {
+        acceptedStatuses: readonly string[];
+        terminalStatuses: readonly string[];
+        read: { get: string; wait: string; subscribe: string };
+        retry: { requiresNewRequestId: boolean };
+        retention: { kind: string; maxTerminalRuns: number };
+        cancellable: boolean;
+      };
+    } | undefined;
+    expect(save).toBeDefined();
+    expect(save?.argsSchema).toMatchObject({
+      type: 'object',
+      required: ['requestId'],
+      properties: {
+        requestId: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+          minLength: 1,
+          maxLength: 128,
+        },
+      },
+    });
+    expect(save?.operationRun).toEqual({
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    });
+  });
+
+  it('does not add run metadata or change the domain of other operations', () => {
+    const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
+    for (const op of gw.listOps()) {
+      if (op.id === 'saveDocToDisk') continue;
+      expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
+      expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
+    }
+    expect(save?.domain).toBe('session');
   });
 });

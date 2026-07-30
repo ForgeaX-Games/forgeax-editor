@@ -311,7 +311,7 @@ export class EngineFacade {
     this._registry?.invalidate(guid);
   }
 
-  /** Hot-patch a LIVE material's `paramValues` in place (updateMaterialParams
+  /** Hot-patch a LIVE material's `values` in place (updateMaterialParams
    *  hot-reload path). The material payload object is shared BY IDENTITY between
    *  the registry catalogue and every `world.sharedRef` minted for it at
    *  instantiate (`asset-registry._resolveSceneGuids` passes `envelope.payload`
@@ -327,7 +327,7 @@ export class EngineFacade {
    *  `invalidate()`, which drops the entry and leaves the sharedRef stale. No-op
    *  when the facade has no registry or the GUID is not a catalogued material.
    *  Records 'registry.patchMaterial' leaf. */
-  patchLiveMaterialParams(guid: string, paramValues: Record<string, unknown>): void {
+  patchLiveMaterialParams(guid: string, values: Record<string, unknown>): void {
     _recordLeaf('registry.patchMaterial');
     const registry = this._registry;
     if (!registry) return;
@@ -336,10 +336,10 @@ export class EngineFacade {
     if (envelope === undefined) return;
     const payload = envelope.payload as unknown as {
       kind?: string;
-      paramValues?: Record<string, unknown>;
+      values?: Record<string, unknown>;
     };
     if (payload.kind !== 'material') return;
-    payload.paramValues = paramValues;
+    payload.values = values;
     // Drop the stale pack-body cache for this GUID's pack. writePackEntry already
     // wrote the fresh bytes to disk and we updated the live catalogue above, but the
     // registry's packFileCache still holds the LOAD-TIME body. If a later Ctrl+S

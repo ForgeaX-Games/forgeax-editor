@@ -125,7 +125,12 @@ type ManagedCarrierHealth = {
 
 function readRendererGeneration(renderer: unknown): number | null {
   const generation = (renderer as { generation?: unknown }).generation;
-  return typeof generation === 'number' && Number.isInteger(generation) && generation >= 0 ? generation : null;
+  // The current public Renderer contract does not expose a generation field.
+  // Keep the carrier identity usable with that contract: pageNonce and the
+  // canvas identity still distinguish renderer instances, while generation 0
+  // is the initial producer generation. Preserve an explicit engine generation
+  // when a future Renderer implementation publishes one.
+  return typeof generation === 'number' && Number.isInteger(generation) && generation >= 0 ? generation : 0;
 }
 
 async function installManagedCarrierHealth(

@@ -1,10 +1,9 @@
-// Game-directory open modal + headless project-id sync.
+// Game-directory open modal and project-id synchronisation.
 //
-// 2026-07-23 — the ProjectSwitcher dropdown (trigger + project list +
-// current-name + delete) was removed from the TopBar. File → 打开项目 now picks
-// a game directory and links it through /api/workbench/games/link. It does not
-// change the Studio instance root.
-import { useState, useEffect } from 'react';
+// A Studio project is exactly one game directory. The runtime host may mount
+// that directory internally for the engine, but it is never exposed as a
+// project/game directory to the user.
+import { useEffect, useState } from 'react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../store';
 import { setCurrentProject } from '../../lib/workbenches';
@@ -12,51 +11,32 @@ import { FsBrowser } from './FsBrowser';
 import './FsBrowser.css';
 import './TopBar.css';
 
-// Headless: keep the active project id in sync so every localStorage read/write
-// namespaces under `forgeax:project:${projId}:*` (was previously driven by the
-// ProjectSwitcher's polling). Idempotent for the same id.
-function useProjectIdSync(): string | null {
-  const [gamesDir, setGamesDir] = useState<string | null>(null);
-
+function useProjectIdSync(): void {
   useEffect(() => {
     let cancelled = false;
     const sync = async () => {
       try {
-        const r = await fetch('/api/projects');
-        const j = (await r.json()) as { current?: string; currentAbs?: string };
-        if (!cancelled) {
-          setCurrentProject(j.current ?? 'default');
-          setGamesDir(j.currentAbs
-            ? `${j.currentAbs.replace(/[\\/]$/, '')}/.forgeax/games`
-            : null);
-        }
-      } catch { /* ignore */ }
+        const r = await fetch('/api/workbench/games');
+        const j = (await r.json()) as { activeSlug?: string; games?: Array<{ slug?: string }> };
+        if (cancelled) return;
+        setCurrentProject(j.activeSlug ?? j.games?.[0]?.slug ?? 'default');
+      } catch { /* server may still be booting */ }
     };
     void sync();
     const timer = setInterval(() => void sync(), 8000);
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
-
-  return gamesDir;
 }
 
-// Mounted once in the shell (App.tsx). Drives the game-directory picker from
-// File → Open Project and runs the headless project-id sync.
 export function GameDirectoryModalHost() {
-  const gamesDir = useProjectIdSync();
+  useProjectIdSync();
   const open = useShellStore((s) => s.gameDirectoryModalOpen);
   const close = useShellStore((s) => s.closeGameDirectoryModal);
   if (!open) return null;
-  return <OpenGameDirectoryModal initialDir={gamesDir} onClose={close} />;
+  return <OpenGameDirectoryModal onClose={close} />;
 }
 
-function OpenGameDirectoryModal({
-  initialDir,
-  onClose,
-}: {
-  initialDir: string | null;
-  onClose: () => void;
-}) {
+function OpenGameDirectoryModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,27 +55,24 @@ function OpenGameDirectoryModal({
       if (!r.ok || !j.ok || !j.slug) throw new Error(j.error ?? `HTTP ${r.status}`);
       onClose();
       await switchGame(j.slug);
-    } catch (e) { setErr((e as Error).message); setBusy(false); }
+    } catch (e) {
+      setErr((e as Error).message);
+      setBusy(false);
+    }
   };
 
   return (
     <div className="tb-modal-overlay" onClick={onClose}>
       <div className="tb-modal tb-modal-wide" onClick={(e) => e.stopPropagation()}>
-        <div className="tb-modal-title">{t('projectSwitcher.openGameDirectory')}</div>
-        {initialDir ? (
-          <FsBrowser
-            initialDir={initialDir}
-            onPick={submitOpen}
-            onCancel={onClose}
-            busy={busy}
-            externalError={err}
-          />
-        ) : (
-          <div className="fsb-state">{t('common.loading')}</div>
-        )}
+        <div className="tb-modal-title">{t('gameDirectory.openTitle')}</div>
+        <FsBrowser
+          initialDir="~"
+          onPick={submitOpen}
+          onCancel={onClose}
+          busy={busy}
+          externalError={err}
+        />
       </div>
     </div>
   );
 }
-
-// SessionSwitcher extracted → ./SessionSwitcher (§D).

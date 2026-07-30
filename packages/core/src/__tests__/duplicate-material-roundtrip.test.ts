@@ -49,7 +49,7 @@ function makeMockShaderRegistry(): ShaderRegistry {
   const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
   // catalog(material) validates each pass's shader against the registry; register
   // the shader the test material references so catalog() succeeds.
-  sr.registerMaterialShader('test::dummy', { source: 'fn main() {}', paramSchema: [] });
+  sr.installMaterialArtifact('test::dummy', { source: 'fn main() {}', paramSchema: [] });
   return sr;
 }
 
@@ -58,8 +58,8 @@ const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
 function makeMaterial(): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-    paramValues: {},
+    passes: [{ name: 'forward', program: { module: 'test::dummy' } }],
+    values: {},
   };
 }
 

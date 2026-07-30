@@ -191,6 +191,11 @@ export function useSurface<S, AMap extends Record<string, UISurfaceActionDef>>(
     const interval = pollIntervalMs ?? POLL_INTERVAL_MS;
     if (interval <= 0) return;
     if (!mounted) return;
+    // A surface whose actions are all hidden from AI has no server-to-client
+    // action path to service. Avoid a permanent empty GET loop for read-only
+    // surfaces such as host.toast; snapshot mirroring still works normally.
+    const hasAiActions = Object.values(actionsRef.current).some((action) => action.exposedToAI !== false);
+    if (!hasAiActions) return;
 
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;

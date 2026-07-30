@@ -20,7 +20,7 @@
 //                      (createSceneList).
 //   - play-config.ts — launcher <game>/play-config.json read/write
 //                      (createPlayConfig) — the clean fetch-injection proof.
-//   - storage.ts     — localStorage doc-key / hidden sidecar / retired mirror
+//   - storage.ts     — localStorage doc-key / retired mirror
 //                      (createStorage).
 // This root builds ONE of each with the real gateway / fetch / fetchWithTimeout
 // / resolveGamePath and re-exports their surfaces, so a headless test drives each
@@ -170,6 +170,8 @@ export interface LoadedInlineSnapshot {
   kind: string;
   payload: unknown;
   refs: unknown[];
+  /** Pack v2 asset envelope metadata; v1 snapshots omit it. */
+  artifacts?: unknown;
 }
 
 /** Build the single persistence-state handle. Field initial values are the exact
@@ -352,13 +354,27 @@ export function loadDocFromDisk(): Promise<boolean> {
   return dispatchAsyncSessionOp({ kind: 'loadDocFromDisk' });
 }
 
-registerAsyncSessionOp('saveDocToDisk', diskIo.doSaveDocToDisk);
+// Save is the first real OperationRun adopter. Its applier captures the
+// authored revision at acceptance, starts the structured persistence effect, and
+// returns that completion to Gateway. The Gateway owns accepted/running/terminal
+// state and publishes the session ledger entry only after succeeded. The legacy
+// asyncOpResult slot below remains exclusively for load/switch/create paths.
+sessionAppliers.set('saveDocToDisk', (op) => {
+  const completion = diskIo.doSaveDocToDisk({ acceptedRevision: gateway.rev });
+  completion.catch(() => {});
+  return { ok: true, completion };
+});
 export function saveDocToDisk(): Promise<boolean> {
-  return dispatchAsyncSessionOp({ kind: 'saveDocToDisk' });
+  const requestId = globalThis.crypto.randomUUID();
+  const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId }, 'human');
+  if (!accepted.ok) return Promise.resolve(false);
+  return gateway.waitOperationRun(requestId).then((terminal) => (
+    terminal.ok && terminal.value.status === 'succeeded'
+  ));
 }
 
 // ── Async session-op collection seam (M2 D-1, m2-w8) ──────────────────────────
-// dispatch() is sync but save/load/switch/create are async. The applier runs the
+// dispatch() is sync but load/switch/create are async. The applier runs the
 // impl and stashes the in-flight promise; the public setter dispatches (ledger +
 // AI trigger) then returns the stashed promise. The slot is ctx.asyncOpResult
 // (ScenePersistenceContext) — one handle, no scattered `let`. This seam stays in

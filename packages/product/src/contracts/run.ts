@@ -3,6 +3,8 @@
 import type { CommandError } from './error';
 
 export const OPERATION_RUN_SCHEMA_VERSION = 'operation-run/v1' as const;
+export const OPERATION_REQUEST_ID_PATTERN = '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' as const;
+const operationRequestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export type OperationRunStatus = 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type TerminalRunStatus = Extract<OperationRunStatus, 'succeeded' | 'failed' | 'cancelled'>;
@@ -21,6 +23,8 @@ export interface RunProgress {
 
 export interface OperationRunRequest {
   readonly runId: string;
+  /** Caller-owned correlation identity; runId remains journal-owned. */
+  readonly requestId?: string;
   readonly operationId: string;
   readonly actor: RunActor;
   readonly sessionId: string;
@@ -37,6 +41,7 @@ export interface OperationRunRequest {
 export interface OperationRun {
   readonly schemaVersion: typeof OPERATION_RUN_SCHEMA_VERSION;
   readonly runId: string;
+  readonly requestId?: string;
   readonly operationId: string;
   readonly status: OperationRunStatus;
   readonly actor: RunActor;
@@ -60,6 +65,26 @@ export interface OperationRun {
   readonly sequence: number;
 }
 
+/** Read result for a request-correlated operation run. */
+export type OperationRunReadResult<T = OperationRun> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: CommandError };
+
+/** Acceptance result returned by the canonical save operation-run owner. */
+export type OperationRunAcceptResult =
+  | { readonly ok: true; readonly runId: string; readonly reused: boolean; readonly run: OperationRun }
+  | { readonly ok: false; readonly error: CommandError };
+
+/** Projection port used by product transport; the Gateway remains the owner. */
+export interface SaveOperationRunPort {
+  dispatchSave(requestId: string, input: unknown, actor: RunActor): OperationRunAcceptResult;
+  get(requestId: string): OperationRunReadResult;
+  wait(requestId: string): Promise<OperationRunReadResult>;
+  subscribe?(requestId: string, listener: (run: OperationRun) => void): () => void;
+  cancel(requestId: string): OperationRunReadResult<never>;
+  retry(requestId: string, retryRequestId: string, actor: RunActor): OperationRunAcceptResult;
+}
+
 interface RunEventBase {
   readonly runId: string;
   readonly sequence: number;
@@ -67,7 +92,7 @@ interface RunEventBase {
 }
 
 export type OperationRunEvent =
-  | (RunEventBase & { readonly type: 'accepted'; readonly operationId: string; readonly actor: RunActor; readonly sessionId: string; readonly scope: string; readonly input?: unknown; readonly parentRunId?: string; readonly traceId: string; readonly idempotencyKey?: string; readonly attempt: number; readonly cancellable: boolean; readonly retryable: boolean })
+  | (RunEventBase & { readonly type: 'accepted'; readonly requestId?: string; readonly operationId: string; readonly actor: RunActor; readonly sessionId: string; readonly scope: string; readonly input?: unknown; readonly parentRunId?: string; readonly traceId: string; readonly idempotencyKey?: string; readonly attempt: number; readonly cancellable: boolean; readonly retryable: boolean })
   | (RunEventBase & { readonly type: 'running' })
   | (RunEventBase & { readonly type: 'progress'; readonly progress: RunProgress })
   | (RunEventBase & { readonly type: 'succeeded'; readonly result?: unknown })
@@ -123,11 +148,15 @@ export function createOperationRun(
   acceptedAt: number = Date.now(),
 ): RunReducerResult {
   if (request.runId.trim() === '') return failure('invalid-run-id', 'runId must be non-empty.');
+  if (request.requestId !== undefined && !operationRequestIdPattern.test(request.requestId)) {
+    return failure('invalid-request-id', `requestId must match ${OPERATION_REQUEST_ID_PATTERN}.`);
+  }
   if (request.operationId.trim() === '') return failure('invalid-operation-id', 'operationId must be non-empty.');
   if (request.scope.trim() === '') return failure('invalid-run-scope', 'scope must be non-empty.');
   const run: OperationRun = {
     schemaVersion: OPERATION_RUN_SCHEMA_VERSION,
     runId: request.runId,
+    ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
     operationId: request.operationId,
     status: 'accepted',
     actor: Object.freeze({ ...request.actor }),
@@ -219,6 +248,7 @@ export function acceptedEvent(run: OperationRun): OperationRunEvent {
     runId: run.runId,
     sequence: 1,
     at: run.acceptedAt,
+    ...(run.requestId === undefined ? {} : { requestId: run.requestId }),
     operationId: run.operationId,
     actor: run.actor,
     sessionId: run.sessionId,

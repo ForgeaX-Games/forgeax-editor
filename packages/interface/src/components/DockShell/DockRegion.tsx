@@ -387,12 +387,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // Track the PROJECT id the dock last reconciled under. Layout localStorage keys
   // are project-scoped (`forgeax:project:<projId>:workbench-layout:<wsId>`), but
   // `currentProjectId` boots as the transient 'default' and only advances to the
-  // real id once ProjectSwitcher resolves /api/projects (async). If onReady runs
+  // real id once the game-directory list resolves /api/workbench/games (async). If onReady runs
   // BEFORE that resolve it restores/builds under 'default' and, when the real id
   // arrives, applyWorkspace was previously a no-op (same workbench id) so the
   // dock stayed on the default layout even though the real project's dragged
   // layout is sitting in localStorage — the "拖动布局刷新有时保存有时不保存"
-  // race (timing of onReady vs. the /api/projects round-trip). Comparing this ref
+  // race (timing of onReady vs. the game-directory round-trip). Comparing this ref
   // lets applyWorkspace FORCE a re-restore when only the project id changed.
   const lastAppliedProjectRef = useRef(getCurrentProject());
   // Track which panels were hidden by the collapse toggle (not by the user clicking ×).
@@ -650,7 +650,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   const applyWorkspace = useCallback((api: DockviewApi, newId: string): void => {
     // Force a reconcile when the PROJECT id changed even if the workbench id is
     // unchanged: the dock may have been built under the transient 'default'
-    // scope before /api/projects resolved, so we must re-restore from the real
+    // scope before the game list resolved, so we must re-restore from the real
     // project's (now-correct-scope) localStorage slot. See lastAppliedProjectRef.
     const currentProject = getCurrentProject();
     const projectChanged = currentProject !== lastAppliedProjectRef.current;

@@ -1,7 +1,7 @@
 // session/material-ops — updateMaterialParams document applier.
 //
 // DOCUMENT-domain op (undoable, enters ledger). Shallow-merges `paramPatch` into
-// the existing MaterialAsset's `paramValues`, writes the updated entry through
+// the existing MaterialAsset's `values`, writes the updated entry through
 // ctx.assetIO, then invalidates the registry cache for hot viewport reload.
 //
 // Gateway fills _oldPatch / _oldRefs / _oldEntry synchronously from assetCatalog
@@ -41,7 +41,7 @@ function _ioFailHint(op: string, path: string, e: unknown): string {
   return `${op}("${path}") background IO failed: ${e instanceof Error ? e.message : String(e)}`;
 }
 
-/** Encode texture GUIDs into the refs array and update paramValues indices.
+/** Encode texture GUIDs into the refs array and update values indices.
  *  For each entry in textureGuids:
  *  - non-null GUID: ensure it exists in refs[], write its index into nextParams[key]
  *  - null: delete the key from nextParams (clear the texture binding) */
@@ -63,7 +63,7 @@ function encodeTextureRefs(
   return { refs };
 }
 
-/** Build inverse textureGuids from old refs + old paramValues. */
+/** Build inverse textureGuids from old refs + old values. */
 function invertTextureGuids(
   oldRefs: string[],
   textureGuids: Record<string, string | null>,
@@ -113,11 +113,11 @@ export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): A
   const currentEntry = _oldEntry as PackAssetEntry;
   const nextEntry: PackAssetEntry = {
     ...currentEntry,
-    payload: { ...(currentEntry.payload as Record<string, unknown>), paramValues: nextParams },
+    payload: { ...(currentEntry.payload as Record<string, unknown>), values: nextParams },
     refs: nextRefs,
   };
 
-  // Build the IN-MEMORY paramValues for the live catalogue/sharedRef payload.
+  // Build the IN-MEMORY values for the live catalogue/sharedRef payload.
   // On disk texture fields are refs[] indices (nextParams, via encodeTextureRefs);
   // the loaded/live form uses GUID strings (materialLoader index→GUID), so mirror
   // that here from textureGuids. Scalars (baseColor/metallic/roughness) are

@@ -134,18 +134,27 @@ export function pickLang(
 }
 
 /**
+ * Strip known package scopes from a manifest id → flat marketplace slug.
+ * Longer scopes first so `@forgeax-extension/…` is never misread as `@forgeax/…`.
+ */
+export function extensionIdSlug(id: string): string {
+  return id
+    .replace(/^@forgeax-extension\//, '')
+    .replace(/^@forgeax-plugin\//, '')
+    .replace(/^@forgeax\//, '');
+}
+
+/**
  * Flat built-in marketplace path hint for BusAdminPanel / Sidebar detail rows.
- * Normalizes `@forgeax-extension/<slug>` and legacy `@forgeax-plugin/<slug>`
- * to `packages/marketplace/extensions/<slug>/forgeax-extension.json`.
+ * Normalizes `@forgeax/<slug>`, `@forgeax-extension/<slug>`, and legacy
+ * `@forgeax-plugin/<slug>` to
+ * `packages/marketplace/extensions/<slug>/forgeax-extension.json`.
  *
  * Deliberately local (id → path): no kind bucket, no PluginSourceDescriptor /
  * plugin-layout dependency (those were reverted with the kind-layout experiment).
  */
 export function extensionManifestPathHint(id: string): string {
-  const slug = id
-    .replace(/^@forgeax-extension\//, '')
-    .replace(/^@forgeax-plugin\//, '');
-  return `packages/marketplace/extensions/${slug}/forgeax-extension.json`;
+  return `packages/marketplace/extensions/${extensionIdSlug(id)}/forgeax-extension.json`;
 }
 
 export async function listExtensions(kind?: string): Promise<ExtensionListResponse> {

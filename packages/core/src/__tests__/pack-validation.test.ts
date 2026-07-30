@@ -5,7 +5,7 @@
 // AC-01: read rejection — malformed packs (HTTP error page, empty, truncated,
 // missing schemaVersion, kind mismatch, assets non-array, entries missing
 // guid/kind/refs) are all rejected with a structured error signal (not null/void).
-// AC-01: schemaVersion '1.0' (editor createPack default) and '1.0.0' (engine
+// AC-01: schemaVersion '1.0' (editor createPack default) and '2.0.0' (engine
 // serializeSceneAssetToPack output) both pass — only typeof === 'string' is checked.
 // AC-05: payload: unknown transparent passthrough.
 //
@@ -13,7 +13,7 @@
 // plan-strategy D-1/D-3, charter P3 (explicit failure signal).
 
 import { describe, expect, it } from 'bun:test';
-import { validatePackShell, PackShellValidationError } from '../scene/scene-pack';
+import { normalizePackForRuntime, validatePackShell, PackShellValidationError } from '../scene/scene-pack';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -169,8 +169,8 @@ describe('M1/w1: schemaVersion dual-accept (AC-01, Finding #7)', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('accepts schemaVersion "1.0.0" (engine serializeSceneAssetToPack output)', () => {
-    const result = validatePackShell(validPack({ schemaVersion: '1.0.0' }));
+  it('accepts schemaVersion "2.0.0" (engine serializeSceneAssetToPack output)', () => {
+    const result = validatePackShell(validPack({ schemaVersion: '2.0.0' }));
     expect(result.ok).toBe(true);
   });
 
@@ -182,6 +182,16 @@ describe('M1/w1: schemaVersion dual-accept (AC-01, Finding #7)', () => {
   it('accepts empty string schemaVersion (typeof === "string" is the only guard)', () => {
     const result = validatePackShell(validPack({ schemaVersion: '' }));
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('editor writeback → runtime Pack v2 normalization', () => {
+  it('upgrades the shell and adds empty artifact descriptors without dropping fields', () => {
+    const raw = validPack({ schemaVersion: '1.0.0', custom: { keep: true } });
+    const normalized = normalizePackForRuntime(raw);
+    expect(normalized.schemaVersion).toBe('2.0.0');
+    expect((normalized.assets as Array<Record<string, unknown>>)[0]?.artifacts).toEqual({});
+    expect(normalized.custom).toEqual({ keep: true });
   });
 });
 

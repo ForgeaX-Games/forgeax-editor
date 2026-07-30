@@ -60,7 +60,7 @@ const KIND_COLORS: Record<string, string> = {
 };
 
 function extractBaseColor(payload: Record<string, unknown>): [number, number, number, number] | null {
-  const pv = payload.paramValues as Record<string, unknown> | undefined;
+  const pv = payload.values as Record<string, unknown> | undefined;
   if (!pv) return null;
   const bc = pv.baseColor;
   if (!Array.isArray(bc) || bc.length < 3) return null;

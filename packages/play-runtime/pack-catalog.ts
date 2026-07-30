@@ -49,9 +49,13 @@ function withBase(base: string, sourceRel: string): string {
  * pluginPack instance exposes. A source file must never appear as a catalog
  * locator: assets-runtime rejects raw locators before attempting a load.
  */
-function metaPackageUrl(base: string, firstGuid: string | undefined): string {
+function metaPackageUrl(_base: string, firstGuid: string | undefined): string {
   const packageName = firstGuid === undefined ? 'pack' : firstGuid.toLowerCase();
-  return withBase(base, `__forgeax-ddc/${packageName}.pack.json`);
+  // DDC is a host-level transport route, not a Vite base asset. Studio proxies
+  // `/__forgeax-ddc/*` from :18920 to the Play server, while `/preview/*`
+  // falls through to Vite's SPA and returns index.html. Keep this URL root-
+  // relative even though ordinary pack files carry the `/preview` base.
+  return `/__forgeax-ddc/${packageName}.pack.json`;
 }
 
 async function processMetaSidecar(

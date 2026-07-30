@@ -16,41 +16,45 @@
 //   requirements-decisions #5: manual-save — dirty indicator shows pending state
 //   plan-strategy D-7: store.ts isDirty/hasPendingDiskSave semantics
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { gateway, hasPendingDiskSave } from '@forgeax/editor-core';
+import { projectSaveEntry } from '../save-operation-projection';
 
-let authoredRevision = 0;
-const authoredListeners = new Set<() => void>();
+let projectionRevision = 0;
+const projectionListeners = new Set<() => void>();
 gateway.subscribe((_doc, command) => {
   if (command === null) return;
-  authoredRevision += 1;
-  for (const listener of authoredListeners) listener();
+  projectionRevision += 1;
+  for (const listener of projectionListeners) listener();
+});
+gateway.subscribeOperationRuns(() => {
+  projectionRevision += 1;
+  for (const listener of projectionListeners) listener();
 });
 
-function subscribeAuthored(listener: () => void): () => void {
-  authoredListeners.add(listener);
-  return () => authoredListeners.delete(listener);
+function subscribeProjection(listener: () => void): () => void {
+  projectionListeners.add(listener);
+  return () => projectionListeners.delete(listener);
 }
 
-function getAuthoredRevision(): number {
-  return authoredRevision;
+function getProjectionRevision(): number {
+  return projectionRevision;
 }
 
 export function DirtyIndicator(): ReactNode {
-  useSyncExternalStore(subscribeAuthored, getAuthoredRevision, getAuthoredRevision);
-  const [dirty, setDirty] = useState(false);
-
-  useEffect(() => {
-    // Polling is cheap — hasPendingDiskSave reads the in-memory dirty flag.
-    const check = () => setDirty(hasPendingDiskSave());
-    check();
-    const interval = setInterval(check, 500);
-    return () => clearInterval(interval);
-  }, []);
+  useSyncExternalStore(subscribeProjection, getProjectionRevision, getProjectionRevision);
+  const projection = projectSaveEntry({
+    run: gateway.operationRuns.listRuns().at(-1),
+    dirty: hasPendingDiskSave(),
+  });
+  const dirty = projection.dirty;
 
   return (
     <span
       data-testid="dirty-indicator"
+      data-save-status={projection.status}
+      data-save-dirty-state={projection.dirtyState}
+      data-save-request-id={projection.requestId ?? ''}
       title={dirty ? 'Unsaved changes — press Save (⌘S)' : 'All changes saved'}
       style={{
         display: 'inline-block',

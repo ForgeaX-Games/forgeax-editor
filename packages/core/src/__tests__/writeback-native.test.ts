@@ -123,10 +123,13 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
 
     const pack = packResult.value as Record<string, unknown>;
     // Pack must have the engine-native shape:
-    // { schemaVersion, kind, assets: [{ guid, kind, payload: { entities } }] }
+    // { schemaVersion: '2.0.0', kind, assets: [{ guid, kind, payload, refs, artifacts }] }
     expect(pack.kind).toBe('internal-text-package');
-    expect(pack.schemaVersion).toBe('1.0.0');
+    expect(pack.schemaVersion).toBe('2.0.0');
     expect(Array.isArray(pack.assets)).toBe(true);
+    expect(pack.assets).toEqual([
+      expect.objectContaining({ artifacts: {} }),
+    ]);
 
     const assets = pack.assets as Array<Record<string, unknown>>;
     expect(assets.length).toBeGreaterThanOrEqual(1);

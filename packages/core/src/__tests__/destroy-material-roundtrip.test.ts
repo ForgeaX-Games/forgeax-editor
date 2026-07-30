@@ -41,7 +41,7 @@ function makeMockShaderRegistry(): ShaderRegistry {
     },
   };
   const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
-  sr.registerMaterialShader('test::dummy', { source: 'fn main() {}', paramSchema: [] });
+  sr.installMaterialArtifact('test::dummy', { source: 'fn main() {}', paramSchema: [] });
   return sr;
 }
 
@@ -51,8 +51,8 @@ const MATERIAL_GUID_2 = 'a1b2c3d4-5678-9012-3456-789abcdef012';
 function makeMaterial(): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-    paramValues: {},
+    passes: [{ name: 'forward', program: { module: 'test::dummy' } }],
+    values: {},
   };
 }
 

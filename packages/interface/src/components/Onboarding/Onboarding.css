@@ -132,6 +132,10 @@
 
 .fx-ob-card { border: 1px solid var(--ob-stroke-2); border-radius: 9px; background: var(--ob-fill-4); overflow: hidden; }
 .fx-ob-card.sel { border-color: var(--ob-accent); }
+/* The overflow:hidden above makes a card's flex auto-minimum resolve to 0, so inside a
+   height-capped .fx-ob-stack (existing-games list, TemplateModal rows) enough rows would
+   shrink to ~0 instead of overflowing into the scrollbar. Rows must never absorb overflow. */
+.fx-ob-stack > .fx-ob-card { flex-shrink: 0; }
 .fx-ob-connect-card { cursor: pointer; }
 .fx-ob-connect-card:focus { outline: none; }
 .fx-ob-connect-card:focus-visible { box-shadow: inset 0 0 0 1px var(--ob-accent); }

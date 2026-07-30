@@ -44,6 +44,13 @@ import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 import { getSourceFileDeleteStatus } from '../session/source-file-delete-status';
 import type { SourceFileDeleteStatus } from '../session/source-file-delete-status';
+import {
+  OperationRunRegistry,
+  type OperationRun,
+  type OperationRunListener,
+  type OperationRunReadResult,
+  type OperationRunSnapshot,
+} from './operation-runs';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -53,7 +60,7 @@ export type DispatchResult =
   // transient ops and the lifecycle methods (update/commit/cancel) omit it. This
   // is how a caller (UI selection, AI over the eval bridge) learns what it just
   // made without re-reading the mutated op or diffing a query snapshot.
-  | { ok: true; result?: { created: EntityHandle[] } }
+  | { ok: true; result?: { created: EntityHandle[]; operationRun?: OperationRun } }
   | { ok: false; error: CommandError };
 
 // Lightweight asset summary — the shared shape both describe legs (describeAsset
@@ -503,6 +510,11 @@ export class EditGateway {
   // ── Lifecycle: active-op slot (plan-strategy §2 D-2) ──────────────────────
   private _activeOp: ActiveOp | null = null;
 
+  // Save is the first adopter of the request-correlated OperationRun surface.
+  // The registry is Gateway-owned; wrappers and downstream projections read it
+  // instead of maintaining a completion map of their own.
+  readonly operationRuns = new OperationRunRegistry();
+
   // ── Executor: EngineFacade (boot-constructed, plan-strategy §2 D-2) ───────
   // Created lazily and REBOUND when the underlying world changes. The same
   // facade instance is reused across dispatch calls as long as doc.world is
@@ -545,6 +557,52 @@ export class EditGateway {
 
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
+  }
+
+  getOperationRun(requestId: string): OperationRun | undefined {
+    return this.operationRuns.getRun(requestId);
+  }
+
+  getOperationRunResult(requestId: string): OperationRunReadResult {
+    return this.operationRuns.getRunResult(requestId);
+  }
+
+  waitOperationRun(requestId: string): Promise<OperationRunReadResult> {
+    return this.operationRuns.wait(requestId);
+  }
+
+  subscribeOperationRun(requestId: string, listener: OperationRunListener): () => void {
+    return this.operationRuns.subscribe(requestId, listener);
+  }
+
+  /** Subscribe to every Gateway-owned save run fact, including terminal updates. */
+  subscribeOperationRuns(listener: OperationRunListener): () => void {
+    return this.operationRuns.subscribeAll(listener);
+  }
+
+  /** Read the retained Gateway-owned runs and their monotonic projection revision. */
+  operationRunSnapshot(): OperationRunSnapshot {
+    return this.operationRuns.snapshot();
+  }
+
+  cancelOperationRun(requestId: string): OperationRunReadResult<never> {
+    return this.operationRuns.cancel(requestId);
+  }
+
+  retryOperationRun(requestId: string, retryRequestId: string, origin: CommandOrigin = 'human'): DispatchResult {
+    const source = this.operationRuns.getRunResult(requestId);
+    if (!source.ok) return { ok: false, error: source.error as unknown as CommandError };
+    if (source.value.status !== 'failed' || !source.value.retryable) {
+      return {
+        ok: false,
+        error: {
+          code: 'operation-not-retryable',
+          hint: 'Only a failed save run can be retried.',
+          current: source.value,
+        },
+      };
+    }
+    return this.dispatch({ kind: 'saveDocToDisk', requestId: retryRequestId, retryOfRequestId: requestId }, origin);
   }
 
   // ── Executor: build ApplierCtx (plan-strategy §2 D-2) ────────────────────
@@ -813,12 +871,68 @@ export class EditGateway {
     // param is optional). Op stays the first arg (unchanged from M1/M2).
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
+
+    const saveRequestId = kind === 'saveDocToDisk'
+      ? (cmd as { readonly requestId?: unknown }).requestId
+      : undefined;
+    const isRequestCorrelatedSave = typeof saveRequestId === 'string';
+    let acceptedSave: OperationRunReadResult | null = null;
+    if (isRequestCorrelatedSave) {
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const retrySource = typeof retryOfRequestId === 'string'
+        ? this.operationRuns.getRunResult(retryOfRequestId)
+        : null;
+      if (retrySource !== null && !retrySource.ok) {
+        return { ok: false, error: retrySource.error as unknown as CommandError };
+      }
+      if (retrySource !== null && (retrySource.value.status !== 'failed' || !retrySource.value.retryable)) {
+        return {
+          ok: false,
+          error: {
+            code: 'operation-not-retryable',
+            hint: 'Only a failed save run can be retried.',
+            current: retrySource.value,
+          },
+        };
+      }
+      const accepted = retrySource !== null
+        ? this.operationRuns.acceptSave(saveRequestId, { ...cmd }, actor, {
+          parentRunId: retrySource.value.runId,
+          attempt: retrySource.value.attempt + 1,
+        })
+        : this.operationRuns.acceptSave(saveRequestId, { ...cmd }, actor);
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedSave = { ok: true, value: accepted.run };
+    }
+
     const ctx = this._buildCtx();
     pushSpan(kind);
     const sResult = applier(cmd, ctx);
     const sOk = sResult.ok;
     popSpan(sOk ? 'OK' : 'ERROR');
-    if (!sOk) return sResult;
+    if (!sOk) {
+      if (acceptedSave !== null) this.operationRuns.fail(acceptedSave.value.runId, sResult.error as unknown as import('@forgeax/editor-product').CommandError);
+      return sResult;
+    }
+
+    if (acceptedSave !== null) {
+      const running = this.operationRuns.markRunning(acceptedSave.value.runId);
+      if (!running.ok) return { ok: false, error: running.error as unknown as CommandError };
+      if (sResult.completion !== undefined) {
+        this.operationRuns.bindCompletion(acceptedSave.value.runId, sResult.completion, (run) => {
+          if (run.status !== 'succeeded' || this.transientMode) return;
+          this.ledger.push(cmd);
+          this.origins.push(origin);
+        });
+      }
+      return { ok: true, result: { created: [], operationRun: running.value } };
+    }
 
     // Ledger-only middle tier (plan-strategy §2 D-1): session ops append to the
     // flat append-only ledger (never the undo stack — they carry no inverse);
@@ -1144,7 +1258,7 @@ export class EditGateway {
     const envelope = registry.assetCatalog.get(key);
     if (!envelope) return;
     const payload = envelope.payload as unknown as Record<string, unknown>;
-    cmd._oldPatch = (payload.paramValues ?? {}) as Record<string, unknown>;
+    cmd._oldPatch = (payload.values ?? {}) as Record<string, unknown>;
     // Engine-memory → wire-format projection: envelope.refs are AssetRef
     // OBJECTS ({ guid, sourceField?, sceneEntityId? }), but the pack on disk
     // stores refs as GUID STRINGS (zod: refs: z.array(z.string())), and the
@@ -1200,7 +1314,7 @@ export class EditGateway {
    *   full payload → resolveAsset(handle) / lookupAsset(guid)
    *   lightweight  → describeAsset(handle) / describeAssetByGuid(guid)
    * A material POD exposes its texture bindings as GUID strings (e.g.
-   * `paramValues.baseColorTexture`); feed that GUID here to inspect the texture's
+   * `values.baseColorTexture`); feed that GUID here to inspect the texture's
    * kind + dimensions + format WITHOUT lookupAsset dragging the whole pixel
    * buffer into scope. Same summary projection as describeAsset (SSOT — the
    * summarizeAsset helper), so the two legs can never drift. Unknown GUID / no

@@ -758,9 +758,10 @@ function ci(argv: string[]): void {
     ['dependency-cycle lint', 'bun', ['run', 'lint:dep']],
     ['editor typecheck', 'bun', ['run', 'typecheck']],
     ['editor-core unit tests', 'bun', ['-F', '@forgeax/editor-core', 'test']],
+    ['editor-product unit tests', 'bun', ['-F', '@forgeax/editor-product', 'test']],
+    ['editor-panels unit tests', 'bun', ['-F', '@forgeax/editor-panels', 'test']],
     ['edit-runtime unit tests', 'bun', ['-F', '@forgeax/editor-edit-runtime', 'test']],
-    ['Play boot smoke', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts']],
-    ['Content Browser smoke', 'bun', ['run', 'test:e2e', 'e2e/smoke-content-browser.spec.ts']],
+    ['browser smoke + save terminal roundtrip', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts', 'e2e/smoke-content-browser.spec.ts', 'e2e/save-operation-run.spec.ts']],
   ];
   step('CI: fresh recursive checkout frozen Bun 1.3.14 install ...');
   verifyFreshFrozenInstall();

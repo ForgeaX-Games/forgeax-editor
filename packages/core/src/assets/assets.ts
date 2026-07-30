@@ -172,10 +172,9 @@ export function extractPackDirs(assets: PackAsset[]): string[] {
 /** CSS color for a material asset's base color (for the panel swatch), or null. */
 export function materialSwatch(a: PackAsset): string | null {
   if (a.kind !== 'material') return null;
-  const pv = a.payload.paramValues as Record<string, unknown> | undefined;
+  const pv = a.payload.values as Record<string, unknown> | undefined;
   const c = pv?.baseColor;
   if (!Array.isArray(c)) return null;
   const u = (v: unknown) => Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 255);
   return `rgb(${u(c[0])}, ${u(c[1])}, ${u(c[2])})`;
 }
-

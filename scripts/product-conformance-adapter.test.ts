@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,7 +43,31 @@ function withManifestFile<T>(document: unknown, callback: (path: string) => T): 
   }
 }
 
+function createExternalContractRepo(): { readonly directory: string; readonly revision: string } {
+  const directory = mkdtempSync(join(tmpdir(), 'forgeax-wave1-contract-'));
+  execFileSync('git', ['init', '--quiet', directory]);
+  execFileSync('git', ['-C', directory, 'config', 'user.name', 'ForgeaX test']);
+  execFileSync('git', ['-C', directory, 'config', 'user.email', 'forgeax-test@example.invalid']);
+  writeFileSync(join(directory, 'contract.json'), '{"specVersion":1}\n');
+  execFileSync('git', ['-C', directory, 'add', 'contract.json']);
+  execFileSync('git', ['-C', directory, 'commit', '--quiet', '-m', 'contract']);
+  const revision = execFileSync('git', ['-C', directory, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  return { directory, revision };
+}
+
 describe('standalone conformance adapter wiring', () => {
+  test('keeps contract revision validation in the contract repository', () => {
+    const external = createExternalContractRepo();
+    try {
+      const actual = createAdapter({ contractRoot: external.directory });
+
+      expect(actual.pin.contractRevision).toBe(external.revision);
+      expect(actual.pin.revisionEvidence).toEqual({ immutable: true, isAncestor: true });
+    } finally {
+      rmSync(external.directory, { recursive: true, force: true });
+    }
+  });
+
   test('default factory exposes the real public adapter contract', () => {
     const actual = createAdapter();
     const selected = createDefaultConformanceAdapter();

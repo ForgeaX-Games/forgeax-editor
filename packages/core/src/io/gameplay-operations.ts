@@ -67,12 +67,35 @@ export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): G
   };
 }
 
-type GameplayGateway = Pick<EditGateway, 'dispatch' | 'invokeGameAction' | 'readGameState'> & { readonly playPhase: EditGateway['playPhase'] };
+type GameplayGateway = Pick<EditGateway, 'dispatch' | 'invokeGameAction' | 'readGameState'> & {
+  readonly playPhase: EditGateway['playPhase'];
+  readonly lastPlayError?: { code?: unknown; hint?: unknown } | null;
+};
+
+const PLAY_READY_TIMEOUT_MS = 15_000;
 
 const unavailable = (hint: string): GameplayProducerResult => ({ ok: false, error: { code: 'surface-unavailable', hint } });
 
 function dispatchResult(result: DispatchResult): GameplayProducerResult {
   return result.ok ? { ok: true } : result;
+}
+
+async function waitForPlayTerminal(gateway: GameplayGateway): Promise<GameplayProducerResult> {
+  const deadline = Date.now() + PLAY_READY_TIMEOUT_MS;
+  while (gateway.playPhase === 'starting' && Date.now() < deadline) {
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 25));
+  }
+  if (gateway.playPhase === 'play') return { ok: true, state: 'running' };
+  const failure = gateway.lastPlayError;
+  return {
+    ok: false,
+    error: {
+      code: typeof failure?.code === 'string' && failure.code.length > 0 ? failure.code : 'play-not-ready',
+      hint: typeof failure?.hint === 'string' && failure.hint.length > 0
+        ? failure.hint
+        : 'the live Play projection did not become ready before the bounded wait expired',
+    },
+  };
 }
 
 export interface GameplayOperations {
@@ -198,7 +221,8 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
   return {
     async play() {
       if (gateway.playPhase === 'play') return { ok: true, state: 'running' };
-      return dispatchResult(gateway.dispatch({ kind: 'play' }));
+      const dispatched = dispatchResult(gateway.dispatch({ kind: 'play' }));
+      return dispatched.ok ? waitForPlayTerminal(gateway) : dispatched;
     },
     async gameplayStop() {
       if (gateway.playPhase !== 'play') return { ok: true, state: 'stopped' };

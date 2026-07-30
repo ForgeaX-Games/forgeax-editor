@@ -68,16 +68,17 @@ function run(command: string, args: string[]): CommandResult {
       };
 }
 
-export function createAdapter() {
+export function createAdapter(options: { readonly contractRoot?: string } = {}) {
+  const contractRoot = options.contractRoot ?? process.cwd();
   const productRevision = gitRevision(editorRoot);
-  const contractRevision = gitRevision(process.cwd());
+  const contractRevision = gitRevision(contractRoot);
   const adapterRevision = productRevision;
   const immutable =
     gitCommitExists(editorRoot, productRevision) &&
-    gitCommitExists(editorRoot, contractRevision) &&
+    gitCommitExists(contractRoot, contractRevision) &&
     gitCommitExists(editorRoot, adapterRevision);
   const isAncestor =
-    immutable && gitIsAncestor(editorRoot, adapterRevision, contractRevision);
+    immutable && gitIsAncestor(editorRoot, adapterRevision, productRevision);
   let storageResult: CommandResult | undefined;
   let gameplayResult: CommandResult | undefined;
 

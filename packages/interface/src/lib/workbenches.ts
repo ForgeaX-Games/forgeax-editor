@@ -88,7 +88,7 @@ export interface WorkbenchListState { list: Workbench[]; activeId: string }
 // Every localStorage read/write below routes through `currentProjectId`. The
 // default is `'default'` so pre-mount reads (e.g., bootAppMode) still resolve
 // deterministically; ProjectSwitcher.tsx calls setCurrentProject(current) as
-// soon as /api/projects returns, at which point subscribers re-read via the
+// soon as /api/workbench/games returns, at which point subscribers re-read via the
 // notify() below.
 let currentProjectId: string = 'default';
 
@@ -130,7 +130,7 @@ export function subscribeWorkbenchList(fn: () => void): () => void {
  *   2. transfers any state stranded under the 'default' fallback id to the
  *      real project id — this fixes a boot-order race where DockRegion.onReady
  *      runs migrateWorkbenchSchema() BEFORE ProjectSwitcher.reload() resolves
- *      /api/projects, so migration writes v8 keys under 'default:*' while the
+ *      /api/workbench/games, so migration writes v8 keys under 'default:*' while the
  *      real project id arrives later. Without this transfer, existing v7 users
  *      on a non-default project silently lose their layout / panelLocations on
  *      the upgrade because the migrated state is stranded under 'default'.
@@ -604,7 +604,7 @@ export function saveWorkbenchList(state: WorkbenchListState): void {
 
 export function loadWorkbenchList(): WorkbenchListState {
   // Belt+suspenders: ensures the migration ran even if setCurrentProject was
-  // never called (e.g., /api/projects failed). Idempotent — no-op past current version.
+  // never called (e.g., /api/workbench/games failed). Idempotent — no-op past current version.
   migrateWorkbenchSchema();
 
   try {

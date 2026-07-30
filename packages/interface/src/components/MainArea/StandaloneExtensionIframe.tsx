@@ -18,10 +18,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 import { getLocale, useTranslation } from '@/i18n';
 import type { ExtensionInfo } from '../../lib/extension-api';
-import {
-  getVideoGamePackageStatus,
-  initializeVideoGamePackage,
-} from '../../lib/game-host-api';
 import { useShellStore } from '../../store';
 import { getSessionClient } from '../../store-parts/session-client';
 import { getWorkbenchClient } from '../../store';
@@ -47,23 +43,6 @@ interface Props {
    *  drops its WebGPU ctx / WS / scroll). Bump this only when you intend a
    *  deliberate hard reload (e.g. a recovery "重载" button). Defaults to 0. */
   reloadNonce?: number;
-}
-
-const VIDEO_GAME_PLUGIN_IDS = new Set([
-  '@forgeax/wb-game-video',
-]);
-const VIDEO_GAME_INITIALIZED_EVENT = 'forgeax:video-game-initialized';
-const videoGameInitRequests = new Map<string, Promise<{ ok: boolean; error?: string }>>();
-
-function initializeVideoGame(slug: string): Promise<{ ok: boolean; error?: string }> {
-  const pending = videoGameInitRequests.get(slug);
-  if (pending) return pending;
-  const request = initializeVideoGamePackage(slug)
-    .finally(() => {
-      videoGameInitRequests.delete(slug);
-    });
-  videoGameInitRequests.set(slug, request);
-  return request;
 }
 
 function buildIframeSrc(
@@ -195,51 +174,6 @@ export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadN
   const effectiveSlug = pinnedSlug ?? activeSlug;
   // 已显式 pin → 立即可用；否则等服务端 active-slug 回来（finally 一定会置位）。
   const slugReady = pinnedSlug != null || slugFetched;
-  const isVideoGamePlugin = VIDEO_GAME_PLUGIN_IDS.has(plugin.id);
-  const [videoGameState, setVideoGameState] = useState<
-    'checking' | 'needs-init' | 'initializing' | 'ready' | 'error'
-  >('checking');
-  const [videoGameError, setVideoGameError] = useState('');
-
-  useEffect(() => {
-    if (!isVideoGamePlugin) {
-      setVideoGameState('ready');
-      return;
-    }
-    if (!slugReady) return;
-    if (!effectiveSlug) {
-      setVideoGameError('no active game');
-      setVideoGameState('error');
-      return;
-    }
-
-    let cancelled = false;
-    setVideoGameState('checking');
-    setVideoGameError('');
-    void getVideoGamePackageStatus(effectiveSlug)
-      .then((body) => {
-        if (!cancelled) {
-          setVideoGameState(body.state === 'initialized' ? 'ready' : 'needs-init');
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setVideoGameError((error as Error).message);
-          setVideoGameState('error');
-        }
-      });
-
-    const handleInitialized = (event: Event) => {
-      if ((event as CustomEvent<{ slug?: string }>).detail?.slug === effectiveSlug) {
-        setVideoGameState('ready');
-      }
-    };
-    window.addEventListener(VIDEO_GAME_INITIALIZED_EVENT, handleInitialized);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(VIDEO_GAME_INITIALIZED_EVENT, handleInitialized);
-    };
-  }, [effectiveSlug, isVideoGamePlugin, slugReady]);
 
   const rawSrc = slugReady ? buildIframeSrc(plugin, pane, effectiveSlug) : null;
   const src = rawSrc ? rawSrc + (rawSrc.includes('?') ? '&' : '?') + `fxv=${encodeURIComponent(iframeCacheKey)}` : null;
@@ -292,105 +226,6 @@ export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadN
         {t('standaloneExtension.noEntryPrefix')} <code>{plugin.id}</code>{' '}
         {t('standaloneExtension.noEntryMiddle')} <code>entry.standalone</code>{' '}
         {t('standaloneExtension.noEntrySuffix')}
-      </div>
-    );
-  }
-
-  if (isVideoGamePlugin && videoGameState !== 'ready') {
-    const checking = videoGameState === 'checking';
-    const initializing = videoGameState === 'initializing';
-    if (pane === 'left') {
-      return (
-        <div
-          style={{
-            height: '100%',
-            display: 'grid',
-            placeItems: 'center',
-            padding: 18,
-            textAlign: 'center',
-            background: 'var(--color-background-base, #0e0c09)',
-            color: 'var(--color-text-secondary, #aaa)',
-          }}
-        >
-          <div>
-            <strong style={{ display: 'block', marginBottom: 8, color: 'var(--color-text-primary, #f6f1e9)' }}>
-              {checking
-                ? t('standaloneExtension.videoGameInitChecking')
-                : t('standaloneExtension.videoGameInitTitle')}
-            </strong>
-            {!checking && t('standaloneExtension.videoGameInitContinueInMain')}
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div
-        style={{
-          height: '100%',
-          display: 'grid',
-          placeItems: 'center',
-          padding: 24,
-          background: 'var(--color-background-base, #0e0c09)',
-          color: 'var(--color-text-primary, #f6f1e9)',
-        }}
-      >
-        <div style={{ maxWidth: 420, textAlign: 'center' }}>
-          {checking ? (
-            <div>{t('standaloneExtension.videoGameInitChecking')}</div>
-          ) : (
-            <>
-              <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>
-                {t('standaloneExtension.videoGameInitTitle')}
-              </h3>
-              <p style={{ margin: '0 0 18px', color: 'var(--color-text-secondary, #aaa)', lineHeight: 1.6 }}>
-                {t('standaloneExtension.videoGameInitBody')}
-              </p>
-              {videoGameState === 'error' && (
-                <p style={{ color: 'var(--color-text-danger, #ff7676)' }}>
-                  {t('standaloneExtension.videoGameInitFailed', { error: videoGameError })}
-                </p>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
-                <button
-                  type="button"
-                  className="tb-modal-btn"
-                  disabled={initializing}
-                  onClick={() => useShellStore.getState().openWorkbench({
-                    tab: 'editor',
-                    expandedExtensionId: null,
-                  })}
-                >
-                  {t('standaloneExtension.videoGameInitCancel')}
-                </button>
-                <button
-                  type="button"
-                  className="tb-modal-btn primary"
-                  disabled={initializing || !effectiveSlug}
-                  onClick={() => {
-                    if (!effectiveSlug) return;
-                    setVideoGameState('initializing');
-                    setVideoGameError('');
-                    void initializeVideoGame(effectiveSlug).then((result) => {
-                      if (!result.ok) {
-                        setVideoGameError(result.error ?? 'unknown error');
-                        setVideoGameState('error');
-                        return;
-                      }
-                      setVideoGameState('ready');
-                      window.dispatchEvent(new CustomEvent(VIDEO_GAME_INITIALIZED_EVENT, {
-                        detail: { slug: effectiveSlug },
-                      }));
-                    });
-                  }}
-                >
-                  {initializing
-                    ? t('standaloneExtension.videoGameInitializing')
-                    : t('standaloneExtension.videoGameInitConfirm')}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
       </div>
     );
   }

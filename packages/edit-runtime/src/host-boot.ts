@@ -66,6 +66,7 @@ import {
   repairAssets,
 } from '@forgeax/editor-core';
 import { installAssetHmrBridge } from '@forgeax/editor-core/assets/asset-hmr-bridge';
+import { installOperationProjectionSource } from '@forgeax/editor-panels';
 import {
   createHostSession,
   type HostSessionContext,
@@ -208,6 +209,22 @@ const hostSession = createHostSession({
   onSelectionChange,
   onAssetSelectionChange,
   installSaveBeaconListeners,
+});
+
+// Operation Center reads the same Gateway-owned run registry as the toolbar
+// and product transport. Recovery actions re-enter through Gateway; this
+// composition root adds no UI completion state or second run owner.
+installOperationProjectionSource({
+  // UI and AI/eval both consume the same required versioned Gateway read surface
+  // (R0-X03 projection contract convergence).
+  getSnapshot: () => gateway.operationRunSnapshot(),
+  subscribe: (listener) => gateway.subscribeOperationRuns(() => listener()),
+  dispatchRecovery: (action, runId) => {
+    const run = gateway.operationRuns.listRuns().find((candidate) => candidate.runId === runId);
+    if (run?.requestId === undefined) return;
+    if (action === 'retry') gateway.retryOperationRun(run.requestId, globalThis.crypto.randomUUID(), 'human');
+    if (action === 'cancel') gateway.cancelOperationRun(run.requestId);
+  },
 });
 
 /**

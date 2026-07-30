@@ -23,6 +23,23 @@ describe('live gameplay operations', () => {
     ]);
   });
 
+  test('waits for asynchronous Play assembly before reporting a running surface', async () => {
+    let phase: 'starting' | 'play' = 'starting';
+    const gateway = {
+      dispatch: () => {
+        setTimeout(() => { phase = 'play'; }, 5);
+        return { ok: true };
+      },
+      invokeGameAction: async () => ({ ok: true, value: undefined }),
+      readGameState: async () => ({ ok: true, value: { entities: [] } }),
+      get playPhase() { return phase; },
+      lastPlayError: null,
+    } as never;
+    const operations = createGameplayOperations(gateway);
+
+    await expect(operations.play()).resolves.toEqual({ ok: true, state: 'running' });
+  });
+
   test('reports unavailable without touching the gateway', async () => {
     const gateway = { playPhase: 'edit' } as never;
     const operations = createGameplayOperations(gateway);

@@ -1,6 +1,6 @@
 // Single source of truth for project/path/branch shown in the TopBar title.
 // Static for now — same constants pattern as `lib/model.ts`. Future iter will
-// swap this for a server-side fetch (`/api/health` could return workspace
+// swap this for a server-side fetch (`/api/health` could return active-game
 // metadata) so the title reflects the actual git branch + active game path.
 export const CURRENT_PROJECT = {
   name: 'forgeax',

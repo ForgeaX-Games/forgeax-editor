@@ -39,17 +39,17 @@
 //   (backward) extracted from store/scene-persistence.ts (this loop's target),
 //     itself split out of store.ts by historical feat
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose.
-import { canonicalScenePackRevision, isScenePack, stableGuid, validatePackShell } from '../../scene/scene-pack';
+import { canonicalScenePackRevision, isScenePack, normalizePackForRuntime, stableGuid, validatePackShell } from '../../scene/scene-pack';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
 import { createEditSession } from '../../session/document';
 import { createPackResourceChange } from '../../session/pack-ops';
 import { worldRootHandles } from '../entity-state';
 import type { ScenePersistenceContext, LoadedInlineSnapshot } from '../scene-persistence';
-import type { EditorOp, EditSession } from '../../types';
+import type { CommandError, EditorOp, EditSession } from '../../types';
 import type { EntityHandle, WorldType } from '../../scene/scene-types';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
-import { assetIO } from '../../io/asset-io-facade';
+import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-facade';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -59,11 +59,31 @@ export interface PersistenceGateway {
   /** The live authoring document (world + registry). Read on every serialize /
    *  scene-load; null world/registry short-circuits headlessly. */
   readonly doc: EditSession;
+  /** Monotonic authored revision used by the save revision collar. */
+  readonly rev?: number;
   /** Replace the whole authoring document (scene swap). */
   replaceDoc(doc: EditSession): void;
   /** Dispatch a session op (used by replaceDoc to clear selection). */
   dispatch(op: EditorOp): { ok: boolean };
 }
+
+export interface SaveDocToDiskOptions {
+  /** Revision captured when Gateway accepted this save request. */
+  readonly acceptedRevision?: number;
+}
+
+export interface SaveDocToDiskCommit {
+  readonly path: string;
+  readonly committedRevision: string;
+  readonly acceptedRevision: number;
+  readonly currentRevision: number;
+  /** Whether the authored document was clean after applying the revision collar. */
+  readonly dirty: boolean;
+}
+
+export type SaveDocToDiskResult =
+  | { readonly ok: true; readonly result: SaveDocToDiskCommit }
+  | { readonly ok: false; readonly error: CommandError };
 
 /**
  * Everything createDiskIo needs, declared explicitly (Pipeline Isolation). No
@@ -87,6 +107,12 @@ export interface DiskIoDeps {
   readonly resolveGamePath: (rel: string) => string;
   /** Signal a doc reload to React consumers (doc-version). */
   readonly notifyDocChanged: () => void;
+  /** Optional headless serializer seam. Production uses the canonical engine
+   *  serializer below; tests inject bytes to exercise each guard deterministically. */
+  readonly serializeForSave?: (doc: EditSession, sceneGuid?: string) => string | null;
+  /** Optional headless resource transaction seam. Production continues through
+   *  the shared assetIO facade and its platform resource protocol. */
+  readonly prepareResourceTransaction?: AssetResourceTransactionPort['prepare'];
   /** Optional last-resort save used by flushPendingSaveBeacon when the beacon
    *  Blob path throws — the composition root wires the public dispatch wrapper so
    *  the fallback still records a ledger entry (OOS-1). Omitted in headless. */
@@ -106,7 +132,7 @@ export interface DiskIo {
   instantiateSceneRefUnderWorld(sceneGuid: string, parentHandle: number): Promise<number | null>;
   resolveAssetRefToHandle(guid: string, assetType: string): Promise<number | null>;
   doLoadDocFromDisk(): Promise<boolean>;
-  doSaveDocToDisk(): Promise<boolean>;
+  doSaveDocToDisk(options?: SaveDocToDiskOptions): Promise<SaveDocToDiskResult>;
   flushPendingSaveBeacon(): void;
   replaceDoc(doc: EditSession): void;
 }
@@ -193,6 +219,9 @@ export function mergeLoadedInlineOrphans(
       // Clone so a later pack mutate cannot corrupt the load-floor snapshot.
       payload: entry.payload === undefined ? undefined : JSON.parse(JSON.stringify(entry.payload)),
       refs: Array.isArray(entry.refs) ? JSON.parse(JSON.stringify(entry.refs)) : [],
+      // The canonical serializer emits Pack v2. Keep orphan entries inside the
+      // same envelope contract so a save cannot turn a valid pack malformed.
+      artifacts: entry.artifacts === undefined ? {} : JSON.parse(JSON.stringify(entry.artifacts)),
     });
     already.add(key);
     merged++;
@@ -265,7 +294,7 @@ function appendInlineAssets(
       continue;
     }
     console.info(`[editor-core][diag]   ref=${refGuid} → INLINE (kind=${payload.kind}, pkg.path=${pkg?.path ?? 'null'}) → appending`);
-    assets.push({ guid: refGuid, kind: payload.kind, payload, refs: [] });
+    assets.push({ guid: refGuid, kind: payload.kind, payload, refs: [], artifacts: {} });
     already.add(key);
     appendedCount++;
   }
@@ -344,6 +373,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     // load snapshot so save cannot drop authored pack data below the floor.
     const orphanMerged = mergeLoadedInlineOrphans(packObj, ctx.loadedInlineAssets);
     const postAppendCount = (packObj.assets as Array<unknown>)?.length ?? 0;
+    // The engine collector emits its historical v1 shell. Upgrade only at the
+    // editor-owned persistence boundary; the engine runtime remains strict on
+    // Pack v2 and does not need a legacy fallback.
+    normalizePackForRuntime(packObj);
     console.info(
       `[editor-core][diag] worldToPack: sceneGuid=${sceneGuid}, rootHandles=${rootHandles.length}, assets before append=${preAppendCount}, after=${postAppendCount}, orphanMerged=${orphanMerged}`,
     );
@@ -540,11 +573,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
               kind?: string;
               payload?: unknown;
               refs?: unknown[];
+              artifacts?: unknown;
             }>;
             const loadedInline = loadedAssets.filter((a) => a.kind !== 'scene');
             // Snapshot full bodies for orphan merge on save (not just the count).
             ctx.loadedInlineAssets = loadedInline
-              .filter((a): a is { guid: string; kind: string; payload?: unknown; refs?: unknown[] } =>
+              .filter((a): a is { guid: string; kind: string; payload?: unknown; refs?: unknown[]; artifacts?: unknown } =>
                 typeof a.guid === 'string' && typeof a.kind === 'string',
               )
               .map((a) => ({
@@ -552,6 +586,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
                 kind: a.kind,
                 payload: a.payload === undefined ? undefined : JSON.parse(JSON.stringify(a.payload)),
                 refs: Array.isArray(a.refs) ? JSON.parse(JSON.stringify(a.refs)) : [],
+                artifacts: a.artifacts === undefined ? undefined : JSON.parse(JSON.stringify(a.artifacts)),
               }));
             console.info(
               `[editor-core][diag] doLoadDocFromDisk: loaded pack from ${p}, total assets=${loadedAssets.length}, inline floor=${ctx.loadedInlineAssetFloor}`,
@@ -620,29 +655,80 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     if (typeof sceneGuid === 'string' && sceneGuid.length > 0) reg.invalidate(sceneGuid);
   }
 
+  /** Build a stable structured save failure. The safety guards remain ordered
+   *  before any canonical write; this only changes observability from boolean to
+   *  CommandError fields that callers can branch on. */
+  function saveFailure(
+    code: CommandError['code'],
+    hint: string,
+    subjectRef: { readonly kind: string; readonly id: string },
+    options: {
+      readonly retryable?: boolean;
+      readonly recoveryActions?: readonly string[];
+      readonly expected?: unknown;
+      readonly current?: unknown;
+    } = {},
+  ): SaveDocToDiskResult {
+    return {
+      ok: false,
+      error: {
+        code,
+        hint,
+        subjectRef,
+        retryable: options.retryable ?? false,
+        recoveryActions: options.recoveryActions ?? ['save.inspect'],
+        ...(options.expected === undefined ? {} : { expected: options.expected }),
+        ...(options.current === undefined ? {} : { current: options.current }),
+      },
+    };
+  }
+
+  function saveSubject(path: string | null): { readonly kind: string; readonly id: string } {
+    return { kind: 'scene', id: path ?? 'active-scene' };
+  }
+
   /** Write the active game's scene to disk as a native engine scene pack. MANUAL
-   *  save (D-7): on success clears the dirty flag. Serialize FIRST and bail on
-   *  failure — never POST an empty body over a good scene (0-byte data loss). */
-  async function doSaveDocToDisk(): Promise<boolean> {
+   *  save (D-7): on success clears dirty only when the accepted authored revision
+   *  is still current. Serialize FIRST and bail on failure — never POST an empty
+   *  body over a good scene (0-byte data loss). */
+  async function doSaveDocToDisk(options: SaveDocToDiskOptions = {}): Promise<SaveDocToDiskResult> {
     const p = scenePath();
-    if (!p) return false;
-    const content = serializedPack();
+    const subjectRef = saveSubject(p);
+    if (!p) {
+      return saveFailure('save-serialization-failed', 'No active scene path is available for this save.', subjectRef);
+    }
+    const acceptedRevision = options.acceptedRevision ?? deps.gateway.rev ?? 0;
+    let content: string | null;
+    try {
+      content = deps.serializeForSave === undefined
+        ? serializedPack()
+        : deps.serializeForSave(gateway.doc, sceneGuidForSave());
+    } catch (cause) {
+      return saveFailure(
+        'save-unexpected-failure',
+        `Save serialization effect threw: ${cause instanceof Error ? cause.message : 'unknown error'}.`,
+        subjectRef,
+        { retryable: true, recoveryActions: ['save.retry'] },
+      );
+    }
     if (content === null) {
       console.error('[editor-core] saveDocToDisk: serialize failed — aborting write to protect on-disk scene');
-      return false;
+      return saveFailure('save-serialization-failed', 'Scene serialization failed; no bytes were written.', subjectRef);
     }
+
     // Validate pack shell before writing (AC-02 — plan-strategy D-1/D-3).
     let parsedNew: unknown;
     try {
       parsedNew = JSON.parse(content);
       if (!validatePackShell(parsedNew).ok) {
         console.error('[editor-core] saveDocToDisk: pack shell validation failed — aborting write');
-        return false;
+        return saveFailure('save-pack-validation-failed', 'Serialized scene pack failed shell validation; no bytes were written.', subjectRef);
       }
     } catch {
       console.error('[editor-core] saveDocToDisk: failed to parse serialized content');
-      return false;
+      return saveFailure('save-pack-validation-failed', 'Serialized scene pack is not valid JSON; no bytes were written.', subjectRef);
     }
+
     // Safety net (charter §9): refuse a write that would DROP inline asset bodies
     // below the LOAD floor — degrade to "save refused, data preserved" (AGENTS.md
     // #2). Guarding against the load floor (not the current on-disk count) means a
@@ -652,19 +738,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       console.error(
         `[editor-core] saveDocToDisk: serialized pack has ${newCount} inline asset(s) but the scene loaded with ${ctx.loadedInlineAssetFloor} — aborting write to protect materials`,
       );
-      // Diagnostic: list inline asset GUIDs in the new pack so we can diff against disk
-      const newAssets = (parsedNew as { assets?: Array<{ guid?: string; kind?: string }> })?.assets;
-      if (Array.isArray(newAssets)) {
-        const inlineGuids = newAssets.filter((a) => a.kind !== 'scene').map((a) => `${a.guid} (${a.kind})`);
-        console.error(
-          `[editor-core][diag] saveDocToDisk: inline assets in serialized pack (${inlineGuids.length}):\n` +
-          inlineGuids.map((g, i) => `  [${i}] ${g}`).join('\n'),
-        );
-      }
-      console.error(
-        `[editor-core][diag] saveDocToDisk: scenePath=${p}, currentSceneGuid=${ctx.currentSceneGuid}, loadedInlineAssetFloor=${ctx.loadedInlineAssetFloor}`,
+      return saveFailure(
+        'save-inline-assets-missing',
+        'Serialized scene pack would drop inline asset bodies; no bytes were written.',
+        subjectRef,
+        { expected: { minimum: ctx.loadedInlineAssetFloor }, current: { actual: newCount } },
       );
-      return false;
     }
     // Entity-drop guard: refuse a write that would overwrite a non-empty scene
     // with an empty-entity pack (e.g. after a failed reload left the world empty).
@@ -672,37 +751,86 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       console.error(
         `[editor-core] saveDocToDisk: serialized pack has 0 entities but the scene loaded with ${ctx.loadedEntityFloor} — aborting write to protect scene data`,
       );
-      return false;
+      return saveFailure(
+        'save-entities-missing',
+        'Serialized scene pack would drop authored entities; no bytes were written.',
+        subjectRef,
+        { expected: { minimum: ctx.loadedEntityFloor }, current: { actual: 0 } },
+      );
     }
+
+    let canonicalRevision: string | null;
     try {
-      const canonicalRevision = canonicalScenePackRevision(parsedNew);
-      const preparedResource = await assetIO.prepareResourceTransaction({
+      canonicalRevision = canonicalScenePackRevision(parsedNew);
+    } catch {
+      return saveFailure('save-unexpected-failure', 'Could not derive the canonical scene revision.', subjectRef, {
+        retryable: true,
+        recoveryActions: ['save.retry'],
+      });
+    }
+    if (canonicalRevision === null) {
+      return saveFailure('save-pack-validation-failed', 'Could not derive a canonical revision for the validated scene pack.', subjectRef);
+    }
+
+    let committedRevision: string;
+    try {
+      const transactionInput = {
         path: p,
         content,
         canonicalRevision,
         changes: [createPackResourceChange(p, content)],
-      });
-      const committed = preparedResource === null
-        ? (await deps.fetch('/api/files', {
+      };
+      const preparedResource = deps.prepareResourceTransaction === undefined
+        ? await assetIO.prepareResourceTransaction(transactionInput)
+        : await deps.prepareResourceTransaction(transactionInput);
+      if (preparedResource !== null) {
+        const committed = await preparedResource.commit();
+        if (committed.revision.length === 0) {
+          return saveFailure('save-write-failed', 'Canonical resource transaction did not publish a revision.', subjectRef, {
+            retryable: true,
+            recoveryActions: ['save.retry'],
+          });
+        }
+        committedRevision = committed.revision;
+      } else {
+        const response = await deps.fetch('/api/files', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ path: p, content }),
-        })).ok
-        : (await preparedResource.commit()).revision.length > 0;
-      if (committed) {
-        ctx.isDirty = false;
-        // Record the exact bytes we wrote so the disk watcher recognises the
-        // resulting file-change event as its OWN echo (and does not treat the
-        // save as an external edit that forces a full scene reload).
-        ctx.setLastSelfSave({ path: p, content, at: Date.now() });
-        // Save is the "asset bytes changed" boundary: drop the stale registry
-        // cache so the next ▶ Play (loadByGuid) re-reads the scene we just wrote.
-        invalidateSavedScene(parsedNew);
+        });
+        if (!response.ok) {
+          return saveFailure('save-write-failed', `Scene pack write failed with HTTP ${response.status}.`, subjectRef, {
+            retryable: true,
+            recoveryActions: ['save.retry'],
+            expected: { status: 200 },
+            current: { status: response.status },
+          });
+        }
+        committedRevision = canonicalRevision;
       }
-      return committed;
-    } catch {
-      return false;
+    } catch (cause) {
+      return saveFailure(
+        'save-write-failed',
+        `Scene pack canonical commit failed: ${cause instanceof Error ? cause.message : 'unknown error'}.`,
+        subjectRef,
+        { retryable: true, recoveryActions: ['save.retry'] },
+      );
     }
+
+    const currentRevision = deps.gateway.rev ?? acceptedRevision;
+    const dirty = currentRevision !== acceptedRevision;
+    ctx.isDirty = dirty;
+    // Record the exact bytes we wrote so the disk watcher recognises the
+    // resulting file-change event as its OWN echo (and does not treat the save as
+    // an external edit that forces a full scene reload).
+    ctx.setLastSelfSave({ path: p, content, at: Date.now() });
+    // Save is the "asset bytes changed" boundary: drop the stale registry cache
+    // so the next ▶ Play (loadByGuid) re-reads the scene we just wrote.
+    invalidateSavedScene(parsedNew);
+    return {
+      ok: true,
+      result: { path: p, committedRevision, acceptedRevision, currentRevision, dirty },
+    };
   }
 
 
@@ -775,10 +903,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     deps.notifyDocChanged();
   }
 
-  // Session-op registration (loadDocFromDisk / saveDocToDisk) + the runAsyncOp
-  // capture-promise seam live in the composition root (scene-persistence.ts), so
-  // the ctx.asyncOpResult slot stays in one place; this factory only produces the
-  // raw async impls (doLoadDocFromDisk / doSaveDocToDisk) it wires there.
+  // Session-op registration (loadDocFromDisk) + the runAsyncOp capture-promise
+  // seam live in the composition root (scene-persistence.ts), so the
+  // ctx.asyncOpResult slot stays in one place. saveDocToDisk is owned by the
+  // OperationRun registry; this factory only produces the raw async impls.
   return {
     scenePath,
     worldToPack,

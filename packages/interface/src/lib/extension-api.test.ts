@@ -8,7 +8,7 @@
  * raised in DockShell's boot effect before the fix.
  */
 import { describe, it, expect, afterEach } from 'bun:test';
-import { extensionManifestPathHint, listExtensions } from './extension-api';
+import { extensionIdSlug, extensionManifestPathHint, listExtensions } from './extension-api';
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -39,6 +39,19 @@ describe('listExtensions — no-bus degrade', () => {
   });
 });
 
+describe('extensionIdSlug — strip known package scopes', () => {
+  it('strips @forgeax-extension/, @forgeax-plugin/, and @forgeax/', () => {
+    expect(extensionIdSlug('@forgeax-extension/wb-reel')).toBe('wb-reel');
+    expect(extensionIdSlug('@forgeax-plugin/wb-observatory')).toBe('wb-observatory');
+    expect(extensionIdSlug('@forgeax/wb-game-video')).toBe('wb-game-video');
+  });
+
+  it('leaves bare slugs unchanged and does not mangle @forgeax-extension as @forgeax', () => {
+    expect(extensionIdSlug('wb-game-video')).toBe('wb-game-video');
+    expect(extensionIdSlug('@forgeax-extension/wb-reel')).not.toBe('extension/wb-reel');
+  });
+});
+
 describe('extensionManifestPathHint — flat Marketplace path', () => {
   it('maps @forgeax-extension/<slug> to packages/marketplace/extensions/<slug>/forgeax-extension.json', () => {
     expect(extensionManifestPathHint('@forgeax-extension/wb-character')).toBe(
@@ -49,6 +62,12 @@ describe('extensionManifestPathHint — flat Marketplace path', () => {
   it('maps legacy @forgeax-plugin/<slug> the same way (persisted / pre-rename ids)', () => {
     expect(extensionManifestPathHint('@forgeax-plugin/wb-observatory')).toBe(
       'packages/marketplace/extensions/wb-observatory/forgeax-extension.json',
+    );
+  });
+
+  it('maps @forgeax/<slug> (arrival-style package scope) the same way', () => {
+    expect(extensionManifestPathHint('@forgeax/wb-game-video')).toBe(
+      'packages/marketplace/extensions/wb-game-video/forgeax-extension.json',
     );
   });
 

@@ -30,6 +30,7 @@ describe('Operation Center component contract', () => {
     expect(source).toContain('actor');
     expect(source).toContain('parentRunId');
     expect(source).toContain('progress');
+    expect(source).toContain('data-field="result"');
     expect(source).toContain('recoveryActions');
     expect(source).toContain('onAction');
   });

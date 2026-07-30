@@ -40,6 +40,7 @@ import {
 import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadrant';
 import { getViewportKeyHandler } from './viewport/viewport';
 import type { InputTarget } from './viewport/viewport-camera';
+import { createHumanSaveRequest } from './save-operation-projection';
 
 /** Minimal asset shape the router hands back for delete/dup/rename. */
 export interface RouterAsset {
@@ -199,7 +200,7 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
     },
     undo: () => { gateway.undo(); },
     redo: () => { gateway.redo(); },
-    save: () => { gateway.dispatch({ kind: 'saveDocToDisk' } as never, 'human'); },
+    save: () => { gateway.dispatch(createHumanSaveRequest(), 'human'); },
     handleViewportKeyDown: (event) => { getViewportKeyHandler()?.(event); },
   };
 }

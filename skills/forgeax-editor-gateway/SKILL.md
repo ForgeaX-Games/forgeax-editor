@@ -102,6 +102,27 @@ node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file snippet.js --
 
 ## Core API Quick Reference
 
+### Save terminal contract
+
+`saveDocToDisk` is a Gateway session operation with a caller-owned `requestId`. The toolbar, keyboard
+router, AI, and product transport all submit the same payload through `gateway.dispatch`:
+
+```ts
+const accepted = gateway.dispatch({
+  kind: 'saveDocToDisk',
+  requestId: 'save-20260730-1',
+}, 'ai');
+```
+
+Acceptance is not completion. Read the Gateway-owned run by `requestId` with `getOperationRunResult`
+or `waitOperationRun`; terminal success is published only after the canonical disk effect commits.
+Save is deliberately non-cancellable. Retry uses a fresh requestId and preserves the failed run as the
+parent attempt. Unknown, expired, conflicting, and unavailable requests remain structured errors with
+machine-readable `code`, `retryable`, and `recoveryActions`; do not parse `hint`.
+
+Product transport projects this same owner through `run.dispatch`, `run.get`, `run.wait`, `run.retry`,
+and `run.cancel`. Generic non-save runs continue to use their existing transport journal.
+
 | Entry | Shape | Purpose |
 |:--|:--|:--|
 | `gateway.dispatch(op, origin?)` | `(EditorOp, 'human'\|'ai') => DispatchResult` | Immediate op: construct EditorOp -> dispatch, domain settled by applier table |
@@ -324,7 +345,7 @@ actually need the pixels/vertices.
 const mr = query({ with: ['MeshRenderer'] });
 const matHandle = mr.rows[0].MeshRenderer.materials[0];        // shared<MaterialAsset> handle
 const mat = gateway.resolveAsset(matHandle as number);         // material POD is small
-const texGuid = mat.ok && mat.asset.paramValues?.baseColorTexture;  // → a GUID string
+const texGuid = mat.ok && mat.asset.values?.baseColorTexture;  // → a GUID string
 if (texGuid) gateway.describeAssetByGuid(texGuid);            // { kind:'texture', meta:{width,height,format} }
 //                    ^ do NOT lookupAsset(texGuid) here — that returns every pixel.
 ```

@@ -37,6 +37,7 @@ import { importFiles, type ImportProgress } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
+import { resolveFileActivateAction } from './folder-view';
 import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
 import {
@@ -313,26 +314,35 @@ export function ContentBrowser() {
     } });
     if (asset.kind === 'scene') {
       const rel = catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots);
-      const entry = rel ? getSceneList().find(s => s.pack === rel) : undefined;
-      if (entry) {
-        gateway.dispatch({ kind: 'switchSceneFile', id: entry.id });
+      if (!rel) {
+        console.warn('[content-browser][diag] openAsset: scene packPath is outside the declared asset roots — scene switch skipped', {
+          packPath: asset.packPath, gameSlug, roots: catalogAssetRoots,
+        });
+        return;
       }
+      const entry = getSceneList().find(s => s.pack === rel);
+      if (!entry) {
+        console.warn('[content-browser][diag] openAsset: scene not found in sceneList (stale boot-time scan or path mismatch) — scene switch skipped', {
+          rel, sceneListPacks: getSceneList().map(s => s.pack),
+        });
+        return;
+      }
+      gateway.dispatch({ kind: 'switchSceneFile', id: entry.id });
     }
   }, [gameSlug, catalogAssetRoots]);
 
-  // Double-click: drill into a folder, or open an asset.
-  // In file mode, double-clicking a pack/meta file toggles its sub-asset expansion.
+  // Double-click: drill into a folder, or open an asset. The file-branch
+  // routing (scene switch beats pack expansion) lives in the pure
+  // resolveFileActivateAction so it is unit-tested without rendering.
   const handleActivate = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') { nav.navigate(item.path); return; }
     if (item.type === 'file') {
-      if (viewMode === 'file' && item.assets.length > 0) {
-        togglePackExpansion(item.path);
-        return;
-      }
+      const action = resolveFileActivateAction(item, viewMode);
+      if (action.type === 'toggle-expand') { togglePackExpansion(item.path); return; }
       setPreviewItem(item);
-      if (item.assets[0]) {
-        openAsset(item.assets[0]);
-        if (item.assets[0].kind !== 'scene') {
+      if (action.type === 'open-asset') {
+        openAsset(action.asset);
+        if (action.asset.kind !== 'scene') {
           void host.commands.execute('app.editor.focus', { panel: 'asset-inspector' });
         }
       }

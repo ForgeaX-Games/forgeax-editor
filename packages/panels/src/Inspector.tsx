@@ -694,7 +694,7 @@ export function InspectorPanel() {
   if (sel === null || !entExists(gateway.activeWorld, sel)) {
     return (
       <div className="fx-inspector" data-testid="panel-inspector">
-        <div data-testid="inspector-product-projection" data-revision={projectionSource.getRevision?.() ?? 'projection:r0'} />
+        <div data-testid="inspector-product-projection" data-revision={projectionSource.getSnapshot().revision} />
         <div className="dp-empty">{t('editor.inspector.noSelection')}</div>
       </div>
     );
@@ -726,7 +726,7 @@ export function InspectorPanel() {
 
   return (
     <div className="fx-inspector" data-testid="panel-inspector">
-      <div data-testid="inspector-product-projection" data-revision={projectionSource.getRevision?.() ?? 'projection:r0'} />
+      <div data-testid="inspector-product-projection" data-revision={projectionSource.getSnapshot().revision} />
       {/* ── Header ───────────────────────────────────────────────── */}
       <div className="dp-name">
         <span className="tico"><ForgeaxIcon name={headerIcon(nodeComponents)} size={15} /></span>

@@ -30,6 +30,7 @@ export {
   getOperationProjectionSource,
   installOperationProjectionSource,
   projectRunFacts,
+  projectSaveRun,
   subscribeOperationProjection,
 } from './operations/run-view-model';
 export type {
@@ -37,5 +38,8 @@ export type {
   OperationCenterProjectionInput,
   OperationCenterRow,
   OperationProjectionSource,
+  OperationRunProjectionSnapshot,
   OperationRunFactProjection,
+  SaveRunDirtyState,
+  SaveRunProjection,
 } from './operations/run-view-model';

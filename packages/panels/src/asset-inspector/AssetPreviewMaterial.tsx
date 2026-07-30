@@ -6,7 +6,7 @@ import type { PreviewProps } from './index';
 
 interface PassDesc {
   name?: string;
-  shader?: string;
+  program?: { module?: string };
 }
 
 /** Engine SSOT: user-region texture field names (derive-paramschema.ts:287-291). */
@@ -36,8 +36,8 @@ function srgbHexToLinear(hex: string, alpha: number = 1): [number, number, numbe
   return [fromSrgb(m[1]!), fromSrgb(m[2]!), fromSrgb(m[3]!), alpha];
 }
 
-/** From paramValues' stored value (integer refs index OR raw GUID string) resolve
- *  to the actual texture GUID. Pack format stores `paramValues[key] = refs[] index`
+/** From values' stored value (integer refs index OR raw GUID string) resolve
+ *  to the actual texture GUID. Pack format stores `values[key] = refs[] index`
  *  (number), while the materialLoader resolves indices back to GUID strings at load
  *  time (may arrive as string). */
 function resolveTextureGuid(value: unknown, refs: readonly string[]): string | null {
@@ -175,11 +175,11 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const { payload, refs } = useLivePayload(propsPayload, asset?.guid);
   const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
   const parent = payload.parent as string | undefined;
-  const paramValues = (payload.paramValues ?? {}) as Record<string, unknown>;
+  const values = (payload.values ?? {}) as Record<string, unknown>;
 
-  const baseColor = Array.isArray(paramValues.baseColor) ? paramValues.baseColor as number[] : [1, 1, 1, 1];
-  const metallic = typeof paramValues.metallic === 'number' ? paramValues.metallic : 0;
-  const roughness = typeof paramValues.roughness === 'number' ? paramValues.roughness : 0.5;
+  const baseColor = Array.isArray(values.baseColor) ? values.baseColor as number[] : [1, 1, 1, 1];
+  const metallic = typeof values.metallic === 'number' ? values.metallic : 0;
+  const roughness = typeof values.roughness === 'number' ? values.roughness : 0.5;
 
   const [localMetallic, setLocalMetallic] = useState(metallic);
   const [localRoughness, setLocalRoughness] = useState(roughness);
@@ -250,9 +250,9 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const textureFields = useMemo(() => {
     return [...TEXTURE_FIELD_NAMES].map(key => ({
       key,
-      guid: resolveTextureGuid(paramValues[key], refs),
+      guid: resolveTextureGuid(values[key], refs),
     }));
-  }, [paramValues, refs]);
+  }, [values, refs]);
 
   return (
     <div data-testid="preview-material" className="mat-editor">
@@ -317,7 +317,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
       {/* Passes (read-only) */}
       <PropertyRow label="Passes" value={passes.length} />
       {passes.map((p, i) => (
-        <PropertyRow key={i} label={`  Pass ${i}`} value={`${p.name ?? '?'} → ${p.shader ?? '?'}`} />
+        <PropertyRow key={i} label={`  Pass ${i}`} value={`${p.name ?? '?'} → ${p.program?.module ?? '?'}`} />
       ))}
 
       {parent && <PropertyRow label="Parent" value={parent} />}

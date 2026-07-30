@@ -69,13 +69,13 @@ export interface CapabilityConfirmation {
   readonly token?: string;
 }
 
-/** Cancellation policy exposed to a run coordinator. */
+/** Cancellation policy exposed to a run coordinator; save publishes supported=false. */
 export interface CapabilityCancellation {
   readonly supported: boolean;
   readonly reason?: string;
 }
 
-/** Retry policy; a retry always creates a new attempt. */
+/** Retry policy; a retry always creates a new attempt and request correlation. */
 export interface CapabilityRetry {
   readonly supported: boolean;
   readonly createsNewAttempt: boolean;

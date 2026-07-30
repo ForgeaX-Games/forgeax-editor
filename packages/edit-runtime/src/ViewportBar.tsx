@@ -21,6 +21,7 @@ import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
+import { createHumanSaveRequest } from './save-operation-projection';
 
 interface ViewportBarProps {
   onPlay: () => void;
@@ -128,7 +129,7 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
       <DirtyIndicator />
       <span className="vp-sep" />
       <button type="button" className="vp-btn" data-testid="vp-save"
-        onClick={() => gateway.dispatch({ kind: 'saveDocToDisk' })} title="Save scene (⌘S)">
+        onClick={() => gateway.dispatch(createHumanSaveRequest(), 'human')} title="Save scene (⌘S)">
         ⤓
       </button>
       <span className="vp-sep" />

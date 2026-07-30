@@ -2,7 +2,7 @@
 //
 // feat-20260701-editor-world-container-doc-ecs-collapse M6 / AC-19:
 // Material panel transforms between hex color strings (UI display) and engine
-// float arrays (MaterialAsset.paramValues). 8-bit precision ensures AC-11
+// float arrays (MaterialAsset.values). 8-bit precision ensures AC-11
 // color round-trip zero loss.
 //
 // research F-MaterialAsset: editor schema.ts used hex strings, engine uses

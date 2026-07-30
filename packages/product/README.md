@@ -7,7 +7,8 @@ World, a browser host, or a producer parser.
 
 ## Shortest successful path
 
-The intended AI path is `discover -> preflight -> dispatch`:
+The intended AI path is `discover -> preflight -> dispatch`. For save, dispatch returns an accepted
+run projection; completion must be read by the same `requestId`:
 
 ```ts
 import {
@@ -26,6 +27,13 @@ const capability = product.describeCapability('editor.listOps');
 if (facts.availability.available && capability?.availability.available) {
   // The host adapter dispatches the validated subject.verb request here.
 }
+
+const save = await service.handle({
+  jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: 'save-1',
+  correlationId: 'save-request-1', method: 'run.dispatch',
+  params: { operationId: 'saveDocToDisk', input: { requestId: 'save-request-1' } },
+});
+// Follow with run.get/run.wait using params.requestId, not a private UI flag.
 ```
 
 Do not copy capability ids into an AI-only table. Call `discover()` or

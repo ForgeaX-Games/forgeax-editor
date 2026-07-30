@@ -9,7 +9,7 @@ export { CBToolbar } from './CBToolbar';
 export { CBFolderItem } from './CBFolderItem';
 export { CBFileItem } from './CBFileItem';
 export { buildAssetContextMenu, buildFolderContextMenu } from './CBContextMenu';
-export { deriveContentView, deriveFileView } from './folder-view';
+export { deriveContentView, deriveFileView, isMetaSidecarFile, resolveFileActivateAction, type FileActivateAction } from './folder-view';
 export { resolveViewMode, isHiddenDir, isHiddenPath } from './view-mode';
 export { resolveFolderMenuItems } from './folder-menu';
 export { DeleteGuardDialog, type DeleteGuardDialogProps } from './DeleteGuardDialog';

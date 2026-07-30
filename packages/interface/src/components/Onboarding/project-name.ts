@@ -7,7 +7,7 @@ export function toGameSlug(name: string): string {
 /**
  * Session layout may create `.forgeax/games/default/` (sessions only, no
  * forge.json) before the user has any real project. Never offer that sentinel
- * in onboarding's "已有项目" list — an empty workspace should hide the section.
+ * in onboarding's "已有项目" list — an empty instance should hide the section.
  */
 export function isUserExistingGame(slug: string): boolean {
   return slug !== 'default';

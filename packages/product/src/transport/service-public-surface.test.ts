@@ -63,6 +63,27 @@ test('asset snapshot and preflight are callable through the typed service', asyn
   expect(preflight.result).toMatchObject({ ok: true, subjectRef: 'asset:one', confirmation: { required: true } });
 });
 
+test('dispatches runtime operations through GameRuntimePort when a product is composed', async () => {
+  const registry = new CapabilityRegistry();
+  registry.register({
+    id: 'document.edit', kind: 'operation', version: '1', subject: 'document', verb: 'edit',
+    inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, availability: { available: true },
+    preconditions: [], recoveryActions: [], executor: { execute: (input) => input },
+  });
+  const service = createTransportService({
+    product: createEditorProduct({ capabilityRegistry: registry }),
+    runtime: runtime(),
+  });
+  const response = await service.handle(request('runtime', 'run.dispatch', {
+    operationId: 'runtime.play', input: {}, ...auth,
+  }));
+  expect(response).toMatchObject({ result: { status: 'succeeded' } });
+  expect(service.getRun(response.runId!)).toMatchObject({
+    ok: true,
+    value: { status: 'succeeded', result: { worldId: 'play-1' } },
+  });
+});
+
 test('async dispatch returns a running run before the executor resolves', async () => {
   let finish: ((value: unknown) => void) | undefined;
   const service = createTransportService({

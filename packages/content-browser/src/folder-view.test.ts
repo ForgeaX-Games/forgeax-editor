@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { deriveContentView, deriveFileView, collectProjectDirs, type ScopedAsset, type ProjectTreeNode } from './folder-view';
+import {
+  deriveContentView, deriveFileView, collectProjectDirs,
+  isMetaSidecarFile, resolveFileActivateAction,
+  type ScopedAsset, type ProjectTreeNode,
+} from './folder-view';
 import type { CBAsset } from './types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -134,6 +138,9 @@ const PROJECT_TREE: ProjectTreeNode[] = [
         { name: 'main.pack.json', path: 'assets/scenes/main.pack.json', type: 'file', size: 1024 },
       ] },
       { name: 'sky.hdr', path: 'assets/sky.hdr', type: 'file', size: 4096 },
+      { name: 'sky.hdr.meta.json', path: 'assets/sky.hdr.meta.json', type: 'file', size: 256 },
+      { name: 'Fox.glb', path: 'assets/Fox.glb', type: 'file', size: 8192 },
+      { name: 'Fox.glb.meta.json', path: 'assets/Fox.glb.meta.json', type: 'file', size: 512 },
     ],
   },
   {
@@ -279,5 +286,96 @@ describe('collectProjectDirs', () => {
 
   it('empty tree returns empty array', () => {
     expect(collectProjectDirs([])).toEqual([]);
+  });
+});
+
+// ── .meta.json sidecar hiding ───────────────────────────────────────────────
+
+describe('isMetaSidecarFile', () => {
+  it('matches .meta.json sidecars case-insensitively', () => {
+    expect(isMetaSidecarFile('Fox.glb.meta.json')).toBe(true);
+    expect(isMetaSidecarFile('SKY.HDR.META.JSON')).toBe(true);
+  });
+
+  it('does not match source files or packs', () => {
+    expect(isMetaSidecarFile('Fox.glb')).toBe(false);
+    expect(isMetaSidecarFile('scene.pack.json')).toBe(false);
+    expect(isMetaSidecarFile('forge.json')).toBe(false);
+  });
+});
+
+describe('deriveFileView — .meta.json sidecars are hidden', () => {
+  it('sidecar files never appear in the file list', () => {
+    const { files } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: 'assets',
+      assetRootNames: ['assets'],
+    });
+
+    const names = files.map(f => f.name);
+    expect(names).toContain('sky.hdr');
+    expect(names).toContain('Fox.glb');
+    expect(names).not.toContain('sky.hdr.meta.json');
+    expect(names).not.toContain('Fox.glb.meta.json');
+    expect(names.some(n => n.endsWith('.meta.json'))).toBe(false);
+  });
+
+  it('folder childCount excludes sidecar files', () => {
+    const { folders } = deriveFileView({
+      projectTree: PROJECT_TREE,
+      currentPath: '',
+      assetRootNames: ['assets'],
+    });
+
+    const assetsFolder = folders.find(f => f.name === 'assets')!;
+    // scenes/main.pack.json + sky.hdr + Fox.glb — the two .meta.json sidecars
+    // are not counted.
+    expect(assetsFolder.childCount).toBe(3);
+  });
+});
+
+// ── resolveFileActivateAction — double-click routing ────────────────────────
+
+function mkCBAsset(kind: string): CBAsset {
+  return {
+    type: 'asset',
+    guid: `guid-${kind}`,
+    kind,
+    name: kind,
+    payload: {},
+    packPath: `assets/x.pack.json`,
+    packIndex: 0,
+    refs: [],
+    estimatedSize: 0,
+  };
+}
+
+describe('resolveFileActivateAction — double-click routing', () => {
+  it('a file holding a scene asset switches the scene EVEN in file mode (regression: used to dead-end on pack expansion)', () => {
+    const file = { assets: [mkCBAsset('mesh'), mkCBAsset('scene')] };
+    const action = resolveFileActivateAction(file, 'file');
+    expect(action).toEqual({ type: 'open-asset', asset: file.assets[1]! });
+  });
+
+  it('scene priority also holds in asset mode', () => {
+    const file = { assets: [mkCBAsset('scene')] };
+    const action = resolveFileActivateAction(file, 'asset');
+    expect(action).toEqual({ type: 'open-asset', asset: file.assets[0]! });
+  });
+
+  it('a non-scene pack toggles sub-asset expansion in file mode', () => {
+    const file = { assets: [mkCBAsset('mesh')] };
+    expect(resolveFileActivateAction(file, 'file')).toEqual({ type: 'toggle-expand' });
+  });
+
+  it('a non-scene pack opens its first asset in asset mode', () => {
+    const file = { assets: [mkCBAsset('material'), mkCBAsset('mesh')] };
+    const action = resolveFileActivateAction(file, 'asset');
+    expect(action).toEqual({ type: 'open-asset', asset: file.assets[0]! });
+  });
+
+  it('an asset-less file falls back to preview', () => {
+    expect(resolveFileActivateAction({ assets: [] }, 'file')).toEqual({ type: 'preview' });
+    expect(resolveFileActivateAction({ assets: [] }, 'asset')).toEqual({ type: 'preview' });
   });
 });

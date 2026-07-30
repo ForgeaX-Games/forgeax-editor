@@ -80,6 +80,25 @@ export interface OpDescriptor {
    *  is the single-asset sugar form of setAssetSelection). AI listOps shows both
    *  but flags sugar so callers learn the one canonical shape. */
   readonly sugar?: boolean;
+  /** OperationRun lifecycle metadata projected by the owning Gateway. */
+  readonly operationRun?: OperationRunDescriptor;
+}
+
+export interface OperationRunDescriptor {
+  /** Statuses visible before the canonical effect has published a terminal fact. */
+  readonly acceptedStatuses: readonly ('accepted' | 'running')[];
+  /** The only statuses that may be treated as completed by a consumer. */
+  readonly terminalStatuses: readonly ('succeeded' | 'failed' | 'cancelled')[];
+  /** Gateway-owned read methods; these are projections, not a second run owner. */
+  readonly read: {
+    readonly get: string;
+    readonly wait: string;
+    readonly subscribe: string;
+  };
+  readonly retry: { readonly requiresNewRequestId: boolean };
+  /** Terminal-only retention keeps active runs queryable until completion. */
+  readonly retention: { readonly kind: 'terminal-only'; readonly maxTerminalRuns: number };
+  readonly cancellable: boolean;
 }
 
 // ── Plan function type (defineOp) ──────────────────────────────────────────
@@ -129,6 +148,7 @@ const builtinOps: ReadonlyArray<{
    *  is the single-asset sugar form of setAssetSelection). AI listOps shows both
    *  but flags sugar so callers learn the one canonical shape. */
   sugar?: boolean;
+  operationRun?: OperationRunDescriptor;
 }> = [
   // ══ document domain (9 primitives) ══════════════════════════════════════
   {
@@ -378,7 +398,7 @@ const builtinOps: ReadonlyArray<{
     title: 'Create Material',
   },
   // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
-  // paramValues. Document-domain (undoable). The sole "edit material params" op —
+  // values. Document-domain (undoable). The sole "edit material params" op —
   // human and AI share one command (north-star §4). Gateway pre-fills _old* fields
   // from the catalog so the applier constructs the inverse without async reads.
   {
@@ -390,7 +410,7 @@ const builtinOps: ReadonlyArray<{
         guid: { type: 'string', description: 'Material asset GUID to update.' },
         paramPatch: {
           type: 'object',
-          description: 'Shallow merge into MaterialAsset.paramValues. Keys should come from the shader\'s paramSchema. undefined deletes the key. Example: {"baseColor":[1,0,0,1],"metallic":0.2,"roughness":0.4}',
+          description: 'Shallow merge into MaterialAsset.values. Keys should come from the shader\'s paramSchema. undefined deletes the key. Example: {"baseColor":[1,0,0,1],"metallic":0.2,"roughness":0.4}',
         },
         textureGuids: {
           type: 'object',
@@ -486,7 +506,38 @@ const builtinOps: ReadonlyArray<{
     argsSchema: { type: 'object', properties: { id: { type: 'string' }, duplicateCurrent: { type: 'boolean' } }, required: ['id'] },
     title: 'Create Scene',
   },
-  { id: 'saveDocToDisk', domain: 'session', argsSchema: null, title: 'Save to Disk' },
+  {
+    id: 'saveDocToDisk', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        requestId: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+          minLength: 1,
+          maxLength: 128,
+          description: 'Caller-minted request identity. Read the same save run with getOperationRun/waitOperationRun; accepted is not persisted.',
+        },
+        retryOfRequestId: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+          minLength: 1,
+          maxLength: 128,
+          description: 'Optional failed requestId being retried; the new requestId remains the public identity of the new attempt.',
+        },
+      },
+      required: ['requestId'],
+    },
+    title: 'Save to Disk',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
   { id: 'loadDocFromDisk', domain: 'session', argsSchema: null, title: 'Load from Disk' },
   { id: 'play', domain: 'session', argsSchema: null, title: 'Play' },
   { id: 'stop', domain: 'session', argsSchema: null, title: 'Stop' },

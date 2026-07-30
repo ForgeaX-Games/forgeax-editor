@@ -1,8 +1,7 @@
-// FsBrowser — server-side directory picker. Used by File → Open Project to
-// pick an existing game directory outside the current instance root.
+// FsBrowser — server-side directory picker for an existing game directory.
 //
 // Folder-only navigation (the server endpoint only returns dirs). The caller
-// links the selected directory through /api/workbench/games/link.
+// binds the selected directory as the active game.
 
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowUp, FolderOpen, Folder, Home, Loader2 } from 'lucide-react';
@@ -12,7 +11,7 @@ interface BrowseEntry {
   name: string;
   isDir: boolean;
   hasForgeaX: boolean;
-  hasGames: boolean;
+  hasGame: boolean;
 }
 interface BrowseResp {
   dir: string;
@@ -21,7 +20,7 @@ interface BrowseResp {
   parentDisplay: string | null;
   name: string;
   selfHasForgeaX: boolean;
-  selfHasGames: boolean;
+  selfHasGame: boolean;
   entries: BrowseEntry[];
   error?: string;
 }
@@ -160,7 +159,7 @@ export function FsBrowser({ initialDir = '~', onPick, onCancel, busy, externalEr
             <span className="fsb-row-name">{e.name}</span>
             <span className="fsb-row-badges">
               {e.hasForgeaX && <span className="fsb-badge">.forgeax</span>}
-              {e.hasGames && <span className="fsb-badge fsb-badge-games">games</span>}
+              {e.hasGame && <span className="fsb-badge fsb-badge-game">game</span>}
             </span>
           </button>
         ))}

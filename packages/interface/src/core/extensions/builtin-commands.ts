@@ -183,8 +183,7 @@ export const builtinCommandsExtension: AppExtension = {
       execute: () => { getState().closeOverlay(); return { status: 'completed' as const }; },
     }));
 
-    // Game flows — a "project" is a game here. Opening a directory links that
-    // game into the current Studio instance.
+    // Game flows — a game is exactly one game directory.
     cleanups.push(registerCommand({
       id: 'game.open-directory',
       title: '打开游戏目录',

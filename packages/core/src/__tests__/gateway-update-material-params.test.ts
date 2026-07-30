@@ -41,7 +41,7 @@ function makeShaderRegistry(): ShaderRegistry {
     },
   };
   const shaders = new ShaderRegistry({ device, manifestUrl: undefined });
-  shaders.registerMaterialShader('test::dummy', { source: 'fn main() {}', paramSchema: [] });
+  shaders.installMaterialArtifact('test::dummy', { source: 'fn main() {}', paramSchema: [] });
   return shaders;
 }
 
@@ -50,8 +50,8 @@ function setup(): { gateway: EditGateway } {
   const registry = new AssetRegistry(makeShaderRegistry());
   const mat: MaterialAsset = {
     kind: 'material',
-    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-    paramValues: { baseColorTexture: 0 },
+    passes: [{ name: 'forward', program: { module: 'test::dummy' } }],
+    values: { baseColorTexture: 0 },
   };
   const guid = AssetGuid.parse(MATERIAL_GUID);
   if (!guid.ok) throw new Error('bad material test GUID');
@@ -116,12 +116,12 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(written.length).toBe(1);
 
-    const entry = written[0] as { refs: unknown; payload: { paramValues: Record<string, unknown> } };
+    const entry = written[0] as { refs: unknown; payload: { values: Record<string, unknown> } };
     // Existing bound ref survives as a STRING; the dropped texture GUID is
-    // appended as a string; paramValues carries its refs[] INDEX (number).
+    // appended as a string; values carries its refs[] INDEX (number).
     expect(entry.refs).toEqual([BOUND_TEXTURE_GUID, DROPPED_TEXTURE_GUID]);
-    expect(entry.payload.paramValues.baseColorTexture).toBe(0);
-    expect(entry.payload.paramValues.metallicRoughnessTexture).toBe(1);
+    expect(entry.payload.values.baseColorTexture).toBe(0);
+    expect(entry.payload.values.metallicRoughnessTexture).toBe(1);
 
     const shell = validatePackShell({
       schemaVersion: '1.0',

@@ -1,7 +1,7 @@
 // viewport-param-gizmo — parameter gizmos (design §3).
 //
-// Visualizes a selected Light's range/spot cone and a Camera's frustum as
-// dotted world-space wireframes (non-interactive). Built from a reused cube-
+// Visualizes a selected Camera's frustum as a dotted world-space wireframe
+// (non-interactive). Built from a reused cube-
 // dot pool; rebuilt cheaply via placeDots (only spawns when the dot count
 // changes), so orbiting just re-sets transforms.
 //
@@ -16,7 +16,7 @@ import type { EngineFacade } from '@forgeax/editor-core';
 
 import type { Vec3 } from './viewport-ray';
 import { num } from './viewport-ray';
-import { cameraGizmoPoints, lightGizmoPoints } from './viewport-gizmo-geometry';
+import { cameraGizmoPoints } from './viewport-gizmo-geometry';
 import type { EditorTransform } from './viewport-entity-read';
 
 export interface ParamGizmoDeps {
@@ -28,7 +28,7 @@ export interface ParamGizmoDeps {
   /** Selected entity handle (null when nothing is selected). */
   getSelection(): EntityHandle | null;
   /** Component-name → POD map for the selected entity (empty when no sel or
-   *  the entity was deleted; drives light/camera detection). */
+   *  the entity was deleted; drives camera detection). */
   getSelectionComponents(): Record<string, unknown> | undefined;
   /** World-space Transform of the selected entity (used for center + wireframe
    *  orientation). */
@@ -46,7 +46,7 @@ export interface ParamGizmo {
   dispose(): void;
 }
 
-/** Build the parameter-gizmo pool (light range / spot cone / camera frustum). */
+/** Build the parameter-gizmo pool (camera frustum). */
 export function createParamGizmo({
   editorEngine, spawnHandleCube, getSelection, getSelectionComponents,
   getSelectionWorldTransform, isAuxVisible, getDist, getAspect,
@@ -85,13 +85,11 @@ export function createParamGizmo({
     if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
     const t = getSelectionWorldTransform();
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
-    const light = comps.Light as Record<string, unknown> | undefined;
     const cam = comps.Camera as Record<string, unknown> | undefined;
     // The wireframe POINT SETS are pure geometry (viewport-gizmo-geometry.ts);
     // the engine dot-pool placement (placeDots) is the only side-effecting edge.
     const dist = getDist();
     const pts: Vec3[] = [];
-    if (light) pts.push(...lightGizmoPoints(light, center, t, dist));
     if (cam) pts.push(...cameraGizmoPoints(cam, center, t, dist, getAspect()));
     placeDots(pts, Math.max(0.05, dist * 0.006));
   }

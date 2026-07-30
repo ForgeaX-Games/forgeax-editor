@@ -51,12 +51,15 @@ export {
 } from './contracts/run';
 export type {
   OperationRun,
+  OperationRunAcceptResult,
   OperationRunEvent,
   OperationRunEventInput,
+  OperationRunReadResult,
   OperationRunRequest,
   OperationRunStatus,
   RunActor,
   RunProgress,
+  SaveOperationRunPort,
   TerminalRunStatus,
 } from './contracts/run';
 export {

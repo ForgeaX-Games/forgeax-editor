@@ -37,6 +37,7 @@ const SKY_GUID = '81eec382-392f-5a93-8998-0ecf11ef7990';
 describe('pack-catalog equirect Pack v2 navigation', () => {
   let tmpDir: string | null = null;
   let entries: Array<Record<string, unknown>> = [];
+  let previewEntries: Array<Record<string, unknown>> = [];
 
   beforeAll(async () => {
     if (skip) return;
@@ -54,6 +55,7 @@ describe('pack-catalog equirect Pack v2 navigation', () => {
       }),
     );
     entries = (await buildPerGameCatalog(tmpDir, '')) as unknown as Array<Record<string, unknown>>;
+    previewEntries = (await buildPerGameCatalog(tmpDir, '/preview')) as unknown as Array<Record<string, unknown>>;
   });
 
   it.skipIf(skip)('emits a kind:equirect row for the equirect sub-asset', () => {
@@ -68,6 +70,11 @@ describe('pack-catalog equirect Pack v2 navigation', () => {
       `/__forgeax-ddc/${SKY_GUID}.pack.json`,
     );
     expect(row.metadata).toBeUndefined();
+  });
+
+  it.skipIf(skip)('keeps the DDC route root-relative under the /preview base', () => {
+    const row = previewEntries.find((e) => e.guid === SKY_GUID)!;
+    expect(row.packageUrl).toBe(`/__forgeax-ddc/${SKY_GUID}.pack.json`);
   });
 
   it.skipIf(skip)('cleanup temp dir', () => {

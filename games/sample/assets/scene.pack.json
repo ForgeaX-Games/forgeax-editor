@@ -271,7 +271,7 @@
         "passes": [
           {
             "name": "Forward",
-            "shader": "forgeax::default-standard-pbr",
+            "program": { "module": "forgeax::default-standard-pbr" },
             "tags": {
               "LightMode": "Forward"
             },
@@ -279,14 +279,14 @@
           },
           {
             "name": "ShadowCaster",
-            "shader": "forgeax::default-shadow-caster",
+            "program": { "module": "forgeax::default-shadow-caster" },
             "tags": {
               "LightMode": "ShadowCaster"
             },
             "passKind": "shadow-caster"
           }
         ],
-        "paramValues": {
+        "values": {
           "baseColor": [
             0.478,
             0.62,
@@ -307,7 +307,7 @@
         "passes": [
           {
             "name": "Forward",
-            "shader": "forgeax::default-standard-pbr",
+            "program": { "module": "forgeax::default-standard-pbr" },
             "tags": {
               "LightMode": "Forward"
             },
@@ -315,14 +315,14 @@
           },
           {
             "name": "ShadowCaster",
-            "shader": "forgeax::default-shadow-caster",
+            "program": { "module": "forgeax::default-shadow-caster" },
             "tags": {
               "LightMode": "ShadowCaster"
             },
             "passKind": "shadow-caster"
           }
         ],
-        "paramValues": {
+        "values": {
           "baseColor": [
             0.85,
             0.2,
@@ -343,7 +343,7 @@
         "passes": [
           {
             "name": "Forward",
-            "shader": "forgeax::default-standard-pbr",
+            "program": { "module": "forgeax::default-standard-pbr" },
             "tags": {
               "LightMode": "Forward"
             },
@@ -351,14 +351,14 @@
           },
           {
             "name": "ShadowCaster",
-            "shader": "forgeax::default-shadow-caster",
+            "program": { "module": "forgeax::default-shadow-caster" },
             "tags": {
               "LightMode": "ShadowCaster"
             },
             "passKind": "shadow-caster"
           }
         ],
-        "paramValues": {
+        "values": {
           "baseColor": [
             0.2,
             0.4,

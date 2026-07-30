@@ -11,7 +11,11 @@ import {
   type CapabilityRegistration,
   type EditorProduct,
   type OperationRun,
+  type OperationRunAcceptResult,
+  type OperationRunReadResult,
   type OperationRunRequest,
+  type SaveOperationRunPort,
+  type RunActor,
   type RunJournalAcceptResult,
   type RunJournalEventInput,
 } from '@forgeax/editor-product';
@@ -28,7 +32,11 @@ export interface GatewayDispatchResult {
 export interface GatewayCapabilitySource {
   readonly listOps: () => readonly OpDescriptor[];
   readonly dispatch?: (command: EditorOp, origin?: CommandOrigin) => GatewayDispatchResult;
+  /** The Gateway-owned request-correlated run projection. */
+  readonly operationRuns?: GatewayOperationRunPort;
 }
+
+export type GatewayOperationRunPort = Pick<SaveOperationRunPort, 'get' | 'wait' | 'subscribe' | 'cancel' | 'retry'>;
 
 export type GatewayRunRequest = Omit<OperationRunRequest, 'operationId' | 'input' | 'runId'> & {
   readonly runId?: string;
@@ -41,6 +49,8 @@ export interface GatewayCapabilityAdapter {
   capabilities(): readonly CapabilityDescriptor[];
   registerInto(registry: CapabilityRegistry): void;
   product(): EditorProduct;
+  /** The product transport's save port; facts remain owned by the Gateway. */
+  readonly saveOperationRuns: SaveOperationRunPort;
   acceptRun(operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult;
   dispatchRun(operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult;
   getRun(runId: string): OperationRun | undefined;
@@ -49,6 +59,11 @@ export interface GatewayCapabilityAdapter {
   cancelRun(runId: string): GatewayRunMutationResult;
   failRun(runId: string, error: import('@forgeax/editor-product').CommandError): GatewayRunMutationResult;
   retryRun(runId: string, retryRunId: string): GatewayRunResult;
+  getOperationRunResult(requestId: string): OperationRunReadResult;
+  waitOperationRun(requestId: string): Promise<OperationRunReadResult>;
+  subscribeOperationRun(requestId: string, listener: (run: OperationRun) => void): () => void;
+  cancelOperationRun(requestId: string): OperationRunReadResult<never>;
+  retryOperationRun(requestId: string, retryRequestId: string, actor?: RunActor): OperationRunAcceptResult;
 }
 
 export type GatewayRunMutationResult =
@@ -81,6 +96,22 @@ function executeGatewayCommand(
     ? input as Record<string, unknown>
     : { value: input };
   return source.dispatch!({ kind: descriptor.id, ...args }, 'ai');
+}
+
+function unavailableRunResult<T = OperationRun>(): OperationRunReadResult<T> {
+  return {
+    ok: false,
+    error: {
+      code: 'executor-unavailable',
+      hint: 'The Gateway operation-run projection is not connected.',
+      retryable: false,
+      recoveryActions: ['editor.discover'],
+    },
+  };
+}
+
+function unavailableRunAccept(): OperationRunAcceptResult {
+  return unavailableRunResult() as OperationRunAcceptResult;
 }
 
 function registrationFor(
@@ -135,6 +166,57 @@ export function createGatewayCapabilityAdapter(
     for (const journal of journals.values()) if (journal.getRun(runId) !== undefined) return journal;
     return undefined;
   };
+  const saveOperationRuns: SaveOperationRunPort = {
+    dispatchSave(requestId, input, actor) {
+      const descriptor = descriptors.get('saveDocToDisk');
+      if (descriptor === undefined || source.dispatch === undefined || source.operationRuns === undefined) return unavailableRunAccept();
+      const result = source.dispatch(
+        {
+          kind: 'saveDocToDisk',
+          ...(input !== null && typeof input === 'object' ? input as Record<string, unknown> : { value: input }),
+          requestId,
+        },
+        actor.kind === 'human' ? 'human' : 'ai',
+      );
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: (result.error as import('@forgeax/editor-product').CommandError | undefined) ?? {
+            code: 'operation-failed',
+            hint: 'The gateway save operation failed.',
+            retryable: false,
+            recoveryActions: [],
+          },
+        };
+      }
+      const resultRecord = result.result !== null && typeof result.result === 'object'
+        ? result.result as Record<string, unknown>
+        : undefined;
+      const run = result.operationRun ?? resultRecord?.operationRun;
+      if (run === null || typeof run !== 'object') return unavailableRunAccept();
+      return {
+        ok: true,
+        runId: (run as OperationRun).runId,
+        reused: false,
+        run: run as OperationRun,
+      };
+    },
+    get(requestId) {
+      return source.operationRuns?.get(requestId) ?? unavailableRunResult();
+    },
+    wait(requestId) {
+      return source.operationRuns?.wait(requestId) ?? Promise.resolve(unavailableRunResult());
+    },
+    subscribe(requestId, listener) {
+      return source.operationRuns?.subscribe?.(requestId, listener) ?? (() => undefined);
+    },
+    cancel(requestId) {
+      return source.operationRuns?.cancel(requestId) ?? unavailableRunResult<never>();
+    },
+    retry(requestId, retryRequestId, actor) {
+      return source.operationRuns?.retry(requestId, retryRequestId, actor) ?? unavailableRunAccept();
+    },
+  };
   const acceptRun = (operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult => {
     if (descriptors.get(operationId) === undefined) {
       return { ok: false, error: { code: 'not-supported', hint: `operation "${operationId}" is not registered.`, retryable: false, recoveryActions: ['editor.discover'] } };
@@ -159,6 +241,11 @@ export function createGatewayCapabilityAdapter(
     return { ...accepted, run: running.value };
   };
   const dispatchRun = (operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult => {
+    const inputRecord = input !== null && typeof input === 'object' ? input as Record<string, unknown> : undefined;
+    const requestId = request.requestId ?? (typeof inputRecord?.requestId === 'string' ? inputRecord.requestId : undefined);
+    if (operationId === 'saveDocToDisk' && requestId !== undefined) {
+      return saveOperationRuns.dispatchSave(requestId, input, request.actor);
+    }
     const accepted = acceptRun(operationId, input, request);
     if (!accepted.ok) return accepted;
     const journal = journalFor(request.scope);
@@ -198,6 +285,7 @@ export function createGatewayCapabilityAdapter(
         code: 'product-available',
       },
     }),
+    saveOperationRuns,
     acceptRun,
     dispatchRun,
     getRun(runId) {
@@ -242,6 +330,21 @@ export function createGatewayCapabilityAdapter(
         cancellable: run.cancellable,
         retryable: run.retryable,
       });
+    },
+    getOperationRunResult(requestId) {
+      return saveOperationRuns.get(requestId);
+    },
+    waitOperationRun(requestId) {
+      return saveOperationRuns.wait(requestId);
+    },
+    subscribeOperationRun(requestId, listener) {
+      return saveOperationRuns.subscribe?.(requestId, listener) ?? (() => undefined);
+    },
+    cancelOperationRun(requestId) {
+      return saveOperationRuns.cancel(requestId);
+    },
+    retryOperationRun(requestId, retryRequestId, actor = { id: 'ai', kind: 'ai' }) {
+      return saveOperationRuns.retry(requestId, retryRequestId, actor);
     },
   };
 }

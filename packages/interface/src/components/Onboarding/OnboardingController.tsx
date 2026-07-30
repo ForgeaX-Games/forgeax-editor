@@ -16,8 +16,12 @@ import { useShellStore } from '../../store';
 import { useHost } from '../../core/app-shell';
 import { applyModelRoute } from '../../lib/model-route';
 import { listModelsWithLive } from '../../lib/model-config';
-import { activateWorkspace } from '../../lib/workspace-activate';
 import { fetchCliProviders, type CliProviderInfo } from '../../lib/cli-providers';
+import { FsBrowser } from '../TopBar/FsBrowser';
+import '../TopBar/FsBrowser.css';
+// FsBrowser's footer buttons are .tb-modal-btn — declare that dependency here
+// instead of inheriting it from TopBar, which is unmounted during onboarding.
+import '../TopBar/TopBar.css';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TourOverlay, type TourStep } from '../TourOverlay';
 import { APP_EVENTS } from '../../lib/storageKeys';
@@ -33,20 +37,6 @@ import { latchTourShellDefaults, prepareTourShell } from './prepareTourShell';
 import { loadWorkbenchList, subscribeWorkbenchList } from '../../lib/workbenches';
 import './Onboarding.css';
 
-/** Native OS folder dialog via the local Studio server (same machine as the UI). */
-async function pickDirectoryNative(): Promise<string | null> {
-  const r = await fetch('/api/fs/pick-directory', { method: 'POST' });
-  const j = (await r.json().catch(() => null)) as {
-    ok?: boolean;
-    cancelled?: boolean;
-    path?: string;
-    error?: string;
-  } | null;
-  if (j?.cancelled) return null;
-  if (!r.ok || !j?.ok || !j.path) throw new Error(j?.error ?? `HTTP ${r.status}`);
-  return j.path;
-}
-
 type CheckResult = '' | 'ok' | 'fail';
 // A local-CLI driver id. Not a closed union: the connectable set is whatever
 // /api/cli/health reports (claude-code / codex / cursor-agent / codebuddy / …),
@@ -57,64 +47,21 @@ type CliId = string;
 /** A built-in game usable as a first-run template (GET /api/workbench/templates). */
 interface TemplateInfo { slug: string; name: string }
 
-/** A game already present in the active workspace (GET /api/workbench/games).
+/** A game already present in the active instance (GET /api/workbench/games).
  *  Non-empty ⇒ the project step ALSO offers "open an existing project" — a
  *  returning user (or a freshly-pulled repo that ships games) enters home
  *  directly instead of being forced through create. */
 interface ExistingGame { slug: string; name: string }
 
-// ── Pending project intent (survives the activate→reload root switch) ──────────
-// Creating the first project under a root that ISN'T the running workspace root
-// (e.g. dev cwd = repo, but the user wants ~/ForgeaxProjects) requires switching
-// FORGEAX_PROJECT_ROOT — which the server does via a full-page reload. We stash
-// the intent here BEFORE activating, then the freshly-booted controller resumes
-// it (now under the correct root) and creates the game. Same-root creates skip
-// all of this and never touch localStorage.
 type ProjectIntent =
-  | { kind: 'new'; root: string; name: string }
-  | { kind: 'template'; root: string; name: string; template: string }
-  | { kind: 'open'; root: string; path: string };
-
-type PendingIntent = ProjectIntent & { at: number };
-
-/** Drop pending intents older than this — leftover entries from failed/abandoned
- *  root switches were auto-resuming on every project-step mount and painting
- *  ghost errors ("already exists" / "not a game folder") with no user action. */
-const PENDING_TTL_MS = 90_000;
-
-const PENDING_KEY = 'forgeax.onboarding.pendingProject';
-function loadPending(): PendingIntent | null {
-  try {
-    const s = localStorage.getItem(PENDING_KEY);
-    if (!s) return null;
-    const p = JSON.parse(s) as Partial<PendingIntent> & { kind?: string };
-    if (!p || !p.kind) { clearPending(); return null; }
-    // Legacy payloads without `at` are treated as stale (pre-TTL bug source).
-    if (typeof p.at !== 'number' || Date.now() - p.at > PENDING_TTL_MS) {
-      clearPending();
-      return null;
-    }
-    return p as PendingIntent;
-  } catch { return null; }
-}
-function savePending(p: ProjectIntent): void {
-  try { localStorage.setItem(PENDING_KEY, JSON.stringify({ ...p, at: Date.now() })); } catch { /* ignore */ }
-}
-function clearPending(): void { try { localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } }
+  | { kind: 'new'; name: string }
+  | { kind: 'template'; name: string; template: string }
+  | { kind: 'open'; path: string };
 
 /** Map raw server errors to onboarding copy (keep unknown messages as-is). */
 function formatProjectError(raw: string, t: (key: string) => string): string {
   if (/not a game folder/i.test(raw)) return t('onboarding.project.errNotGame');
   return raw;
-}
-
-/** True when `root` (a `~/…` or absolute path) is the currently-active workspace
- *  root — compared against BOTH the friendly (`~/…`) and absolute server forms. */
-async function isActiveRoot(root: string): Promise<boolean> {
-  try {
-    const j = (await fetch('/api/workspaces/active').then((r) => r.json())) as { absPath?: string; path?: string };
-    return root === j.path || root === j.absPath;
-  } catch { return false; }
 }
 
 // Install-doc links, keyed by driver id. Optional lookup: a driver reported by
@@ -222,13 +169,9 @@ export function OnboardingController() {
   const [countdown, setCountdown] = useState<number | null>(null);
   const cdRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── project runtime (§14 Model B: second step = pick/create a game under the
-  // workspace root). `projRoot` IS the workspace dir (default ~/ForgeaxProjects,
-  // changeable via 更改); a project ≡ a game named <projName> in
-  // <projRoot>/.forgeax/games/. When projRoot ≠ the running root, create switches
-  // the root first (activate + reload + resume). ──
-  const [projRoot, setProjRoot] = useState('~/ForgeaxProjects');
+  // ── project runtime: project = one game directory ──
   const [projName, setProjName] = useState('');
+  const [fsOpen, setFsOpen] = useState(false);
   const [tmplOpen, setTmplOpen] = useState(false);
   const [templates, setTemplates] = useState<TemplateInfo[] | null>(null);
   const [tmplSlug, setTmplSlug] = useState<string | null>(null);
@@ -236,9 +179,8 @@ export function OnboardingController() {
   // Which action is in-flight — drives a specific "creating…/copying…/opening…"
   // loading banner so the (possibly multi-second) server-side copy isn't a
   // silent freeze followed by an abrupt jump to home.
-  const [projBusyKind, setProjBusyKind] = useState<PendingIntent['kind'] | null>(null);
+  const [projBusyKind, setProjBusyKind] = useState<ProjectIntent['kind'] | null>(null);
   const [projErr, setProjErr] = useState<string | null>(null);
-  const resumedRef = useRef(false);
 
   // ── home runtime ──
   // Resume from persisted milestones: a returning user who already finished the
@@ -411,19 +353,6 @@ export function OnboardingController() {
   // welcome step's "skip" only skips model-connect and lands on `project`.
   const skipConnect = useCallback(() => { resetCheck(); setPhase('project'); }, [resetCheck, setPhase]);
 
-  // Show the REAL current workspace root (WYSIWYG) instead of a hardcoded
-  // ~/ForgeaxProjects placeholder — the displayed path MUST match where a project
-  // will actually land. Fetched once on mount; after a root switch + reload this
-  // re-reads the now-active root. `更改` overrides it thereafter (runs once).
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/workspaces/active')
-      .then((r) => r.json() as Promise<{ path?: string; absPath?: string }>)
-      .then((j) => { const p = j.path ?? j.absPath; if (!cancelled && p) setProjRoot(p); })
-      .catch(() => { /* keep default */ });
-    return () => { cancelled = true; };
-  }, []);
-
   // Lazily load the built-in templates the first time the template modal opens.
   useEffect(() => {
     if (!tmplOpen || templates) return;
@@ -435,12 +364,12 @@ export function OnboardingController() {
     return () => { cancelled = true; };
   }, [tmplOpen, templates]);
 
-  // Games already in the ACTIVE workspace root (mtime-sorted server-side).
+  // Games already known to the runtime host (mtime-sorted server-side).
   // Fetched once on mount; drives the "open an existing project" section so a
-  // workspace that already has games never forces a create (§14 amendment:
+  // host that already has games never forces a create (§14 amendment:
   // opening an existing game IS a valid init — enterHomeWith reuses the same
   // pin + enter path as create/link). Filter out the `default` session stub so
-  // an empty workspace does not show a fake "已有项目" row.
+  // an empty instance does not show a fake "已有项目" row.
   const [existingGames, setExistingGames] = useState<ExistingGame[] | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -479,9 +408,8 @@ export function OnboardingController() {
     }
   }, [enterHomeWith]);
 
-  // Do the actual game create/link. Assumes the workspace root is ALREADY correct
-  // (either it matched projRoot, or we've activated + reloaded into it). Throws on
-  // failure so the caller can surface the error.
+  // Do the actual game create/link. Open games remain at their canonical paths;
+  // newly-created games use the runtime host's default game store.
   const execIntent = useCallback(async (intent: ProjectIntent) => {
     if (intent.kind === 'open') {
       const r = await fetch('/api/workbench/games/link', {
@@ -490,7 +418,6 @@ export function OnboardingController() {
       });
       const j = (await r.json()) as { ok?: boolean; error?: string; slug?: string };
       if (!r.ok || !j.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      clearPending();
       await enterHomeWith(j.slug ?? '');
       return;
     }
@@ -501,14 +428,11 @@ export function OnboardingController() {
     });
     const j = (await r.json()) as { ok?: boolean; error?: string; slug?: string };
     if (!r.ok || !j.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-    clearPending();
     await enterHomeWith(j.slug ?? slug);
   }, [enterHomeWith]);
 
-  // Entry point for all three project actions. Ensures the workspace root equals
-  // projRoot first: if it already is, create immediately (no reload); otherwise
-  // stash the intent, switch the root (activate → reload), and let the reloaded
-  // controller resume it (see the resume effect below).
+  // Entry point for all three project actions. There is no root-switch or
+  // Project creation/opening is a game operation; no root-switch intent exists.
   const startAction = useCallback(async (intent: ProjectIntent) => {
     let next = intent;
     if (intent.kind !== 'open') {
@@ -520,89 +444,13 @@ export function OnboardingController() {
     setProjBusyKind(next.kind);
     setProjErr(null);
     try {
-      if (await isActiveRoot(next.root)) {
-        await execIntent(next);
-        return;
-      }
-      // Root switch needed — persist BEFORE activating (activate reloads the page).
-      savePending(next);
-      await activateWorkspace({ path: next.root, initIfMissing: true, scaffold: false });
-      window.location.reload();
+      await execIntent(next);
     } catch (e) {
-      clearPending();
       setProjErr(formatProjectError((e as Error).message, t));
       setProjBusy(false);
       setProjBusyKind(null);
     }
   }, [execIntent, existingGames, t]);
-
-  // Resume a pending intent after the activate→reload root switch. Runs once when
-  // the controller mounts at the project phase with a stashed intent whose root
-  // is now the active one.
-  useEffect(() => {
-    if (phase !== 'project' || resumedRef.current) return;
-    const pending = loadPending();
-    if (!pending) return;
-    resumedRef.current = true;
-    setProjBusy(true);
-    setProjBusyKind(pending.kind);
-    void (async () => {
-      try {
-        if (!(await isActiveRoot(pending.root))) { clearPending(); setProjBusy(false); setProjBusyKind(null); return; }
-        await execIntent(pending);
-      } catch (e) {
-        clearPending();
-        const msg = (e as Error).message ?? '';
-        // Create already succeeded on a prior attempt (or the slug was taken
-        // before resume). Swallow — otherwise remounting the project step with
-        // a stale pending intent paints a ghost ".forgeax/games/… already exists"
-        // error even though the user did nothing this visit.
-        if (/already exists/i.test(msg)) {
-          setProjBusy(false);
-          setProjBusyKind(null);
-          return;
-        }
-        setProjErr(formatProjectError(msg, t));
-        setProjBusy(false);
-        setProjBusyKind(null);
-      }
-    })();
-  }, [phase, execIntent, t]);
-
-  const pickProjRoot = useCallback(async () => {
-    try {
-      const path = await pickDirectoryNative();
-      if (!path) return;
-      setProjRoot(path);
-      if (projErr) setProjErr(null);
-      // Path only — do NOT activate/reload here. Workspace switch + create happen
-      // when the user clicks 新建/模板/打开. Existing-games list is for the ACTIVE
-      // root; refresh it if the pick matches, otherwise hide until create switches.
-      if (await isActiveRoot(path)) {
-        try {
-          const r = await fetch('/api/workbench/games');
-          const j = (await r.json()) as { games?: ExistingGame[] };
-          setExistingGames((j.games ?? []).filter((g) => isUserExistingGame(g.slug)));
-        } catch {
-          setExistingGames([]);
-        }
-      } else {
-        setExistingGames([]);
-      }
-    } catch (e) {
-      setProjErr((e as Error).message);
-    }
-  }, [projErr]);
-
-  const pickOpenDir = useCallback(async () => {
-    try {
-      const path = await pickDirectoryNative();
-      if (!path) return;
-      await startAction({ kind: 'open', root: projRoot, path });
-    } catch (e) {
-      setProjErr((e as Error).message);
-    }
-  }, [projRoot, startAction]);
 
   const onLang = (next: Locale) => { setLang(next); changeLanguage(next); };
 
@@ -699,16 +547,14 @@ export function OnboardingController() {
             ) : (
               <ProjectView
                 t={t}
-                projRoot={projRoot}
-                onChangeRoot={() => void pickProjRoot()}
                 projName={projName}
                 setProjName={(v) => { setProjName(v); if (projErr) setProjErr(null); }}
                 busy={projBusy}
                 busyKind={projBusyKind}
                 err={projErr}
-                onNew={() => void startAction({ kind: 'new', root: projRoot, name: projName })}
+                onNew={() => void startAction({ kind: 'new', name: projName })}
                 onTemplate={() => { setTmplSlug(null); setTmplOpen(true); }}
-                onOpen={() => void pickOpenDir()}
+                onOpen={() => setFsOpen(true)}
                 existingGames={existingGames}
                 onOpenExisting={(slug) => void openExisting(slug)}
               />
@@ -748,9 +594,28 @@ export function OnboardingController() {
           selected={tmplSlug}
           onSelect={setTmplSlug}
           onCancel={() => setTmplOpen(false)}
-          onConfirm={() => { if (tmplSlug) { setTmplOpen(false); void startAction({ kind: 'template', root: projRoot, name: projName, template: tmplSlug }); } }}
+                onConfirm={() => { if (tmplSlug) { setTmplOpen(false); void startAction({ kind: 'template', name: projName, template: tmplSlug }); } }}
           busy={projBusy}
         />
+      )}
+
+      {/* Browses the SERVER's filesystem (GET /api/fs/browse) — that is the machine
+          a game directory actually lives on, and a headless or remote Studio host has
+          no OS dialog to open. Picking commits immediately (link + enter home);
+          failures surface on the project card, so the modal closes first. */}
+      {phase === 'project' && fsOpen && (
+        <div className="fx-ob-modal-scrim" onClick={(e) => { if (e.target === e.currentTarget) setFsOpen(false); }}>
+          <div className="fx-ob-modal">
+            <div className="fx-ob-modal-inner">
+              <h3 className="fx-ob-h3">{t('onboarding.project.openTitle')}</h3>
+              <FsBrowser
+                initialDir="~"
+                onPick={(absPath) => { setFsOpen(false); void startAction({ kind: 'open', path: absPath }); }}
+                onCancel={() => setFsOpen(false)}
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -910,9 +775,8 @@ function WelcomeView(props: {
 
 function ProjectView(props: {
   t: TFn;
-  projRoot: string; onChangeRoot: () => void;
   projName: string; setProjName: (v: string) => void;
-  busy: boolean; busyKind: PendingIntent['kind'] | null; err: string | null;
+  busy: boolean; busyKind: ProjectIntent['kind'] | null; err: string | null;
   onNew: () => void; onTemplate: () => void; onOpen: () => void;
   existingGames: ExistingGame[] | null; onOpenExisting: (slug: string) => void;
 }) {
@@ -922,7 +786,7 @@ function ProjectView(props: {
     (props.existingGames ?? []).map((g) => g.slug),
   );
   const busyMsg = props.busyKind ? t(`onboarding.project.busy.${props.busyKind}`) : t('onboarding.project.busy.new');
-  // "New"/"template" create a game <slug> under the workspace root; "open" adopts
+  // "New"/"template" create a game in the runtime host; "open" adopts
   // an existing game dir at any path (name not needed — derived server-side).
   // Empty name auto-resolves to untitled-N — never block create on the name field.
   const cards: { id: 'new' | 'sample' | 'open'; title: string; desc: string; cta: string; onGo: () => void }[] = [
@@ -939,7 +803,7 @@ function ProjectView(props: {
           <span>{busyMsg}</span>
         </div>
       )}
-      {/* Workspace already has games (returning user / pulled repo) → offer
+      {/* Instance already has games (returning user / pulled repo) → offer
           direct entry FIRST: pick one and go, creation below stays optional. */}
       {props.existingGames && props.existingGames.length > 0 && (
         <div className="fx-ob-panel">
@@ -952,9 +816,7 @@ function ProjectView(props: {
               <div
                 key={g.slug}
                 className="fx-ob-card"
-                // flexShrink 0: .fx-ob-card has overflow:hidden → flex min-size 0,
-                // so the maxHeight'd column would crush rows to ~0 instead of scrolling.
-                style={{ cursor: props.busy ? 'default' : 'pointer', flexShrink: 0 }}
+                style={{ cursor: props.busy ? 'default' : 'pointer' }}
                 onClick={() => { if (!props.busy) props.onOpenExisting(g.slug); }}
               >
                 <div className="fx-ob-card-cb">
@@ -971,11 +833,6 @@ function ProjectView(props: {
         </div>
       )}
       <div className="fx-ob-panel">
-        <div className="fx-ob-row"><span className="fx-ob-small fx-ob-sec" style={{ fontWeight: 500 }}>{t('onboarding.project.root')}</span></div>
-        <div className="fx-ob-row" style={{ marginTop: 6, gap: 8 }}>
-          <input className="fx-ob-input" style={{ flex: 1, minWidth: 0 }} value={props.projRoot} readOnly />
-          <button className="fx-ob-btn fx-ob-btn-secondary" style={{ whiteSpace: 'nowrap' }} disabled={props.busy} onClick={props.onChangeRoot}>{t('onboarding.project.changeRoot')}</button>
-        </div>
         <div className="fx-ob-row" style={{ marginTop: 8 }}><span className="fx-ob-small fx-ob-sec" style={{ fontWeight: 500 }}>{t('onboarding.project.name')}</span></div>
         <div className="fx-ob-row" style={{ marginTop: 6 }}>
           <input className="fx-ob-input" style={{ flex: 1, minWidth: 0 }} placeholder={t('onboarding.project.namePlaceholder')} value={props.projName} onChange={(e) => props.setProjName(e.target.value)} />

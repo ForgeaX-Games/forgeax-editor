@@ -1,9 +1,9 @@
 // Game modal host + New Game modal + timeSince helper.
 //
 // 2026-07-23 — the always-on GameSwitcher dropdown was removed from the TopBar.
-// The File menu now drives games: 新建项目 → new-game dialog (game.new), and
-// 打开项目 / 打开最近 → a centered "open game" modal whose body is the game list
-// (game.open). This file exports `GameModalHost` (mounted once in App.tsx);
+// Game-specific commands still drive the new-game dialog and game list modal;
+// File → 打开游戏目录 is handled by the game-directory modal separately.
+// This file exports `GameModalHost` (mounted once in App.tsx);
 // `NewGameModal` + `timeSince` stay internal. The store flag `gameSwitcherOpen`
 // now means "the open-game list modal is open".
 import { useState, useEffect } from 'react';
@@ -117,7 +117,7 @@ export function GameModalHost() {
   );
 }
 
-// ProjectSwitcher + NewProjectModal + activateWorkspace extracted → ./ProjectSwitcher (§D).
+// Game-directory modal and game binding are extracted → ./ProjectSwitcher (§D).
 
 function timeSince(ms: number): string {
   const d = (Date.now() - ms) / 1000;

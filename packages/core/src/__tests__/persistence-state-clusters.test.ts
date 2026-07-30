@@ -2,7 +2,7 @@
 // STATE-type persistence clusters extracted in w7:
 //   - scene-list / switch  (createSceneList)
 //   - play-config          (createPlayConfig)   ← the clean fetch-injection proof
-//   - storage / hidden-key (createStorage)
+//   - storage / retired doc mirror (createStorage)
 //
 // Each cluster is a `create<Thing>(deps)` factory that reaches all state THROUGH
 // deps (deps.ctx) — a fresh fake ctx fully controls behavior, so nothing reads a
@@ -107,7 +107,7 @@ describe('createPlayConfig — fetch injected, no network (AC-02 / R-P1)', () =>
   });
 });
 
-// ── storage / hidden-key ──────────────────────────────────────────────────────
+// ── storage / retired doc mirror ─────────────────────────────────────────────
 describe('createStorage — reads ctx via deps (AC-02)', () => {
   function make(): { s: ReturnType<typeof createStorage>; ctx: ScenePersistenceContext } {
     const ctx = createScenePersistenceContext();
@@ -118,16 +118,6 @@ describe('createStorage — reads ctx via deps (AC-02)', () => {
   it('loadDocFromStorage stays retired (always false, AC-15 / OOS-1)', () => {
     const { s } = make();
     expect(s.loadDocFromStorage()).toBe(false);
-  });
-
-  it('buildHiddenKey derives from ctx state and explicit overrides', () => {
-    const { s, ctx } = make();
-    ctx.currentSceneId = 'shoot';
-    ctx.currentSceneFile = 'lvl1';
-    expect(s.buildHiddenKey()).toBe('forgeax:editor:hidden:v1:shoot:lvl1');
-    // explicit sceneFile=null collapses to the single-scene shape
-    expect(s.buildHiddenKey('other', null)).toBe('forgeax:editor:hidden:v1:other');
-    expect(s.buildHiddenKey('other', 'main')).toBe('forgeax:editor:hidden:v1:other:main');
   });
 
   it('clearDocStorage does not throw in a headless env', () => {

@@ -54,16 +54,16 @@ export const builtinMenusExtension: AppExtension = {
         labelKey: 'menu.brand.checkUpdate', icon: 'refresh-cw' },
 
       // ─── FILE ─────────────────────────────────────────────────────────────
-      // 新建项目 → new-game dialog (game.new). 打开项目 → pick and link an
-      // existing game directory (game.open-directory → FsBrowser).
+      // A game is the user-facing unit. The host's private instance root is
+      // intentionally absent from this menu.
       // 打开最近 → a hover submenu of recent games (dynamicChildren, derived from
       // the recent-games cache by mtime); each row switches to that game via
-      // game.pick. 关闭项目 stays unimplemented (disabled).
-      { id: 'file.newProject', menu: 'file', group: 'project', order: 10,
-        labelKey: 'menu.file.newProject', commandId: 'game.new', icon: 'file-plus' },
-      { id: 'file.openProject', menu: 'file', group: 'project', order: 20,
-        labelKey: 'menu.file.openProject', commandId: 'game.open-directory', icon: 'folder-open' },
-      { id: 'file.openRecent', menu: 'file', group: 'project', order: 30,
+      // game.pick. Closing a game stays unimplemented (disabled).
+      { id: 'file.newGame', menu: 'file', group: 'game', order: 10,
+        labelKey: 'menu.file.newGame', commandId: 'game.new', icon: 'file-plus' },
+      { id: 'file.openGameDirectory', menu: 'file', group: 'game', order: 20,
+        labelKey: 'menu.file.openGameDirectory', commandId: 'game.open-directory', icon: 'folder-open' },
+      { id: 'file.openRecent', menu: 'file', group: 'game', order: 30,
         labelKey: 'menu.file.openRecent', icon: 'clock',
         // Dynamic submenu: recent games (mtime-desc). Label uses the raw game
         // name as the i18n key — `t()` falls back to the key when unmatched, so
@@ -75,8 +75,8 @@ export const builtinMenusExtension: AppExtension = {
           labelKey: (typeof g.name === 'string' && g.name) ? g.name : g.slug,
           commandId: 'game.pick', args: { slug: g.slug },
         })) },
-      { id: 'file.closeProject', menu: 'file', group: 'project', order: 40,
-        labelKey: 'menu.file.closeProject', icon: 'x' },
+      { id: 'file.closeGame', menu: 'file', group: 'game', order: 40,
+        labelKey: 'menu.file.closeGame', icon: 'x' },
 
       { id: 'file.save', menu: 'file', group: 'file', order: 10,
         labelKey: 'menu.file.save', icon: 'save',

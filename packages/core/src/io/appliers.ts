@@ -75,7 +75,9 @@ export interface SessionApplierCtx {
  *  module's own state (and, via ctx.engine, the engine world) and fires its own
  *  listeners; the gateway records the ledger entry (session) or nothing (transient)
  *  purely from which table the kind is registered in. */
-export type SessionApplier = (op: EditorOp, ctx?: SessionApplierCtx) => { ok: true } | { ok: false; error: CommandError };
+export type SessionApplier = (op: EditorOp, ctx?: SessionApplierCtx) =>
+  | { ok: true; completion?: Promise<unknown> }
+  | { ok: false; error: CommandError };
 
 /** Type alias for the session/transient registration map. */
 export type SessionApplierMap = Map<string, SessionApplier>;

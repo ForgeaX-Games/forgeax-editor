@@ -6,7 +6,7 @@
 //   pure geometry that BUILDS the gizmo/param-gizmo point sets lived inline in the
 //   closure next to the engine-writing wiring. This file lifts that geometry out:
 //   the axis/plane/ring layout constants, the cone-mesh vertex builder, and the
-//   dotted-wireframe point generators for Light range/spot cones and Camera frusta.
+//   dotted-wireframe point generators for Camera frusta.
 //   viewport.ts now imports these and stays focused on the engine wiring + the
 //   pointer/gizmo interaction state machine.
 //
@@ -21,8 +21,8 @@
 //
 // OOS-1 / OOS-3 (zero behavior change, no semantic rewrite)
 //   Every body below is the VERBATIM math previously inline in viewport.ts
-//   (ensureCone vertex loop, addSeg/circlePts/forwardOf, and the light/camera
-//   branches of updateParamGizmo). Only the surrounding orchestration (getSelection,
+//   (ensureCone vertex loop, addSeg/circlePts/forwardOf, and the camera branch of
+//   updateParamGizmo). Only the surrounding orchestration (getSelection,
 //   entComponents, isAuxVisible, placeDots) stays in viewport.ts. This is a pure
 //   MOVE, not a rewrite — the sister loop world-partition rewrites the camera-pose
 //   WRITE path (viewport.ts:167) and the pick path, neither of which lives here, so
@@ -36,10 +36,10 @@
 //     (no viewport semantic rewrite); plan-strategy §2 D-5 (M6 tail) + §8 naming.
 //   (backward) this geometry was factored into viewport.ts during the
 //     `refactor: rename engine/ to viewport/` history feat (#76); the gizmo/param-
-//     gizmo design (axis bars/rings, light/camera wireframes) shipped with the
+//     gizmo design (axis bars/rings and camera wireframe) shipped with the
 //     viewport's original interaction landing.
 
-import { quat, vec3 } from '@forgeax/engine-math';
+import { quat } from '@forgeax/engine-math';
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
 
 import { type Vec3, num, orthoBasis } from './viewport-ray';
@@ -76,9 +76,6 @@ export const TIP_QUAT: [number, number, number, number][] = [
   [0, 0, 0, 1],                     // Y: identity
   [0.70710678, 0, 0, 0.70710678],   // Z: +Y → +Z
 ];
-
-// ── shared scratch buffer (pure geometry only, called sequentially) ────────────
-const _gv3 = new Float32Array(3) as EngineVec3;
 
 // ── pure mesh + point builders ────────────────────────────────────────────────
 
@@ -120,42 +117,6 @@ export function forwardOf(t?: Record<string, number>): Vec3 {
   quat.fromEuler(q, num(t?.rotX, 0) * DEG2RAD, num(t?.rotY, 0) * DEG2RAD, num(t?.rotZ, 0) * DEG2RAD, 'XYZ');
   const o = new Float32Array(3) as EngineVec3; quat.transformVec3(o, q, [0, 0, -1] as unknown as EngineVec3);
   return [o[0]!, o[1]!, o[2]!];
-}
-
-/** Dotted-wireframe points visualizing a selected Light's range/spot cone.
- *  directional → arrow; spot → base circle + 4 cone edges; point → 3 axis rings.
- *  `t` supplies the euler rotation for the spot direction; `dist` scales the arrow. */
-export function lightGizmoPoints(
-  light: Record<string, unknown>, center: Vec3, t: Record<string, number> | undefined, dist: number,
-): Vec3[] {
-  const pts: Vec3[] = [];
-  const type = (light.type as string) ?? 'point';
-  if (type === 'directional') {
-    const d = (light.direction as number[] | undefined) ?? [];
-    vec3.normalize(_gv3, [num(d[0], -0.4), num(d[1], -1), num(d[2], -0.3)]);
-    const dir: Vec3 = [_gv3[0]!, _gv3[1]!, _gv3[2]!];
-    const len = Math.max(2, dist * 0.18);
-    const tip: Vec3 = [center[0] + dir[0] * len, center[1] + dir[1] * len, center[2] + dir[2] * len];
-    addSeg(pts, center, tip, 16);
-    const [u, v] = orthoBasis(dir);
-    const back = len * 0.18;
-    for (const s of [u, v, [-u[0], -u[1], -u[2]] as Vec3, [-v[0], -v[1], -v[2]] as Vec3]) {
-      addSeg(pts, tip, [tip[0] - dir[0] * back + s[0] * back, tip[1] - dir[1] * back + s[1] * back, tip[2] - dir[2] * back + s[2] * back], 5);
-    }
-  } else if (type === 'spot') {
-    const range = num(light.range as number, 0) || 6;
-    const half = num(light.spotAngle as number, 30) * DEG2RAD;
-    const fwd = forwardOf(t);
-    const [u, v] = orthoBasis(fwd);
-    const baseC: Vec3 = [center[0] + fwd[0] * range, center[1] + fwd[1] * range, center[2] + fwd[2] * range];
-    const br = Math.tan(half) * range;
-    pts.push(...circlePts(baseC, u, v, br, 36));
-    for (let j = 0; j < 4; j++) { const th = (j / 4) * Math.PI * 2, c = Math.cos(th) * br, s = Math.sin(th) * br; addSeg(pts, center, [baseC[0] + u[0] * c + v[0] * s, baseC[1] + u[1] * c + v[1] * s, baseC[2] + u[2] * c + v[2] * s], 10); }
-  } else { // point (or unknown) → range sphere = 3 axis rings
-    const range = num(light.range as number, 0) || 3;
-    for (const a of AXES) { const [u, v] = orthoBasis(a.axis); pts.push(...circlePts(center, u, v, range, 36)); }
-  }
-  return pts;
 }
 
 /** Dotted-wireframe points visualizing a selected Camera's frustum (near+far

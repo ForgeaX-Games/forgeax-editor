@@ -17,7 +17,7 @@
 //   A. patchLiveMaterialParams mutates the payload the sharedRef resolves to
 //      (identity) AND the catalogue lookup, WITHOUT deleting the entry.
 //   B. applyUpdateMaterialParams routes through patchLiveMaterialParams (NOT
-//      invalidateAsset) after the pack write resolves, with merged paramValues.
+//      invalidateAsset) after the pack write resolves, with merged values.
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
@@ -42,7 +42,7 @@ function makeMockShaderRegistry(): ShaderRegistry {
     },
   };
   const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
-  sr.registerMaterialShader('test::dummy', { source: 'fn main() {}', paramSchema: [] });
+  sr.installMaterialArtifact('test::dummy', { source: 'fn main() {}', paramSchema: [] });
   return sr;
 }
 
@@ -51,9 +51,9 @@ const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
 function makeMaterial(baseColor: number[]): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-    paramValues: { baseColor },
-  } as MaterialAsset;
+    passes: [{ name: 'forward', program: { module: 'test::dummy' } }],
+    values: { baseColor },
+  };
 }
 
 describe('A. patchLiveMaterialParams — hot-update the live sharedRef payload', () => {
@@ -82,14 +82,14 @@ describe('A. patchLiveMaterialParams — hot-update the live sharedRef payload',
     );
     expect(res.ok).toBe(true);
     if (res.ok) {
-      const pv = res.value.paramValues as Record<string, unknown>;
+      const pv = res.value.values as Record<string, unknown>;
       expect(pv.baseColor).toEqual([0.2, 0.4, 0.6, 1]);
       expect(pv.metallic).toBe(0.5);
     }
 
     // The catalogue lookup (save path: appendInlineAssets → reg.lookup) agrees…
     const looked = registry.lookup<MaterialAsset>(MATERIAL_GUID);
-    expect((looked?.paramValues as Record<string, unknown>).baseColor).toEqual([0.2, 0.4, 0.6, 1]);
+    expect((looked?.values as Record<string, unknown>).baseColor).toEqual([0.2, 0.4, 0.6, 1]);
     // …and the entry is NOT dropped (unlike the old invalidateAsset path).
     expect(registry.assetCatalog.has(key)).toBe(true);
   });
@@ -131,7 +131,7 @@ describe('A. patchLiveMaterialParams — hot-update the live sharedRef payload',
     expect(registry.packFileCache.has(packageUrl)).toBe(false);
     // …but the catalogue entry survives (consecutive edits + _preFillMaterialOp).
     expect(registry.assetCatalog.has(key)).toBe(true);
-    expect((registry.lookup<MaterialAsset>(MATERIAL_GUID)!.paramValues as Record<string, unknown>).baseColor)
+    expect((registry.lookup<MaterialAsset>(MATERIAL_GUID)!.values as Record<string, unknown>).baseColor)
       .toEqual([0.9, 0.1, 0.1, 1]);
   });
 });
@@ -167,7 +167,7 @@ describe('B. applyUpdateMaterialParams — hot-patch instead of invalidate', () 
         guid: MATERIAL_GUID,
         kind: 'material',
         name: 'M',
-        payload: { kind: 'material', passes: [], paramValues: { baseColor: [1, 1, 1, 1], roughness: 0.5 } },
+        payload: { kind: 'material', passes: [], values: { baseColor: [1, 1, 1, 1], roughness: 0.5 } },
         refs: [],
       },
     } as unknown as EditorOp;

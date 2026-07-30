@@ -58,7 +58,7 @@ function makeShaderRegistry(): ShaderRegistry {
     },
   };
   const shaders = new ShaderRegistry({ device, manifestUrl: undefined });
-  shaders.registerMaterialShader('test::dummy', {
+  shaders.installMaterialArtifact('test::dummy', {
     source: 'fn main() {}',
     paramSchema: [],
   });
@@ -68,8 +68,8 @@ function makeShaderRegistry(): ShaderRegistry {
 function material(): MaterialAsset {
   return {
     kind: 'material',
-    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-    paramValues: {},
+    passes: [{ name: 'forward', program: { module: 'test::dummy' } }],
+    values: {},
   };
 }
 

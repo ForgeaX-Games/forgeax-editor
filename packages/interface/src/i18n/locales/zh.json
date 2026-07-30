@@ -16,7 +16,7 @@
   "onboarding": {
     "step": {
       "welcome": "欢迎 · 语言 · 连接模型",
-      "project": "设置 workspace",
+      "project": "选择游戏",
       "home": "进入首页"
     },
     "welcome": {
@@ -57,35 +57,31 @@
     "back": "上一步",
     "skip": "跳过设置",
     "project": {
-      "title": "设置你的 workspace",
-      "root": "项目根目录",
-      "rootHint": "项目会作为一个 game 建在这个 workspace 下（~/ 即用户主目录）。点「更改」只选定路径；真正切换并创建要等点「新建」。",
-      "changeRoot": "更改",
-      "rootPickTitle": "选择 workspace 目录",
-      "name": "项目名称",
+      "title": "选择你的游戏",
+      "name": "游戏名称",
       "namePlaceholder": "可选；留空则自动命名为 untitled-1",
       "nameRequired": "请填写项目名称（≥1 位，小写字母/数字/连字符）。",
-      "willCreate": "将创建项目：{{name}}",
+      "willCreate": "将创建游戏：{{name}}",
       "busy": {
         "new": "正在创建项目…",
         "template": "正在从模板复制项目…（可能需要几秒）",
         "open": "正在打开目录…"
       },
       "newTitle": "新建空项目",
-      "newDesc": "在当前 workspace 下新建一个空项目（默认游戏模板）。",
+      "newDesc": "使用默认模板新建一个空游戏。",
       "newCta": "新建",
       "existingTitle": "打开已有项目",
-      "existingDesc": "当前 workspace 已有 {{count}} 个项目——直接选择一个进入，无需新建。",
+      "existingDesc": "已有 {{count}} 个游戏——直接选择一个进入。",
       "existingOpen": "打开",
       "openTitle": "打开目录",
-      "openDesc": "选择任意目录挂进当前 workspace（可在根目录以外）。空目录会自动初始化为游戏项目。",
+      "openDesc": "选择任意目录作为游戏目录。空目录会自动初始化。",
       "openCta": "选择目录",
       "errNotGame": "所选目录不是游戏项目，且不是空目录。请选空文件夹（将自动初始化），或选已有 forge.json / main.ts 的目录。",
       "sampleTitle": "从模板创建",
-      "sampleDesc": "以一个内置游戏为模板，拷贝成当前 workspace 下的新项目。",
+      "sampleDesc": "以一个内置游戏为模板创建新游戏。",
       "sampleCta": "选择模板",
       "select": "选择",
-      "footer": "选择任一方式后会创建/打开 workspace 并进入首页。"
+      "footer": "选择任一方式后会创建或打开游戏并进入首页。"
     },
     "template": {
       "title": "选择一个内置模板",
@@ -321,7 +317,7 @@
     },
     "upload": {
       "title": "上传",
-      "hint": "把当前 workspace 的 .forgeax 创作内容上传到 GitHub 仓（聊天里的 /upload 命令等效）。",
+      "hint": "把当前项目的 .forgeax 创作内容上传到 GitHub 仓（聊天里的 /upload 命令等效）。",
       "tokenPlaceholder": "粘贴 GitHub token（经典或 fine-grained，共享或个人）",
       "tokenNotSetHint": "已内置共享 token · 粘贴自己的 token 可覆盖",
       "resetTokenTitle": "清除覆盖，恢复内置共享 token",
@@ -543,9 +539,9 @@
     "source": "源",
     "components": "组件",
     "asset": "资产",
-    "workspace": "工作区",
-    "workspace_ref": "工作区引用",
-    "workspace_context_hint": "右键可重命名或删除此工作区",
+    "workspace": "工作台",
+    "workspace_ref": "工作台引用",
+    "workspace_context_hint": "右键可重命名或删除此工作台",
     "component_property": "组件属性"
   },
   "workbench": {
@@ -601,7 +597,7 @@
     "deleteFailedTitle": "删除失败",
     "switchTooltip": "切换游戏（每个游戏 = 一个 game）",
     "listTitle": "打开游戏",
-    "newGameTooltip": "在当前 workspace 下新建一个 .forgeax/games/<slug>/（Iori/Suzu 设计 + Forge 写代码）",
+    "newGameTooltip": "在 .forgeax/games/<slug>/ 新建一个游戏（Iori/Suzu 设计 + Forge 写代码）",
     "newGame": "新建 game",
     "empty": "暂无 game · 点上方 + 新建",
     "switchToTooltip": "切到 games/{{slug}}/",
@@ -610,8 +606,8 @@
     "unpin": "取消固定 — 跟随最新",
     "slugError": "slug: 1-41 字符 / 小写 ASCII / 数字 / 连字符",
     "kickoffMessage": "刚创建了 games/{{slug}}/，brief：{{brief}}。请走完 Iori → Suzu → 你自己写代码的流水线。",
-    "modalTitle": "新建项目",
-    "slugLabel": "slug (项目目录名)",
+    "modalTitle": "新建游戏",
+    "slugLabel": "slug（游戏目录名）",
     "nameLabel": "显示名（可选）",
     "namePlaceholder": "留空用 slug",
     "briefLabel": "brief（可选 — 留下 Forge 立刻派 Iori 立柱）",
@@ -833,29 +829,8 @@
       "unread": "{{count}} 条新消息"
     }
   },
-  "projectSwitcher": {
-    "triggerTooltip": "项目（agentic 工作目录）· 切换会热重启 engine + cli",
-    "switching": "切换中…",
-    "newProjectTooltip": "新建一个项目（agentic 工作目录）",
-    "newProject": "新建项目",
-    "empty": "暂无 project",
-    "currentSuffix": "· 当前",
-    "extSourceTooltip": "来自 ~/.forgeax/known-projects.json",
-    "deleteCurrentDisabledTooltip": "无法删除当前项目（先切换到其他项目）",
-    "removeFromListTooltip": "从已知列表移除（不删目录）",
-    "deleteProjectTooltip": "删除项目",
-    "openExisting": "打开已有目录",
-    "removeRegisteredConfirm": "从已知列表中移除 \"{{name}}\"？\n\n仅会从 ~/.forgeax/known-projects.json 中摘除条目，磁盘上的目录 {{path}} 不会被删除。",
-    "deleteProjectConfirm": "确认删除 project {{id}}/ ？此操作会删除整个工作目录（games + .forgeax）。",
-    "idError": "id: 2-41 字符 / lowercase ascii / 数字 / -_",
-    "tabNew": "新建项目",
-    "tabOpen": "打开已有目录",
-    "idLabel": "id (工作目录名)",
-    "displayNameLabel": "显示名（可选）",
-    "displayNamePlaceholder": "留空用 id",
-    "creating": "创建中...",
-    "create": "创建",
-    "openGameDirectory": "打开游戏目录"
+  "gameDirectory": {
+    "openTitle": "打开游戏目录"
   },
   "dashboard": {
     "busKindRegistering": "{{kind}} · 扩展登记中…",
@@ -925,7 +900,7 @@
   },
   "store": {
     "openFile": {
-      "notInWorkspace": "无法打开「{{path}}」\n\n这个文件不在可编辑工作区内(通常是引擎 / 依赖库的只读源码,agent 只是读取过它)。\nStudio 只能打开 .forgeax/games/** 和 packages/** 下的文件。",
+      "notInWorkspace": "无法打开「{{path}}」\n\n这个文件不在可编辑游戏目录内（通常是引擎 / 依赖库的只读源码，agent 只是读取过它）。\nStudio 只能打开 .forgeax/games/** 和 packages/** 下的文件。",
       "serverDetail": "\n\n服务端: {{serverMsg}}",
       "notFound": "文件不存在:「{{path}}」\n\n可能已被移动 / 重命名 / 删除,或这个游戏的入口文件其实是别的名字(例如 main.ts 而非 index.ts)。",
       "failed": "无法打开「{{path}}」:{{status}} {{statusText}}"
@@ -1290,9 +1265,10 @@
     "browse": "浏览…（打开系统文件夹选择器）",
     "addrHint": "输入路径后按回车跳转",
     "emptyDir": "空目录",
+    "initWorkspaceWhenNoGame": "无 game 时初始化默认游戏",
     "selectDir": "选择 {{dir}}",
     "processing": "处理中…",
-    "selectThisDir": "打开此游戏目录"
+    "selectThisDir": "选择此目录"
   },
   "subAgent": {
     "status": {
@@ -1465,15 +1441,7 @@
     "noEntryPrefix": "扩展",
     "noEntryMiddle": "没有",
     "noEntrySuffix": "入口。",
-    "iframeLoadFailed": "iframe 加载失败：{{error}}",
-    "videoGameInitChecking": "正在检查当前游戏…",
-    "videoGameInitTitle": "当前游戏尚未创建视频游戏",
-    "videoGameInitBody": "创建后会注入视频游戏蓝图和模板素材，并将当前游戏切换为视频游戏类型。",
-    "videoGameInitCancel": "返回编辑器",
-    "videoGameInitConfirm": "创建视频游戏",
-    "videoGameInitializing": "正在创建并注入素材…",
-    "videoGameInitFailed": "创建失败：{{error}}",
-    "videoGameInitContinueInMain": "请在主区确认是否创建"
+    "iframeLoadFailed": "iframe 加载失败：{{error}}"
   },
   "themes": {
     "classicLime": {
@@ -1533,11 +1501,11 @@
       "checkUpdate": "检查更新"
     },
     "file": {
-      "newProject": "新建项目…",
-      "openProject": "打开项目…",
+      "newGame": "新建游戏…",
+      "openGameDirectory": "打开游戏目录…",
       "openRecent": "打开最近",
       "openRecentEmpty": "暂无最近记录",
-      "closeProject": "关闭项目",
+      "closeGame": "关闭游戏",
       "save": "保存",
       "saveAll": "全部保存",
       "reveal": "在系统中显示",

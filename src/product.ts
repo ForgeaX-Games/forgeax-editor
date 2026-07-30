@@ -18,6 +18,46 @@ export type {
   ProductContractManifest,
 } from '@forgeax/editor-product';
 
+export { createAssetWorkspace } from '@forgeax/editor-product';
+export type {
+  AssetWorkspace,
+  AssetWorkspaceDelta,
+  AssetWorkspaceInput,
+  AssetWorkspaceObservation,
+  AssetWorkspaceRecoveryIntent,
+  AssetWorkspaceReconcileResult,
+  AssetWorkspaceResult,
+} from '@forgeax/editor-product';
+
+export {
+  CapabilityRegistry,
+  OperationRunCoordinator,
+  RunCoordinator,
+  RunJournal,
+} from '@forgeax/editor-product';
+export type {
+  CapabilityDiscoveryOptions,
+  HostParityReport,
+  OperationDefinition,
+  OperationRun,
+  OperationRunEvent,
+  OperationRunEventInput,
+  OperationRunRequest,
+  OperationRunStatus,
+  RunAcceptedResult,
+  RunActor,
+  RunCoordinatorEvent,
+  RunCoordinatorOptions,
+  RunEventInput,
+  RunJournalAcceptResult,
+  RunJournalEventInput,
+  RunJournalOptions,
+  RunJournalRecord,
+  RunJournalResult,
+  RunProgress,
+  TerminalRunStatus,
+} from '@forgeax/editor-product';
+
 export {
   RUNTIME_CONTRACT_VERSION,
   TRANSPORT_PROTOCOL_VERSION,
@@ -36,4 +76,5 @@ export type {
   TransportRequest,
   TransportResponse,
   TransportService,
+  TransportServiceOptions,
 } from '@forgeax/editor-product';

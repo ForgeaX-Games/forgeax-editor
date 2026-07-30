@@ -365,12 +365,33 @@ struct MenuInvokePayload {
 ///
 /// `publish` is intentionally skipped — it's an in-app dropdown, not an OS
 /// menu category (T5 spec).
+///
+/// MUST stay non-`async`: Tauri runs sync commands on the main thread but
+/// spawns `async` ones onto the async runtime, and macOS requires NSMenu to be
+/// built and installed on the main thread. Off-thread the bar still renders
+/// with correct labels but its items never deliver menu events, so every click
+/// is a silent no-op (the `on_main` trace below is what pinned this down).
 #[tauri::command]
-async fn set_app_menu(
+fn set_app_menu(
     app: tauri::AppHandle,
     payload: Vec<NativeMenuJson>,
 ) -> Result<(), String> {
-    let menu = Menu::new(&app).map_err(|e| e.to_string())?;
+    // `on_main` is the load-bearing signal: macOS silently produces a menu that
+    // renders but never delivers events when NSMenu is built off the main thread.
+    let thread = std::thread::current();
+    let on_main = thread.name() == Some("main");
+    fx_trace_line(&format!(
+        "set_app_menu: enter thread={:?} on_main={} menus={}",
+        thread.name(),
+        on_main,
+        payload.len(),
+    ));
+
+    let menu = Menu::new(&app).map_err(|e| {
+        fx_trace_line(&format!("set_app_menu: Menu::new FAILED {e}"));
+        e.to_string()
+    })?;
+    let mut installed = 0usize;
     for m in payload.iter() {
         if m.menu == "publish" {
             continue;
@@ -379,9 +400,41 @@ async fn set_app_menu(
         let submenu = Submenu::new(&app, title, true).map_err(|e| e.to_string())?;
         append_items(&app, &submenu, &m.items)?;
         menu.append(&submenu).map_err(|e| e.to_string())?;
+        installed += 1;
+        fx_trace_line(&format!(
+            "set_app_menu:   + submenu '{}' ({}) items={} ids=[{}]",
+            title,
+            m.menu,
+            m.items.len(),
+            m.items
+                .iter()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        ));
     }
-    menu.set_as_app_menu().map_err(|e| e.to_string())?;
+    menu.set_as_app_menu().map_err(|e| {
+        fx_trace_line(&format!("set_app_menu: set_as_app_menu FAILED {e}"));
+        e.to_string()
+    })?;
+    fx_trace_line(&format!(
+        "set_app_menu: installed ok submenus={installed}"
+    ));
     Ok(())
+}
+
+/// Trace sink for the menu bridge. The release `.app` builds tauri without the
+/// `devtools` feature, so webview `console.*` is unreachable there — routing the
+/// webview's bridge trace here puts the whole native↔webview chain in one stderr
+/// stream (visible when the .app is launched from a terminal).
+fn fx_trace_line(line: &str) {
+    eprintln!("[fx-trace] {line}");
+}
+
+/// Webview-callable end of `fx_trace_line` (see above).
+#[tauri::command]
+fn fx_trace(line: String) {
+    fx_trace_line(&line);
 }
 
 /// Recursive builder for a Submenu's children. Honors `separator_before`
@@ -425,7 +478,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![set_pointer_capture, set_app_menu])
+        .invoke_handler(tauri::generate_handler![
+            set_pointer_capture,
+            set_app_menu,
+            fx_trace
+        ])
         // Global menu event handler — fires for BOTH the tray menu and the
         // app menu bar. The tray keeps its own callback (build_tray) for
         // 'show'/'hide'/'quit'; here we forward everything else to the webview
@@ -433,12 +490,18 @@ pub fn run() {
         // dispatch the associated command. Rust owns no business logic.
         .on_menu_event(|app_handle, event| {
             let id = event.id().as_ref().to_string();
+            fx_trace_line(&format!("on_menu_event: id={id}"));
             // Skip tray-owned ids — the tray's `on_menu_event` handles them.
             if matches!(id.as_str(), "show" | "hide" | "quit") {
+                fx_trace_line("on_menu_event: tray-owned id, skipped");
                 return;
             }
-            if let Some(win) = app_handle.get_webview_window("main") {
-                let _ = win.emit("menu:invoke", MenuInvokePayload { id });
+            let echo = id.clone();
+            match app_handle.emit("menu:invoke", MenuInvokePayload { id }) {
+                Ok(()) => fx_trace_line(&format!("on_menu_event: emitted menu:invoke id={echo}")),
+                Err(e) => fx_trace_line(&format!(
+                    "on_menu_event: emit FAILED id={echo} err={e}"
+                )),
             }
         })
         .setup(|app| {
@@ -684,6 +747,13 @@ fn start_bundled_backend(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     // timeout we now navigate to the origin anyway but emit a `failed`
     // backend-status so the SPA can surface an explicit error rather than a
     // blank/502 view.
+    //
+    // NOTE: navigating to the sidecar's http origin makes the live document a
+    // REMOTE one as far as Tauri's ACL is concerned. Without a capability that
+    // declares this origin under `remote.urls`, Tauri never exposes
+    // `__TAURI_INTERNALS__` there — `isTauri()` goes false and every native
+    // feature (native menu bar included) silently dies. That capability lives in
+    // `capabilities/remote-webview.json`; keep the two in sync.
     std::thread::spawn(move || {
         const ATTEMPTS: u32 = 600; // 600 × 100ms = 60s
         let mut server_ready = false;

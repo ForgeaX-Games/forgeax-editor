@@ -29,7 +29,7 @@ import type { Vec3 } from './viewport-ray';
 
 // Declared as a type alias (not interface) so TS treats its shape as closed:
 // all-number fields are structurally compatible with `Record<string, number>`,
-// which is what viewport-gizmo-geometry (lightGizmoPoints / cameraGizmoPoints)
+// which is what viewport-gizmo-geometry (cameraGizmoPoints)
 // consumes. Interfaces are considered open (declaration-merging-friendly), so
 // that assignability wouldn't hold and the callers would need a cast.
 export type EditorTransform = {

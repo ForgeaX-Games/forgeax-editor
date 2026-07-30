@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Box, Bot, MoreHorizontal, Pin, Search } from 'lucide-react';
 import { useShellStore } from '../../store';
-import { listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
+import { extensionIdSlug, listExtensions, pickLang, type ExtensionInfo } from '../../lib/extension-api';
 import { useSurface, type UISurfaceActionDef } from '../../lib/surface';
 import { extensionRendersInMainArea } from '../MainArea/WorkbenchExtensionHost';
 import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
@@ -34,18 +34,17 @@ interface RailItem {
 // Product spec: category → ordered plugin slugs.
 // 暂时隐藏(功能未就绪):方块人编辑(wb-lowpoly-obj)、Diffusion Renderer
 // (wb-diffusion-renderer)。就绪后把 slug 加回对应分组即可恢复。
-const RAIL_CATEGORIES: ReadonlyArray<{ category: '3D' | '2D' | 'general'; slugs: readonly string[] }> = [
+export const RAIL_CATEGORIES: ReadonlyArray<{
+  category: '3D' | '2D' | 'general';
+  slugs: readonly string[];
+}> = [
   { category: '3D', slugs: ['wb-skill', 'wb-gen3d', 'wb-3d-lowpoly'] },
   { category: '2D', slugs: ['wb-character', 'wb-items', 'wb-anim', 'wb-2d-scene-asset-generator'] },
-  { category: 'general', slugs: ['wb-ui', 'wb-narrative', 'wb-reel', 'wb-game-video', 'wb-bgm', 'wb-scene-generator'] },
+  { category: 'general', slugs: ['wb-asset-canvas', 'wb-ui', 'wb-narrative', 'wb-reel', 'wb-game-video', 'wb-bgm', 'wb-scene-generator'] },
 ];
 
 /** First-run seed so upgrading users keep today's rail contents until they unpin. */
 const DEFAULT_PINNED_SLUGS: readonly string[] = RAIL_CATEGORIES.flatMap((g) => g.slugs);
-
-function slugOf(manifestId: string): string {
-  return manifestId.replace(/^@forgeax-extension\//, '').replace(/^@forgeax-plugin\//, '');
-}
 
 function readPinnedSlugs(): string[] {
   try {
@@ -131,7 +130,7 @@ export function ActivityRail() {
   // Full catalog groups (installed ∩ spec). Used by More menu + AI surface.
   const catalogGroups = useMemo(() => {
     const bySlug = new Map<string, ExtensionInfo>();
-    for (const m of busExtensions ?? []) bySlug.set(slugOf(m.id), m);
+    for (const m of busExtensions ?? []) bySlug.set(extensionIdSlug(m.id), m);
     return RAIL_CATEGORIES
       .map(({ category, slugs }) => ({
         category,

@@ -151,7 +151,7 @@ describe('session routing — async persistence op-kinds reach the ledger (m2-w2
   // A bare { kind } is now correctly rejected as INVALID_ARGS (proven separately
   // in gateway-args-validation.test.ts); here we assert the well-formed routing.
   const wellFormed: Record<string, EditorOp> = {
-    saveDocToDisk: { kind: 'saveDocToDisk' },
+    saveDocToDisk: { kind: 'saveDocToDisk', requestId: 'routing-save-1' },
     loadDocFromDisk: { kind: 'loadDocFromDisk' },
     switchSceneFile: { kind: 'switchSceneFile', id: 'level-2' },
     createSceneFile: { kind: 'createSceneFile', id: 'level-2', duplicateCurrent: false },
@@ -164,7 +164,10 @@ describe('session routing — async persistence op-kinds reach the ledger (m2-w2
       // The op is routable (session domain), applied without a structured error,
       // and appended to the flat ledger; undo stays frozen.
       expect(r.ok).toBe(true);
-      expect(gw.ledger.length).toBe(ledgerBefore + 1);
+      // Request-correlated saves enter the ledger only after their asynchronous
+      // terminal success; the other session ops record immediately.
+      const expectedLedgerDelta = kind === 'saveDocToDisk' ? 0 : 1;
+      expect(gw.ledger.length).toBe(ledgerBefore + expectedLedgerDelta);
       expect(gw.appliedCount()).toBe(undoBefore);
     });
   }

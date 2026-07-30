@@ -2,11 +2,10 @@
 //
 // 设计意图（R5 store 收敛 · WS 归位）：
 //  - 后端在 `/ws`（无 sid）上 broadcast 一批 app-agnostic 帧：`daemon-tick-*`（chat）、
-//    `telemetry`（观测）、`workspace-changed`（全局壳 reload）。它们本是**同一条广播流**，
+//    `telemetry`（观测）等 app-agnostic 帧。它们本是**同一条广播流**，
 //    R4 期间被拆成了两条 raw socket（store.connectDaemonWs + chat/daemon-tick.ts）。
 //  - 本 primitive 把它收敛回**一条**：全页单例、按 `msg.type` 字符串分发给订阅者。
-//    它**不认识**任何帧的含义（daemon-tick 归 chat、telemetry 归观测、workspace-changed
-//    归壳），只做传输 + 分发 —— 满足「interface foundation 零 app 语义」。
+//    它**不认识**任何帧的含义（daemon-tick 归 chat、telemetry 归观测），只做传输 + 分发。
 //  - 「按 type 客户端分发」≠「后端多路复用」：后端本就 broadcast 全部帧，此处零后端改动。
 //
 // 关键纪律：**不在 module-load 自动连**（那是 R4 前 store 的反模式：import 即偷偷开 socket）。

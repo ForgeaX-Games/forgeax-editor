@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 
 import {
+  acceptedEvent,
   createOperationRun,
   isTerminalRunStatus,
   reduceOperationRun,
@@ -128,4 +129,32 @@ test('invalid run identity and missing terminal are structured failures', () => 
   });
   expect(terminalCheck.ok).toBe(false);
   if (!terminalCheck.ok) expect(terminalCheck.error.code).toBe('run-not-terminal');
+});
+
+test('requestId is carried by the operation run and accepted event', () => {
+  const accepted = createOperationRun({ ...request, runId: 'run-1', requestId: 'save-1' }, 1);
+  expect(accepted.ok).toBe(true);
+  if (!accepted.ok) return;
+
+  expect(accepted.value.requestId).toBe('save-1');
+  expect(acceptedEvent(accepted.value)).toMatchObject({
+    type: 'accepted',
+    requestId: 'save-1',
+  });
+});
+
+test('requestId format is validated at the OperationRun boundary', () => {
+  expect(createOperationRun({ ...request, runId: 'run-1', requestId: '' }, 1)).toMatchObject({
+    ok: false,
+    error: { code: 'invalid-request-id' },
+  });
+  expect(createOperationRun({ ...request, runId: 'run-1', requestId: 'bad id' }, 1)).toMatchObject({
+    ok: false,
+    error: { code: 'invalid-request-id' },
+  });
+  expect(createOperationRun({ ...request, runId: 'run-1', requestId: `a${'x'.repeat(127)}` }, 1)).toMatchObject({ ok: true });
+  expect(createOperationRun({ ...request, runId: 'run-1', requestId: `a${'x'.repeat(128)}` }, 1)).toMatchObject({
+    ok: false,
+    error: { code: 'invalid-request-id' },
+  });
 });

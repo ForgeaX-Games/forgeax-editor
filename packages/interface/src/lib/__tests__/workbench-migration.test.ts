@@ -53,7 +53,7 @@ describe('T7 workbench v7 → v8 → v9 → v10 migration', () => {
     clearAll();
     // Reset the module-level `currentProjectId` back to 'default' so each test
     // starts from the same boot-order state (production ships in this state
-    // until ProjectSwitcher.reload() resolves /api/projects).
+    // until the game-directory list resolves /api/workbench/games).
     const { __resetCurrentProjectIdForTests } = await reload();
     __resetCurrentProjectIdForTests();
   });
@@ -351,7 +351,7 @@ describe('T7 workbench v7 → v8 → v9 → v10 migration', () => {
   // ── Boot-order race: setCurrentProject rescues 'default'-scoped state ────
   //
   // In production, DockRegion.onReady() calls migrateWorkbenchSchema() BEFORE
-  // ProjectSwitcher.reload() resolves /api/projects. At that moment
+  // the game-directory list resolves /api/workbench/games. At that moment
   // `currentProjectId` is still its module-init fallback ('default'), so
   // migrated state gets written under `forgeax:project:default:*`. When
   // setCurrentProject('real-id') fires later, the state is stranded — the
@@ -359,7 +359,7 @@ describe('T7 workbench v7 → v8 → v9 → v10 migration', () => {
 
   it("boot-order race: migration under 'default' is transferred on first setCurrentProject('real-id')", async () => {
     // Seed v7 state; migrate under the module-init 'default' id (simulates the
-    // DockRegion.onReady path firing before /api/projects resolves).
+    // DockRegion.onReady path firing before the game list resolves).
     localStorage.setItem(LEGACY_WS, JSON.stringify({
       activeId: 'workbench',
       list: [

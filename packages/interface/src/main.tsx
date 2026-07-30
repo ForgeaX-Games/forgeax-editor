@@ -104,19 +104,18 @@ if (detachedSurface) {
     </StrictMode>,
   );
 } else {
-  // Restore UI prefs, resolve the active project id, then mount the shell so
-  // DockRegion reads the correct project-scoped workbench layout keys on first
-  // paint (ProjectSwitcher alone is too late — it mounts after DockShell).
+  // Restore UI prefs, resolve the active game/project id, then mount the shell
+  // so DockRegion reads project-scoped layout keys on first paint.
   void (async () => {
     await syncBrowserPrefsFromServer();
     initI18n();
     try {
-      const r = await fetch('/api/projects');
+      const r = await fetch('/api/workbench/games');
       if (r.ok) {
-        const j = (await r.json()) as { current?: string };
-        setCurrentProject(j.current ?? 'default');
+        const j = (await r.json()) as { activeSlug?: string; games?: Array<{ slug?: string }> };
+        setCurrentProject(j.activeSlug ?? j.games?.[0]?.slug ?? 'default');
       }
-    } catch { /* non-critical — ProjectSwitcher retries */ }
+    } catch { /* non-critical — GameDirectoryModalHost retries */ }
     startBrowserPrefsSync();
     startWorkbenchLayoutFlush();
     bootStageEntry();
@@ -133,7 +132,7 @@ function bootStore() {
   // (Play/Edit/plugin) into the status bar. Must run before any iframe mounts so
   // early createApp failures are caught. Idempotent.
   installHealthBridge();
-  bootBroadcast(); // R5/P1 唯一公共广播 socket（telemetry / workspace-changed）
+  bootBroadcast(); // R5/P1 唯一公共广播 socket（telemetry）
   subscribeNarrativeCopilot();
   subscribeFileActivityStream();
   subscribePermissionStream();

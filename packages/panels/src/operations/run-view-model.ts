@@ -16,6 +16,7 @@ export type OperationCenterAction = 'retry' | 'cancel' | 'undo';
 
 export interface OperationRunFactProjection {
   readonly runId: string;
+  readonly requestId?: string;
   readonly operationId: string;
   readonly status: OperationRun['status'];
   readonly actor: OperationRun['actor'];
@@ -24,6 +25,7 @@ export interface OperationRunFactProjection {
   readonly traceId: string;
   readonly parentRunId?: string;
   readonly attempt: number;
+  readonly sequence: number;
   readonly progress: RunProgress;
   readonly result?: unknown;
   readonly error?: CommandError;
@@ -40,10 +42,18 @@ export interface OperationCenterProjectionInput {
   readonly commit?: AuthoredCommit;
 }
 
+/**
+ * Versioned read model shared by human UI and AI/eval callers. This is the
+ * only terminal input accepted by the projection boundary (R0-X03).
+ */
+export interface OperationRunProjectionSnapshot {
+  readonly revision: number;
+  readonly runs: readonly OperationRun[];
+}
+
 export interface OperationProjectionSource {
-  readonly getRuns: () => readonly OperationRun[];
+  readonly getSnapshot: () => OperationRunProjectionSnapshot;
   readonly getCommits?: () => readonly AuthoredCommit[];
-  readonly getRevision?: () => string;
   readonly subscribe?: (listener: () => void) => () => void;
   readonly dispatchRecovery?: (action: OperationCenterAction, runId: string) => void;
 }
@@ -71,6 +81,7 @@ export function projectRunFacts(input: OperationCenterProjectionInput): Operatio
   const isTerminal = run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled';
   const projection: OperationRunFactProjection = {
     runId: run.runId,
+    ...(run.requestId === undefined ? {} : { requestId: run.requestId }),
     operationId: run.operationId,
     status: run.status,
     actor: run.actor,
@@ -79,6 +90,7 @@ export function projectRunFacts(input: OperationCenterProjectionInput): Operatio
     traceId: run.traceId,
     ...(run.parentRunId === undefined ? {} : { parentRunId: run.parentRunId }),
     attempt: run.attempt,
+    sequence: run.sequence,
     progress: Object.freeze({ ...run.progress }),
     ...(run.result === undefined ? {} : { result: run.result }),
     ...(run.error === undefined ? {} : { error: run.error }),
@@ -90,6 +102,65 @@ export function projectRunFacts(input: OperationCenterProjectionInput): Operatio
     actions: actionSet(run, commit) as OperationCenterAction[],
   };
   return Object.freeze(projection);
+}
+
+export type SaveRunDirtyState = 'clean' | 'pending' | 'failed' | 'unavailable';
+
+export interface SaveRunProjection {
+  readonly requestId?: string;
+  readonly runId?: string;
+  readonly operationId: 'saveDocToDisk';
+  readonly status: OperationRun['status'] | 'unavailable';
+  readonly dirty: boolean;
+  readonly dirtyState: SaveRunDirtyState;
+  readonly retryable: boolean;
+  readonly recoveryActions: readonly string[];
+  readonly sequence?: number;
+  readonly isTerminal: boolean;
+  readonly isSuccess: boolean;
+  readonly error?: CommandError;
+  readonly run?: OperationRun;
+}
+
+export function projectSaveRun(input: {
+  readonly run?: OperationRun;
+  readonly dirty: boolean;
+  readonly error?: CommandError;
+}): SaveRunProjection {
+  const run = input.run;
+  if (run === undefined) {
+    return Object.freeze({
+      operationId: 'saveDocToDisk',
+      status: 'unavailable',
+      dirty: input.dirty,
+      dirtyState: 'unavailable',
+      retryable: false,
+      recoveryActions: Object.freeze([...(input.error?.recoveryActions ?? ['editor.discover'])]),
+      isTerminal: false,
+      isSuccess: false,
+      ...(input.error === undefined ? {} : { error: input.error }),
+    });
+  }
+  const dirtyState: SaveRunDirtyState = !input.dirty
+    ? 'clean'
+    : run.status === 'failed'
+      ? 'failed'
+      : 'pending';
+  return Object.freeze({
+    operationId: 'saveDocToDisk',
+    requestId: run.requestId,
+    runId: run.runId,
+    status: run.status,
+    dirty: input.dirty,
+    dirtyState,
+    retryable: run.retryable,
+    recoveryActions: Object.freeze([...run.recoveryActions]),
+    sequence: run.sequence,
+    isTerminal: run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled',
+    isSuccess: run.status === 'succeeded',
+    ...(run.error === undefined ? {} : { error: run.error }),
+    run,
+  });
 }
 
 export function buildOperationCenterRows(
@@ -112,20 +183,20 @@ export function buildOperationCenterRows(
   }));
 }
 
-const EMPTY_RUNS: readonly OperationRun[] = Object.freeze([]);
+const EMPTY_SNAPSHOT: OperationRunProjectionSnapshot = Object.freeze({
+  revision: 0,
+  runs: Object.freeze([]),
+});
 const EMPTY_COMMITS: readonly AuthoredCommit[] = Object.freeze([]);
 const EMPTY_SOURCE: OperationProjectionSource = Object.freeze({
-  getRuns: () => EMPTY_RUNS,
+  getSnapshot: () => EMPTY_SNAPSHOT,
   getCommits: () => EMPTY_COMMITS,
-  getRevision: () => 'projection:r0',
 });
 
 let activeSource: OperationProjectionSource = EMPTY_SOURCE;
 let rowsCache: {
   readonly source: OperationProjectionSource;
-  readonly revision?: string;
-  readonly runs: readonly (OperationRun | OperationRunFactProjection)[];
-  readonly commits: readonly AuthoredCommit[];
+  readonly revision: number;
   readonly rows: readonly OperationCenterRow[];
 } | undefined;
 
@@ -142,18 +213,18 @@ export function getOperationProjectionSource(): OperationProjectionSource {
 }
 
 export function getOperationCenterRows(source: OperationProjectionSource = activeSource): readonly OperationCenterRow[] {
-  const runs = source.getRuns();
+  const snapshot = source.getSnapshot();
+  const runs = snapshot.runs;
   const commits = source.getCommits?.() ?? EMPTY_COMMITS;
-  const revision = source.getRevision?.();
+  const revision = snapshot.revision;
   if (
     rowsCache?.source === source
     && rowsCache.revision === revision
-    && (revision !== undefined || (rowsCache.runs === runs && rowsCache.commits === commits))
   ) {
     return rowsCache.rows;
   }
   const rows = buildOperationCenterRows(runs, commits);
-  rowsCache = { source, revision, runs, commits, rows };
+  rowsCache = { source, revision, rows };
   return rows;
 }
 

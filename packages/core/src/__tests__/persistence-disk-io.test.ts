@@ -31,7 +31,12 @@
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose).
 
 import { describe, expect, it } from 'bun:test';
-import { createDiskIo, type DiskIoDeps, type PersistenceGateway } from '../store/persistence/disk-io';
+import {
+  createDiskIo,
+  type DiskIoDeps,
+  type PersistenceGateway,
+  type SaveDocToDiskResult,
+} from '../store/persistence/disk-io';
 import { createScenePersistenceContext, type ScenePersistenceContext } from '../store/scene-persistence';
 import type { EditSession } from '../types';
 
@@ -49,6 +54,7 @@ function makeFakeGateway(doc?: Partial<EditSession>): {
   const dispatchCalls: unknown[] = [];
   const gateway: PersistenceGateway = {
     doc: { world: (doc?.world ?? null) as never, registry: doc?.registry },
+    rev: 1,
     replaceDoc(d: EditSession): void { replaceCalls.push(d); },
     dispatch(op: unknown): { ok: true } { dispatchCalls.push(op); return { ok: true }; },
   };
@@ -148,8 +154,8 @@ describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)',
     ctx.currentSceneId = 'shoot';
     ctx.isDirty = true;
     const io = createDiskIo(deps);
-    const ok = await io.doSaveDocToDisk();
-    expect(ok).toBe(false);
+    const result = await io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expect(result).toMatchObject({ ok: false, error: { code: 'save-serialization-failed' } });
     // The 0-byte data-loss guard: no write attempted over a good on-disk scene.
     expect(net.fetchCalls.length).toBe(0);
     // Save aborted before clearing dirty → the next save can retry.
@@ -161,9 +167,165 @@ describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)',
     const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
     ctx.currentSceneId = 'default';
     const io = createDiskIo(deps);
-    expect(await io.doSaveDocToDisk()).toBe(false);
+    const result = await io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expect(result).toMatchObject({ ok: false, error: { code: 'save-serialization-failed' } });
     expect(net.fetchCalls.length).toBe(0);
     expect(net.fetchTimeoutCalls.length).toBe(0);
+  });
+});
+
+// M2-T1: the real save safety boundary must expose structured terminal failures,
+// not a boolean or a message copied from console output. Every fixture uses an
+// injected serializer so the test reaches the exact guard under test without a
+// live WebGPU world. A fake resource store records the old bytes and only changes
+// them after a successful canonical commit; all refusal paths must leave them and
+// the dirty/self-save facts untouched.
+const validPack = (options?: {
+  readonly entities?: readonly unknown[];
+  readonly inlineAssets?: number;
+}): string => JSON.stringify({
+  schemaVersion: '1.0.0',
+  kind: 'internal-text-package',
+  assets: [
+    {
+      guid: '550e8400-e29b-41d4-a716-446655440000',
+      kind: 'scene',
+      refs: [],
+      payload: { entities: options?.entities ?? [{ localId: 'root' }] },
+    },
+    ...Array.from({ length: options?.inlineAssets ?? 0 }, (_, index) => ({
+      guid: `inline-${index}`,
+      kind: 'material',
+      refs: [],
+      payload: { name: `material-${index}` },
+    })),
+  ],
+});
+
+function saveFixture(options: {
+  readonly serialized: string | null;
+  readonly ctx?: Partial<ScenePersistenceContext>;
+  readonly fetchImpl?: (path: string, init?: RequestInit) => Promise<Response>;
+  readonly transaction?: DiskIoDeps['prepareResourceTransaction'];
+  readonly serializerThrows?: boolean;
+}): {
+  readonly io: ReturnType<typeof createDiskIo>;
+  readonly ctx: ScenePersistenceContext;
+  readonly fetchCalls: Array<{ path: string; init?: RequestInit }>;
+  readonly bytes: { value: string };
+} {
+  const bytes = { value: '{"lastGood":true}\n' };
+  const fetchCalls: Array<{ path: string; init?: RequestInit }> = [];
+  const ctx = Object.assign(createScenePersistenceContext(), {
+    currentSceneId: 'shoot',
+    isDirty: true,
+    ...options.ctx,
+  });
+  const { gateway } = makeFakeGateway();
+  const deps: DiskIoDeps = {
+    ctx,
+    gateway,
+    fetch: async (path, init) => {
+      fetchCalls.push({ path, init });
+      if (options.fetchImpl) return options.fetchImpl(path, init);
+      bytes.value = typeof init?.body === 'string' ? init.body : bytes.value;
+      return new Response('{}', { status: 200 });
+    },
+    fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+    resolveGamePath: (rel) => `/games/g1/${rel}`,
+    notifyDocChanged: () => {},
+    serializeForSave: () => {
+      if (options.serializerThrows) throw new Error('serializer fixture exploded');
+      return options.serialized;
+    },
+    prepareResourceTransaction: options.transaction,
+  };
+  return { io: createDiskIo(deps), ctx, fetchCalls, bytes };
+}
+
+function expectSaveFailure(
+  result: SaveDocToDiskResult,
+  code: string,
+  expected: Record<string, unknown>,
+): void {
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code,
+      hint: expect.any(String),
+      retryable: expect.any(Boolean),
+      recoveryActions: expect.arrayContaining([expect.any(String)]),
+      ...expected,
+    },
+  });
+}
+
+describe('M2-T1 structured save failures preserve bytes and dirty state', () => {
+  it('classifies serializer failure before any write', async () => {
+    const fixture = saveFixture({ serialized: null });
+    const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expectSaveFailure(result, 'save-serialization-failed', { subjectRef: { kind: 'scene', id: '/games/g1/scene.pack.json' } });
+    expect(fixture.fetchCalls).toHaveLength(0);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
+    expect(fixture.ctx.lastSelfSave).toBeNull();
+  });
+
+  it('classifies pack-shell validation failure before any write', async () => {
+    const fixture = saveFixture({ serialized: JSON.stringify({ schemaVersion: '1.0.0', assets: [] }) });
+    const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expectSaveFailure(result, 'save-pack-validation-failed', { subjectRef: { kind: 'scene', id: '/games/g1/scene.pack.json' } });
+    expect(fixture.fetchCalls).toHaveLength(0);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
+  });
+
+  it('classifies inline-asset floor loss with expected/current counts', async () => {
+    const fixture = saveFixture({ serialized: validPack({ inlineAssets: 1 }), ctx: { loadedInlineAssetFloor: 2 } });
+    const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expectSaveFailure(result, 'save-inline-assets-missing', {
+      expected: { minimum: 2 },
+      current: { actual: 1 },
+      subjectRef: { kind: 'scene', id: '/games/g1/scene.pack.json' },
+    });
+    expect(fixture.fetchCalls).toHaveLength(0);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
+  });
+
+  it('classifies entity floor loss with expected/current counts', async () => {
+    const fixture = saveFixture({ serialized: validPack({ entities: [] }), ctx: { loadedEntityFloor: 1 } });
+    const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expectSaveFailure(result, 'save-entities-missing', {
+      expected: { minimum: 1 },
+      current: { actual: 0 },
+      subjectRef: { kind: 'scene', id: '/games/g1/scene.pack.json' },
+    });
+    expect(fixture.fetchCalls).toHaveLength(0);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
+  });
+
+  it('classifies canonical write failure and preserves the previous bytes', async () => {
+    const fixture = saveFixture({
+      serialized: validPack(),
+      fetchImpl: async () => new Response('write failed', { status: 503 }),
+    });
+    const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expectSaveFailure(result, 'save-write-failed', { subjectRef: { kind: 'scene', id: '/games/g1/scene.pack.json' } });
+    expect(fixture.fetchCalls).toHaveLength(1);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
+    expect(fixture.ctx.lastSelfSave).toBeNull();
+  });
+
+  it('classifies unexpected effect errors without treating them as writes', async () => {
+    const fixture = saveFixture({ serialized: validPack(), serializerThrows: true });
+    const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    expectSaveFailure(result, 'save-unexpected-failure', { subjectRef: { kind: 'scene', id: '/games/g1/scene.pack.json' } });
+    expect(fixture.fetchCalls).toHaveLength(0);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
   });
 });
 

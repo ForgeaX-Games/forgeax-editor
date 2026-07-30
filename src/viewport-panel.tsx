@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
 import { useHost } from '@forgeax/interface/core/app-shell';
+import { APP_EVENTS } from '@forgeax/interface/lib/storageKeys';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +58,11 @@ function setContextKeys(host: AppHost, values: Record<string, ContextKeyValue>):
 
 function syncViewportContext(host: AppHost): void {
   const q = getViewportQuadrant();
+  const running = q.run !== 'edit';
+  document.documentElement.dataset.forgeaxViewportRunning = String(running);
+  window.dispatchEvent(new CustomEvent(APP_EVENTS.viewportRunChanged, {
+    detail: { running },
+  }));
   setContextKeys(host, {
     'panel.viewport.mounted': true,
     'panel.viewport.run': q.run,
