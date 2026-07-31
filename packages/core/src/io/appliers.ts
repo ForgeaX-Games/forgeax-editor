@@ -24,7 +24,9 @@
 //   research F-6: applyCommand switch break-out needs unified table
 
 import type { CommandError, EditorOp } from '../types';
+import type { CommandOrigin } from './gateway-history';
 import type { ApplyResult } from '../types';
+import type { RunProgress } from '@forgeax/editor-product';
 import {
   applyCommand,
   applySpawnEntity,
@@ -55,6 +57,9 @@ export type ApplierMap = Map<string, ApplierFn>;
  *  as a local shape here (not imported from gateway) to avoid an appliers↔gateway
  *  import cycle. Optional so existing (op)-only session appliers stay compatible. */
 export interface SessionApplierCtx {
+  /** Origin of the outer Gateway dispatch. Nested effects preserve authorship
+   * when they re-enter the same Gateway door. */
+  origin: CommandOrigin;
   /** Controlled engine-write proxy (the same EngineFacade the document executor
    *  hands document appliers via ctx.engine). A session applier that must move the
    *  engine world (e.g. cameraOrbit, D-12) writes through this — the ONLY move path
@@ -66,6 +71,15 @@ export interface SessionApplierCtx {
     despawn(entity: number): unknown;
     allocSharedRef(type: unknown, asset: unknown): unknown;
     get(entity: number, component: unknown): unknown;
+  };
+  /** Gateway-owned lifecycle reporter. Appliers may publish executor facts
+   * without owning a second operation status store. */
+  operationRun?: {
+    reportProgress(progress: RunProgress): void;
+    registerCancelHandler?(handler: () =>
+      | { readonly ok: true }
+      | { readonly ok: false; readonly error: CommandError }
+    ): void;
   };
 }
 

@@ -64,6 +64,7 @@ function CBFileItemImpl({
         name: asset.name,
         path: asset.packPath,
         payload: asset.payload,
+        authoring: asset.authoring,
       });
     }
     e.dataTransfer.effectAllowed = 'copy';

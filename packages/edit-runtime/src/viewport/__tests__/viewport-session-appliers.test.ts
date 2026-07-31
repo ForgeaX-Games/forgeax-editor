@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { gateway } from '@forgeax/editor-core';
+import { gateway, type PlayDirtyPolicy } from '@forgeax/editor-core';
 import { registerViewportSessionAppliers } from '../viewport-session-appliers';
 
 const registered: Array<() => void> = [];
@@ -14,7 +14,7 @@ function deps() {
   return {
     calls,
     value: {
-      play: () => { calls.push('play'); },
+      play: (policy: PlayDirtyPolicy) => { calls.push(`play:${policy}`); return { ok: true as const }; },
       stop: () => { calls.push('stop'); },
       setDisplay: (display: 'scene' | 'game') => { calls.push(`display:${display}`); },
       grantGameControl: () => { calls.push('grant'); },
@@ -28,14 +28,15 @@ describe('viewport session applier registrar (M3)', () => {
   it('registers all seven operations and routes calls to runtime deps', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));
-    expect(gateway.dispatch({ kind: 'play' })).toEqual({ ok: true });
+    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toEqual({ ok: true });
+    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'prompt' } as never)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'stop' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'setDisplay', display: 'game' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'grantGameControl' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'releaseGameControl' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });
-    expect(d.calls).toEqual(['play', 'stop', 'display:game', 'grant', 'release', 'removeSystem']);
+    expect(d.calls).toEqual(['play:last-saved', 'stop', 'display:game', 'grant', 'release', 'removeSystem']);
   });
 
   it('validates display/name, rejects duplicate registration, and disposes idempotently', () => {

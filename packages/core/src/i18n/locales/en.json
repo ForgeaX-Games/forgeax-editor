@@ -322,7 +322,13 @@
       },
       "importProgress": {
         "running": "Importing {{current}}/{{total}}: {{name}}",
-        "complete": "Import complete: {{done}}/{{total}} succeeded"
+        "phase": "Importing {{current}}/{{total}}: {{name}} · {{stage}} {{percent}}%",
+        "complete": "Import complete: {{done}}/{{total}} succeeded",
+        "failed": "Import failed: {{name}}",
+        "cancelled": "Import cancelled: {{name}}",
+        "cancel": "Cancel",
+        "retry": "Retry {{name}}",
+        "dismiss": "Dismiss"
       },
       "sourceTree": {
         "gameAssets": "Game Assets",

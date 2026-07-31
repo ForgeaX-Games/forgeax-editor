@@ -18,7 +18,7 @@ export type {
 // reach them from the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 
-export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind } from './types';
+export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy } from './types';
 export type { EditorOpLifecycle } from './types';
 
 // ── Scene pack ──
@@ -40,9 +40,12 @@ export * from './public/assets';
 // public slices. This makes consumer-driven barrel checks inspect the same
 // contract that TypeScript resolves through export-star re-exports.
 export type {
+  CommandOrigin,
+  DispatchResult,
   EngineFacade,
   OpDescriptor,
   OpHandle,
+  OperationRun,
   SessionApplier,
 } from './public/gateway';
 export type { GameplayIdentity } from './public/runtime';
@@ -56,6 +59,11 @@ export type {
   AssetWorkspaceSnapshot,
   DragAssetRef,
   ImportFileResult,
+  ImportFailure,
+  ImportFailureCode,
+  ImportProgressEvent,
+  ImportProgressStage,
+  ImportSubAsset,
   PackAsset,
 } from './public/assets';
 
@@ -258,6 +266,7 @@ export {
   initDiskWatch,
   initSceneList,
   getSceneFile,
+  getActiveScenePackPath,
   getSceneList,
   onSceneListChange,
   useSceneList,

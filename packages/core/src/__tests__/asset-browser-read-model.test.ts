@@ -54,8 +54,21 @@ describe('AssetBrowserSnapshot read model (M2)', () => {
     expect(snapshot.assets.map(asset => asset.guid)).toEqual(['guid-catalog']);
     expect(snapshot.assets[0]?.storagePackageUrl).toBe('catalog/assets/Fox.glb.pack.json');
     expect(snapshot.assets[0]?.storageSourcePath).toBe('catalog/assets/Fox.glb');
+    expect(snapshot.assets[0]?.authoring).toBeUndefined();
     expect(snapshot.sources).toContainEqual(expect.objectContaining({ sourcePath: 'assets/Fox.glb', phase: 'indexed' }));
     expect(snapshot.assets.some(asset => asset.guid === 'guid-sidecar')).toBe(false);
+  });
+
+  it('projects producer-owned authoring capability without interpreting the asset kind', async () => {
+    const authoring = {
+      placement: { operation: 'spawnEntity' as const },
+      binding: { operation: 'unavailable' as const, reason: { code: 'missing-producer-capability' as const, hint: 'provider-owned' } },
+    };
+    const { model } = makeModel({ rows: [
+      { guid: 'GUID-CUSTOM', kind: 'host/new-kind', packageUrl: 'catalog/assets/custom.pack.json', authoring },
+    ] });
+    const snapshot = await model.refresh();
+    expect(snapshot.assets[0]?.authoring).toEqual(authoring);
   });
 
   it('reports pending, indexed, raw, and invalid-meta source states', async () => {

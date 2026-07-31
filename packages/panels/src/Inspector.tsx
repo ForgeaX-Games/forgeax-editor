@@ -674,6 +674,7 @@ export function InspectorPanel() {
       field: picker.field,
       assetType: picker.assetType,
       guids: [guid],
+      requestId: crypto.randomUUID(),
       ...(picker.slot !== undefined ? { slot: picker.slot } : {}),
     });
   };
@@ -1136,6 +1137,7 @@ export function InspectorPanel() {
                                         field: f.key,
                                         assetType: arrType,
                                         guids: [ref.guid],
+                                        requestId: crypto.randomUUID(),
                                         slot: virtual ? items.length : i,
                                       });
                                     }}
@@ -1269,7 +1271,7 @@ export function InspectorPanel() {
                                       try {
                                         const ref = JSON.parse(assetJson);
                                         if (ref.guid) {
-                                          dispatchMutation({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: scalarType, guids: [ref.guid] });
+                                          dispatchMutation({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: scalarType, guids: [ref.guid], requestId: crypto.randomUUID() });
                                         }
                                       } catch { /* noop */ }
                                     }}

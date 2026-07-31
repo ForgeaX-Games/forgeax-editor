@@ -322,7 +322,13 @@
       },
       "importProgress": {
         "running": "正在导入 {{current}}/{{total}}：{{name}}",
-        "complete": "导入完成：{{done}}/{{total}} 成功"
+        "phase": "正在导入 {{current}}/{{total}}：{{name}} · {{stage}} {{percent}}%",
+        "complete": "导入完成：{{done}}/{{total}} 成功",
+        "failed": "导入失败：{{name}}",
+        "cancelled": "已取消导入：{{name}}",
+        "cancel": "取消",
+        "retry": "重试 {{name}}",
+        "dismiss": "关闭"
       },
       "sourceTree": {
         "gameAssets": "游戏资产",

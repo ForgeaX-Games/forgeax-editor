@@ -35,11 +35,13 @@ export {
 } from './operations/run-view-model';
 export type {
   OperationCenterAction,
+  OperationAssetContext,
   OperationCenterProjectionInput,
   OperationCenterRow,
   OperationProjectionSource,
   OperationRunProjectionSnapshot,
   OperationRunFactProjection,
+  OperationSubjectProjection,
   SaveRunDirtyState,
   SaveRunProjection,
 } from './operations/run-view-model';

@@ -64,7 +64,7 @@
 //   requirements AC-09: pure structural migration — every read/write is
 //     behaviorally identical (OOS-1 zero behavior change).
 import { gateway } from './gateway';
-import { sessionAppliers } from '../io/appliers';
+import { domainOf, sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
 import { registerActiveScenePackResolver } from '../session/pack-ops';
@@ -324,6 +324,9 @@ export const loadDocFromStorage = storage.loadDocFromStorage;
 // instantiateSceneRefUnderWorld / stripEditorHiddenMarker / inlineAssetCount.
 /** @internal-store — disk-watch READS this (D-6 seam). Not in facade/barrel. */
 export const scenePath = diskIo.scenePath;
+/** Read-only public projection for host consumers that must address the active
+ * authored scene pack without reimplementing scene-list path policy. */
+export const getActiveScenePackPath = diskIo.scenePath;
 // Feed the active-scene-pack resolver seam so the createMaterial document applier
 // (session/pack-ops) can default a new material into the active scene's real pack
 // without a static import cycle (pack-ops <- ... <- scene-persistence). One-way:
@@ -414,7 +417,15 @@ function dispatchAsyncSessionOp(op: EditorOp): Promise<boolean> {
 // hasPendingDiskSave); it clears on a successful save / explicit cancel / beacon
 // flush. R3: this top-level gateway.subscribe is an EVAL-TIME side effect and MUST
 // stay top-level (do NOT lazify) or dirty tracking breaks.
-gateway.subscribe(() => { ctx.isDirty = true; });
+gateway.subscribe((_doc, lastCommand) => {
+  // Session/transient operations (Play, Stop, Save, selection, display) and
+  // lifecycle pointer emits do not change authored scene bytes. Only a
+  // document-domain command, including undo/redo, makes the persistence-owned
+  // dirty bit true. Scene replacement/load paths set the bit explicitly.
+  if (lastCommand !== null && domainOf(lastCommand.kind) === 'document') {
+    ctx.isDirty = true;
+  }
+});
 
 /** True while the in-memory scene has unsaved edits (drives the dirty indicator +
  *  the disk-watch "don't clobber my edits" guard). */

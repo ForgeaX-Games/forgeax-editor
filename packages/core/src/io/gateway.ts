@@ -1,6 +1,7 @@
 import { applyCommand, createEditSession } from '../session/document';
 import type { DocApplierCtx, DocAliasMap, EngineWriteProxy } from '../session/document';
 import type { CommandError, EditorOp, EditSession } from '../types';
+import type { RunProgress } from '@forgeax/editor-product';
 import type { World } from '@forgeax/engine-ecs';
 import { clearSelection } from '../store/selection';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
@@ -42,7 +43,10 @@ import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
 // field schemas BEFORE a spawn/setComponent (instead of learning them only by
 // triggering a SPAWN_FAILED). Derive, don't duplicate.
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
-import { getSourceFileDeleteStatus } from '../session/source-file-delete-status';
+import {
+  projectSourceFileDeleteStatus,
+  sourceFileDeletePath,
+} from '../session/source-file-delete-status';
 import type { SourceFileDeleteStatus } from '../session/source-file-delete-status';
 import {
   OperationRunRegistry,
@@ -161,6 +165,12 @@ export interface ApplierCtx {
   dispatchSub(kind: string, payload: EditorOp): ReturnType<ApplierFn>;
   /** Read-side query snapshot function. Same as the gateway.buildQueryFn() output. */
   query: QuerySnapshotFn;
+  /** Origin of the outer Gateway dispatch, preserved for session appliers. */
+  origin: CommandOrigin;
+  /** Gateway-owned progress reporter for request-correlated operations. */
+  operationRun?: {
+    reportProgress(progress: RunProgress): void;
+  };
 }
 
 /**
@@ -286,6 +296,11 @@ export class EditGateway {
   // fresh play world is dropped, so stale game closures cannot outlive their world.
   private _gameProjection: GameProjectionRegistry | null = null;
 
+  // Dirty state remains owned by scene-persistence. The downstream host binds
+  // this read-only provider so AI and UI inspect the same fact through Gateway
+  // without importing or duplicating persistence state.
+  private _dirtyReadProvider: (() => boolean) | null = null;
+
 
   // ── Play-attempt observability (solo round-8, friction #3) ────────────────
   // ▶ Play assembly is ASYNC and fire-and-forget: `dispatch({kind:'play'})`
@@ -301,17 +316,6 @@ export class EditGateway {
   // field (architecture-principles §2 Derive).
   private _playPending = false;
   private _lastPlayError: CommandError | null = null;
-
-  // ── Async scene-mount observability (solo round-28, P3/P9) ────────────────
-  // `addSceneAssetToScene` is necessarily a session-domain detached continuation:
-  // it must load a catalog GUID before the canonical engine instantiate spine can
-  // write the derived mount subtree. As with Play, immediate `{ok:true}` only means
-  // the request was accepted. These two fields make the TERMINAL result public so a
-  // docs-only caller can poll a stable operation-specific state rather than infer
-  // success from a browser reload, host log, or a stale catalog.
-  private _sceneMountPending = false;
-  private _lastSceneMountSucceeded = false;
-  private _lastSceneMountError: CommandError | null = null;
 
   /** The current active World pointer (Derive). edit mode → doc.world, play mode → playWorld.
    *  During a studio cross-game switch teardown may briefly leave doc.world undefined
@@ -350,51 +354,6 @@ export class EditGateway {
    *  attempt begins or play succeeds (see beginPlayAttempt/enterPlay). */
   get lastPlayError(): CommandError | null {
     return this._lastPlayError;
-  }
-
-  /**
-   * Terminal-aware scene-mount phase. `pending` means the accepted
-   * `addSceneAssetToScene` request is still resolving its GUID-backed SceneAsset;
-   * `mounted` confirms the engine instantiated its derived subtree; `failed` pairs
-   * with `lastSceneMountError`; `idle` has no in-flight or failed attempt.
-   */
-  get sceneMountPhase(): 'idle' | 'pending' | 'mounted' | 'failed' {
-    if (this._sceneMountPending) return 'pending';
-    if (this._lastSceneMountError !== null) return 'failed';
-    if (this._lastSceneMountSucceeded) return 'mounted';
-    return 'idle';
-  }
-
-  /** The structured terminal error from the latest failed scene mount, or null. */
-  get lastSceneMountError(): CommandError | null {
-    return this._lastSceneMountError;
-  }
-
-  /** Mark a `addSceneAssetToScene` continuation as in flight. */
-  beginSceneMountAttempt(): void {
-    this._sceneMountPending = true;
-    this._lastSceneMountSucceeded = false;
-    this._lastSceneMountError = null;
-    this._rev++;
-    for (const fn of this.listeners) fn(this.doc, null);
-  }
-
-  /** Mark the asynchronous scene mount successful. */
-  completeSceneMountAttempt(): void {
-    this._sceneMountPending = false;
-    this._lastSceneMountSucceeded = true;
-    this._lastSceneMountError = null;
-    this._rev++;
-    for (const fn of this.listeners) fn(this.doc, null);
-  }
-
-  /** Publish a structured scene-mount failure through the public gateway read surface. */
-  failSceneMountAttempt(error: CommandError): void {
-    this._sceneMountPending = false;
-    this._lastSceneMountSucceeded = false;
-    this._lastSceneMountError = error;
-    this._rev++;
-    for (const fn of this.listeners) fn(this.doc, null);
   }
 
   /** Mark a ▶ Play attempt as in flight (playPhase → 'starting'). Clears any prior
@@ -510,7 +469,7 @@ export class EditGateway {
   // ── Lifecycle: active-op slot (plan-strategy §2 D-2) ──────────────────────
   private _activeOp: ActiveOp | null = null;
 
-  // Save is the first adopter of the request-correlated OperationRun surface.
+  // Request-correlated session operations share the Gateway-owned OperationRun surface.
   // The registry is Gateway-owned; wrappers and downstream projections read it
   // instead of maintaining a completion map of their own.
   readonly operationRuns = new OperationRunRegistry();
@@ -555,6 +514,19 @@ export class EditGateway {
     return this._getEngineFacade();
   }
 
+  /** Read whether the authored scene has unsaved in-memory edits. */
+  hasPendingDiskSave(): boolean {
+    return this._dirtyReadProvider?.() ?? false;
+  }
+
+  /** Bind the persistence-owned dirty read model; returns an idempotent detach. */
+  registerDirtyReadProvider(provider: () => boolean): () => void {
+    this._dirtyReadProvider = provider;
+    return () => {
+      if (this._dirtyReadProvider === provider) this._dirtyReadProvider = null;
+    };
+  }
+
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
   }
@@ -575,7 +547,7 @@ export class EditGateway {
     return this.operationRuns.subscribe(requestId, listener);
   }
 
-  /** Subscribe to every Gateway-owned save run fact, including terminal updates. */
+  /** Subscribe to every Gateway-owned operation run fact, including terminal updates. */
   subscribeOperationRuns(listener: OperationRunListener): () => void {
     return this.operationRuns.subscribeAll(listener);
   }
@@ -597,19 +569,41 @@ export class EditGateway {
         ok: false,
         error: {
           code: 'operation-not-retryable',
-          hint: 'Only a failed save run can be retried.',
+          hint: 'Only a failed retryable operation run can be retried.',
           current: source.value,
         },
       };
     }
-    return this.dispatch({ kind: 'saveDocToDisk', requestId: retryRequestId, retryOfRequestId: requestId }, origin);
+    if (source.value.operationId === 'saveDocToDisk') {
+      return this.dispatch({ kind: 'saveDocToDisk', requestId: retryRequestId, retryOfRequestId: requestId }, origin);
+    }
+    if (source.value.input === null || typeof source.value.input !== 'object' || Array.isArray(source.value.input)) {
+      return {
+        ok: false,
+        error: {
+          code: 'operation-not-retryable',
+          hint: 'The failed operation did not retain replayable input.',
+          current: source.value,
+        },
+      };
+    }
+    return this.dispatch({
+      ...(source.value.input as Record<string, unknown>),
+      kind: source.value.operationId,
+      requestId: retryRequestId,
+      retryOfRequestId: requestId,
+    } as EditorOp, origin);
   }
 
   // ── Executor: build ApplierCtx (plan-strategy §2 D-2) ────────────────────
 
   /** Build the IoC context for an applier execution.
    *  ctx.engine / ctx.dispatchSub / ctx.query — NO world field (AC-01). */
-  private _buildCtx(): ApplierCtx {
+  private _buildCtx(
+    progressReporter?: (progress: RunProgress) => void,
+    cancelHandlerRegistrar?: (handler: Parameters<OperationRunRegistry['registerCancelHandler']>[1]) => void,
+    origin: CommandOrigin = 'human',
+  ): ApplierCtx {
     const engine = this._getEngineFacade();
     // Read-side reader bound to the ACTIVE world (makeQueryFn calls getWorld per
     // query, so a world swap is reflected) — sunk assembly, w10. activeWorld
@@ -624,7 +618,21 @@ export class EditGateway {
     const dispatchSub = (_kind: string, sub: EditorOp): ReturnType<ApplierFn> => {
       return this._execDocumentApplier(sub);
     };
-    return { engine, assetIO, dispatchSub, query };
+    return {
+      engine,
+      assetIO,
+      dispatchSub,
+      query,
+      origin,
+      ...(progressReporter === undefined
+        ? {}
+        : {
+          operationRun: {
+            reportProgress: progressReporter,
+            ...(cancelHandlerRegistrar === undefined ? {} : { registerCancelHandler: cancelHandlerRegistrar }),
+          },
+        }),
+    };
   }
 
   // ── Executor: span-wrapped document applier call ──────────────────────────
@@ -872,12 +880,17 @@ export class EditGateway {
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
-    const saveRequestId = kind === 'saveDocToDisk'
+    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'bindAssetRef'
       ? (cmd as { readonly requestId?: unknown }).requestId
       : undefined;
-    const isRequestCorrelatedSave = typeof saveRequestId === 'string';
-    let acceptedSave: OperationRunReadResult | null = null;
+    const isRequestCorrelatedSave = kind === 'saveDocToDisk' && typeof requestId === 'string';
+    const isRequestCorrelatedDelete = kind === 'deleteSourceFile' && typeof requestId === 'string';
+    const isRequestCorrelatedImport = (kind === 'importAsset' || kind === 'reimportAsset') && typeof requestId === 'string';
+    const isRequestCorrelatedSceneMount = kind === 'addSceneAssetToScene' && typeof requestId === 'string';
+    const isRequestCorrelatedBind = kind === 'bindAssetRef' && typeof requestId === 'string';
+    let acceptedRun: OperationRunReadResult | null = null;
     if (isRequestCorrelatedSave) {
+      const saveRequestId = requestId as string;
       const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
       const actor = origin === 'ai'
         ? { id: 'ai', kind: 'ai' as const }
@@ -908,30 +921,121 @@ export class EditGateway {
       if (accepted.reused) {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
       }
-      acceptedSave = { ok: true, value: accepted.run };
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedDelete) {
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+        operationId: kind,
+        cancellable: false,
+        retryable: false,
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedImport) {
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const retrySource = typeof retryOfRequestId === 'string'
+        ? this.operationRuns.getRunResult(retryOfRequestId)
+        : null;
+      if (retrySource !== null && !retrySource.ok) {
+        return { ok: false, error: retrySource.error as unknown as CommandError };
+      }
+      if (retrySource !== null && (retrySource.value.status !== 'failed' || !retrySource.value.retryable)) {
+        return {
+          ok: false,
+          error: {
+            code: 'operation-not-retryable',
+            hint: 'Only a failed retryable operation run can be retried.',
+            current: retrySource.value,
+          },
+        };
+      }
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+        operationId: kind,
+        cancellable: true,
+        retryable: true,
+        ...(retrySource === null ? {} : {
+          parentRunId: retrySource.value.runId,
+          attempt: retrySource.value.attempt + 1,
+        }),
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedSceneMount) {
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+        operationId: kind,
+        cancellable: false,
+        retryable: false,
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedBind) {
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+        operationId: kind,
+        cancellable: false,
+        retryable: false,
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedRun = { ok: true, value: accepted.run };
     }
 
-    const ctx = this._buildCtx();
+    const progressReporter = acceptedRun === null
+      ? undefined
+      : (progress: RunProgress) => {
+        this.operationRuns.reportProgress(acceptedRun.value.runId, progress);
+      };
+    const cancelHandlerRegistrar = acceptedRun === null
+      ? undefined
+      : (handler: Parameters<OperationRunRegistry['registerCancelHandler']>[1]) => {
+        this.operationRuns.registerCancelHandler(acceptedRun.value.runId, handler);
+      };
+    let runningRun: OperationRun | undefined;
+    if (acceptedRun !== null) {
+      const running = this.operationRuns.markRunning(acceptedRun.value.runId);
+      if (!running.ok) return { ok: false, error: running.error as unknown as CommandError };
+      runningRun = running.value;
+    }
+    const ctx = this._buildCtx(progressReporter, cancelHandlerRegistrar, origin);
     pushSpan(kind);
     const sResult = applier(cmd, ctx);
     const sOk = sResult.ok;
     popSpan(sOk ? 'OK' : 'ERROR');
     if (!sOk) {
-      if (acceptedSave !== null) this.operationRuns.fail(acceptedSave.value.runId, sResult.error as unknown as import('@forgeax/editor-product').CommandError);
+      if (acceptedRun !== null) this.operationRuns.fail(acceptedRun.value.runId, sResult.error as unknown as import('@forgeax/editor-product').CommandError);
       return sResult;
     }
 
-    if (acceptedSave !== null) {
-      const running = this.operationRuns.markRunning(acceptedSave.value.runId);
-      if (!running.ok) return { ok: false, error: running.error as unknown as CommandError };
+    if (acceptedRun !== null) {
       if (sResult.completion !== undefined) {
-        this.operationRuns.bindCompletion(acceptedSave.value.runId, sResult.completion, (run) => {
+        this.operationRuns.bindCompletion(acceptedRun.value.runId, sResult.completion, (run) => {
           if (run.status !== 'succeeded' || this.transientMode) return;
           this.ledger.push(cmd);
           this.origins.push(origin);
         });
       }
-      return { ok: true, result: { created: [], operationRun: running.value } };
+      return { ok: true, result: { created: [], operationRun: runningRun } };
     }
 
     // Ledger-only middle tier (plan-strategy §2 D-1): session ops append to the
@@ -1373,7 +1477,10 @@ export class EditGateway {
 
   /** Read the terminal state of an accepted deleteSourceFile request. */
   sourceFileDeleteStatus(requestId: string): SourceFileDeleteStatus | null {
-    return getSourceFileDeleteStatus(requestId);
+    const run = this.operationRuns.getRun(requestId);
+    if (run === undefined) return null;
+    const path = sourceFileDeletePath(run);
+    return path === null ? null : projectSourceFileDeleteStatus(run, path);
   }
 
   /**

@@ -26,14 +26,14 @@ import { useContentBrowserCommands } from './hooks/useContentBrowserCommands';
 import { computeDeleteImpact } from './delete-guard';
 import { authorizeSubjectAction, preflightSubjectAction, type SubjectActionRequest } from './workspace/subject-actions';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
-import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, type CRUDCallbacks } from './CBContextMenu';
+import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, dispatchReimportAsset, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
 import { CBNavigationBar } from './CBNavigationBar';
 import { CBGrid } from './CBGrid';
 import { CBPreviewPanel } from './CBPreviewPanel';
 import { CBSourceTree } from './CBSourceTree';
 import { iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
-import { importFiles, type ImportProgress } from './import-pipeline';
+import { importFiles, retryImportRun, type ImportProgress, type ImportRunRecord } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
@@ -98,6 +98,13 @@ export function ContentBrowser() {
   const { allAssets, loading, reload, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const currentImportRun = importProgress?.currentRun;
+  const currentImportIsActive = currentImportRun?.status === 'accepted' || currentImportRun?.status === 'running';
+  const currentImportCanCancel = currentImportIsActive === true
+    && currentImportRun.cancellable
+    && currentImportRun.progress.stage === 'cooking'
+    && currentImportRun.progress.fraction < 1;
+  const retryableImportRuns = importProgress?.runs.filter(record => record.run.status === 'failed' && record.run.retryable) ?? [];
   const [dragOver, setDragOver] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
@@ -611,12 +618,14 @@ export function ContentBrowser() {
     const firstAsset = file.assets[0];
     const items: CBContextMenuEntry[] = [
       { title: file.name, icon: iconNameForFileFamily(file.family) },
-      ...fileSpecificMenuItems(t, file).map(item => ({
+      ...fileSpecificMenuItems(t, file, firstAsset).map(item => ({
         ...item,
         onClick: item.id === 'expand-sub-assets'
           ? () => togglePackExpansion(file.path)
           : item.id === 'render-preview' || item.id === 'audition'
           ? () => setPreviewItem(file)
+          : item.id === 'reimport' && firstAsset
+            ? () => dispatchReimportAsset(firstAsset)
           : item.id === 'copy-guid' && firstAsset
             ? () => { void navigator.clipboard.writeText(file.assets.map(asset => asset.guid).join('\n')); }
             : undefined,
@@ -666,7 +675,7 @@ export function ContentBrowser() {
       currentPath: nav.currentPath,
     });
 
-    setImportProgress({ total: files.length, completed: 0, current: '', results: [] });
+    setImportProgress({ total: files.length, completed: 0, current: '', results: [], runs: [] });
     const results = await importFiles(
       Array.from(files),
       nav.currentPath,
@@ -683,9 +692,47 @@ export function ContentBrowser() {
       console.warn('[ContentBrowser] import errors:', errors.map(e => `${e.filename}: ${e.error}`));
     }
 
-    setTimeout(() => setImportProgress(null), 3000);
+    if (errors.length === 0) setTimeout(() => setImportProgress(null), 3000);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [nav.currentPath, reload]);
+
+  const handleCancelImport = useCallback(() => {
+    const requestId = importProgress?.currentRequestId;
+    if (requestId === undefined) return;
+    const cancelled = gateway.cancelOperationRun(requestId);
+    if (!cancelled.ok) {
+      setImportProgress(previous => previous === null ? previous : { ...previous, actionError: cancelled.error.hint });
+    }
+  }, [importProgress?.currentRequestId]);
+
+  const handleRetryImport = useCallback(async (record: ImportRunRecord) => {
+    const originalRunId = record.run.runId;
+    const retried = await retryImportRun(record, (requestId, run) => {
+      setImportProgress(previous => {
+        if (previous === null) return previous;
+        const runs = previous.runs.map(entry => entry.run.runId === originalRunId
+          ? { ...entry, requestId, run }
+          : entry);
+        return {
+          ...previous,
+          currentRequestId: requestId,
+          currentRun: run,
+          runs,
+          actionError: undefined,
+        };
+      });
+    });
+    if (!retried.ok) {
+      setImportProgress(previous => previous === null ? previous : { ...previous, actionError: retried.error.hint });
+      return;
+    }
+    setImportProgress(previous => {
+      if (previous === null) return previous;
+      const results = previous.results.map(result => result.filename === record.filename ? retried.result : result);
+      return { ...previous, results, currentRequestId: retried.requestId, currentRun: retried.terminal, actionError: undefined };
+    });
+    reload();
+  }, [reload]);
 
   const clearKindFilters = useCallback(() => {
     filter.filters.filter(f => f.active).forEach(f => filter.toggleFilter(f.id));
@@ -804,8 +851,8 @@ export function ContentBrowser() {
       nav.currentPath,
       (p) => setImportProgress(p),
       reload,
-    ).then(() => {
-      setTimeout(() => setImportProgress(null), 3000);
+    ).then((results) => {
+      if (results.every(result => result.status === 'done')) setTimeout(() => setImportProgress(null), 3000);
     });
   }, [gameSlug, nav.currentPath, reload]);
 
@@ -912,7 +959,19 @@ export function ContentBrowser() {
       {importProgress && (
         <div className="cb-import-progress">
           <span className="cb-import-progress-text">
-            {importProgress.completed < importProgress.total
+            {currentImportRun?.status === 'failed'
+              ? t('editor.contentBrowser.importProgress.failed', { name: importProgress.current })
+              : currentImportRun?.status === 'cancelled'
+              ? t('editor.contentBrowser.importProgress.cancelled', { name: importProgress.current })
+              : currentImportRun?.status === 'accepted' || currentImportRun?.status === 'running'
+              ? t('editor.contentBrowser.importProgress.phase', {
+                  current: importProgress.completed + 1,
+                  total: importProgress.total,
+                  name: importProgress.current,
+                  stage: currentImportRun.progress.stage,
+                  percent: Math.round(currentImportRun.progress.fraction * 100),
+                })
+              : importProgress.completed < importProgress.total
               ? t('editor.contentBrowser.importProgress.running', {
                   current: importProgress.completed + 1,
                   total: importProgress.total,
@@ -926,9 +985,44 @@ export function ContentBrowser() {
           <div className="cb-import-progress-bar">
             <div
               className="cb-import-progress-fill"
-              style={{ width: `${(importProgress.completed / importProgress.total) * 100}%` }}
+              style={{ width: `${Math.round((currentImportRun?.progress.fraction ?? (importProgress.completed / importProgress.total)) * 100)}%` }}
             />
           </div>
+          {importProgress.actionError && (
+            <span className="cb-import-progress-error">{importProgress.actionError}</span>
+          )}
+          {currentImportIsActive && (
+            <Button
+              size="sm"
+              variant="subtle"
+              className="cb-import-progress-action"
+              disabled={!currentImportCanCancel}
+              onClick={handleCancelImport}
+            >
+              {t('editor.contentBrowser.importProgress.cancel')}
+            </Button>
+          )}
+          {retryableImportRuns.map(record => (
+            <Button
+              key={record.run.runId}
+              size="sm"
+              variant="subtle"
+              className="cb-import-progress-action"
+              onClick={() => { void handleRetryImport(record); }}
+            >
+              {t('editor.contentBrowser.importProgress.retry', { name: record.filename })}
+            </Button>
+          ))}
+          {importProgress.completed >= importProgress.total && (
+            <Button
+              size="sm"
+              variant="subtle"
+              className="cb-import-progress-action"
+              onClick={() => setImportProgress(null)}
+            >
+              {t('editor.contentBrowser.importProgress.dismiss')}
+            </Button>
+          )}
         </div>
       )}
 

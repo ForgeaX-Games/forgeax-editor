@@ -6,6 +6,9 @@
 // catalog-only; sidecars contribute source/indexing state and diagnostics.
 
 import { createAssetWorkspace, type AssetWorkspaceSnapshot, type AssetWorkspaceIssue } from '@forgeax/editor-product';
+import type { AssetAuthoringCapability } from '@forgeax/engine-types';
+
+export type { AssetAuthoringCapability } from '@forgeax/engine-types';
 
 export interface AssetBrowserCatalogRoot {
   readonly root: string;
@@ -19,6 +22,8 @@ export interface AssetBrowserRegistryEntry {
   readonly packageUrl: string;
   readonly refs?: readonly string[];
   readonly sourcePath?: string;
+  /** Producer-owned placement/binding facts; consumers must not infer from kind. */
+  readonly authoring?: AssetAuthoringCapability;
 }
 
 export interface AssetBrowserRegistry {
@@ -58,6 +63,8 @@ export interface AssetBrowserAsset {
    * this value deliberately remains in the file backend's address space. */
   readonly storageSourcePath?: string;
   readonly refs: readonly string[];
+  /** Producer-owned placement/binding facts projected without reinterpretation. */
+  readonly authoring?: AssetAuthoringCapability;
 }
 
 export type AssetSourcePhase = 'raw' | 'pending-index' | 'indexed' | 'invalid-meta';
@@ -268,6 +275,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
         ...(sourcePath ? { sourcePath } : {}),
         ...(row.sourcePath ? { storageSourcePath: row.sourcePath } : {}),
         refs: [...(row.refs ?? [])],
+        ...(row.authoring !== undefined ? { authoring: row.authoring } : {}),
       });
       if (sourcePath) catalogBySource.set(sourcePath, [...(catalogBySource.get(sourcePath) ?? []), guid]);
     }

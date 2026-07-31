@@ -4,6 +4,7 @@
 // import them directly here.
 
 import type { TFunction } from '@forgeax/editor-core/i18n';
+import type { AssetAuthoringCapability } from '@forgeax/engine-types';
 import { resolveGamePath } from '@forgeax/editor-core';
 import type { CBAsset, CBFileFamily, CBViewItem } from './types';
 
@@ -45,6 +46,7 @@ export interface RegistryCatalogEntry {
   packageUrl: string;
   refs?: readonly string[];
   sourcePath?: string;
+  authoring?: AssetAuthoringCapability;
 }
 
 export type CBContextMenuEntry = {
@@ -238,6 +240,7 @@ export function menuIconForId(id: string): string {
 export function fileSpecificMenuItems(
   t: TFunction,
   file: { family: CBFileFamily },
+  firstAsset?: Pick<CBAsset, 'sourcePath'>,
 ): { id: string; label: string; icon: string; disabled?: boolean }[] {
   switch (file.family) {
     case 'doc':
@@ -256,20 +259,20 @@ export function fileSpecificMenuItems(
     case 'pack':
       return [
         { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
-        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: true },
+        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined },
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'meta':
       return [
         { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
-        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: true },
+        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined },
         { id: 'locate-source-file', label: t('editor.contentBrowser.contextMenu.locateSourceFile'), icon: 'crosshair', disabled: true },
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'model':
       return [
         { id: 'import-as-asset', label: t('editor.contentBrowser.contextMenu.importAsAsset'), icon: 'box', disabled: true },
-        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: true },
+        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined },
         { id: 'generate-meta', label: t('editor.contentBrowser.contextMenu.generateMeta'), icon: 'file-cog', disabled: true },
       ];
     case 'image':
@@ -325,6 +328,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
     ...(e.sourcePath ? { sourcePath: e.sourcePath } : {}),
     packIndex: index,
     refs: e.refs ? [...e.refs] : [],
+    ...(e.authoring !== undefined ? { authoring: e.authoring } : {}),
     estimatedSize: 0,
   };
 }

@@ -8,9 +8,9 @@
 // dispatchable), and would have FAILED before it (no op → hasOp false, dispatch →
 // UNKNOWN_OP):
 //   - addSceneAssetToScene is a SESSION-domain op, cataloged (AI-discoverable via
-//     listOps), with sceneGuid as the one required arg.
-//   - dispatching it with a valid sceneGuid is accepted (fire-and-forget session
-//     applier — the mount completes in a detached promise).
+//     listOps), with sceneGuid + requestId as required args.
+//   - dispatching it with a valid sceneGuid/requestId is accepted and returns the
+//     independent OperationRun that carries the asynchronous mount outcome.
 //   - dispatching it with a missing/empty sceneGuid fails fast with a STRUCTURED
 //     error (INVALID_ARGS), never a silent no-op (charter P3 / Fail Fast).
 
@@ -29,8 +29,11 @@ describe('addSceneAssetToScene op registration (catalog SSOT)', () => {
     expect(getOp('addSceneAssetToScene')?.domain).toBe('session');
     const op = listOps().find((o) => o.id === 'addSceneAssetToScene');
     expect(op?.domain).toBe('session');
-    // argsSchema drives AI self-discovery — sceneGuid is the one required field.
+    // argsSchema drives AI self-discovery — both identity inputs are required.
     expect(op?.argsSchema?.required).toContain('sceneGuid');
+    expect(op?.argsSchema?.required).toContain('requestId');
+    expect(op?.operationRun?.read.wait).toBe('waitOperationRun');
+    expect(op?.operationRun?.cancellable).toBe(false);
   });
 
   // solo round-10 (P6 animation): the argsSchema description is the machine-readable
@@ -69,21 +72,30 @@ describe('addSceneAssetToScene dispatch (session applier)', () => {
   });
 
   it('empty sceneGuid fails fast with a STRUCTURED error', () => {
-    const r = gw.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: '' });
+    const r = gw.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: '', requestId: 'scene-empty-guid' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
   });
 
-  it('valid sceneGuid is accepted (fire-and-forget; mount runs detached)', () => {
-    // The applier returns synchronously {ok:true}; the async spawnGlbSceneAsMount
-    // body runs in a detached promise (it will no-op here — no live world/registry
-    // — and warn, which is the intended fire-and-forget contract, not a throw).
+  it('missing requestId fails validation before accepting an unobservable mount', () => {
+    const r = gw.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: 'scene-guid' } as never);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
+  });
+
+  it('valid sceneGuid/requestId is accepted with a running OperationRun', () => {
     const r = gw.dispatch({
       kind: 'addSceneAssetToScene',
       sceneGuid: '019f5545-087e-7f92-9041-f5b839605afe',
       name: 'Fox',
+      requestId: 'scene-mount-accepted',
     });
     expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.result?.operationRun?.requestId).toBe('scene-mount-accepted');
+      expect(r.result?.operationRun?.operationId).toBe('addSceneAssetToScene');
+      expect(r.result?.operationRun?.status).toBe('running');
+    }
   });
 });
 
@@ -94,35 +106,43 @@ describe('addSceneAssetToScene async observability', () => {
     gw = new EditGateway(createEditSession());
   });
 
-  it('publishes pending → mounted without inventing a second operation path', () => {
-    expect(gw.sceneMountPhase).toBe('idle');
-    expect(gw.lastSceneMountError).toBeNull();
-
-    gw.beginSceneMountAttempt();
-    expect(gw.sceneMountPhase).toBe('pending');
-    expect(gw.lastSceneMountError).toBeNull();
-
-    gw.completeSceneMountAttempt();
-    expect(gw.sceneMountPhase).toBe('mounted');
-    expect(gw.lastSceneMountError).toBeNull();
-  });
-
-  it('publishes a structured terminal mount failure that a caller can branch on', () => {
-    gw.beginSceneMountAttempt();
-    gw.failSceneMountAttempt({
-      code: 'scene-mount-failed',
-      hint: 'could not load scene asset guid',
+  it('keeps concurrent mount requests independent and publishes terminal facts by requestId', async () => {
+    const first = gw.dispatch({
+      kind: 'addSceneAssetToScene',
+      sceneGuid: 'scene-guid-one',
+      requestId: 'scene-mount-one',
     });
-
-    expect(gw.sceneMountPhase).toBe('failed');
-    expect(gw.lastSceneMountError).toEqual({
-      code: 'scene-mount-failed',
-      hint: 'could not load scene asset guid',
+    const second = gw.dispatch({
+      kind: 'addSceneAssetToScene',
+      sceneGuid: 'scene-guid-two',
+      requestId: 'scene-mount-two',
     });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
 
-    // A retry resets the old terminal state before the next asynchronous result.
-    gw.beginSceneMountAttempt();
-    expect(gw.sceneMountPhase).toBe('pending');
-    expect(gw.lastSceneMountError).toBeNull();
+    const [one, two] = await Promise.all([
+      gw.waitOperationRun('scene-mount-one'),
+      gw.waitOperationRun('scene-mount-two'),
+    ]);
+    expect(one.ok).toBe(true);
+    expect(two.ok).toBe(true);
+    if (one.ok && two.ok) {
+      expect(one.value.requestId).toBe('scene-mount-one');
+      expect(two.value.requestId).toBe('scene-mount-two');
+      expect(['succeeded', 'failed']).toContain(one.value.status);
+      expect(['succeeded', 'failed']).toContain(two.value.status);
+      if (one.value.status === 'failed') {
+        expect(one.value.error?.code).toBe('scene-mount-failed');
+        expect(one.value.error?.current).toMatchObject({ requestId: 'scene-mount-one', sceneGuid: 'scene-guid-one' });
+        expect((one.value.error?.current as { cleanup?: { attempted?: boolean } })?.cleanup?.attempted).toBeTypeOf('boolean');
+      }
+      if (two.value.status === 'failed') {
+        expect(two.value.error?.code).toBe('scene-mount-failed');
+        expect(two.value.error?.current).toMatchObject({ requestId: 'scene-mount-two', sceneGuid: 'scene-guid-two' });
+        expect((two.value.error?.current as { cleanup?: { attempted?: boolean } })?.cleanup?.attempted).toBeTypeOf('boolean');
+      }
+      expect((one.value.input as { requestId?: string }).requestId).toBe('scene-mount-one');
+      expect((two.value.input as { requestId?: string }).requestId).toBe('scene-mount-two');
+    }
   });
 });

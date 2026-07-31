@@ -35,6 +35,7 @@
 //   placeholder (plan-strategy §D-5 narrows AC-10 to the mesh branch only).
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import type { AssetAuthoringCapability } from '@forgeax/engine-types';
 import { resolveMeshOriginalMaterials } from '../scene/mesh-original-materials';
 
 export interface DragAssetRef {
@@ -44,6 +45,8 @@ export interface DragAssetRef {
   name?: string;
   path?: string;
   payload?: Record<string, unknown>;
+  /** Producer-owned placement/binding facts; never inferred by consumers. */
+  authoring?: AssetAuthoringCapability;
 }
 
 export interface SpawnRefEntity {

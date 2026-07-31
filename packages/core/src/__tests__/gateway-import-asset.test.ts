@@ -3,7 +3,7 @@
 // Invariant 7 convergence: asset import is now a first-class one-door op. This test
 // pins:
 //   - importAsset is a SESSION-domain op, cataloged (AI-discoverable via listOps).
-//   - dispatching importAsset is accepted (fire-and-forget session applier).
+//   - dispatching importAsset returns a correlated accepted/running OperationRun.
 //   - executeAssetImport routes EVERY disk write through the assetIO gate — proven
 //     by observing the exact HTTP endpoints (/api/files/upload → /api/files →
 //     /__import) the gate methods hit, with fetch stubbed (no server).
@@ -19,7 +19,8 @@ import { setPathResolver } from '../util/path-resolver';
 import { getImportFormat } from '../scan/ext-importer-map';
 // Importing the barrel loads import-ops' side-effect (session applier registration),
 // exactly as the app boot does. executeAssetImport comes from the same module.
-import { executeAssetImport } from '../index';
+import { executeAssetImport, registerPostAssetWriteCatalogSync } from '../index';
+import { panelBridge } from '../io/panel-bridge';
 import type { EditSession } from '../types';
 
 const originalFetch = globalThis.fetch;
@@ -33,6 +34,14 @@ describe('importAsset op registration (catalog SSOT)', () => {
     expect(op?.domain).toBe('session');
     // argsSchema drives AI self-discovery — destPath is the one required field.
     expect(op?.argsSchema?.required).toContain('destPath');
+  });
+
+  it('reimportAsset is a cataloged SESSION op with a correlated run contract', () => {
+    expect(hasOp('reimportAsset')).toBe(true);
+    expect(getOp('reimportAsset')?.domain).toBe('session');
+    const op = listOps().find((entry) => entry.id === 'reimportAsset');
+    expect(op?.argsSchema?.required).toEqual(['destPath', 'requestId']);
+    expect(op?.operationRun?.terminalStatuses).toEqual(['succeeded', 'failed', 'cancelled']);
   });
 });
 
@@ -54,10 +63,12 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
   });
 
   it('image import: upload → sidecar → cook, all via the gate endpoints', async () => {
+    const phases: string[] = [];
     const r = await executeAssetImport({
       destPath: '/games/demo/assets/logo.png',
       sourceName: 'logo.png',
       base64: btoa('fake-png-bytes'),
+      onProgress: (progress) => phases.push(progress.stage),
     });
     expect(r.status).toBe('done');
     expect(r.guid).toBeDefined();
@@ -69,6 +80,7 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
     // triggerCook (image importer goes through the simple sidecar + cook path)
     expect(urls.some((u) => u.includes('/__import/'))).toBe(true);
+    expect(phases).toEqual(['uploading', 'sidecar', 'cooking']);
   });
 
   it('skipUpload path does not re-upload bytes (startup-scan / AI contract)', async () => {
@@ -88,6 +100,12 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
       base64: btoa('x'),
     });
     expect(r.status).toBe('error');
+    expect(r.errorDetail).toMatchObject({
+      code: 'IMPORT_UNSUPPORTED_FORMAT',
+      path: '/games/demo/assets/notes.xyz',
+      retryable: false,
+      recoveryActions: ['import.verifySource'],
+    });
     expect(calls.length).toBe(0);
   });
 
@@ -105,6 +123,8 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     });
     expect(r.status).toBe('done');
     expect(r.guid).toBeDefined();
+    expect(r.subAssets).toHaveLength(3);
+    expect(r.subAssets?.every((asset) => asset.guid && asset.kind)).toBe(true);
 
     const sidecarPaths = calls.filter((c) => c.url.startsWith('/api/files') && !c.url.includes('upload') && !c.url.includes('raw'));
     expect(sidecarPaths.length).toBe(1);
@@ -130,7 +150,7 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
   });
 });
 
-describe('importAsset dispatch (session applier accepted)', () => {
+describe('importAsset dispatch (OperationRun convergence)', () => {
   let gw: EditGateway;
 
   beforeEach(() => {
@@ -148,8 +168,307 @@ describe('importAsset dispatch (session applier accepted)', () => {
     setPathResolver(null);
   });
 
-  it('dispatch({kind:"importAsset"}) is accepted (fire-and-forget)', () => {
-    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png' });
-    expect(r.ok).toBe(true);
+  it('returns a running run and records the ledger only after successful completion', async () => {
+    const beforeLedger = gw.ledger.length;
+    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-test-1' });
+    expect(r).toMatchObject({ ok: true, result: { operationRun: { requestId: 'import-test-1', operationId: 'importAsset', status: 'running' } } });
+    expect(gw.ledger.length).toBe(beforeLedger);
+
+    const terminal = await gw.waitOperationRun('import-test-1');
+    expect(terminal).toMatchObject({ ok: true, value: { status: 'succeeded', result: { status: 'done', filename: 'logo.png' } } });
+    expect(gw.ledger.length).toBe(beforeLedger + 1);
+  });
+
+  it('projects executor-owned import phases through OperationRun progress', async () => {
+    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-progress-1' });
+    expect(r).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
+
+    const observed: string[] = [];
+    const unsubscribe = gw.subscribeOperationRun('import-progress-1', (run) => {
+      if (run.progress.fraction > 0 && observed.at(-1) !== run.progress.stage) observed.push(run.progress.stage);
+    });
+    const terminal = await gw.waitOperationRun('import-progress-1');
+    unsubscribe();
+
+    expect(terminal).toMatchObject({
+      ok: true,
+      value: { status: 'succeeded', progress: { stage: 'cooking', fraction: 1 } },
+    });
+    expect(observed).toEqual(['sidecar', 'cooking']);
+  });
+
+  it('publishes a structured terminal failure instead of resolving success', async () => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.resolve(new Response('', { status: 500 }))) as unknown as typeof fetch;
+    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-test-failed' });
+    expect(r).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
+
+    const terminal = await gw.waitOperationRun('import-test-failed');
+    expect(terminal).toMatchObject({ ok: true, value: { status: 'failed', error: { code: 'IMPORT_SIDECAR_WRITE_FAILED', retryable: true, subjectRef: { id: 'assets/logo.png' } } } });
+    expect(gw.ledger).toHaveLength(0);
+  });
+
+  it('reimport refuses to mint a replacement when the source metadata is missing', async () => {
+    const dispatched = gw.dispatch({
+      kind: 'reimportAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      requestId: 'reimport-missing-meta',
+    });
+    expect(dispatched).toMatchObject({ ok: true });
+
+    expect(await gw.waitOperationRun('reimport-missing-meta')).toMatchObject({
+      ok: true,
+      value: {
+        status: 'failed',
+        error: {
+          code: 'IMPORT_REIMPORT_META_MISSING',
+          retryable: false,
+          recoveryActions: ['import.verifySource'],
+        },
+      },
+    });
+    expect(gw.ledger).toHaveLength(0);
+  });
+
+  it('reimport preserves the producer GUID and existing import settings', async () => {
+    const stableGuid = '019f0000-0000-7000-8000-000000000001';
+    let writtenMeta: Record<string, unknown> | undefined;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, init?: { body?: BodyInit | null }) => {
+      if (url.includes('/api/files/raw')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          schemaVersion: '1.0.0',
+          importer: 'image',
+          importSettings: { colorSpace: 'linear', customSetting: 'keep-me' },
+          subAssets: [{ guid: stableGuid, kind: 'texture', sourceIndex: 0 }],
+        }), { status: 200 }));
+      }
+      if (url === '/api/files' && typeof init?.body === 'string') {
+        const request = JSON.parse(init.body) as { content?: string };
+        writtenMeta = JSON.parse(request.content ?? '{}') as Record<string, unknown>;
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+
+    const dispatched = gw.dispatch({
+      kind: 'reimportAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      requestId: 'reimport-stable-identity',
+    });
+    expect(dispatched).toMatchObject({ ok: true });
+    expect(await gw.waitOperationRun('reimport-stable-identity')).toMatchObject({
+      ok: true,
+      value: {
+        status: 'succeeded',
+        result: { status: 'done', guid: stableGuid, subAssets: [{ guid: stableGuid, kind: 'texture' }] },
+      },
+    });
+    expect(writtenMeta).toMatchObject({
+      importSettings: { colorSpace: 'linear', customSetting: 'keep-me' },
+      subAssets: [{ guid: stableGuid, kind: 'texture', sourceIndex: 0 }],
+    });
+  });
+
+  it('retries a failed import run with the same operation input and a new request id', async () => {
+    let fail = true;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.resolve(new Response('', { status: fail ? 500 : 200 }))) as unknown as typeof fetch;
+
+    const first = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-retry-source' });
+    expect(first.ok).toBe(true);
+    const failed = await gw.waitOperationRun('import-retry-source');
+    expect(failed).toMatchObject({ ok: true, value: { status: 'failed', retryable: true } });
+
+    fail = false;
+    const retry = gw.retryOperationRun('import-retry-source', 'import-retry-attempt-2', 'ai');
+    expect(retry).toMatchObject({
+      ok: true,
+      result: { operationRun: { requestId: 'import-retry-attempt-2', parentRunId: expect.any(String), attempt: 2 } },
+    });
+    expect(await gw.waitOperationRun('import-retry-attempt-2')).toMatchObject({
+      ok: true,
+      value: { status: 'succeeded', result: { status: 'done' } },
+    });
+  });
+
+  it('cancels a glTF read/cook phase before any sidecar write', async () => {
+    let resolveRead!: (response: Response) => void;
+    const calls: string[] = [];
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
+      calls.push(String(url));
+      if (String(url).includes('/api/files/raw')) {
+        return new Promise<Response>((resolve) => { resolveRead = resolve; });
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+
+    const dispatched = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/model.glb',
+      sourceName: 'model.glb',
+      skipUpload: true,
+      requestId: 'import-cancel-safe',
+    });
+    expect(dispatched).toMatchObject({ ok: true, result: { operationRun: { status: 'running', cancellable: true } } });
+
+    expect(gw.cancelOperationRun('import-cancel-safe')).toMatchObject({
+      ok: true,
+      value: { status: 'cancelled', error: { code: 'run-cancelled' } },
+    });
+    resolveRead(new Response('not-a-glb', { status: 200 }));
+
+    expect(await gw.waitOperationRun('import-cancel-safe')).toMatchObject({
+      ok: true,
+      value: { status: 'cancelled' },
+    });
+    expect(calls.some((url) => url.includes('.meta.json'))).toBe(false);
+  });
+
+  it('refuses cancellation once a generic importer starts its sidecar write', async () => {
+    let resolveSidecar!: (response: Response) => void;
+    let fetchCount = 0;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return new Promise<Response>((resolve) => { resolveSidecar = resolve; });
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+
+    const dispatched = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      skipUpload: true,
+      requestId: 'import-cancel-refused',
+    });
+    expect(dispatched).toMatchObject({ ok: true, result: { operationRun: { status: 'running', cancellable: true } } });
+
+    expect(gw.cancelOperationRun('import-cancel-refused')).toMatchObject({
+      ok: false,
+      error: {
+        code: 'run-not-cancellable',
+        current: { requestId: 'import-cancel-refused', status: 'running' },
+        recoveryActions: ['run.wait'],
+      },
+    });
+    resolveSidecar(new Response('', { status: 200 }));
+    expect(await gw.waitOperationRun('import-cancel-refused')).toMatchObject({
+      ok: true,
+      value: { status: 'succeeded', result: { status: 'done' } },
+    });
+  });
+
+  it('waits for catalog visibility before broadcasting import completion', async () => {
+    const events: string[] = [];
+    registerPostAssetWriteCatalogSync(async (guid) => {
+      events.push(`catalog:${guid}`);
+    });
+    const off = panelBridge.on('assetsChanged', () => events.push('broadcast'));
+    try {
+      const dispatched = gw.dispatch({
+        kind: 'importAsset',
+        destPath: 'assets/logo.png',
+        sourceName: 'logo.png',
+        skipUpload: true,
+        requestId: 'import-catalog-barrier',
+      });
+      expect(dispatched).toMatchObject({ ok: true });
+      expect(await gw.waitOperationRun('import-catalog-barrier')).toMatchObject({
+        ok: true,
+        value: { status: 'succeeded', result: { status: 'done' } },
+      });
+      expect(events).toEqual([
+        expect.stringMatching(/^catalog:/),
+        'broadcast',
+      ]);
+    } finally {
+      off();
+      registerPostAssetWriteCatalogSync(null);
+    }
+  });
+
+  it('fails the run and suppresses the broadcast when catalog sync fails', async () => {
+    const broadcasts: string[] = [];
+    registerPostAssetWriteCatalogSync(async () => {
+      throw new Error('catalog unavailable');
+    });
+    const off = panelBridge.on('assetsChanged', () => broadcasts.push('broadcast'));
+    try {
+      const dispatched = gw.dispatch({
+        kind: 'importAsset',
+        destPath: 'assets/logo.png',
+        sourceName: 'logo.png',
+        skipUpload: true,
+        requestId: 'import-catalog-failed',
+      });
+      expect(dispatched).toMatchObject({ ok: true });
+      expect(await gw.waitOperationRun('import-catalog-failed')).toMatchObject({
+        ok: true,
+        value: {
+          status: 'failed',
+          error: {
+            code: 'IMPORT_CATALOG_SYNC_FAILED',
+            retryable: true,
+            recoveryActions: ['operation.retry'],
+          },
+        },
+      });
+      expect(broadcasts).toEqual([]);
+    } finally {
+      off();
+      registerPostAssetWriteCatalogSync(null);
+    }
+  });
+});
+
+describe('importAsset terminal error taxonomy', () => {
+  beforeEach(() => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('distinguishes upload HTTP and network failures', async () => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.resolve(new Response('', { status: 503 }))) as unknown as typeof fetch;
+    const upload = await executeAssetImport({
+      destPath: '/games/demo/assets/logo.png',
+      sourceName: 'logo.png',
+      base64: btoa('x'),
+    });
+    expect(upload.errorDetail).toMatchObject({ code: 'IMPORT_UPLOAD_FAILED', path: '/games/demo/assets/logo.png' });
+
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() => Promise.reject(new Error('offline'))) as unknown as typeof fetch;
+    const network = await executeAssetImport({
+      destPath: '/games/demo/assets/logo.png',
+      sourceName: 'logo.png',
+      base64: btoa('x'),
+    });
+    expect(network.errorDetail).toMatchObject({ code: 'IMPORT_NETWORK_ERROR', path: '/games/demo/assets/logo.png' });
+  });
+
+  it('distinguishes source read and cook failures for glTF', async () => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.resolve(new Response('', { status: 404 }))) as unknown as typeof fetch;
+    const read = await executeAssetImport({
+      destPath: '/games/demo/assets/model.glb',
+      sourceName: 'model.glb',
+      skipUpload: true,
+    });
+    expect(read.errorDetail).toMatchObject({ code: 'IMPORT_SOURCE_READ_FAILED', path: '/games/demo/assets/model.glb' });
+
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
+    const cook = await executeAssetImport({
+      destPath: '/games/demo/assets/model.glb',
+      sourceName: 'model.glb',
+      base64: btoa('not-a-glb'),
+    });
+    expect(cook.errorDetail).toMatchObject({ code: 'IMPORT_COOK_FAILED', path: '/games/demo/assets/model.glb', retryable: false });
   });
 });

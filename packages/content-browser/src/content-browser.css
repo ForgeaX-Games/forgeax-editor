@@ -971,6 +971,17 @@
   border-radius: 2px;
   transition: width 0.2s ease;
 }
+.cb-import-progress-error {
+  display: block;
+  color: var(--danger, #ff7474);
+  font-size: 11px;
+  margin-top: 5px;
+  white-space: normal;
+}
+.cb-import-progress-action {
+  margin-top: 6px;
+  margin-right: 4px;
+}
 
 /* ── Delete guard dialog (C3) ── */
 .cb-dialog-overlay {

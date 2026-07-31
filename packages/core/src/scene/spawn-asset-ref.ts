@@ -4,10 +4,12 @@
  */
 import { resolveComponent } from '@forgeax/engine-ecs';
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
-import { buildSpawnEntityFromDragRef, recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
+import { recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
+import { planAssetPlacement } from '../assets/asset-placement-plan';
 import { sessionAppliers } from '../io/appliers';
 import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
+import type { CommandError } from '../types';
 
 function toDragRef(ref: AssetChatRef): DragAssetRef {
   return {
@@ -21,6 +23,7 @@ function toDragRef(ref: AssetChatRef): DragAssetRef {
     name: ref.name,
     path: ref.path,
     payload: ref.payload,
+    authoring: ref.authoring,
   };
 }
 
@@ -37,12 +40,12 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
   // (AGENTS.md #2 / AC-04). Best-effort: any recovery miss leaves it single-material.
   const materialGuids = kind === 'mesh' ? await recoverMeshOriginalMaterialGuids(ref) : undefined;
 
-  const entity = buildSpawnEntityFromDragRef(ref, materialGuids ? { materialGuids } : undefined);
-  if (!entity) return false;
+  const plan = planAssetPlacement(ref, materialGuids ? { materialGuids } : undefined);
+  if (!plan.ok || plan.plan.operation !== 'spawnEntity') return false;
 
-  gateway.dispatch({ kind: 'spawnEntity', name: entity.name, components: entity.components });
+  gateway.dispatch(plan.plan.args);
   broadcastAssetsChanged();
-  console.info('[CB:import] spawn.reference', { kind, guid: ref.guid, name: entity.name });
+  console.info('[CB:import] spawn.reference', { kind, guid: ref.guid, name: plan.plan.args.name });
   return true;
 }
 
@@ -138,18 +141,29 @@ function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
   }
 }
 
+type SceneMountCleanup =
+  | { attempted: false }
+  | { attempted: true; ok: true; wrapper: EntityHandle }
+  | { attempted: true; ok: false; wrapper: EntityHandle; error: CommandError };
+
+type SceneMountFailure = {
+  ok: false;
+  hint: string;
+  cleanup: SceneMountCleanup;
+};
+
 /** Add a whole imported GLB/FBX to the scene as a NESTED SceneInstance mount:
  *  spawn a wrapper entity via the gateway (so it is the mount ROOT →
  *  round-trips as one `mounts[]` entry), then instantiate the scene sub-asset
  *  under it via the engine's canonical loadByGuid → instantiate spine
  *  (instantiateSceneRefUnderWorld). This renders the REAL GLB geometry (not a
  *  HANDLE_CUBE placeholder) and survives save → reopen → Play through the
- *  engine's native mount mechanism. Returns true on success. On failure the
- *  wrapper is left in place (harmless empty node) and we return false — callers
- *  MUST NOT fall back to cubes. */
-async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<
+ *  engine's native mount mechanism. A failed async instantiation rolls back
+ *  the provisional wrapper through the Gateway before returning its terminal
+ *  failure facts — callers MUST NOT fall back to cubes. */
+async function spawnGlbSceneAsMount(sceneGuid: string, name: string, requestId: string): Promise<
   { ok: true; wrapper: EntityHandle; root: number }
-  | { ok: false; hint: string }
+  | SceneMountFailure
 > {
   // Identity-Transform wrapper via the gateway (undoable, marks the doc dirty).
   // The spawn's created channel gives the real engine handle — that handle IS the
@@ -162,13 +176,37 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<
   const wrapperHandle: EntityHandle | undefined =
     r.ok && r.result ? r.result.created[0] : undefined;
   if (wrapperHandle === undefined) {
-    return { ok: false, hint: 'could not create the SceneInstance wrapper entity' };
+    return {
+      ok: false,
+      hint: 'could not create the SceneInstance wrapper entity',
+      cleanup: { attempted: false },
+    };
   }
   const root = await instantiateSceneRefUnderWorld(sceneGuid, wrapperHandle as unknown as number);
   if (root === null) {
+    let cleanupFacts: SceneMountCleanup;
+    try {
+      const cleanup = gateway.dispatch({ kind: 'destroyEntity', entity: wrapperHandle }, 'ai');
+      cleanupFacts = cleanup.ok
+        ? { attempted: true, ok: true, wrapper: wrapperHandle }
+        : { attempted: true, ok: false, wrapper: wrapperHandle, error: cleanup.error };
+    } catch (error) {
+      cleanupFacts = {
+        attempted: true,
+        ok: false,
+        wrapper: wrapperHandle,
+        error: {
+          code: 'DESPAWN_FAILED',
+          hint: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
     return {
       ok: false,
-      hint: `could not load or instantiate scene asset ${sceneGuid}; the empty wrapper remains and can be undone`,
+      hint: cleanupFacts.attempted && cleanupFacts.ok
+        ? `could not load or instantiate scene asset ${sceneGuid}; the provisional wrapper was rolled back`
+        : `could not load or instantiate scene asset ${sceneGuid}; wrapper cleanup failed and requires recovery`,
+      cleanup: cleanupFacts,
     };
   }
   autoAddAnimationPlayerToSkinEntities(root as unknown as number);
@@ -179,7 +217,7 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<
 }
 
 // ── Session applier: addSceneAssetToScene (ledger-only, no undo) ───────────────
-// solo round-6 / skinning-pillar convergence. WHY THIS EXISTS (registry razor +
+// R0-05B request correlation. WHY THIS EXISTS (registry razor +
 // invariant 7): a scene sub-asset catalogued by GUID (e.g. just imported via the
 // `importAsset` op) had NO front-door path into the live scene — the whole
 // "Add to Scene" orchestration (spawnGlbSceneAsMount) lived only in this module's
@@ -187,34 +225,51 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string): Promise<
 // does. `instantiateSceneAsset` (document domain, SYNC) takes a pre-collected POD,
 // not a catalog GUID, and can't loadByGuid (async) — so it cannot serve this path.
 //
-// This registers a SESSION op that IS spawnGlbSceneAsMount, mirroring importAsset's
-// fire-and-forget shape (applier returns synchronously; the async body completes in
-// a detached promise, broadcastAssetsChanged() on completion). Now the human UI
-// (spawnAssetRefToScene, below) and any AI dispatch the SAME op → the SAME body →
-// one door, human + AI equal peers. The wrapper-spawn inside the body is a document
-// op (undoable, marks dirty); the nested SceneInstance subtree is the engine's
-// by-design derived cache (AGENTS.md invariant 7 escape hatch), round-tripping as
-// one mounts[] entry via the wrapper's SceneInstance ref.
+// This registers a SESSION op whose completion is returned to the Gateway. The
+// Gateway owns the accepted/running/terminal OperationRun; this module owns only
+// the canonical mount effect. The wrapper-spawn inside the body is a document op
+// (undoable, marks dirty); the nested SceneInstance subtree is the engine's
+// by-design derived cache, round-tripping as one mounts[] entry via the wrapper's
+// SceneInstance ref.
 sessionAppliers.set('addSceneAssetToScene', (op) => {
-  const { sceneGuid, name } = op as { sceneGuid: string; name?: string };
+  const { sceneGuid, name, requestId } = op as { sceneGuid: string; name?: string; requestId: string };
   if (typeof sceneGuid !== 'string' || sceneGuid.length === 0) {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'addSceneAssetToScene requires a non-empty `sceneGuid` (a catalogued scene sub-asset GUID)' } };
   }
+  if (typeof requestId !== 'string' || requestId.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'addSceneAssetToScene requires a non-empty `requestId` for OperationRun correlation' } };
+  }
   const label = typeof name === 'string' && name.length > 0 ? name : 'Scene';
-  gateway.beginSceneMountAttempt();
-  void spawnGlbSceneAsMount(sceneGuid, label)
+  const completion = spawnGlbSceneAsMount(sceneGuid, label, requestId)
     .then((result) => {
       if (result.ok) {
-        gateway.completeSceneMountAttempt();
-        return;
+        return { ok: true, result: { requestId, sceneGuid, name: label, wrapper: result.wrapper, root: result.root } };
       }
-      gateway.failSceneMountAttempt({ code: 'scene-mount-failed', hint: result.hint });
+      return {
+        ok: false,
+        error: {
+          code: 'scene-mount-failed',
+          hint: result.hint,
+          current: { requestId, sceneGuid, name: label, cleanup: result.cleanup },
+          retryable: result.cleanup.attempted && result.cleanup.ok,
+          recoveryActions: result.cleanup.attempted && result.cleanup.ok ? [] : ['inspect provisional wrapper and retry cleanup'],
+        },
+      };
     })
     .catch((e) => {
       const hint = e instanceof Error ? e.message : String(e);
-      gateway.failSceneMountAttempt({ code: 'scene-mount-failed', hint });
+      return {
+        ok: false,
+        error: {
+          code: 'scene-mount-failed',
+          hint,
+          current: { requestId, sceneGuid, name: label, cleanup: { attempted: false } },
+          retryable: false,
+          recoveryActions: ['inspect scene mount state before retrying'],
+        },
+      };
     });
-  return { ok: true };
+  return { ok: true, completion };
 });
 
 // ── Session applier: bindAssetRef (ledger-only, no undo on the resolve; the
@@ -231,26 +286,51 @@ sessionAppliers.set('addSceneAssetToScene', (op) => {
 // the field via a DOCUMENT setComponent (so the bind is undoable + round-trips like
 // any owned-entity component write). One op closes the whole shared<T> class.
 //
-// Fire-and-forget async (mirrors addSceneAssetToScene): the applier returns
-// synchronously; resolution + the setComponent dispatch complete in a detached
-// promise. Writes onto an OWNED entity; a shared<T> field on a mount MEMBER needs
-// the escalated engine mount-override round-trip (P6 ENGINE-FINDING), not this op.
+// Request-correlated async (R0-05C): the applier returns the completion promise to
+// the Gateway, which owns the accepted/running/terminal OperationRun. Writes onto
+// an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine
+// mount-override round-trip (P6 ENGINE-FINDING), not this op.
+type BindAssetRefRunResult = {
+  requestId: string;
+  entity: number;
+  component: string;
+  field: string;
+  assetType: string;
+  guids: string[];
+  resolvedHandles: number[];
+  slot?: number;
+  valueShape: 'scalar' | 'array' | 'array-slot';
+};
+
+type BindAssetRefEffect =
+  | { ok: true; result: BindAssetRefRunResult }
+  | { ok: false; error: CommandError };
+
 async function bindAssetRefBody(
+  requestId: string,
   entity: number,
   component: string,
   field: string,
   assetType: string,
   guids: string[],
   slot: number | undefined,
-): Promise<void> {
+): Promise<BindAssetRefEffect> {
   // Resolve every GUID to a live handle first; a single miss aborts the whole bind
   // (Fail Fast — never write a partial/zeroed ref).
   const handles: number[] = [];
   for (const g of guids) {
     const h = await resolveAssetRefToHandle(g, assetType);
     if (h === null) {
-      console.warn('[editor-core] bindAssetRef: could not resolve guid — bind aborted', { guid: g, assetType });
-      return;
+      return {
+        ok: false,
+        error: {
+          code: 'ASSET_NOT_FOUND',
+          hint: `could not resolve catalogued asset GUID ${g} as ${assetType}; bind aborted before any write`,
+          current: { requestId, entity, component, field, assetType, guid: g, guidIndex: handles.length },
+          retryable: false,
+          recoveryActions: [],
+        },
+      };
     }
     handles.push(h);
   }
@@ -276,8 +356,7 @@ async function bindAssetRefBody(
 
   const r = gateway.dispatch({ kind: 'setComponent', entity, component, patch: { [field]: value } }, 'ai');
   if (!r.ok) {
-    console.warn('[editor-core] bindAssetRef: setComponent rejected', r.error?.code, r.error?.hint);
-    return;
+    return { ok: false, error: r.error };
   }
   notifyDocChanged();
   broadcastAssetsChanged();
@@ -286,6 +365,20 @@ async function bindAssetRefBody(
   if (component === 'AnimationPlayer' && field === 'clips') {
     autoActivateWeightsForBoundClips(entity, handles, slot);
   }
+  return {
+    ok: true,
+    result: {
+      requestId,
+      entity,
+      component,
+      field,
+      assetType,
+      guids: [...guids],
+      resolvedHandles: [...handles],
+      ...(slot === undefined ? {} : { slot }),
+      valueShape: slot !== undefined ? 'array-slot' : isScalarSharedField(component, field) ? 'scalar' : 'array',
+    },
+  };
 }
 
 /**
@@ -350,8 +443,8 @@ function isScalarSharedField(component: string, field: string): boolean {
 }
 
 sessionAppliers.set('bindAssetRef', (op) => {
-  const { entity, component, field, assetType, guids, slot } = op as {
-    entity: number; component: string; field: string; assetType: string; guids: string[]; slot?: number;
+  const { entity, component, field, assetType, guids, slot, requestId } = op as {
+    entity: number; component: string; field: string; assetType: string; guids: string[]; slot?: number; requestId: string;
   };
   if (typeof entity !== 'number') return { ok: false, error: { code: 'INVALID_ARGS', hint: 'bindAssetRef requires a numeric `entity` handle' } };
   if (typeof component !== 'string' || component.length === 0) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'bindAssetRef requires a `component` name' } };
@@ -360,10 +453,21 @@ sessionAppliers.set('bindAssetRef', (op) => {
   if (!Array.isArray(guids) || guids.length === 0 || !guids.every((g) => typeof g === 'string' && g.length > 0)) {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'bindAssetRef requires a non-empty `guids` array of catalogued asset GUID strings' } };
   }
-  void bindAssetRefBody(entity, component, field, assetType, guids, typeof slot === 'number' ? slot : undefined).catch((e) =>
-    console.warn('[editor-core] bindAssetRef failed:', e),
-  );
-  return { ok: true };
+  if (typeof requestId !== 'string' || requestId.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'bindAssetRef requires a non-empty `requestId` for OperationRun correlation' } };
+  }
+  const completion = bindAssetRefBody(requestId, entity, component, field, assetType, guids, typeof slot === 'number' ? slot : undefined)
+    .catch((e): BindAssetRefEffect => ({
+      ok: false,
+      error: {
+        code: 'asset-bind-failed',
+        hint: e instanceof Error ? e.message : String(e),
+        current: { requestId, entity, component, field, assetType, guids },
+        retryable: false,
+        recoveryActions: [],
+      },
+    }));
+  return { ok: true, completion };
 });
 
 export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Promise<void> {
@@ -385,12 +489,19 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
     const sceneGuid = await resolveSceneSubAssetGuid(drag);
     if (sceneGuid) {
       // Route through the SAME session op an AI dispatches (single door): the op's
-      // applier body IS spawnGlbSceneAsMount. dispatch() returns synchronously
-      // ({ok:true}) while the mount completes in the applier's detached promise
-      // (fire-and-forget async session-op contract). On a mount failure the body
-      // warns + leaves the wrapper (no cube fallback); a post-import page-reload
-      // makes the GUID resolvable and re-adding then succeeds.
-      const r = gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid, name: label });
+      // applier body IS spawnGlbSceneAsMount. The returned requestId independently
+      // identifies this accepted/running/terminal OperationRun.
+      const requestId = globalThis.crypto.randomUUID();
+      const plan = planAssetPlacement({ ...drag, guid: sceneGuid, name: label }, { requestId, sceneGuid });
+      if (!plan.ok) {
+        console.warn('[spawn-asset] placement plan rejected:', plan.error.code, plan.error.hint);
+        return;
+      }
+      if (plan.plan.operation !== 'addSceneAssetToScene') {
+        console.warn('[spawn-asset] placement plan selected a non-scene operation for a scene ref');
+        return;
+      }
+      const r = gateway.dispatch(plan.plan.args);
       if (r.ok) return;
       console.warn('[spawn-asset] addSceneAssetToScene dispatch rejected:', r.error?.code, r.error?.hint);
       return;
@@ -404,9 +515,8 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
       if (await spawnReferenceEntity(meshRefs[0]!)) return;
     } else if (meshRefs.length > 1) {
       const commands = meshRefs.map((m) => {
-        const entity = buildSpawnEntityFromDragRef(m);
-        if (!entity) return null;
-        return { kind: 'spawnEntity' as const, name: entity.name, components: entity.components };
+        const plan = planAssetPlacement(m);
+        return plan.ok && plan.plan.operation === 'spawnEntity' ? plan.plan.args : null;
       }).filter((c): c is NonNullable<typeof c> => c !== null);
       if (commands.length > 0) {
         gateway.dispatch({ kind: 'transaction', label: `Import: ${drag.name ?? 'FBX'}`, commands });

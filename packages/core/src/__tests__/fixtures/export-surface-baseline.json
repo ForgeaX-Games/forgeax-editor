@@ -24,6 +24,10 @@
     "signature": "EditGateway"
   },
   {
+    "name": "getActiveScenePackPath",
+    "signature": "() => string | null"
+  },
+  {
     "name": "getAssetSelection",
     "signature": "() => SelectedAsset | null"
   },

@@ -18,8 +18,9 @@
 import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
+import { parseScenePayload } from '@forgeax/engine-assets-runtime';
 import { createRuntimeUiGraph, entComponent, panelBridge, publishMeshStats } from '@forgeax/editor-core';
-import type { EngineFacade, EntityHandle, SelectedAsset } from '@forgeax/editor-core';
+import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDirtyPolicy, SelectedAsset } from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
@@ -33,7 +34,11 @@ type WorldLike = {
 };
 type RendererLike = {
   ready: Promise<unknown>;
-  assets: { loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }> };
+  assets: {
+    loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }>;
+    invalidate?: (guid: string) => void;
+    catalog?: (guid: string, payload: unknown, refs?: string[]) => { ok: boolean; value?: unknown };
+  };
   store: unknown;
 };
 // The editor App: start (edit boot) + pause/resume (▶/■ drive the
@@ -161,8 +166,8 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
 }
 
 export interface HostSession {
-  /** ▶ Play — assemble a transient play world and resolve when it enters Play or fails. */
-  playSimulation(): Promise<void>;
+  /** ▶ Play — apply the explicit dirty-scene policy, then assemble a transient play world. */
+  playSimulation(policy?: PlayDirtyPolicy, origin?: CommandOrigin): DispatchResult;
   /** ■ Stop — freeze + restore the pre-▶ snapshot. */
   stopSimulation(): void;
   /**
@@ -187,7 +192,13 @@ export interface HostGateway {
    *  scene-load emptiness probe + the mesh-stats publisher. */
   readonly activeWorld: unknown;
   /** The single authoritative mutable path (scene-load spawns + setSceneId). */
-  dispatch(op: unknown): { ok: boolean };
+  dispatch(op: unknown, origin?: CommandOrigin): { ok: boolean; error?: unknown };
+  /** Wait for the canonical Gateway-owned save run used by save-then-play. */
+  waitOperationRun?(requestId: string): Promise<{
+    ok: boolean;
+    value?: { status: string; error?: { code?: string; hint?: string } };
+    error?: unknown;
+  }>;
   /** Subscribe to doc changes (mesh-stats republish trigger). */
   subscribe(fn: () => void): () => void;
   /** The one core-minted controlled write proxy for boot-side world writes. */
@@ -230,6 +241,8 @@ export interface HostSessionDeps {
   /** The host game→disk path resolver (gameRoot-bound, installed by
    *  configureHostSession from the host-supplied game). */
   readonly resolveGamePath: (rel: string) => string;
+  /** Persistence-owned active scene pack path; never reconstruct this in host code. */
+  readonly getActiveScenePackPath: () => string | null;
   /** Load the authored scene from disk (session op). false → try storage. */
   readonly loadDocFromDisk: () => Promise<boolean>;
   /** Load the authored scene from the localStorage mirror. */
@@ -462,7 +475,78 @@ export function createHostSession(deps: HostSessionDeps): {
     // here is to build the play-assemble dependency closures (defaultScene load /
     // bootstrap resolve / input attach) and wire them into createRunLifecycle.
     let runLifecycle: RunLifecycle | null = null;
-    const playSimulation = (): Promise<void> => runLifecycle?.playSimulation() ?? Promise.resolve();
+    let invalidateNextPlaySceneAsset = false;
+
+    // Save Then Play uses the canonical saved bytes directly for the next
+    // SceneAsset load. The engine DDC route can retain a cooked package body
+    // beyond a registry invalidation; parsing with the engine helper and
+    // re-cataloguing through AssetRegistry keeps the play world equal to the
+    // just-committed scene without inventing an editor-side scene format.
+    const loadSavedSceneAsset = async (guid: string): Promise<unknown | null> => {
+      try {
+        const path = deps.getActiveScenePackPath();
+        if (path === null) return null;
+        const response = await deps.fetch(`/api/files?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
+        if (!response.ok) return null;
+        const raw = await response.json() as { content?: unknown };
+        if (typeof raw.content !== 'string') return null;
+        const pack = JSON.parse(raw.content) as { assets?: unknown };
+        if (!Array.isArray(pack.assets)) return null;
+        const entry = pack.assets.find((candidate): candidate is { guid?: unknown; kind?: unknown; payload?: unknown; refs?: unknown } => (
+          typeof candidate === 'object' && candidate !== null
+          && (candidate as { guid?: unknown }).guid === guid
+          && (candidate as { kind?: unknown }).kind === 'scene'
+        ));
+        if (!entry || typeof entry.payload !== 'object' || entry.payload === null) return null;
+        const refs = Array.isArray(entry.refs) && entry.refs.every((ref) => typeof ref === 'string')
+          ? entry.refs as string[]
+          : undefined;
+        const parsed = parseScenePayload(entry.payload as Record<string, unknown>, refs);
+        if (!parsed || typeof parsed !== 'object' || !('kind' in parsed) || parsed.kind !== 'scene') return null;
+        if (renderer.assets.catalog === undefined) return null;
+        const cataloged = renderer.assets.catalog(guid, parsed, refs);
+        return cataloged.ok ? (cataloged.value ?? parsed) : null;
+      } catch { return null; }
+    };
+    const playSimulation = (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human'): DispatchResult => {
+      if (runLifecycle === null) return { ok: true };
+      const dirty = hasPendingDiskSave();
+      if (dirty && policy === 'cancel') {
+        return {
+          ok: false,
+          error: {
+            code: 'play-cancelled-dirty',
+            hint: 'Play cancelled because the authored scene has unsaved edits; choose last-saved or save-then-play.',
+          },
+        };
+      }
+      if (dirty && policy === 'save-then-play') {
+        invalidateNextPlaySceneAsset = true;
+        gateway.beginPlayAttempt?.();
+        const requestId = globalThis.crypto.randomUUID();
+        const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId }, origin);
+        if (!accepted.ok) {
+          invalidateNextPlaySceneAsset = false;
+          const error = { code: 'play-save-failed' as const, hint: 'Save Then Play could not start the canonical save operation.' };
+          gateway.failPlayAttempt?.(error);
+          return { ok: false, error };
+        }
+        void (async () => {
+          const terminal = await gateway.waitOperationRun?.(requestId);
+          if (!terminal?.ok || terminal.value?.status !== 'succeeded') {
+            invalidateNextPlaySceneAsset = false;
+            const saveError = terminal?.value?.error;
+            const hint = saveError?.hint ?? 'Save Then Play stopped because the canonical save did not succeed.';
+            gateway.failPlayAttempt?.({ code: 'play-save-failed', hint });
+            return;
+          }
+          void runLifecycle.playSimulation();
+        })();
+        return { ok: true };
+      }
+      void runLifecycle.playSimulation();
+      return { ok: true };
+    };
     const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
 
     // Read forge.json once per ▶ Play so entry and default SceneAsset fallback
@@ -522,6 +606,15 @@ export function createHostSession(deps: HostSessionDeps): {
       const parsed = AssetGuid.parse(forge.defaultSceneGuid);
       if (!parsed.ok) return null;
       await renderer.ready.catch(() => null);
+      // The shared AssetRegistry caches loadByGuid results. Save Then Play must
+      // invalidate the authored SceneAsset first, or Play would silently replay
+      // stale bytes despite the canonical save having succeeded.
+      if (invalidateNextPlaySceneAsset) {
+        renderer.assets.invalidate?.(forge.defaultSceneGuid);
+        invalidateNextPlaySceneAsset = false;
+        const saved = await loadSavedSceneAsset(forge.defaultSceneGuid);
+        if (saved !== null) return saved;
+      }
       const assetRes = await renderer.assets.loadByGuid(parsed.value);
       if (!assetRes.ok) {
         const error = assetRes.error as {

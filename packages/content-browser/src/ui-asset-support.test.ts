@@ -22,6 +22,16 @@ describe('UI asset Content Browser support', () => {
     expect(asset.packPath).toBe('assets/ui/hud.meta.json');
   });
 
+  it('projects producer authoring facts onto the browser asset without a kind switch', () => {
+    const authoring = {
+      placement: { operation: 'spawnEntity' as const },
+      binding: { operation: 'unavailable' as const, reason: { code: 'missing-producer-capability' as const, hint: 'provider-owned' } },
+    };
+    expect(registryEntryToCBAsset({
+      guid: 'custom-guid', kind: 'host/new-kind', packageUrl: '/custom.pack.json', authoring,
+    }, 0).authoring).toEqual(authoring);
+  });
+
   it('keeps authoring sources and sidecars separate from UI asset cards', () => {
     expect(fileFamilyOf('hud.ui.html')).toBe('code');
     expect(fileFamilyOf('hud.ui.css')).toBe('code');

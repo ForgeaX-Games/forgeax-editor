@@ -7,7 +7,7 @@ import {
 } from './run-view-model';
 
 export interface OperationCenterProps {
-  readonly onAction?: (action: OperationCenterAction, runId: string) => void;
+  readonly onAction?: (action: OperationCenterAction, runId: string, row: OperationCenterRow) => void;
 }
 
 function useRows(): readonly OperationCenterRow[] {
@@ -18,22 +18,39 @@ function useRows(): readonly OperationCenterRow[] {
   );
 }
 
+function actionLabel(action: OperationCenterAction): string {
+  switch (action) {
+    case 'retry':
+      return 'Retry';
+    case 'cancel':
+      return 'Cancel';
+    case 'undo':
+      return 'Undo';
+    case 'inspect':
+      return 'Inspect';
+    case 'reveal-source':
+      return 'Reveal source';
+  }
+}
+
 function ActionButton({
   action,
   runId,
+  row,
   onAction,
 }: {
   readonly action: OperationCenterAction;
   readonly runId: string;
+  readonly row: OperationCenterRow;
   readonly onAction?: OperationCenterProps['onAction'];
 }): ReactNode {
   return (
     <button
       type="button"
       data-action={action}
-      onClick={() => onAction?.(action, runId)}
+      onClick={() => onAction?.(action, runId, row)}
     >
-      {action}
+      {actionLabel(action)}
     </button>
   );
 }
@@ -86,12 +103,23 @@ export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
               <div data-field="terminal">{row.status}</div>
               {row.result !== undefined && <div data-field="result">{formatResult(row.result)}</div>}
               {row.error && <div data-field="error">{row.error.code}: {row.error.hint}</div>}
+              {row.subject && (
+                <div data-field="subject">
+                  {row.subject.kind}
+                  {row.subject.name ? ` ${row.subject.name}` : ''}
+                  {row.subject.sceneGuid ? ` scene=${row.subject.sceneGuid}` : ''}
+                  {row.subject.entity !== undefined ? ` entity=${row.subject.entity}` : ''}
+                  {row.subject.component ? ` ${row.subject.component}.${row.subject.field ?? ''}` : ''}
+                  {row.subject.assets.map((asset) => <span key={asset.guid} data-field="asset">{asset.name} ({asset.guid})</span>)}
+                  {row.subject.cleanup && <span data-field="cleanup">cleanup={row.subject.cleanup.ok === undefined ? 'unknown' : row.subject.cleanup.ok ? 'succeeded' : 'failed'}</span>}
+                </div>
+              )}
               <div data-field="recoveryActions">
                 {row.recoveryActions.map((action) => <span key={action}>{action}</span>)}
               </div>
               <div className="operation-center-actions">
                 {row.actions.map((action) => (
-                  <ActionButton key={action} action={action} runId={row.runId} onAction={dispatchAction} />
+                  <ActionButton key={action} action={action} runId={row.runId} row={row} onAction={dispatchAction} />
                 ))}
               </div>
             </article>

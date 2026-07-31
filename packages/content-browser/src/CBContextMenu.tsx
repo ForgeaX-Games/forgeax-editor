@@ -23,7 +23,7 @@ function assignAssetToEntity(kind: string, guid: string, name: string, entity: E
     gateway.dispatch({
       kind: 'bindAssetRef', entity,
       component: 'MeshRenderer', field: 'materials',
-      assetType: 'MaterialAsset', guids: [guid],
+      assetType: 'MaterialAsset', guids: [guid], requestId: crypto.randomUUID(),
     }, 'human');
     return true;
   }
@@ -32,7 +32,7 @@ function assignAssetToEntity(kind: string, guid: string, name: string, entity: E
     gateway.dispatch({
       kind: 'bindAssetRef', entity,
       component: 'MeshFilter', field: 'assetHandle',
-      assetType: 'MeshAsset', guids: [guid],
+      assetType: 'MeshAsset', guids: [guid], requestId: crypto.randomUUID(),
     }, 'human');
     return true;
   }
@@ -54,7 +54,7 @@ function assignAssetToEntity(kind: string, guid: string, name: string, entity: E
     gateway.dispatch({
       kind: 'bindAssetRef', entity,
       component: 'MeshRenderer', field: 'materials',
-      assetType: 'MaterialAsset', guids: [materialGuid],
+      assetType: 'MaterialAsset', guids: [materialGuid], requestId: crypto.randomUUID(),
     }, 'human');
     return true;
   }
@@ -75,6 +75,18 @@ export interface ContextMenuItem {
 
 function getAssetsInSelection(selection: CBSelection): CBAsset[] {
   return selection.items.filter((i): i is CBAsset => i.type === 'asset');
+}
+
+export function dispatchReimportAsset(asset: CBAsset): void {
+  if (!asset.sourcePath) return;
+  const sourceName = asset.sourcePath.slice(asset.sourcePath.lastIndexOf('/') + 1);
+  const result = gateway.dispatch({
+    kind: 'reimportAsset',
+    destPath: asset.sourcePath,
+    sourceName,
+    requestId: crypto.randomUUID(),
+  }, 'human');
+  if (!result.ok) console.warn('[content-browser] reimport dispatch rejected', result.error);
 }
 
 export interface CRUDCallbacks {
@@ -139,8 +151,8 @@ export function buildAssetContextMenu(
     { id: 'replace', label: 'Replace asset', action: () => {
       callbacks?.onSubjectAction?.({ operation: 'replace', asset });
     }},
-    { id: 'reimport', label: 'Reimport asset', action: () => {
-      callbacks?.onSubjectAction?.({ operation: 'reimport', asset });
+    { id: 'reimport', label: 'Reimport asset', disabled: asset.sourcePath === undefined, action: () => {
+      dispatchReimportAsset(asset);
     }},
     { id: 'duplicate', label: tr('editor.contentBrowser.contextMenu.duplicate'), shortcut: 'Ctrl+D', action: () => {
       for (const a of targets) {
@@ -167,7 +179,7 @@ export function buildAssetContextMenu(
 
     // ── Scene ──
     { id: 'add-to-scene', label: tr('editor.contentBrowser.contextMenu.addToScene'), action: () => {
-      const ref: AssetChatRef = { type: 'asset', guid: asset.guid, kind: asset.kind, name: asset.name, path: asset.packPath, payload: asset.payload };
+      const ref: AssetChatRef = { type: 'asset', guid: asset.guid, kind: asset.kind, name: asset.name, path: asset.packPath, payload: asset.payload, authoring: asset.authoring };
       console.info('[CB:import] Add to Scene', { kind: ref.kind, guid: ref.guid, name: ref.name, path: ref.path });
       requestAddAssetToScene(ref);
     }},

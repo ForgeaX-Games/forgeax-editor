@@ -16,6 +16,13 @@ export {
   recoverMeshOriginalMaterialGuids,
 } from '../assets/drag-asset-spawn';
 export type { DragAssetRef, SpawnRefEntity } from '../assets/drag-asset-spawn';
+export { planAssetPlacement } from '../assets/asset-placement-plan';
+export type {
+  AssetPlacementPlan,
+  AssetPlacementPlanError,
+  AssetPlacementPlanOptions,
+  AssetPlacementPlanResult,
+} from '../assets/asset-placement-plan';
 export { spawnAssetRefToScene, requestAddAssetToScene } from '../scene/spawn-asset-ref';
 export {
   resolveMeshOriginalMaterials,
@@ -28,6 +35,7 @@ export type { GltfCookResult } from '../assets/gltf-cook';
 export type { FbxCookResult } from '../assets/fbx-cook';
 export { createAssetBrowserReadModel } from '../assets/asset-browser-read-model';
 export type {
+  AssetAuthoringCapability,
   AssetBrowserAsset,
   AssetBrowserCatalogRoot,
   AssetBrowserDiagnostic,
@@ -54,7 +62,12 @@ export {
   createAssetWorkspace,
 } from '@forgeax/editor-product';
 export { assetIO, AssetIOFacade } from '../io/asset-io-facade';
-export type { AssetResourceTransactionPort, SourceFileDeleteResult } from '../io/asset-io-facade';
+export type {
+  AssetIoError,
+  AssetIoResult,
+  AssetResourceTransactionPort,
+  SourceFileDeleteResult,
+} from '../io/asset-io-facade';
 export type { SourceFileDeleteStatus } from '../session/source-file-delete-status';
 export {
   generateAssetGuid,
@@ -64,8 +77,18 @@ export {
   deleteDirectory,
   registerPostAssetWriteCatalogSync,
 } from '../session/pack-ops';
-export { executeAssetImport } from '../session/import-ops';
-export type { AssetImportSpec, ImportFileResult, ImportFileStatus } from '../session/import-ops';
+export { createImportFailure, executeAssetImport } from '../session/import-ops';
+export type {
+  AssetImportSpec,
+  ImportFailure,
+  ImportFailureCode,
+  ImportCancellationPolicy,
+  ImportFileResult,
+  ImportFileStatus,
+  ImportProgressEvent,
+  ImportProgressStage,
+  ImportSubAsset,
+} from '../session/import-ops';
 export { installAssetHmrBridge } from '../assets/asset-hmr-bridge';
 export { ensureAssetCataloged } from '../assets/ensure-asset-cataloged';
 export {

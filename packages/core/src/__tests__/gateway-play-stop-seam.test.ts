@@ -125,6 +125,16 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
     expect(gw.appliedCount()).toBe(undoBefore);
   });
 
+  it('projects the persistence-owned dirty read without creating a second state owner', () => {
+    let dirty = false;
+    const unregister = gw.registerDirtyReadProvider(() => dirty);
+    expect(gw.hasPendingDiskSave()).toBe(false);
+    dirty = true;
+    expect(gw.hasPendingDiskSave()).toBe(true);
+    unregister();
+    expect(gw.hasPendingDiskSave()).toBe(false);
+  });
+
   it('a failing test-double applier surfaces its structured error', () => {
     const unreg = registerSessionApplier('play', () => ({ ok: false, error: { code: 'PLAN_FAILED', hint: 'boom' } }));
     cleanups.push(unreg);

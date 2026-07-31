@@ -496,6 +496,16 @@ describe('Gateway asset read surface', () => {
       packageUrl: '/assets/material.pack.json',
       sourcePath: 'materials/hero.material',
       kind: 'host/material',
+      authoring: {
+        placement: {
+          operation: 'unavailable',
+          reason: { code: 'unsupported-asset-kind', hint: 'producer capability is unavailable' },
+        },
+        binding: {
+          operation: 'unavailable',
+          reason: { code: 'unsupported-asset-kind', hint: 'producer capability is unavailable' },
+        },
+      },
       packageId: 'host-package',
       provenance,
       revision,

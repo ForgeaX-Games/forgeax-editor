@@ -1,3 +1,5 @@
+import type { AssetAuthoringCapability } from '@forgeax/engine-types';
+
 /**
  * Cross-panel type definitions shared between editor-core and consumer panels.
  *
@@ -40,5 +42,7 @@ export interface AssetChatRef {
   name: string;
   path: string;
   payload?: Record<string, unknown>;
+  /** Producer-owned placement/binding facts; preserve them across bridges. */
+  authoring?: AssetAuthoringCapability;
   summary?: { totalAssets: number; kinds: Record<string, number>; guids: string[] };
 }

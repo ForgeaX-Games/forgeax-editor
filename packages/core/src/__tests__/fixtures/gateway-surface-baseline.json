@@ -9,7 +9,7 @@
   },
   {
     "name": "assetCatalog",
-    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; sourcePath?: string | undefined; }[]"
+    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; authoring?: AssetAuthoringCapability | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; sourcePath?: string | undefined; }[]"
   },
   {
     "name": "auditLog",
@@ -21,10 +21,6 @@
   },
   {
     "name": "beginPlayAttempt",
-    "signature": "() => void"
-  },
-  {
-    "name": "beginSceneMountAttempt",
     "signature": "() => void"
   },
   {
@@ -58,10 +54,6 @@
   {
     "name": "commit",
     "signature": "(handle: OpHandle) => DispatchResult"
-  },
-  {
-    "name": "completeSceneMountAttempt",
-    "signature": "() => void"
   },
   {
     "name": "createGameProjectionRegistry",
@@ -124,8 +116,8 @@
     "signature": "(error: CommandError) => void"
   },
   {
-    "name": "failSceneMountAttempt",
-    "signature": "(error: CommandError) => void"
+    "name": "hasPendingDiskSave",
+    "signature": "() => boolean"
   },
   {
     "name": "historySteps",
@@ -145,10 +137,6 @@
   },
   {
     "name": "lastPlayError",
-    "signature": "CommandError | null"
-  },
-  {
-    "name": "lastSceneMountError",
     "signature": "CommandError | null"
   },
   {
@@ -205,7 +193,7 @@
   },
   {
     "name": "playPhase",
-    "signature": "\"play\" | \"failed\" | \"edit\" | \"starting\""
+    "signature": "\"failed\" | \"play\" | \"edit\" | \"starting\""
   },
   {
     "name": "publishDeferred",
@@ -218,6 +206,10 @@
   {
     "name": "redo",
     "signature": "() => boolean"
+  },
+  {
+    "name": "registerDirtyReadProvider",
+    "signature": "(provider: () => boolean) => () => void"
   },
   {
     "name": "retryOperationRun",
@@ -238,10 +230,6 @@
   {
     "name": "scanLocked",
     "signature": "boolean"
-  },
-  {
-    "name": "sceneMountPhase",
-    "signature": "\"failed\" | \"pending\" | \"idle\" | \"mounted\""
   },
   {
     "name": "sourceFileDeleteStatus",

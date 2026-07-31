@@ -36,6 +36,16 @@ export type SourceFileDeleteResult =
   | { ok: true }
   | { ok: false; error: CommandError };
 
+export interface AssetIoError {
+  readonly kind: 'http' | 'network';
+  readonly hint: string;
+  readonly status?: number;
+}
+
+export type AssetIoResult<T = void> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: AssetIoError };
+
 export interface AssetResourceTransactionPort<TInput = unknown> {
   readonly prepare: (input: TInput) => Promise<{
     readonly commit: () => Promise<{ readonly revision: string; readonly result?: unknown }>;
@@ -113,6 +123,8 @@ export class AssetIOFacade {
         error: {
           code: 'SOURCE_FILE_DELETE_FAILED',
           hint: `source file delete failed for ${resolvedPath} (HTTP ${response.status})`,
+          retryable: true,
+          recoveryActions: ['operation.retry'],
         },
       };
     } catch (err) {
@@ -121,6 +133,8 @@ export class AssetIOFacade {
         error: {
           code: 'SOURCE_FILE_DELETE_FAILED',
           hint: `source file delete failed for ${resolvedPath}: ${(err as Error)?.message ?? String(err)}`,
+          retryable: true,
+          recoveryActions: ['operation.retry'],
         },
       };
     }
@@ -221,7 +235,7 @@ export class AssetIOFacade {
   // startup-scan callers whose source already lives on disk).
 
   /** Upload raw source bytes (base64) to disk at destPath. `POST /api/files/upload`. */
-  async uploadSourceBytes(destPath: string, base64: string): Promise<boolean> {
+  async uploadSourceBytes(destPath: string, base64: string, signal?: AbortSignal): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.uploadSourceBytes');
     console.info('[import-diag] uploadSourceBytes', { destPath, base64Len: base64.length });
     try {
@@ -229,65 +243,76 @@ export class AssetIOFacade {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: destPath, data: base64 }),
+        signal,
       });
       console.info('[import-diag] uploadSourceBytes response', { status: r.status, ok: r.ok });
-      return r.ok;
+      return r.ok
+        ? { ok: true, value: undefined }
+        : { ok: false, error: { kind: 'http', status: r.status, hint: `source upload failed (HTTP ${r.status})` } };
     } catch (err) {
       console.error('[import-diag] uploadSourceBytes THREW', err);
-      return false;
+      return { ok: false, error: { kind: 'network', hint: `source upload network error: ${(err as Error)?.message ?? String(err)}` } };
     }
   }
 
   /** Write a pre-built `.meta.json` sidecar (text content) to disk. `POST /api/files`. */
-  async writeMetaSidecar(metaPath: string, content: string): Promise<boolean> {
+  async writeMetaSidecar(metaPath: string, content: string, signal?: AbortSignal): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.writeMetaSidecar');
     console.info('[import-diag] writeMetaSidecar', { metaPath, contentLen: content.length });
-    const r = await fetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: metaPath, content }),
-    });
-    console.info('[import-diag] writeMetaSidecar response', { metaPath, status: r.status, ok: r.ok });
-    return r.ok;
+    try {
+      const r = await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: metaPath, content }),
+        signal,
+      });
+      console.info('[import-diag] writeMetaSidecar response', { metaPath, status: r.status, ok: r.ok });
+      return r.ok
+        ? { ok: true, value: undefined }
+        : { ok: false, error: { kind: 'http', status: r.status, hint: `sidecar write failed (HTTP ${r.status})` } };
+    } catch (err) {
+      console.error('[import-diag] writeMetaSidecar THREW', { metaPath }, err);
+      return { ok: false, error: { kind: 'network', hint: `sidecar write network error: ${(err as Error)?.message ?? String(err)}` } };
+    }
   }
 
   /** Best-effort cook trigger for a freshly-written sidecar. `POST /__import/:guid`.
-   *  Returns undefined on success, or a human-readable reason string on failure
-   *  (matching the old triggerCook contract — a cook failure is surfaced, not thrown). */
-  async triggerCook(guid: string): Promise<string | undefined> {
+   *  Returns a structured success/failure result so the executor preserves the
+   *  first decisive boundary instead of collapsing it into a generic error. */
+  async triggerCook(guid: string, signal?: AbortSignal): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.triggerCook');
     console.info('[import-diag] triggerCook', { guid });
     try {
-      const res = await fetch(`/__import/${guid}`, { method: 'POST' });
+      const res = await fetch(`/__import/${guid}`, { method: 'POST', signal });
       console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: res.ok });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string; reason?: string; hint?: string };
         const reason = body.reason ?? body.hint ?? `cook failed (${res.status})`;
         console.warn('[import-diag] triggerCook FAILED', { guid, reason, body });
-        return reason;
+        return { ok: false, error: { kind: 'http', status: res.status, hint: reason } };
       }
-      return undefined;
+      return { ok: true, value: undefined };
     } catch (err) {
       console.error('[import-diag] triggerCook THREW', { guid }, err);
-      return `triggerCook network error: ${(err as Error)?.message ?? String(err)}`;
+      return { ok: false, error: { kind: 'network', hint: `triggerCook network error: ${(err as Error)?.message ?? String(err)}` } };
     }
   }
 
   /** Read raw source bytes from disk (for cook when no in-memory File exists).
-   *  `GET /api/files/raw`. Returns null on 404 / network error. */
-  async readSourceBytes(path: string): Promise<ArrayBuffer | null> {
+   *  `GET /api/files/raw`. Returns a structured failure on 404 / network error. */
+  async readSourceBytes(path: string, signal?: AbortSignal): Promise<AssetIoResult<ArrayBuffer>> {
     recordAssetLeaf('assetIO.readSourceBytes');
     console.info('[import-diag] readSourceBytes', { path });
     try {
-      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`);
+      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`, { signal });
       console.info('[import-diag] readSourceBytes response', { path, status: r.status, ok: r.ok });
-      if (!r.ok) return null;
+      if (!r.ok) return { ok: false, error: { kind: 'http', status: r.status, hint: `source read failed (HTTP ${r.status})` } };
       const buf = await r.arrayBuffer();
       console.info('[import-diag] readSourceBytes got', { path, byteLength: buf.byteLength });
-      return buf;
+      return { ok: true, value: buf };
     } catch (err) {
       console.error('[import-diag] readSourceBytes THREW', { path }, err);
-      return null;
+      return { ok: false, error: { kind: 'network', hint: `source read network error: ${(err as Error)?.message ?? String(err)}` } };
     }
   }
 

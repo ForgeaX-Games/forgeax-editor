@@ -44,14 +44,14 @@ export const IMPORT_FORMATS: ImportFormat[] = [
     label: '3D Model (GLB/glTF)',
     importer: 'gltf',
     subAssetKinds: ['scene'],
-    defaultSettings: {},
+    defaultSettings: { scale: 1.0, generateTangents: true },
   },
   {
     extensions: ['.fbx'],
     label: '3D Model (FBX)',
     importer: 'fbx',
     subAssetKinds: ['scene'],
-    defaultSettings: {},
+    defaultSettings: { scale: 1.0, generateTangents: true },
   },
   {
     extensions: ['.mp3', '.wav', '.ogg', '.aac', '.m4a', '.flac', '.opus'],

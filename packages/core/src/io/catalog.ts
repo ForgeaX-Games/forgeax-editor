@@ -539,7 +539,19 @@ const builtinOps: ReadonlyArray<{
     },
   },
   { id: 'loadDocFromDisk', domain: 'session', argsSchema: null, title: 'Load from Disk' },
-  { id: 'play', domain: 'session', argsSchema: null, title: 'Play' },
+  {
+    id: 'play', domain: 'session', title: 'Play',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        dirtyPolicy: {
+          type: 'string',
+          enum: ['last-saved', 'save-then-play', 'cancel'],
+          description: 'When unsaved edits exist: use the last saved scene, save through Gateway then play, or cancel.',
+        },
+      },
+    },
+  },
   { id: 'stop', domain: 'session', argsSchema: null, title: 'Stop' },
   // ── camera navigation session ops (feat-2026-07-16 UE5 nav) ────────────────
   // All four are session-domain (ledger-only, no undo). The appliers live in
@@ -605,7 +617,7 @@ const builtinOps: ReadonlyArray<{
   },
   { id: 'cbGoBack', domain: 'session', argsSchema: null, title: 'Go Back' },
   { id: 'cbGoForward', domain: 'session', argsSchema: null, title: 'Go Forward' },
-  // importAsset (Invariant 7 convergence): session-domain, ledger-only. Cataloged
+  // importAsset (R0-04A lifecycle convergence): session-domain, ledger-only. Cataloged
   // so AI can self-discover it via gateway.listOps() (registry razor — the human
   // drag-drop capability is now equally AI-reachable). destPath is an on-disk
   // (game-relative OK) source; the applier uploads-then-cooks through the assetIO gate.
@@ -613,13 +625,42 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        destPath: { type: 'string', description: 'On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller.' },
+        destPath: { type: 'string', minLength: 1, description: 'On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller.' },
         sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source.' },
         skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for dispatched ops; the UI path uploads via the assetIO gate before dispatch).' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.' },
       },
-      required: ['destPath'],
+      required: ['destPath', 'requestId'],
     },
     title: 'Import Asset',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: true,
+    },
+  },
+  { id: 'reimportAsset', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        destPath: { type: 'string', minLength: 1, description: 'Existing game-relative source path whose metadata sidecar supplies stable output GUIDs and import settings.' },
+        sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.' },
+      },
+      required: ['destPath', 'requestId'],
+    },
+    title: 'Reimport Asset',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: true,
+    },
   },
   { id: 'deleteSourceFile', domain: 'session',
     argsSchema: {
@@ -631,6 +672,14 @@ const builtinOps: ReadonlyArray<{
       required: ['path', 'requestId'],
     },
     title: 'Delete Source File',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
   // ── filesystem folder + source-file ops (2026-07-23 assets-folder-name-validation) ──
   // Registered here so gateway.listOps() shows them to AI (registry razor: same
@@ -725,26 +774,33 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Reveal in File Manager',
   },
-  // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): session-
-  // domain, ledger-only, fire-and-forget async. Cataloged so AI self-discovers it
-  // via gateway.listOps() (registry razor — the human "Add to Scene" capability is
-  // now equally AI-reachable). Instantiates a catalogued scene sub-asset (by GUID,
-  // e.g. just imported) into the live scene as a nested SceneInstance mount — the
-  // missing last leg of the import→place chain (importAsset gets it INTO the
-  // catalog; this gets it INTO the scene).
+  // addSceneAssetToScene (R0-05B): session-domain, ledger-only, request-correlated
+  // async. The caller-minted requestId is the public identity of this one mount;
+  // concurrent placements therefore expose independent OperationRuns instead of
+  // racing over a singleton latest-only phase. Cataloged so AI self-discovers the
+  // same human "Add to Scene" capability via gateway.listOps().
   { id: 'addSceneAssetToScene', domain: 'session',
     argsSchema: {
       type: 'object',
       properties: {
         sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer — which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited — see the gateway skill "Animate a skinned asset" note).' },
         name: { type: 'string', description: 'Optional name for the wrapper root entity; defaults to "Scene". The wrapper is the mount ROOT and round-trips as one mounts[] entry.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
       },
-      required: ['sceneGuid'],
+      required: ['sceneGuid', 'requestId'],
     },
     title: 'Add Scene Asset to Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
-  // bindAssetRef (solo round-11 / P5 rendering-authoring): session-domain, ledger-
-  // only, fire-and-forget async. Cataloged so AI self-discovers it via listOps().
+  // bindAssetRef (R0-05C): session-domain, ledger-only, request-correlated async.
+  // Cataloged so AI self-discovers the same human binder via listOps().
   // The missing front-door binder for shared<T> component fields: addComponent/
   // setComponent pass value RAW (no GUID->handle resolution), so a GUID in a
   // shared<T> field silently becomes handle 0. This op resolves each GUID
@@ -761,10 +817,19 @@ const builtinOps: ReadonlyArray<{
         assetType: { type: 'string', description: 'Engine asset-union tag for allocSharedRef, e.g. "MaterialAsset", "EquirectAsset", "AnimationClip". Must match the field\'s shared<T> target type.' },
         guids: { type: 'array', items: { type: 'string' }, description: 'Catalogued asset GUID(s) (from gateway.assetCatalog()). For an array<shared<T>> field, one GUID per slot (unless `slot` is given). For a scalar shared<T> field, a single-element array.' },
         slot: { type: 'number', description: 'For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
       },
-      required: ['entity', 'component', 'field', 'assetType', 'guids'],
+      required: ['entity', 'component', 'field', 'assetType', 'guids', 'requestId'],
     },
     title: 'Bind Asset Ref (resolve GUID -> shared<T> handle)',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════

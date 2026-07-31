@@ -366,21 +366,36 @@ The read legs above (`assetCatalog`/`describeAsset`/`resolveAsset`/`lookupAsset`
 assets exist?"*. The **write legs** are ordinary `dispatch` ops — the same door humans use from the
 Content Browser, so an AI is an equal peer (registry razor). They are **session-domain, ledger-only**
 (no undo — a cook/instantiate produces derived artefacts) and, because they do disk / `loadByGuid`
-I/O, **fire-and-forget async**: `dispatch` returns `{ok:true}` synchronously while the work completes
-in a detached promise. There is **no `created[]`** on a session op. `importAsset` has no terminal
-status read yet, so confirm it by polling `assetCatalog()` after any disk-watch reload. In contrast,
-`addSceneAssetToScene` publishes the terminal mount result through `sceneMountPhase` and
-`lastSceneMountError` — do not infer completion from the synchronous dispatch result, a wrapper
-entity, or a host log.
+I/O, **request-correlated async**: `dispatch` returns `{ok:true, result:{operationRun}}`
+synchronously while the work completes in the Gateway-owned OperationRun. There is **no
+`created[]`** on a session op; read the terminal fact with `getOperationRun()`,
+`waitOperationRun()`, or `subscribeOperationRun()` using the same caller-minted `requestId`.
+Concurrent requests have independent runs; never infer completion from a singleton phase, a
+wrapper entity, or a host log.
 
 | Op | Args | Does |
 |:--|:--|:--|
-| `importAsset` | `{ destPath, sourceName?, skipUpload? }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). |
-| `addSceneAssetToScene` | `{ sceneGuid, name? }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin` + `Skeleton` joints for a rigged asset), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. **It does NOT create an `AnimationPlayer`** — see "Animate a skinned asset" below. |
+| `importAsset` | `{ destPath, sourceName?, skipUpload?, requestId }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). Read its terminal OperationRun with the same `requestId`. |
+| `addSceneAssetToScene` | `{ sceneGuid, name?, requestId }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin` + `Skeleton` joints for a rigged asset), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. **It does NOT create an `AnimationPlayer`** — see "Animate a skinned asset" below. `requestId` is the independent OperationRun identity for this mount. If async load/instantiate fails, the provisional wrapper is rolled back through `destroyEntity`; inspect terminal `error.current.cleanup` for `{ attempted, ok, wrapper }` facts (or a structured cleanup error) before retrying. |
 | `createMaterial` | `{ guid, name, baseColor:[r,g,b,a], metallic?, roughness?, packPath?, refs? }` | **AUTHOR a NEW PBR material from params** — the create-a-look counterpart to `bindAssetRef`'s bind-an-existing-look. Mints a `MaterialAsset` (POD built by the engine's canonical `Materials.standard()` — 3-pass GBuffer+Forward+ShadowCaster) into the pack; document-domain (undoable, inverse `destroyAsset`). **You mint `guid` yourself** (`crypto.randomUUID()`) — the op returns no minted value (the dispatch result carries only entity handles), so reuse the SAME guid for the follow-up `bindAssetRef`. **Omit `packPath`** — it defaults to the active scene's real pack (the same one the scene saves to, so it round-trips Edit=Play); only pass it (game-relative, e.g. `"sample/assets/scene.pack.json"`) to target another pack. Author-then-bind: `createMaterial{guid,name,baseColor,metallic,roughness}` → `bindAssetRef{entity, component:'MeshRenderer', field:'materials', assetType:'MaterialAsset', guids:[guid], slot}`. |
-| `bindAssetRef` | `{ entity, component, field, assetType, guids, slot? }` | **Bind a catalogued asset GUID into a `shared<T>` component field** — the front-door GUID→handle binder. `addComponent`/`setComponent` pass values RAW (no resolution), so a GUID in a `shared<T>` field silently becomes handle `0`; this op resolves each GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle via an undoable `setComponent`. Closes the whole class: `MeshRenderer.materials` (`assetType:'MaterialAsset'`), `Skylight`/`SkyboxBackground.equirect` (`'EquirectAsset'`), `AnimationPlayer.clips` (`'AnimationClip'`). `slot` writes one array element; omit to write the whole field. **Owned entities only** — a `shared<T>` field on a mount MEMBER still needs the engine mount-override round-trip (P6, escalated). |
+| `bindAssetRef` | `{ entity, component, field, assetType, guids, slot?, requestId }` | **Bind catalogued asset GUIDs into a `shared<T>` component field** — the front-door GUID→handle binder. `addComponent`/`setComponent` pass values RAW (no resolution), so a GUID in a `shared<T>` field silently becomes handle `0`; this op resolves each GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle via an undoable `setComponent`. Its terminal OperationRun result identifies the request, target, input GUIDs, resolved handles, and scalar/array/slot shape; a miss or set rejection is a structured error. Closes the whole class: `MeshRenderer.materials` (`assetType:'MaterialAsset'`), `Skylight`/`SkyboxBackground.equirect` (`'EquirectAsset'`), `AnimationPlayer.clips` (`'AnimationClip'`). `slot` writes one array element; omit to write the whole field. **Owned entities only** — a `shared<T>` field on a mount MEMBER still needs the engine mount-override round-trip (P6, escalated). |
 | `requestReimport` | `{ paths: string[] }` | Re-cook already-imported sources (e.g. after the file changed on disk). |
 | `duplicateAsset` / `renameAsset` / `destroyAsset` / `restoreAsset` | (see each `argsSchema`) | Catalog-management ops, mirrors of the Content Browser context menu. |
+
+Placement callers share the producer-owned plan surface. `planAssetPlacement(ref, options)` is a
+read-only editor-core helper: it projects the asset's `authoring.placement` descriptor and returns
+the exact `spawnEntity` or `addSceneAssetToScene` Gateway args. Content Browser drag, context-menu
+placement, and the edit-runtime bridge must dispatch those returned args unchanged; an unavailable
+producer capability is a structured refusal. AI callers can dispatch the same returned operation
+shape directly through the Gateway, so the plan is not a second mutation path.
+
+The human feedback surface is the same projection, not a placement-specific status store. The
+Operation Center derives `addSceneAssetToScene` and `bindAssetRef` subject facts from the versioned
+Gateway OperationRun snapshot: scene/asset identity, wrapper or target entity, component/field,
+source path, and `error.current.cleanup` when rollback was attempted. Its `inspect` action selects
+the affected entity or asset through Gateway session ops; `reveal-source` dispatches the existing
+`revealInFileManager` op; `retry` always uses a fresh requestId and the same operation. A UI may
+show the recovery action, but it must not infer terminal state from a toast or console message.
 
 > [!IMPORTANT]
 > **Why `addSceneAssetToScene` and not `instantiateSceneAsset` for a catalogued GUID.**
@@ -396,10 +411,13 @@ entity, or a host log.
 End-to-end recipe — import a rigged GLB and place it (each step is one front-door call):
 
 ```ts
-// 1) Cook the file on disk into the catalog (session op — fire-and-forget).
-gateway.dispatch({ kind: 'importAsset', destPath: 'assets/Fox.glb', sourceName: 'Fox.glb' }, 'ai');
-// → {ok:true}. NOTE: an import that writes the .meta sidecar can trigger a pack
-//   disk-watch page reload; drive import and the confirm-read in SEPARATE eval calls.
+// 1) Cook the file on disk into the catalog (session op — request-correlated).
+const importRequestId = crypto.randomUUID();
+gateway.dispatch({ kind: 'importAsset', destPath: 'assets/Fox.glb', sourceName: 'Fox.glb', requestId: importRequestId }, 'ai');
+const imported = await gateway.waitOperationRun(importRequestId);
+if (!imported.ok || imported.value.status === 'failed') throw new Error('import failed');
+// NOTE: an import that writes the .meta sidecar can trigger a pack disk-watch page reload;
+// drive import and the catalog confirm-read in SEPARATE eval calls when the host reloads.
 
 // 2) Poll the catalog for the cooked scene sub-asset (no created[] on a session op).
 const scene = gateway.assetCatalog().find(
@@ -407,13 +425,12 @@ const scene = gateway.assetCatalog().find(
 );
 
 // 3) Place it — real geometry + skeleton/skin, one mounts[] entry. (No AnimationPlayer — see below.)
-gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'Fox' }, 'ai');
+const mountRequestId = crypto.randomUUID();
+gateway.dispatch({ kind: 'addSceneAssetToScene', sceneGuid: scene.guid, name: 'Fox', requestId: mountRequestId }, 'ai');
 
-// 4) Poll the operation-specific terminal state, not only a component query.
-// `mounted` means the canonical engine instantiate continuation completed;
-// `failed` pairs with a machine-branchable error. Retry clears a prior terminal state.
-while (gateway.sceneMountPhase === 'pending') await new Promise((r) => setTimeout(r, 250));
-if (gateway.sceneMountPhase === 'failed') throw new Error(gateway.lastSceneMountError?.hint);
+// 4) Read this mount's independent terminal fact, not a latest-only phase or a component query.
+const mounted = await gateway.waitOperationRun(mountRequestId);
+if (!mounted.ok || mounted.value.status === 'failed') throw new Error(mounted.ok ? mounted.value.error?.hint : mounted.error.hint);
 
 // 5) Confirm the skinned instance landed. Query by semantic component — mount
 // descendants do not inherit the wrapper's Name.
@@ -425,8 +442,9 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > `addSceneAssetToScene` mounts an identity-`Transform` **wrapper** entity (named by `name`)
 > whose CHILDREN carry the actual `MeshRenderer` / `Skin` / geometry. Filtering by the wrapper's
 > name and expecting a `MeshRenderer` on it sees nothing → a false "it didn't land". First wait for
-> `sceneMountPhase === 'mounted'` (or branch on `failed` / `lastSceneMountError`), then query by the
-> component you want (`query({ with: ['MeshRenderer'] })`) to catch the mesh children. For a
+> the mount's `waitOperationRun(requestId)` result to reach `succeeded` (or branch on its structured
+> `failed` error), then query by the component you want (`query({ with: ['MeshRenderer'] })`) to
+> catch the mesh children. For a
 > multi-material scene, a non-empty `MeshRenderer.materials` array is semantic mount evidence; do
 > not expect the derived mesh child to carry the wrapper name.
 > Also: the mount is **async** and **each headless `gateway-eval.mjs` call is a fresh page load
@@ -447,10 +465,11 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > 1. **Bind the clip GUID with `bindAssetRef`, NOT raw `addComponent`.** `clips` is
 >    `array<shared<AnimationClip>,4>`; passing a clip **GUID** to `addComponent`/`setComponent` is silently
 >    coerced to handle `0` (they pass component data raw). Use the front-door binder instead:
->    `dispatch({ kind:'bindAssetRef', entity, component:'AnimationPlayer', field:'clips', assetType:'AnimationClip', guids:[clipGuid], slot:0 })`
+>    `dispatch({ kind:'bindAssetRef', entity, component:'AnimationPlayer', field:'clips', assetType:'AnimationClip', guids:[clipGuid], slot:0, requestId: crypto.randomUUID() })`
 >    — it resolves the GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle. (First `addComponent`
 >    an `AnimationPlayer` with the scalar params — `weights/speeds/paused/looping` — then `bindAssetRef` the
->    `clips`.) This closes the old "no clip-binding leg" gap for **owned** entities (solo round-11).
+>    `clips`; wait on the same requestId for terminal success/error.) This closes the old "no clip-binding leg"
+>    gap for **owned** entities (solo round-11).
 > 2. **Mount-member overrides still don't round-trip.** A component authored on a *mounted* child (the fox
 >    from `addSceneAssetToScene` is a SceneInstance mount member) is dropped on `saveDocToDisk` — the engine's
 >    `collect-scene-asset` OOS-1 does not fold `mount.overrides[]` back on collect, and Play reloads from disk,

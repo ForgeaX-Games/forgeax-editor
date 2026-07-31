@@ -89,6 +89,7 @@ function CBAssetItemImpl({
       name: asset.name,
       path: asset.packPath,
       payload: asset.payload,
+      authoring: asset.authoring,
     };
     e.dataTransfer.setData('text/plain', `@${asset.name} (${asset.kind})`);
     e.dataTransfer.setData('application/x-forgeax-asset', JSON.stringify({

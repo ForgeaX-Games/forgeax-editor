@@ -50,6 +50,7 @@ import {
   loadDocFromDisk,
   getLoadedSceneEntities,
   getSceneId,
+  getActiveScenePackPath,
   initSceneList,
   initDiskWatch,
   flushPendingSaveBeacon,
@@ -75,6 +76,10 @@ import {
 } from './viewport/host-session';
 
 export type { HostSessionContext, HostSession, PhysicsBackend };
+
+// The persistence module owns the dirty bit. Bind that read model once to the
+// public Gateway so AI and UI use the same fact without importing store state.
+gateway.registerDirtyReadProvider(hasPendingDiskSave);
 
 /**
  * The active game a host wants the engine to boot. The host is the single source
@@ -196,6 +201,7 @@ const hostSession = createHostSession({
   gateway: gateway as never,
   getSceneId,
   resolveGamePath,
+  getActiveScenePackPath,
   loadDocFromDisk,
   loadDocFromStorage,
   getLoadedSceneEntities,
@@ -219,11 +225,45 @@ installOperationProjectionSource({
   // (R0-X03 projection contract convergence).
   getSnapshot: () => gateway.operationRunSnapshot(),
   subscribe: (listener) => gateway.subscribeOperationRuns(() => listener()),
-  dispatchRecovery: (action, runId) => {
+  resolveAsset: (guid) => {
+    const asset = gateway.assetCatalog().find((candidate) => candidate.guid.toLowerCase() === guid.toLowerCase());
+    if (asset === undefined) return undefined;
+    return {
+      guid: asset.guid,
+      kind: asset.kind,
+      name: asset.name ?? asset.guid,
+      ...(asset.sourcePath === undefined ? {} : { sourcePath: asset.sourcePath }),
+    };
+  },
+  dispatchRecovery: (action, runId, row) => {
     const run = gateway.operationRuns.listRuns().find((candidate) => candidate.runId === runId);
-    if (run?.requestId === undefined) return;
-    if (action === 'retry') gateway.retryOperationRun(run.requestId, globalThis.crypto.randomUUID(), 'human');
-    if (action === 'cancel') gateway.cancelOperationRun(run.requestId);
+    if (action === 'retry' && run?.requestId !== undefined) {
+      gateway.retryOperationRun(run.requestId, globalThis.crypto.randomUUID(), 'human');
+      return;
+    }
+    if (action === 'cancel' && run?.requestId !== undefined) {
+      gateway.cancelOperationRun(run.requestId);
+      return;
+    }
+    if (action === 'inspect') {
+      const subject = row.subject;
+      if (subject?.selectableEntity !== undefined) {
+        gateway.dispatch({ kind: 'setSelection', id: subject.selectableEntity }, 'human');
+        return;
+      }
+      const asset = subject?.assets[0];
+      if (asset !== undefined) {
+        gateway.dispatch({
+          kind: 'setAssetSelectionOne',
+          asset: { guid: asset.guid, kind: asset.kind, name: asset.name, packPath: asset.sourcePath ?? asset.guid },
+        }, 'human');
+      }
+      return;
+    }
+    if (action === 'reveal-source') {
+      const path = row.subject?.sourcePaths[0];
+      if (path !== undefined) gateway.dispatch({ kind: 'revealInFileManager', path }, 'human');
+    }
   },
 });
 

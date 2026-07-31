@@ -96,6 +96,11 @@ export function registerPostAssetWriteCatalogSync(fn: ((guid: string) => Promise
   postAssetWriteCatalogSync = fn;
 }
 
+/** Await the host-owned catalog visibility barrier for a newly written asset. */
+export async function awaitPostAssetWriteCatalogSync(guid: string): Promise<void> {
+  await postAssetWriteCatalogSync?.(guid);
+}
+
 // ── Dangling refs check ──────────────────────────────────────────────────────
 
 /** Find assets in `pack` that reference `removingGuid` in their refs[]. */

@@ -132,6 +132,7 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
     gateway: gatewayCtl.gateway,
     getSceneId: () => 'default',
     resolveGamePath: (rel: string) => `/games/g1/${rel}`,
+    getActiveScenePackPath: () => '/games/g1/scene.pack.json',
     loadDocFromDisk: async () => { log.loadDiskCalls++; return false; },
     loadDocFromStorage: () => { log.loadStorageCalls++; return false; },
     getLoadedSceneEntities: () => [],

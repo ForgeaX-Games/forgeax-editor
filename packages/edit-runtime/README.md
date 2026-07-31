@@ -34,6 +34,14 @@ import { bus, dispatch, useSelection } from '@forgeax/editor-shared';
 | `./viewport/viewport-component` | ViewportComponent —— in-process 引擎 viewport（canvas+world+renderer+camera） |
 | `./package.json` | 包元信息 |
 
+## Play dirty policy
+
+`play` is a Gateway session operation. Its optional `dirtyPolicy` is one of
+`last-saved`, `save-then-play`, or `cancel`; the human projection and AI dispatch
+use the same operation and the same persistence-owned `gateway.hasPendingDiskSave()`
+read. `save-then-play` waits for the canonical Gateway save run before loading the
+fresh SceneAsset.
+
 ## troubleshooting
 
 | 症状 | 原因 | 解决 |

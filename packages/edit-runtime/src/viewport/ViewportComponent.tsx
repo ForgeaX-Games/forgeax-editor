@@ -56,7 +56,10 @@ import {
   createGameplayCaptureGateway,
   createGameplayCarrierBridge,
   createGameplayOperations,
+  type CommandOrigin,
+  type DispatchResult,
   type GameplayIdentity,
+  type PlayDirtyPolicy,
   registerPostAssetWriteCatalogSync,
 } from '@forgeax/editor-core';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -268,7 +271,7 @@ function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): v
 }
 
 interface BootFns {
-  playSimulation: () => void;
+  playSimulation: (policy?: PlayDirtyPolicy, origin?: CommandOrigin) => DispatchResult;
   stopSimulation: () => void;
 }
 
@@ -309,7 +312,7 @@ export function ViewportComponent({
   // Deferred ▶/■ actions — wired once host-boot returns the run lifecycle. The
   // chrome mounts immediately (usable even if WebGPU is slow); its callbacks
   // resolve through this holder so they don't close over undefined references.
-  const actionsRef = useRef<BootFns>({ playSimulation: () => {}, stopSimulation: () => {} });
+  const actionsRef = useRef<BootFns>({ playSimulation: () => ({ ok: true }), stopSimulation: () => {} });
   useEffect(() => {
     if (bootStarted) return;
     bootStarted = true;
@@ -346,7 +349,7 @@ export function ViewportComponent({
           // actionsRef.current, so the button and an AI `gateway.dispatch({kind:'play'},
           // 'ai')` are the same action. Defined here (the single callback source
           // shared by ViewportBar + GameOverlay) so both surfaces dispatch uniformly.
-          onPlay={() => gateway.dispatch({ kind: 'play' })}
+          onPlay={() => gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' }, 'human')}
           onStop={() => gateway.dispatch({ kind: 'stop' })}
           onToggleDisplay={() => {
             const q = getViewportQuadrant();
@@ -571,14 +574,24 @@ async function bootViewport(
     if (!reg) return;
     const key = guid.toLowerCase();
     const deadline = Date.now() + 5000;
+    let visible = false;
     while (Date.now() < deadline) {
       await reg.refreshCatalog?.().catch(() => false);
-      if (reg.packIndexCache?.has(key)) break;
+      if (reg.packIndexCache?.has(key)) {
+        visible = true;
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!visible) {
+      throw new Error(`Asset catalog did not expose imported GUID ${guid} before the visibility deadline.`);
     }
     const parsed = AssetGuid.parse(guid);
     if (parsed.ok) {
-      await reg.loadByGuid(parsed.value).catch(() => undefined);
+      const loaded = await reg.loadByGuid(parsed.value);
+      if (!loaded.ok) {
+        throw new Error(`Asset catalog row ${guid} was visible but could not be loaded.`);
+      }
     }
   });
   registerTeardown(() => registerPostAssetWriteCatalogSync(null));
@@ -877,7 +890,7 @@ async function bootViewport(
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
-    session = { playSimulation: async () => {}, stopSimulation: () => {}, dispose: () => {}, getPlayPauseHandle: () => null };
+    session = { playSimulation: () => ({ ok: true }), stopSimulation: () => {}, dispose: () => {}, getPlayPauseHandle: () => null };
   }
   const revokeGameControl = (): void => {
     canvasInput.revokeGame();
@@ -942,11 +955,11 @@ async function bootViewport(
 
   // Wire the deferred ▶/■ chrome actions now that the lifecycle exists (was :505).
   actionsRef.current = {
-    playSimulation: () => {
+    playSimulation: (policy = 'last-saved', origin = 'human') => {
       canvasInput.revokeGame();
       // `session.playSimulation()` assembles asynchronously. Its lifecycle
       // callback publishes play·game only after gateway.activeWorld is live.
-      void session.playSimulation();
+      return session.playSimulation(policy, origin);
     },
     stopSimulation: () => {
       revokeGameControl();
@@ -969,7 +982,7 @@ async function bootViewport(
   // returned unregister fns run on teardown to avoid leaking a stale applier across
   // a cross-game realm reset.
   registerTeardown(registerViewportSessionAppliers({
-    play: () => actionsRef.current.playSimulation(),
+    play: (policy, origin) => actionsRef.current.playSimulation(policy, origin),
     stop: () => actionsRef.current.stopSimulation(),
     setDisplay: (display) => {
       if (display !== 'game') revokeGameControl();
@@ -1009,7 +1022,7 @@ async function bootViewport(
   // Expose the viewport quadrant SSOT for out-of-frame scripting (was :503).
   (window as unknown as Record<string, unknown>).__forgeax_editor = {
     app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
-    playSimulation: () => actionsRef.current.playSimulation(),
+    playSimulation: (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human') => actionsRef.current.playSimulation(policy, origin),
     stopSimulation: () => actionsRef.current.stopSimulation(),
     readActiveWorld: () => gateway.activeWorld.inspect(),
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,

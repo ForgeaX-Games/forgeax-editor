@@ -8,10 +8,10 @@
 
 import { getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
-import { registerSessionApplier, type SessionApplier } from '@forgeax/editor-core';
+import { registerSessionApplier, type DispatchResult, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
 
 export interface ViewportSessionApplierDeps {
-  readonly play: () => void;
+  readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => DispatchResult;
   readonly stop: () => void;
   readonly setDisplay: (display: 'scene' | 'game') => void;
   readonly grantGameControl: () => void;
@@ -28,7 +28,18 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
   };
 
   try {
-    register('play', () => { deps.play(); return { ok: true }; }, 'Play');
+    register('play', (op, ctx) => {
+      const dirtyPolicy = (op as { dirtyPolicy?: unknown }).dirtyPolicy ?? 'last-saved';
+      if (dirtyPolicy !== 'last-saved' && dirtyPolicy !== 'save-then-play' && dirtyPolicy !== 'cancel') {
+        return invalidArgs('dirtyPolicy must be "last-saved", "save-then-play", or "cancel"');
+      }
+      return deps.play(dirtyPolicy, ctx?.origin ?? 'human');
+    }, 'Play', {
+      type: 'object',
+      properties: {
+        dirtyPolicy: { type: 'string', enum: ['last-saved', 'save-then-play', 'cancel'] },
+      },
+    });
     register('stop', () => { deps.stop(); return { ok: true }; }, 'Stop');
     register('setDisplay', (op) => {
       const display = (op as { display?: unknown }).display;

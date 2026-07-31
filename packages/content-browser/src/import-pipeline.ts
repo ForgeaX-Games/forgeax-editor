@@ -11,15 +11,23 @@
  *
  * Flow per file (human drag-drop / toolbar):
  *   1. Upload binary through assetIO.uploadSourceBytes (write-gate)
- *   2. gateway.dispatch({ kind: 'importAsset', destPath, sourceName, skipUpload:true })
+ *   2. gateway.dispatch({ kind: 'importAsset', destPath, sourceName, skipUpload:true, requestId })
  *      → the applier cooks + writes the sidecar + triggers cook (all gated)
- *   3. Report progress; broadcastAssetsChanged once at the end.
+ *   3. Await the same Gateway terminal run, then report the result.
  *
  * The startup scan does NOT use this file — it runs while the gateway is scan-locked
  * and calls `executeAssetImport` directly through the shared import executor.
  */
 
-import { assetIO, gateway, resolveGamePath, broadcastAssetsChanged, type ImportFileResult } from '@forgeax/editor-core';
+import {
+  assetIO,
+  createImportFailure,
+  gateway,
+  resolveGamePath,
+  type ImportFailureCode,
+  type ImportFileResult,
+  type OperationRun,
+} from '@forgeax/editor-core';
 import { isImportable, logImport } from './import-registry';
 
 // Re-export the core result type so existing consumers keep importing it from here.
@@ -30,6 +38,17 @@ export interface ImportProgress {
   completed: number;
   current: string;
   results: ImportFileResult[];
+  currentRequestId?: string;
+  currentRun?: OperationRun;
+  runs: ImportRunRecord[];
+  actionError?: string;
+}
+
+export interface ImportRunRecord {
+  filename: string;
+  path: string;
+  requestId: string;
+  run: OperationRun;
 }
 
 export type ImportProgressCallback = (progress: ImportProgress) => void;
@@ -42,6 +61,65 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
+}
+
+function failureResult(
+  filename: string,
+  path: string,
+  code: ImportFailureCode,
+  hint: string,
+  retryable = true,
+): ImportFileResult {
+  const errorDetail = createImportFailure(path, code, hint, { retryable });
+  return { filename, status: 'error', error: hint, errorDetail };
+}
+
+export function importRunToResult(filename: string, path: string, run: OperationRun): ImportFileResult {
+  if (run.status === 'succeeded') {
+    const result = run.result as ImportFileResult | undefined;
+    return result === undefined
+      ? failureResult(filename, path, 'IMPORT_EXECUTION_FAILED', 'Import completed without a terminal result', false)
+      : { ...result, filename };
+  }
+  const terminalError = run.error;
+  return failureResult(
+    filename,
+    terminalError?.subjectRef?.id ?? path,
+    typeof terminalError?.code === 'string' && terminalError.code.startsWith('IMPORT_')
+      ? terminalError.code as ImportFailureCode
+      : 'IMPORT_EXECUTION_FAILED',
+    terminalError?.hint ?? terminalError?.code ?? `Import ${run.status}.`,
+    terminalError?.retryable ?? false,
+  );
+}
+
+export type ImportRetryResult =
+  | { ok: true; requestId: string; terminal: OperationRun; result: ImportFileResult }
+  | { ok: false; error: { code: string; hint: string } };
+
+export async function retryImportRun(
+  record: ImportRunRecord,
+  onRun?: (requestId: string, run: OperationRun) => void,
+): Promise<ImportRetryResult> {
+  const requestId = crypto.randomUUID();
+  const dispatched = gateway.retryOperationRun(record.requestId, requestId, 'human');
+  if (!dispatched.ok) return { ok: false, error: { code: dispatched.error.code, hint: dispatched.error.hint } };
+  const accepted = dispatched.result?.operationRun;
+  if (accepted === undefined) {
+    return { ok: false, error: { code: 'IMPORT_EXECUTION_FAILED', hint: 'Retry was accepted without an OperationRun.' } };
+  }
+  onRun?.(requestId, accepted);
+  const unsubscribe = gateway.subscribeOperationRun(requestId, (run) => onRun?.(requestId, run));
+  const terminal = await gateway.waitOperationRun(requestId);
+  unsubscribe();
+  if (!terminal.ok) return { ok: false, error: { code: terminal.error.code, hint: terminal.error.hint } };
+  onRun?.(requestId, terminal.value);
+  return {
+    ok: true,
+    requestId,
+    terminal: terminal.value,
+    result: importRunToResult(record.filename, record.path, terminal.value),
+  };
 }
 
 /**
@@ -83,6 +161,11 @@ export async function importFiles(
     completed: 0,
     current: '',
     results,
+    runs: [],
+  };
+
+  const publishProgress = (): void => {
+    onProgress?.(structuredClone(progress));
   };
 
   // Host-resolved import target — the studio games-dir convention lives in the
@@ -96,7 +179,10 @@ export async function importFiles(
 
   for (const file of importable) {
     progress.current = file.name;
-    onProgress?.(structuredClone(progress));
+    progress.currentRequestId = undefined;
+    progress.currentRun = undefined;
+    progress.actionError = undefined;
+    publishProgress();
 
     const uploadPath = `${basePath}/${file.name}`;
     const gameRelPath = `${gameRelBase}/${file.name}`;
@@ -109,8 +195,13 @@ export async function importFiles(
       // carries a path, not bytes (ledger stays clean, op stays AI-replayable).
       const uploaded = await assetIO.uploadSourceBytes(uploadPath, base64);
       logImport('pipeline.file.uploadResult', { filename: file.name, uploaded });
-      if (!uploaded) {
-        result = { filename: file.name, status: 'error', error: 'Upload failed' };
+      if (!uploaded.ok) {
+        result = failureResult(
+          file.name,
+          uploadPath,
+          uploaded.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
+          uploaded.error.hint,
+        );
       } else {
         // `.ui.css` is a companion, not an independently imported asset. When
         // the user drops/selects an HTML/CSS pair, put the companion on disk
@@ -122,11 +213,16 @@ export async function importFiles(
           const companionPath = `${basePath}/${uiCompanion.name}`;
           const companionBase64 = arrayBufferToBase64(await uiCompanion.arrayBuffer());
           const companionUploaded = await assetIO.uploadSourceBytes(companionPath, companionBase64);
-          if (!companionUploaded) {
-            result = { filename: file.name, status: 'error', error: `Failed to upload UI stylesheet companion: ${uiCompanion.name}` };
+          if (!companionUploaded.ok) {
+            result = failureResult(
+              file.name,
+              companionPath,
+              companionUploaded.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
+              `Failed to upload UI stylesheet companion: ${uiCompanion.name}: ${companionUploaded.error.hint}`,
+            );
             results.push(result);
             progress.completed++;
-            onProgress?.(structuredClone(progress));
+            publishProgress();
             continue;
           }
         }
@@ -135,17 +231,43 @@ export async function importFiles(
         // resolveGamePath() to add the slug, so passing the already-resolved
         // uploadPath would double-prefix (hellforge/hellforge/...).
         logImport('pipeline.file.dispatching', { filename: file.name, gameRelPath });
+        const requestId = crypto.randomUUID();
         const r = gateway.dispatch(
-          { kind: 'importAsset', destPath: gameRelPath, sourceName: file.name, skipUpload: true },
+          { kind: 'importAsset', destPath: gameRelPath, sourceName: file.name, skipUpload: true, requestId },
           'human',
         );
         logImport('pipeline.file.dispatchResult', { filename: file.name, ok: r.ok, error: (r as { error?: { code?: string } }).error?.code });
-        // The applier is fire-and-forget (async session-op contract); a synchronous
-        // ok means the op was accepted. Precise per-file cook errors surface through
-        // the console + the post-reload catalog (sibling-op parity — see import-ops.ts).
-        result = r.ok
-          ? { filename: file.name, status: 'done' }
-          : { filename: file.name, status: 'error', error: r.error?.code ?? 'import dispatch rejected' };
+        if (!r.ok) {
+          result = { filename: file.name, status: 'error', error: r.error?.code ?? 'import dispatch rejected' };
+        } else {
+          const acceptedRun = r.result?.operationRun;
+          if (acceptedRun === undefined) {
+            result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', 'Import was accepted without an OperationRun', false);
+          } else {
+            progress.currentRequestId = requestId;
+            progress.currentRun = acceptedRun;
+            progress.runs.push({ filename: file.name, path: uploadPath, requestId, run: acceptedRun });
+            publishProgress();
+            const unsubscribe = gateway.subscribeOperationRun(requestId, (run) => {
+              const record = progress.runs.find(entry => entry.requestId === requestId);
+              if (record) record.run = run;
+              progress.currentRun = run;
+              publishProgress();
+            });
+            const terminal = await gateway.waitOperationRun(requestId);
+            unsubscribe();
+            if (terminal.ok) {
+              const record = progress.runs.find(entry => entry.requestId === requestId);
+              if (record) record.run = terminal.value;
+              progress.currentRun = terminal.value;
+            }
+            if (terminal.ok) {
+              result = importRunToResult(file.name, uploadPath, terminal.value);
+            } else {
+              result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', terminal.error.code, false);
+            }
+          }
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -156,11 +278,10 @@ export async function importFiles(
     results.push(result);
     progress.completed++;
     logImport('pipeline.file.done', { filename: file.name, status: result.status, error: result.error });
-    onProgress?.(structuredClone(progress));
+    publishProgress();
   }
 
   logImport('pipeline.importFiles.complete', { total: results.length, results: results.map(r => ({ f: r.filename, s: r.status, e: r.error })) });
-  broadcastAssetsChanged();
   onReload?.();
 
   return results;

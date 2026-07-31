@@ -13,6 +13,7 @@ import {
   type RunActor,
   type RunJournalAcceptResult,
   type RunJournalResult,
+  type RunProgress,
 } from '@forgeax/editor-product';
 
 export type { OperationRun } from '@forgeax/editor-product';
@@ -20,6 +21,10 @@ export type { OperationRun } from '@forgeax/editor-product';
 export type OperationRunReadResult<T = OperationRun> = RunJournalResult<T>;
 /** Listener for a Gateway-owned run projection update. */
 export type OperationRunListener = (run: OperationRun) => void;
+export type OperationRunCancelResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: CommandError };
+export type OperationRunCancelHandler = () => OperationRunCancelResult;
 
 /**
  * Consistent read of the bounded run index. `revision` changes whenever the
@@ -38,6 +43,14 @@ export interface OperationRunRegistryOptions {
 }
 
 export interface SaveRunAcceptOptions {
+  readonly parentRunId?: string;
+  readonly attempt?: number;
+}
+
+export interface OperationRunAcceptOptions {
+  readonly operationId: string;
+  readonly cancellable: boolean;
+  readonly retryable: boolean;
   readonly parentRunId?: string;
   readonly attempt?: number;
 }
@@ -91,6 +104,7 @@ export class OperationRunRegistry {
   private readonly now: () => number;
   private readonly listeners = new Map<string, Set<OperationRunListener>>();
   private readonly allListeners = new Set<OperationRunListener>();
+  private readonly cancelHandlers = new Map<string, OperationRunCancelHandler>();
   private activeSaveRunId: string | null = null;
   private nextRun = 0;
   private _revision = 0;
@@ -136,22 +150,36 @@ export class OperationRunRegistry {
       this.activeSaveRunId = null;
     }
 
+    return this.acceptOperation(requestId, input, actor, {
+      operationId: 'saveDocToDisk',
+      cancellable: false,
+      retryable: true,
+      ...options,
+    });
+  }
+
+  acceptOperation(
+    requestId: string,
+    input: unknown,
+    actor: RunActor,
+    options: OperationRunAcceptOptions,
+  ): RunJournalAcceptResult {
     const accepted = this.journal.accept({
       runId: `operation-run-${++this.nextRun}`,
       requestId,
-      operationId: 'saveDocToDisk',
+      operationId: options.operationId,
       actor,
       sessionId: this.scope,
       scope: this.scope,
       input,
       ...(options.parentRunId === undefined ? {} : { parentRunId: options.parentRunId }),
       ...(options.attempt === undefined ? {} : { attempt: options.attempt }),
-      cancellable: false,
-      retryable: true,
+      cancellable: options.cancellable,
+      retryable: options.retryable,
     });
     if (!accepted.ok) return accepted;
     if (!accepted.reused) {
-      this.activeSaveRunId = accepted.runId;
+      if (options.operationId === 'saveDocToDisk') this.activeSaveRunId = accepted.runId;
       this.notify(accepted.run);
     }
     return accepted;
@@ -161,6 +189,17 @@ export class OperationRunRegistry {
     const result = this.journal.append({ type: 'running', runId, at: this.now() });
     if (result.ok) this.notify(result.value);
     return result;
+  }
+
+  reportProgress(runId: string, progress: RunProgress): OperationRunReadResult {
+    const result = this.journal.updateProgress(runId, progress);
+    if (result.ok) this.notify(result.value);
+    return result;
+  }
+
+  /** Register the effect-owned policy for cancelling an accepted run. */
+  registerCancelHandler(runId: string, handler: OperationRunCancelHandler): void {
+    this.cancelHandlers.set(runId, handler);
   }
 
   bindCompletion(
@@ -181,8 +220,14 @@ export class OperationRunRegistry {
   }
 
   fail(runId: string, error: CommandError): OperationRunReadResult {
-    const result = this.journal.append({ type: 'failed', runId, at: this.now(), error });
+    const normalizedError: CommandError = {
+      ...error,
+      retryable: error.retryable ?? false,
+      recoveryActions: error.recoveryActions ?? [],
+    };
+    const result = this.journal.append({ type: 'failed', runId, at: this.now(), error: normalizedError });
     if (result.ok) {
+      this.cancelHandlers.delete(runId);
       if (this.activeSaveRunId === runId) this.activeSaveRunId = null;
       this.notify(result.value);
     }
@@ -229,10 +274,44 @@ export class OperationRunRegistry {
   cancel(requestId: string): OperationRunReadResult<never> {
     const current = this.getRunResult(requestId);
     if (!current.ok) return current;
-    return failure('run-not-cancellable', 'saveDocToDisk cannot be cancelled after acceptance.', {
-      current: current.value,
-      recoveryActions: ['run.wait'],
+    if (!current.value.cancellable) {
+      return failure('run-not-cancellable', `${current.value.operationId} cannot be cancelled at this phase.`, {
+        current: current.value,
+        recoveryActions: ['run.wait'],
+      });
+    }
+    if (isTerminalRunStatus(current.value.status)) {
+      return failure('run-terminal', `${current.value.operationId} is already terminal.`, {
+        current: current.value,
+        recoveryActions: ['run.get'],
+      });
+    }
+    const handler = this.cancelHandlers.get(current.value.runId);
+    const decision = handler?.() ?? { ok: true as const };
+    if (!decision.ok) {
+      return failure(decision.error.code, decision.error.hint, {
+        current: current.value,
+        recoveryActions: decision.error.recoveryActions,
+        retryable: decision.error.retryable,
+      });
+    }
+    const result = this.journal.append({
+      type: 'cancelled',
+      runId: current.value.runId,
+      at: this.now(),
+      error: {
+        code: 'run-cancelled',
+        hint: `${current.value.operationId} was cancelled before its next write boundary.`,
+        retryable: false,
+        recoveryActions: ['run.get'],
+      },
     });
+    if (result.ok) {
+      this.cancelHandlers.delete(current.value.runId);
+      if (this.activeSaveRunId === current.value.runId) this.activeSaveRunId = null;
+      this.notify(result.value);
+    }
+    return result as OperationRunReadResult<never>;
   }
 
   retry(
@@ -248,10 +327,29 @@ export class OperationRunRegistry {
         recoveryActions: ['run.get'],
       });
     }
-    return this.acceptSave(retryRequestId, current.value.input, actor, {
-      parentRunId: current.value.runId,
-      attempt: current.value.attempt + 1,
-    });
+    if (current.value.operationId === 'saveDocToDisk') {
+      return this.acceptSave(retryRequestId, current.value.input, actor, {
+        parentRunId: current.value.runId,
+        attempt: current.value.attempt + 1,
+      });
+    }
+    if (current.value.input === null || typeof current.value.input !== 'object' || Array.isArray(current.value.input)) {
+      return failure('operation-not-retryable', 'The failed operation did not retain replayable input.', {
+        current: current.value,
+      });
+    }
+    return this.acceptOperation(
+      retryRequestId,
+      { ...(current.value.input as Record<string, unknown>), requestId: retryRequestId },
+      actor,
+      {
+        operationId: current.value.operationId,
+        cancellable: current.value.cancellable,
+        retryable: current.value.retryable,
+        parentRunId: current.value.runId,
+        attempt: current.value.attempt + 1,
+      },
+    );
   }
 
   private subscribeRun(runId: string, listener: OperationRunListener): () => void {
@@ -273,6 +371,7 @@ export class OperationRunRegistry {
       ? this.journal.append({ type: 'succeeded', runId, at: this.now(), result: outcome.result })
       : this.journal.append({ type: 'failed', runId, at: this.now(), error: outcome.error });
     if (!result.ok) return;
+    this.cancelHandlers.delete(runId);
     if (this.activeSaveRunId === runId) this.activeSaveRunId = null;
     this.notify(result.value);
     onTerminal?.(result.value);

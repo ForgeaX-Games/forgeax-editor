@@ -34,6 +34,8 @@ export interface CBAsset extends CBItem {
   packIndex: number;
   /** GUID cross-references from pack `assets[].refs`. */
   refs: string[];
+  /** Producer-owned placement/binding facts; never inferred from `kind`. */
+  authoring?: import('@forgeax/engine-types').AssetAuthoringCapability;
   /** Cached thumbnail data URL or endpoint URL. */
   thumbnailUrl?: string;
   /** Pack file mtime (all assets in the same pack share this value). */

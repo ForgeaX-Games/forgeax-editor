@@ -254,7 +254,9 @@ describe('AC-01 export-surface snapshot', () => {
     // too, but from './store/entity-state', so they are outside this barrel's
     // count.) This count is the machine witness that the surface moved exactly
     // as intended.
-    expect(entries.length).toBe(61);
+    // getActiveScenePackPath is the read-only host projection of the
+    // persistence-owned active scene path, bringing the barrel surface to 62.
+    expect(entries.length).toBe(62);
 
     // Every entry must be non-empty.
     for (const e of entries) {

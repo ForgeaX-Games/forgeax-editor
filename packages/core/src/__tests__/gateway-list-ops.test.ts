@@ -260,13 +260,41 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
     });
   });
 
-  it('does not add run metadata or change the domain of other operations', () => {
+  it('does not add run metadata or change the domain of unrelated operations', () => {
     const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
     for (const op of gw.listOps()) {
-      if (op.id === 'saveDocToDisk') continue;
+      if (op.id === 'saveDocToDisk' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'addSceneAssetToScene' || op.id === 'bindAssetRef') continue;
       expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
       expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
     }
     expect(save?.domain).toBe('session');
+  });
+
+  it('exposes the same request-correlated terminal read policy for deleteSourceFile', () => {
+    const deleteSourceFile = gw.listOps().find((op) => op.id === 'deleteSourceFile');
+    expect(deleteSourceFile?.domain).toBe('session');
+    expect(deleteSourceFile?.argsSchema).toMatchObject({ required: ['path', 'requestId'] });
+    expect(deleteSourceFile?.operationRun).toEqual({
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    });
+  });
+
+  it('exposes the same request-correlated terminal read policy for importAsset', () => {
+    const importAsset = gw.listOps().find((op) => op.id === 'importAsset');
+    expect(importAsset?.domain).toBe('session');
+    expect(importAsset?.argsSchema).toMatchObject({ required: ['destPath', 'requestId'] });
+    expect(importAsset?.operationRun).toEqual({
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: true,
+    });
   });
 });

@@ -9,9 +9,9 @@
 // discoverable via listOps + AI-dispatchable), and would have FAILED before it
 // (no op -> hasOp false, dispatch -> UNKNOWN_OP):
 //   - bindAssetRef is a SESSION-domain op, cataloged (AI-discoverable via listOps),
-//     with entity/component/field/assetType/guids as required args.
-//   - dispatching it with valid args is accepted (fire-and-forget session applier —
-//     the loadByGuid -> allocSharedRef -> setComponent completes detached).
+//     with entity/component/field/assetType/guids/requestId as required args.
+//   - dispatching it with valid args is accepted with an independent OperationRun;
+//     the loadByGuid -> allocSharedRef -> setComponent completion is queryable.
 //   - dispatching it with a missing/empty required arg fails fast with a STRUCTURED
 //     error (INVALID_ARGS), never a silent no-op (charter P3 / Fail Fast).
 //
@@ -34,10 +34,12 @@ describe('bindAssetRef op registration (catalog SSOT)', () => {
     expect(getOp('bindAssetRef')?.domain).toBe('session');
     const op = listOps().find((o) => o.id === 'bindAssetRef');
     expect(op?.domain).toBe('session');
-    // argsSchema drives AI self-discovery — the five binder inputs are required.
-    for (const req of ['entity', 'component', 'field', 'assetType', 'guids']) {
+    // argsSchema drives AI self-discovery — the binder inputs + correlation id are required.
+    for (const req of ['entity', 'component', 'field', 'assetType', 'guids', 'requestId']) {
       expect(op?.argsSchema?.required).toContain(req);
     }
+    expect(op?.operationRun?.read.wait).toBe('waitOperationRun');
+    expect(op?.operationRun?.cancellable).toBe(false);
   });
 
   it('argsSchema documents the shared<T> class it closes + the owned-entity limit', () => {
@@ -78,10 +80,7 @@ describe('bindAssetRef dispatch (session applier)', () => {
     if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
   });
 
-  it('valid args are accepted (fire-and-forget; resolve+bind runs detached)', () => {
-    // The applier returns synchronously {ok:true}; the async body runs detached (it
-    // will no-op here — no live world/registry — and warn, the intended fire-and-
-    // forget contract, not a throw).
+  it('valid args are accepted with an independently queryable OperationRun', async () => {
     const r = gw.dispatch({
       kind: 'bindAssetRef',
       entity: 2,
@@ -90,7 +89,20 @@ describe('bindAssetRef dispatch (session applier)', () => {
       assetType: 'MaterialAsset',
       guids: ['019f56f2-0ac0-776a-9d28-50eaf795daed'],
       slot: 0,
+      requestId: 'bind-asset-run-1',
     });
     expect(r.ok).toBe(true);
+    if (r.ok) expect(r.result?.operationRun?.requestId).toBe('bind-asset-run-1');
+    const terminal = await gw.waitOperationRun('bind-asset-run-1');
+    expect(terminal.ok).toBe(true);
+    if (terminal.ok) {
+      expect(['succeeded', 'failed']).toContain(terminal.value.status);
+      expect((terminal.value.input as { requestId?: string }).requestId).toBe('bind-asset-run-1');
+      expect((terminal.value.input as { guids?: string[] }).guids).toEqual(['019f56f2-0ac0-776a-9d28-50eaf795daed']);
+      expect((terminal.value.input as { slot?: number }).slot).toBe(0);
+      if (terminal.value.status === 'failed') {
+        expect(['ASSET_NOT_FOUND', 'asset-bind-failed']).toContain(terminal.value.error?.code ?? '');
+      }
+    }
   });
 });

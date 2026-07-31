@@ -225,5 +225,6 @@ async function resolveTexture(bus: EditGateway, entity: number, textureGuid: str
     field: 'materials',
     assetType: 'MaterialAsset',
     guids: [materialGuid],
+    requestId: crypto.randomUUID(),
   }, 'ai');
 }

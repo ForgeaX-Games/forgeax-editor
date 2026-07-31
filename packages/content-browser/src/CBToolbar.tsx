@@ -133,7 +133,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
       basePath,
     });
 
-    onImportProgress?.({ total: files.length, completed: 0, current: '', results: [] });
+    onImportProgress?.({ total: files.length, completed: 0, current: '', results: [], runs: [] });
 
     const results = await importFiles(
       Array.from(files),
@@ -151,7 +151,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
       console.warn('[CBToolbar] import errors:', errors.map(e => `${e.filename}: ${e.error}`));
     }
 
-    setTimeout(() => onImportProgress?.(null), 3000);
+    if (errors.length === 0) setTimeout(() => onImportProgress?.(null), 3000);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [currentPath, onReload, onImportProgress]);
 

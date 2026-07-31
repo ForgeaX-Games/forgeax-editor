@@ -71,4 +71,63 @@ describe('Operation Center run view model', () => {
     expect(rows[0]?.status).toBe('cancelled');
     expect(rows[0]?.isSuccess).toBe(false);
   });
+
+  it('projects placement identity, cleanup facts, and human recovery actions from the run', () => {
+    const failed = makeRun({
+      operationId: 'addSceneAssetToScene',
+      input: { sceneGuid: 'scene-guid', name: 'Fox' },
+      retryable: false,
+      cancellable: false,
+    });
+    const row = projectRunFacts({
+      run: {
+        ...failed,
+        status: 'failed',
+        error: {
+          code: 'scene-mount-failed',
+          hint: 'wrapper cleanup failed',
+          current: {
+            requestId: 'request-1',
+            sceneGuid: 'scene-guid',
+            name: 'Fox',
+            cleanup: { attempted: true, ok: false, wrapper: 91, error: { code: 'DESPAWN_FAILED' } },
+          },
+          retryable: false,
+          recoveryActions: ['inspect provisional wrapper and retry cleanup'],
+        },
+      },
+      resolveAsset: (guid) => ({ guid, kind: 'scene', name: 'Fox', sourcePath: 'assets/Fox.glb' }),
+    });
+
+    expect(row.subject).toEqual(expect.objectContaining({
+      kind: 'placement',
+      sceneGuid: 'scene-guid',
+      selectableEntity: 91,
+      sourcePaths: ['assets/Fox.glb'],
+      cleanup: expect.objectContaining({ attempted: true, ok: false, wrapper: 91, errorCode: 'DESPAWN_FAILED' }),
+    }));
+    expect(row.actions).toEqual(['inspect', 'reveal-source']);
+  });
+
+  it('projects binding target identity for the same human/AI feedback surface', () => {
+    const run = makeRun({
+      operationId: 'bindAssetRef',
+      input: { entity: 17, component: 'MeshRenderer', field: 'materials', guids: ['material-guid'] },
+      retryable: true,
+      cancellable: false,
+    });
+    const row = projectRunFacts({
+      run: { ...run, status: 'succeeded', result: { entity: 17, guids: ['material-guid'] } },
+      resolveAsset: (guid) => ({ guid, kind: 'material', name: 'Hero Material', sourcePath: 'assets/hero.material' }),
+    });
+
+    expect(row.subject).toEqual(expect.objectContaining({
+      kind: 'binding',
+      entity: 17,
+      component: 'MeshRenderer',
+      field: 'materials',
+      assets: [{ guid: 'material-guid', kind: 'material', name: 'Hero Material', sourcePath: 'assets/hero.material' }],
+    }));
+    expect(row.actions).toEqual(['inspect', 'reveal-source']);
+  });
 });

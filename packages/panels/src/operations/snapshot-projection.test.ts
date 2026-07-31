@@ -83,6 +83,6 @@ describe('versioned terminal projection source', () => {
     expect(source).toContain('readonly revision: number;');
     expect(source).not.toContain('readonly runs: readonly (OperationRun | OperationRunFactProjection)[];');
     expect(source).not.toContain('readonly commits: readonly AuthoredCommit[];');
-    expect(source).toContain('rowsCache = { source, revision, rows };');
+    expect(source).toContain('rowsCache = { source, revision, resolveAsset: source.resolveAsset, rows };');
   });
 });

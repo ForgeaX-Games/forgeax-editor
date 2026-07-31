@@ -82,6 +82,7 @@ export {
   getSceneId,
   getLoadedSceneEntities,
   getSceneFile,
+  getActiveScenePackPath,
   getSceneList,
   onSceneListChange,
   useSceneList,

@@ -76,13 +76,13 @@ export function validateSource(
 
   // Check: magic bytes for known formats
   const magic = MAGIC_BYTES[ext];
-  if (magic && bytes.length >= magic.bytes.length) {
-    let match = true;
-    for (let i = 0; i < magic.bytes.length; i++) {
-      if (bytes[i] !== magic.bytes[i]) {
-        match = false;
-        break;
-      }
+  // An empty byte sample is the deliberate path-only `validateSourceQuick`
+  // input. A non-empty sample shorter than the signature is a truncated source
+  // and must fail closed instead of silently passing the matrix gate.
+  if (magic && bytes.length > 0) {
+    let match = bytes.length >= magic.bytes.length;
+    for (let i = 0; match && i < magic.bytes.length; i++) {
+      if (bytes[i] !== magic.bytes[i]) match = false;
     }
     if (!match) {
       diagnostics.push({

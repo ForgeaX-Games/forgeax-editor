@@ -35,10 +35,18 @@
         "name": {
           "type": "string",
           "description": "Optional name for the wrapper root entity; defaults to \"Scene\". The wrapper is the mount ROOT and round-trips as one mounts[] entry."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id."
         }
       },
       "required": [
-        "sceneGuid"
+        "sceneGuid",
+        "requestId"
       ]
     },
     "title": "Add Scene Asset to Scene"
@@ -178,6 +186,13 @@
         "slot": {
           "type": "number",
           "description": "For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id."
         }
       },
       "required": [
@@ -185,7 +200,8 @@
         "component",
         "field",
         "assetType",
-        "guids"
+        "guids",
+        "requestId"
       ]
     },
     "title": "Bind Asset Ref (resolve GUID -> shared<T> handle)"
@@ -575,7 +591,15 @@
       "properties": {
         "destPath": {
           "type": "string",
+          "minLength": 1,
           "description": "On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for the accepted/running/terminal OperationRun."
         },
         "sourceName": {
           "type": "string",
@@ -587,7 +611,8 @@
         }
       },
       "required": [
-        "destPath"
+        "destPath",
+        "requestId"
       ]
     },
     "title": "Import Asset"
@@ -640,8 +665,52 @@
     "id": "play",
     "domain": "session",
     "source": "builtin",
-    "argsSchema": null,
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "dirtyPolicy": {
+          "type": "string",
+          "enum": [
+            "last-saved",
+            "save-then-play",
+            "cancel"
+          ],
+          "description": "When unsaved edits exist: use the last saved scene, save through Gateway then play, or cancel."
+        }
+      }
+    },
     "title": "Play"
+  },
+  {
+    "id": "reimportAsset",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "destPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Existing game-relative source path whose metadata sidecar supplies stable output GUIDs and import settings."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for the accepted/running/terminal OperationRun."
+        },
+        "sourceName": {
+          "type": "string",
+          "description": "Optional basename override; defaults to the last path segment."
+        }
+      },
+      "required": [
+        "destPath",
+        "requestId"
+      ]
+    },
+    "title": "Reimport Asset"
   },
   {
     "id": "removeComponent",

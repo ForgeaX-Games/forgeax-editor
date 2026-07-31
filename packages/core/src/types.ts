@@ -116,38 +116,25 @@ export type BuiltinEditorOp =
   // cleanly reversible). Human callers upload bytes through the assetIO gate first
   // then dispatch with skipUpload; AI passes an on-disk path. destPath may be
   // game-relative (the applier resolves it via resolveGamePath).
-  | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean }
-  // addSceneAssetToScene (solo round-6 / skinning-pillar convergence): "a scene
-  // sub-asset is in the catalog by GUID (e.g. just imported); add it to the live
-  // scene." SESSION-domain, ledger-only, fire-and-forget async — it must
-  // loadByGuid (async), so it cannot ride the SYNC document-domain
-  // instantiateSceneAsset applier (which takes a pre-collected POD). Mirrors
-  // importAsset's shape exactly: same session domain, same detached-promise
-  // completion, same "around the catalog" scope. The applier body is the SAME
-  // spawnGlbSceneAsMount the human "Add to Scene" UI runs — one door, human + AI
-  // are equal peers (registry razor: the UI capability is now AI-reachable, not a
-  // registered copy). The nested SceneInstance subtree is the engine's by-design
-  // derived cache (AGENTS.md invariant 7 escape hatch); the authored fact is the
-  // wrapper's SceneInstance ref, which the wrapper-spawn (a document op inside the
-  // body) round-trips as one mounts[] entry.
-  | { kind: 'addSceneAssetToScene'; sceneGuid: string; name?: string }
-  // bindAssetRef (solo round-11 / P5 rendering-authoring convergence): "resolve a
-  // catalogued asset GUID to a live shared<T> handle and write it into a component
-  // field." SESSION-domain, ledger-only, fire-and-forget async — it must
-  // loadByGuid (async), exactly like addSceneAssetToScene, so it cannot ride the
-  // SYNC document appliers. This is the ONE front-door projection of the engine's
-  // own GUID->handle resolution onto a component field: `addComponent`/
-  // `setComponent` pass their `value`/`patch` RAW (no shared<T> resolution), so a
-  // GUID string in a shared<T> field silently coerces to handle 0. This op closes
-  // the whole class at once — MeshRenderer.materials (array<shared<MaterialAsset>>),
-  // Skylight/SkyboxBackground.equirect (shared<EquirectAsset>), AnimationPlayer.clips
-  // (array<shared<AnimationClip>>) — by loadByGuid -> allocSharedRef -> writing the
-  // resolved handle via a document setComponent (so the authored bind is undoable +
-  // round-trips like any owned-entity component write). `assetType` is the engine
-  // asset-union tag allocSharedRef expects (e.g. 'MaterialAsset'); `field` is the
-  // shared<T> field on `component`; `slot` targets one element of an array field
-  // (omit to write the whole array from `guids`).
-  | { kind: 'bindAssetRef'; entity: EntityHandle; component: string; field: string; assetType: string; guids: string[]; slot?: number }
+  | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean; requestId: string }
+  // Reimport uses the existing source metadata as the producer-owned identity
+  // and settings input; missing metadata is a structured terminal failure.
+  | { kind: 'reimportAsset'; destPath: string; sourceName?: string; requestId: string }
+  // addSceneAssetToScene (R0-05B): a catalogued scene sub-asset is placed by GUID.
+  // SESSION-domain, ledger-only, request-correlated async — requestId is the
+  // independent Gateway OperationRun identity, so concurrent mounts do not race
+  // over a latest-only phase/error slot. The nested SceneInstance subtree is the
+  // engine's derived cache; the wrapper's SceneInstance ref is the authored fact
+  // that round-trips as one mounts[] entry. If async instantiation fails, the
+  // provisional wrapper is rolled back through destroyEntity and terminal
+  // error.current.cleanup reports the cleanup facts.
+  | { kind: 'addSceneAssetToScene'; sceneGuid: string; name?: string; requestId: string }
+  // bindAssetRef (R0-05C): resolve catalogued GUIDs to live shared<T> handles and
+  // write them into a component field. SESSION-domain, ledger-only, async; the
+  // caller-minted requestId identifies the terminal Gateway OperationRun. The
+  // nested setComponent remains the authored undoable write. `slot` targets one
+  // array element; omit it to write the whole field from `guids`.
+  | { kind: 'bindAssetRef'; entity: EntityHandle; component: string; field: string; assetType: string; guids: string[]; slot?: number; requestId: string }
   | { kind: 'setFolderSelection'; paths?: string[]; items?: { path: string; kind: 'dir' | 'file' }[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }
@@ -155,9 +142,10 @@ export type BuiltinEditorOp =
   // play·stop (plan-strategy §2 D-11): SESSION-domain discrete instantaneous ops.
   // Their real applier (the state machine) lives in edit-runtime (DAG downstream)
   // and is injected via registerSessionApplier at boot; in headless core they are
-  // unregistered → dispatch returns UNKNOWN_OP (not silently swallowed). Payload
-  // is empty (instantaneous degenerate dispatch — no continuous lifecycle).
-  | { kind: 'play' }
+  // unregistered → dispatch returns UNKNOWN_OP (not silently swallowed). The
+  // optional policy keeps direct runtime callers on the historical Last Saved
+  // default; UI and AI callers should provide it explicitly.
+  | { kind: 'play'; dirtyPolicy?: PlayDirtyPolicy }
   | { kind: 'stop' }
   | { kind: 'setDisplay'; display: 'scene' | 'game' }
   // scan pipeline ops (north-star §6/§8) — SESSION-domain, ledger-only, no undo
@@ -191,6 +179,9 @@ export type WithEntityId = { _id?: number; [key: string]: unknown };
  * phase). plan-strategy §2 D-2.
  */
 export type EditorOpLifecycle = EditorOp;
+
+/** What Play does when the authored scene has unsaved in-memory edits. */
+export type PlayDirtyPolicy = 'last-saved' | 'save-then-play' | 'cancel';
 
 // ── Error codes (plan-strategy §2 D-7) ──────────────────────────────────────
 
@@ -252,11 +243,28 @@ export interface CommandError {
     // + lastPlayError carries this — instead of dispatch({kind:'play'}) returning
     // {ok:true} while play silently never started (the round-3/5 misdiagnosis trap).
     | 'play-assemble-failed'
+    // Play was requested with save-then-play, but the canonical Gateway save
+    // did not reach a succeeded terminal run.
+    | 'play-save-failed'
+    // Play was explicitly cancelled because the authored scene was dirty.
+    | 'play-cancelled-dirty'
     // ── solo round-28: async scene-mount failure ──
     // addSceneAssetToScene loads + instantiates a catalogued SceneAsset in a
     // detached session continuation. Its accepted dispatch must still expose the
     // terminal outcome through the same gateway read surface — never console-only.
     | 'scene-mount-failed'
+    // ── Async shared-ref binding failure (R0-05C) ──
+    | 'asset-bind-failed'
+    // Asset import executor failures (stable terminal taxonomy).
+    | 'IMPORT_UNSUPPORTED_FORMAT'
+    | 'IMPORT_SOURCE_BYTES_MISSING'
+    | 'IMPORT_UPLOAD_FAILED'
+    | 'IMPORT_SOURCE_READ_FAILED'
+    | 'IMPORT_COOK_FAILED'
+    | 'IMPORT_SIDECAR_WRITE_FAILED'
+    | 'IMPORT_COOK_TRIGGER_FAILED'
+    | 'IMPORT_NETWORK_ERROR'
+    | 'IMPORT_EXECUTION_FAILED'
     // ── Play-only game projection codes ──
     // A game owns these action/read closures. The editor Gateway exposes only
     // discovery + invocation while a fresh play world is live; it never imports
