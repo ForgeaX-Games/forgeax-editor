@@ -63,6 +63,7 @@
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
+    "@forgeax/engine-npc": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "lucide-react": "^0.460.0",

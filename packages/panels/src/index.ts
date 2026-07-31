@@ -25,6 +25,24 @@ export { InspectorPanel } from './Inspector';
 export { LauncherPanel } from './Launcher';
 export { AssetInspectorPanel } from './AssetInspector';
 export {
+  buildDiagnosticsRows,
+  filterDiagnosticsRows,
+  formatDiagnosticsDetail,
+  getDiagnosticsProjectionSource,
+  getDiagnosticsSnapshot,
+  installDiagnosticsProjectionSource,
+  subscribeDiagnosticsProjection,
+} from './diagnostics/diagnostics-view-model';
+export type {
+  DiagnosticsLocation,
+  DiagnosticsPanelAction,
+  DiagnosticsPanelFilters,
+  DiagnosticsPanelRow,
+  DiagnosticsPanelSeverity,
+  DiagnosticsPanelSource,
+  DiagnosticsProjectionSource,
+} from './diagnostics/diagnostics-view-model';
+export {
   buildOperationCenterRows,
   getOperationCenterRows,
   getOperationProjectionSource,

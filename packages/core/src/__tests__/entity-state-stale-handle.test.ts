@@ -2,7 +2,7 @@
 //
 // feat-20260707-editor-world-fork-ssot-level-load-play-activeworld M1:
 // Define stale-entity-handle structured error contract —
-// (a) error shape: { ok: false, error: { code: 'stale-entity-handle', hint: '...', entity } };
+// (a) error shape: { ok: false, error: { code: 'stale-entity-handle', hint: '...', objectRefs } };
 // (b) entity-state helper rewritten to return this error instead of undefined;
 // (c) hint directly encodes self-rescue action (re-query activeWorld or getSelection());
 // (d) Result shape consistent with gateway dispatch return values.
@@ -40,7 +40,7 @@ import {
 interface StaleEntityHandleError {
   readonly code: 'stale-entity-handle';
   readonly hint: string;
-  readonly entity: EntityHandle;
+  readonly objectRefs: { readonly entity: { readonly kind: 'entity'; readonly id: string } };
 }
 
 interface StaleHandleResult {
@@ -61,8 +61,8 @@ describe('w3 — stale-entity-handle error contract', () => {
     expect(world).toBeDefined();
   });
 
-  // ── Test (a): error shape has correct .code / .hint / .entity ──
-  it('(a1) stale-entity-handle error shape: { ok: false, error: { code, hint, entity } }', () => {
+  // ── Test (a): error shape has correct .code / .hint / .objectRefs ──
+  it('(a1) stale-entity-handle error shape: { ok: false, error: { code, hint, objectRefs } }', () => {
     // w5 will produce a function that checks whether a handle is valid in
     // the current activeWorld. A stale (never-spawned) handle returns a
     // structured error rather than undefined or empty object.
@@ -71,7 +71,7 @@ describe('w3 — stale-entity-handle error contract', () => {
     //   .ok === false
     //   .error.code === 'stale-entity-handle'
     //   .error.hint is a non-empty string
-    //   .error.entity is the stale EntityHandle
+    //   .error.objectRefs.entity identifies the stale EntityHandle
     const h = staleHandle();
 
     // world.get with a stale handle returns { ok: false, error: StaleEntityError }

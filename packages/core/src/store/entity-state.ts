@@ -25,7 +25,7 @@
 //
 // Anchors:
 //   requirements AC-01: entity-state full handle<->id mapping ops deleted
-//   requirements AC-14: stale-entity-handle structured error (.code/.hint/.entity)
+//   requirements AC-14: stale-entity-handle structured error (.code/.hint/.objectRefs.entity)
 //   plan-strategy D-4: read helper normalized to Result on stale handle
 //   plan-strategy §2.5: entity-state.ts net-reduction (double-map -> read face)
 //   research Finding 13: current entComponent returns undefined for stale ids (P3)
@@ -44,6 +44,10 @@ import {
 } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
+import {
+  createEntityObjectRef,
+  type ErrorSubjectRef,
+} from '@forgeax/editor-product';
 import {
   validateHandlePair,
   type HandlePair,
@@ -68,8 +72,8 @@ export interface StaleEntityHandleError {
   /** Self-rescue path for AI and human consumers — re-query the active world
    *  or call getSelection() to obtain a fresh handle. */
   readonly hint: string;
-  /** The stale entity handle that triggered the error. */
-  readonly entity: EntityHandle;
+  /** The stable entity ref and optional world-bound locator that triggered the error. */
+  readonly objectRefs: { readonly entity: ErrorSubjectRef };
   /** Present when the super handle-pair check produced this error — narrows the
    *  stale cause (D-8). Absent on the legacy isStale fallback path. */
   readonly detail?: { readonly reason: HandlePairStaleReason; readonly engineCode?: string };
@@ -82,8 +86,7 @@ export interface StaleEntityHandleError {
 export interface ComponentAbsentError {
   readonly code: 'component-absent';
   readonly hint: string;
-  readonly entity: EntityHandle;
-  readonly component: string;
+  readonly objectRefs: { readonly entity: ErrorSubjectRef; readonly component: ErrorSubjectRef };
 }
 
 /** Result shape for entity read operations: ok with value, or a structured
@@ -193,11 +196,19 @@ function checkHandle(
   }
   // Missing world (cross-game gap): treat as stale so Result callers stay structured.
   if (!hasWorld(world)) {
-    return { code: 'stale-entity-handle', hint: NO_WORLD_HINT, entity: handle };
+    return {
+      code: 'stale-entity-handle',
+      hint: NO_WORLD_HINT,
+      objectRefs: { entity: createEntityObjectRef({ handle, ...pairMeta }) },
+    };
   }
   // Legacy fallback (no binding): plain liveness, reason-less stale error.
   return isStale(world, handle)
-    ? { code: 'stale-entity-handle', hint: STALE_HINT, entity: handle }
+    ? {
+      code: 'stale-entity-handle',
+      hint: STALE_HINT,
+      objectRefs: { entity: createEntityObjectRef({ handle, ...pairMeta }) },
+    }
     : null;
 }
 
@@ -306,7 +317,14 @@ export function entComponent(
   opts?: HandleCheckOpts,
 ): StaleHandleResult<Record<string, unknown>> {
   if (!hasWorld(world)) {
-    return { ok: false, error: { code: 'stale-entity-handle', hint: NO_WORLD_HINT, entity: handle } };
+    return {
+      ok: false,
+      error: {
+        code: 'stale-entity-handle',
+        hint: NO_WORLD_HINT,
+        objectRefs: { entity: createEntityObjectRef({ handle, ...opts?.pair }) },
+      },
+    };
   }
   const bad = checkHandle(world, handle, opts?.binding, opts?.pair);
   if (bad !== null) return { ok: false, error: bad };
@@ -320,8 +338,10 @@ export function entComponent(
     error: {
       code: 'component-absent',
       hint: `component '${compName}' is not present on this entity`,
-      entity: handle,
-      component: compName,
+      objectRefs: {
+        entity: createEntityObjectRef({ handle, ...opts?.pair }),
+        component: { kind: 'component', id: compName },
+      },
     },
   };
 }

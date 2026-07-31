@@ -266,6 +266,27 @@ describe('createBootstrapResolver — one module evaluation, fresh-world bootstr
     expect(await resolveBootstrap()).toBeNull();
     expect(urls).toEqual(['/@fs/games/p9a/main.ts', '/@fs/games/p9a/src/main.ts']);
   });
+
+  it('turns an explicit bootstrap import throw into a structured startup failure', async () => {
+    let fail = true;
+    const bootstrap = () => {};
+    const resolveBootstrap = createBootstrapResolver({
+      readForgeForPlay: async () => ({ entry: 'main.ts' }),
+      resolveGameFsBase: async () => '/@fs/games/p9a',
+      getSceneId: () => 'p9a',
+      importModule: async () => {
+        if (fail) throw new Error('module syntax error');
+        return { bootstrap };
+      },
+    });
+
+    await expect(resolveBootstrap()).rejects.toEqual({
+      code: 'play-bootstrap-resolve-failed',
+      hint: 'The configured Play bootstrap could not be loaded: module syntax error',
+    });
+    fail = false;
+    expect(await resolveBootstrap()).toBe(bootstrap);
+  });
 });
 
 describe('initHostSession — boot ordering driven headlessly (AC-05)', () => {

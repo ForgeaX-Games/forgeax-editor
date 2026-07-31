@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveGameEngineEntry } from './runtime-vite-preset';
 
@@ -33,6 +34,25 @@ describe('resolveGameEngineEntry', () => {
     expect(resolveGameEngineEntry('@forgeax/engine-pack/guid')).toBe(
       resolve(EDIT_RUNTIME, 'node_modules/@forgeax/engine-pack/dist/guid.mjs'),
     );
+    expect(resolveGameEngineEntry('@forgeax/npc-client')).toBeNull();
+
+    const hostRoot = mkdtempSync(join(tmpdir(), 'forgeax-editor-host-'));
+    try {
+      const packageDir = resolve(hostRoot, 'packages/npc-client');
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        resolve(packageDir, 'package.json'),
+        JSON.stringify({
+          name: '@forgeax/npc-client',
+          exports: { '.': { import: './dist/index.js' } },
+        }),
+      );
+      expect(resolveGameEngineEntry('@forgeax/npc-client', hostRoot)).toBe(
+        resolve(packageDir, 'dist/index.js'),
+      );
+    } finally {
+      rmSync(hostRoot, { recursive: true, force: true });
+    }
   });
 
   test('leaves unavailable package exports unresolved', () => {

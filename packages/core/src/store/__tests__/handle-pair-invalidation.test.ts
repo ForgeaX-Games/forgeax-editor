@@ -42,8 +42,10 @@ import type { EntityHandle } from '../../scene/scene-types';
 import {
   type HandlePair,
   type HandlePairBinding,
+  validateEntityObjectRef,
   validateHandlePair,
 } from '../handle-pair';
+import { createEntityObjectRef } from '@forgeax/editor-product';
 
 // The stable worldRef indices (mirror WorldBinding.ts WORLD_REF_*): 0 = editor,
 // 1 = scene. handle-pair.ts is world-agnostic — it only compares the numbers, so
@@ -101,7 +103,7 @@ describe('w22 — handle-pair three-layer invalidation', () => {
     if (!r.ok && r.error.code === 'stale-entity-handle') {
       // Reuses the editor's real code family (D-8), narrowed by detail.reason.
       expect(r.error.detail.reason).toBe('world-epoch-mismatch');
-      expect(r.error.entity).toBe(ent);
+      expect(r.error.objectRefs.entity.locator).toMatchObject({ handle: ent, worldRef: WORLD_REF_SCENE, epoch: 0 });
     } else {
       throw new Error(`expected stale-entity-handle, got ${r.ok ? 'ok' : r.error.code}`);
     }
@@ -121,7 +123,7 @@ describe('w22 — handle-pair three-layer invalidation', () => {
     expect(r.ok).toBe(false);
     if (!r.ok && r.error.code === 'stale-entity-handle') {
       expect(r.error.detail.reason).toBe('stale-entity');
-      expect(r.error.entity).toBe(ent);
+      expect(r.error.objectRefs.entity.locator).toMatchObject({ handle: ent, worldRef: WORLD_REF_SCENE, epoch: 0 });
     } else {
       throw new Error(`expected stale-entity-handle, got ${r.ok ? 'ok' : r.error.code}`);
     }
@@ -163,5 +165,34 @@ describe('w22 — handle-pair three-layer invalidation', () => {
     const r = validateHandlePair(pair, binding(WORLD_REF_SCENE, 0, sceneWorld));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.entity).toBe(ent);
+  });
+
+  it('(6) entity object refs resolve only through their world-bound locator', () => {
+    const sceneWorld = new World();
+    const ent = spawnNamed(sceneWorld, 'locatable');
+    const located = createEntityObjectRef({ handle: ent, worldRef: WORLD_REF_SCENE, epoch: 3 });
+
+    const live = validateEntityObjectRef(located, binding(WORLD_REF_SCENE, 3, sceneWorld));
+    expect(live).toEqual({ ok: true, entity: ent });
+
+    const stale = validateEntityObjectRef(located, binding(WORLD_REF_SCENE, 4, sceneWorld));
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) {
+      expect(stale.error.code).toBe('stale-entity-handle');
+      expect(stale.error.objectRefs.entity).toEqual(located);
+    }
+  });
+
+  it('(7) a stable entity ref without a locator cannot guess a live entity', () => {
+    const sceneWorld = new World();
+    const ent = spawnNamed(sceneWorld, 'not-guessable');
+    const stable = createEntityObjectRef({ handle: ent });
+
+    const r = validateEntityObjectRef(stable, binding(WORLD_REF_SCENE, 0, sceneWorld));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('entity-ref-unresolvable');
+      expect(r.error.objectRefs.entity).toEqual(stable);
+    }
   });
 });

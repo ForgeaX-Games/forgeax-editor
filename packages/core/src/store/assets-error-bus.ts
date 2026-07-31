@@ -31,7 +31,25 @@ export interface AssetsErrorPayload {
   ts: number;
 }
 
+const ASSET_ERROR_HISTORY_LIMIT = 128;
+const assetErrorHistory: AssetsErrorPayload[] = [];
+let assetErrorRevision = 0;
+
 /** Broadcast a background asset-IO failure to panels (toast subscribers). */
 export function broadcastAssetsError(payload: Omit<AssetsErrorPayload, 'ts'>): void {
-  panelBridge.emit('assetsError', { ...payload, ts: Date.now() });
+  const event = Object.freeze({ ...payload, ts: Date.now() });
+  assetErrorRevision += 1;
+  assetErrorHistory.push(event);
+  if (assetErrorHistory.length > ASSET_ERROR_HISTORY_LIMIT) assetErrorHistory.shift();
+  panelBridge.emit('assetsError', event);
+}
+
+/** Read the bounded asset-error history; the bus remains the event owner. */
+export function recentAssetsErrors(limit: number = ASSET_ERROR_HISTORY_LIMIT): readonly AssetsErrorPayload[] {
+  return assetErrorHistory.slice(Math.max(0, assetErrorHistory.length - Math.max(0, Math.floor(limit))));
+}
+
+/** Monotonic source revision for diagnostics snapshot versioning. */
+export function assetsErrorRevision(): number {
+  return assetErrorRevision;
 }

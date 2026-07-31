@@ -41,18 +41,30 @@ export function resolveGameEngineEntry(id: string): string | null {
   const rest = id.slice('@forgeax/'.length);
   const [packageName, ...subpath] = rest.split('/');
   if (!packageName) return null;
-  const packageDir = resolve(here, 'node_modules/@forgeax', packageName);
-  try {
-    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
-      exports?: PackageExports;
-    };
-    const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
-    const entry = manifest.exports?.[exportKey];
-    const importPath = typeof entry === 'string' ? entry : entry?.import;
-    return typeof importPath === 'string' ? resolve(packageDir, importPath) : null;
-  } catch {
-    return null;
+  const packageRoots = [resolve(here, 'node_modules')];
+  if (HOST_PACKAGE_ROOT) {
+    const hostRoot = resolve(HOST_PACKAGE_ROOT);
+    packageRoots.push(hostRoot, resolve(hostRoot, 'node_modules'), resolve(hostRoot, 'packages'));
   }
+  for (let cursor = dirname(here); cursor !== dirname(cursor); cursor = dirname(cursor)) {
+    packageRoots.push(resolve(cursor, 'node_modules'), resolve(cursor, 'packages'));
+  }
+  for (const root of packageRoots) {
+    for (const packageDir of [resolve(root, '@forgeax', packageName), resolve(root, packageName)]) {
+      try {
+        const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+          name?: string;
+          exports?: PackageExports;
+        };
+        if (manifest.name !== id.split('/').slice(0, 2).join('/')) continue;
+        const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
+        const entry = manifest.exports?.[exportKey];
+        const importPath = typeof entry === 'string' ? entry : entry?.import;
+        if (typeof importPath === 'string') return resolve(packageDir, importPath);
+      } catch { /* try the next host-owned package root */ }
+    }
+  }
+  return null;
 }
 
 function gameEngineResolve() {
@@ -257,6 +269,11 @@ function forgeaxWorkspacePackages(): string[] {
 }
 const FORGEAX_WS_PKGS = forgeaxWorkspacePackages();
 
+// Studio-owned game SDK packages are resolved from an injected host package
+// root. This keeps standalone editor install independent from unpublished SDKs
+// while letting embedded Studio games import them through the same resolver.
+const HOST_PACKAGE_ROOT = process.env.FORGEAX_HOST_PACKAGE_ROOT;
+
 const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
 const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
 
@@ -282,6 +299,39 @@ function forgeaxPackBaseStrip() {
           }
         }
         next();
+      });
+    },
+  };
+}
+
+/** Project-bound identity used by local orchestration clients before opening preview. */
+function forgeaxRuntimeIdentity() {
+  const instanceRootAbs = process.env.FORGEAX_PROJECT_ROOT
+    ? resolve(process.env.FORGEAX_PROJECT_ROOT)
+    : undefined;
+  return {
+    name: 'forgeax:runtime-identity',
+    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
+      server.middlewares.use((
+        req: { url?: string },
+        res: {
+          statusCode: number;
+          setHeader(name: string, value: string): void;
+          end(body: string): void;
+        },
+        next: () => void,
+      ) => {
+        if (req.url?.split('?')[0] !== '/preview/__forgeax_health') {
+          next();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          status: 'ok',
+          name: '@forgeax/play-runtime',
+          instanceRootAbs,
+        }));
       });
     },
   };
@@ -594,6 +644,7 @@ export default defineConfig({
   define: { __FORGEAX_GAMES_URL_PREFIX__: JSON.stringify(GAMES_URL_PREFIX) },
   plugins: [
     gameEngineResolve() as never,
+    forgeaxRuntimeIdentity() as never,
     forgeaxPackBaseStrip() as never,
     forgeaxPerGamePackBaseStrip() as never,
     // URL-decode MUST precede pluginPack: its urlToAbs keys are verbatim

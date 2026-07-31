@@ -112,6 +112,12 @@ export function runtimeError(
   return Object.freeze({
     code,
     hint,
+    ...(options.owner === undefined ? {} : { owner: options.owner }),
+    ...(options.category === undefined ? {} : { category: options.category }),
+    ...(options.operationId === undefined ? {} : { operationId: options.operationId }),
+    ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
+    ...(options.objectRefs === undefined ? {} : { objectRefs: options.objectRefs }),
+    ...(options.cause === undefined ? {} : { cause: options.cause }),
     retryable: options.retryable ?? false,
     recoveryActions: Object.freeze([...(options.recoveryActions ?? [])]),
     ...(options.expected === undefined ? {} : { expected: options.expected }),
@@ -137,7 +143,10 @@ export function createStaleRuntimeHandleError(input: {
 
 export function unavailableRuntimeError(operation: RuntimeOperation, reason: string, blocking = false): CommandError {
   return runtimeError(blocking ? 'runtime-unavailable' : 'display-unavailable', reason, {
-    recoveryActions: ['runtime.describe'],
+    // The transport-level discovery route is the canonical executable
+    // recovery action; runtime capabilities do not define a second
+    // discovery operation.
+    recoveryActions: ['transport.describe'],
     retryable: !blocking,
     subjectRef: { kind: 'runtime-operation', id: operation },
   });

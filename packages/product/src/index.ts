@@ -37,11 +37,25 @@ export type {
   CapabilitySchema,
 } from './contracts/capability';
 export {
+  createEntityObjectRef,
+  createErrorCause,
   createCommandError,
   isCommandError,
   unavailable,
+  withCommandErrorContext,
 } from './contracts/error';
-export type { CommandError, CommandErrorCode } from './contracts/error';
+export type {
+  CommandError,
+  CommandErrorCode,
+  CommandErrorContext,
+  ErrorCategory,
+  ErrorCause,
+  ErrorEntityLocator,
+  ErrorConfirmation,
+  ErrorObjectRefs,
+  ErrorOwner,
+  ErrorSubjectRef,
+} from './contracts/error';
 export {
   acceptedEvent,
   createOperationRun,

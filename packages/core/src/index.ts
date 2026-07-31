@@ -20,6 +20,16 @@ export type { EntityHandle, WorldType } from './scene/scene-types';
 
 export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy } from './types';
 export type { EditorOpLifecycle } from './types';
+export type {
+  CommandErrorContext,
+  ErrorCategory,
+  ErrorCause,
+  ErrorEntityLocator,
+  ErrorObjectRefs,
+  ErrorOwner,
+  ErrorSubjectRef,
+} from '@forgeax/editor-product';
+export { createEntityObjectRef } from '@forgeax/editor-product';
 
 // ── Scene pack ──
 export {
@@ -84,6 +94,27 @@ export type {
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
 
+// Diagnostics are a read-only projection of existing trace, scan, asset-bus,
+// and OperationRun facts. Console output is intentionally not an input source.
+export { createDiagnosticsReadModel, queryDiagnosticsSnapshot, DIAGNOSTICS_DEDUPE, DIAGNOSTICS_RETENTION, DIAGNOSTICS_SCHEMA_VERSION } from './io/diagnostics';
+export type {
+  CreateDiagnosticsReadModelDeps,
+  DiagnosticsAssetSource,
+  DiagnosticsDedupe,
+  DiagnosticsOperationRunSource,
+  DiagnosticsQueryItem,
+  DiagnosticsQueryRequest,
+  DiagnosticsQueryResult,
+  DiagnosticsReadModel,
+  DiagnosticsReadModelOptions,
+  DiagnosticsRetention,
+  DiagnosticsScanSource,
+  DiagnosticsSeverity,
+  DiagnosticsSource,
+  DiagnosticsSnapshot,
+  DiagnosticsTraceSource,
+} from './io/diagnostics';
+
 // Runtime UI diagnostics are the typed read-only Gateway contract. The graph
 // remains internal; consumers receive only schema-valid status and counters.
 export {
@@ -140,8 +171,10 @@ export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, E
 // The world-manager layer holds HandlePairs (worldRef + epoch + entity) instead
 // of bare EntityHandles, and validates them through validateHandlePair before
 // any read/write — the defence against cross-world reads.
-export { validateHandlePair } from './store/handle-pair';
+export { validateEntityObjectRef, validateHandlePair } from './store/handle-pair';
 export type {
+  EntityObjectRefResult,
+  EntityObjectRefUnavailableError,
   HandlePair,
   HandlePairBinding,
   HandlePairResult,
@@ -320,7 +353,7 @@ export type { AssetsChangedHint } from './store/assets-changed';
 // asset IO that failed AFTER the applier returned ok. Panels subscribe via
 // panelBridge.on('assetsError', …) and toast; the applier remains SSOT for
 // state mutation (north-star §9). See dev-plan §5 step 3.
-export { broadcastAssetsError } from './store/assets-error-bus';
+export { assetsErrorRevision, broadcastAssetsError, recentAssetsErrors } from './store/assets-error-bus';
 export type { AssetsErrorPayload } from './store/assets-error-bus';
 export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace } from './store/store';
 

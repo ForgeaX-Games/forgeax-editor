@@ -42,7 +42,7 @@ describe('entity-state missing-world guards (cross-game gap)', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('stale-entity-handle');
-      expect(r.error.entity).toBe(HANDLE);
+      expect(r.error.objectRefs.entity.id).toBe(String(HANDLE));
     }
   });
 

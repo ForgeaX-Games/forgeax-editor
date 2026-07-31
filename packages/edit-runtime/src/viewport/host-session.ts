@@ -24,7 +24,7 @@ import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDir
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
-import { ensureGamePluginsLoaded, addGamePluginSystems, type GamePluginLoad } from './game-plugins';
+import { ensureGamePluginsLoaded, addGamePluginSystems, getPlayPluginFailure, type GamePluginLoad } from './game-plugins';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -142,26 +142,39 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
   return async (): Promise<GameBootstrap | null> => {
     if (resolved) return cached;
     resolved = true;
-    const forge = await deps.readForgeForPlay();
-    const gameFsBase = await deps.resolveGameFsBase();
-    const candidates: string[] = [];
-    if (forge.entry) candidates.push(forge.entry);
-    for (const fallback of ['main.ts', 'src/main.ts']) {
-      if (!candidates.includes(fallback)) candidates.push(fallback);
-    }
-    for (const rel of candidates) {
-      try {
-        const mod = await deps.importModule(`${gameFsBase}/${rel}`);
-        if (typeof mod.bootstrap === 'function') {
-          cached = mod.bootstrap as GameBootstrap;
-          return cached;
-        }
-      } catch (err) {
-        console.warn(`[editor] ▶ Play import failed for ${gameFsBase}/${rel}:`, err);
+    try {
+      const forge = await deps.readForgeForPlay();
+      const gameFsBase = await deps.resolveGameFsBase();
+      const candidates: string[] = [];
+      if (forge.entry) candidates.push(forge.entry);
+      for (const fallback of ['main.ts', 'src/main.ts']) {
+        if (!candidates.includes(fallback)) candidates.push(fallback);
       }
+      let lastImportError: unknown = null;
+      for (const rel of candidates) {
+        try {
+          const mod = await deps.importModule(`${gameFsBase}/${rel}`);
+          if (typeof mod.bootstrap === 'function') {
+            cached = mod.bootstrap as GameBootstrap;
+            return cached;
+          }
+        } catch (err) {
+          lastImportError = err;
+          console.warn(`[editor] ▶ Play import failed for ${gameFsBase}/${rel}:`, err);
+        }
+      }
+      if (lastImportError !== null && forge.entry) {
+        const hint = lastImportError instanceof Error ? lastImportError.message : String(lastImportError);
+        // A failed module evaluation is not a valid cache entry: a corrected file
+        // or recovered module must be able to retry on the next ▶ Play.
+        throw { code: 'play-bootstrap-resolve-failed', hint: `The configured Play bootstrap could not be loaded: ${hint}` };
+      }
+      console.warn(`[editor] ▶ Play bootstrap module not found for ${deps.getSceneId()}`);
+      return cached;
+    } catch (error) {
+      resolved = false;
+      throw error;
     }
-    console.warn(`[editor] ▶ Play bootstrap module not found for ${deps.getSceneId()}`);
-    return cached;
   };
 }
 
@@ -604,7 +617,12 @@ export function createHostSession(deps: HostSessionDeps): {
       if (!forge.defaultSceneGuid) return null;
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(forge.defaultSceneGuid);
-      if (!parsed.ok) return null;
+      if (!parsed.ok) {
+        throw {
+          code: 'play-default-scene-invalid',
+          hint: `forge.json defaultScene is not a valid asset GUID: ${forge.defaultSceneGuid}`,
+        };
+      }
       await renderer.ready.catch(() => null);
       // The shared AssetRegistry caches loadByGuid results. Save Then Play must
       // invalidate the authored SceneAsset first, or Play would silently replay
@@ -629,7 +647,10 @@ export function createHostSession(deps: HostSessionDeps): {
           hint: error.hint,
           detail: error.detail,
         }));
-        return null;
+        throw {
+          code: 'play-default-scene-load-failed',
+          hint: error.hint ?? `The defaultScene asset could not be loaded (${error.code ?? 'load-failed'}).`,
+        };
       }
       return assetRes.value;
     };
@@ -667,6 +688,13 @@ export function createHostSession(deps: HostSessionDeps): {
         // is registered when the defaultScene instantiates (a scene entity carrying
         // a `Rotator` needs the component token to exist to round-trip in).
         const pluginLoad = await loadGamePlugins();
+        const pluginFailure = getPlayPluginFailure(pluginLoad);
+        if (pluginFailure) {
+          return {
+            ok: false,
+            error: pluginFailure,
+          };
+        }
         const res = await assemblePlayWorld({
           renderer: renderer as never,
           loadDefaultScene,

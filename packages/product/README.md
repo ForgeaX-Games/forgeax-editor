@@ -59,11 +59,17 @@ descriptor never exposes that closure.
 
 ## Error contract
 
-Use `CommandError.code` for branching. Use `subjectRef`, `expected`,
+Use `CommandError.code` for branching. Use `owner`, `category`,
+`operationId`, `requestId`, `objectRefs`, `cause`, `subjectRef`, `expected`,
 `current`, `retryable`, `confirmation`, and `recoveryActions` for structured
 handling. `hint` and `message` are explanatory text and must not be parsed as
-protocol fields. `createCommandError()` freezes the result and its recovery
-action list; `isCommandError()` narrows unknown transport data.
+protocol fields. `objectRefs` are stable reference shapes, not live handles;
+entity refs may additionally carry a world-bound `{ handle, worldRef, epoch }`
+locator. That locator is only safe after the active world and epoch are
+validated by the core handle-pair gate. `cause` is a JSON-safe causal link.
+`createCommandError()` freezes the result and its structured context;
+`withCommandErrorContext()` adds Gateway correlation without rewriting the hint;
+`isCommandError()` narrows unknown transport data.
 
 ## Public entry points
 
@@ -72,7 +78,8 @@ action list; `isCommandError()` narrows unknown transport data.
 - `discoverCapabilities()` lists the derived capability index.
 - `describeCapability()` resolves one canonical id for preflight.
 - `capabilityId()` builds a canonical `subject.verb` id.
-- `createCommandError()` and `unavailable()` create structured failures.
+- `createCommandError()`, `withCommandErrorContext()`, `createErrorCause()`,
+  and `unavailable()` create structured failures.
 
 Later run and transport layers consume these same contracts. They must keep
 the registry, error shape, and host adapter boundaries intact.

@@ -1,7 +1,13 @@
 import { applyCommand, createEditSession } from '../session/document';
 import type { DocApplierCtx, DocAliasMap, EngineWriteProxy } from '../session/document';
 import type { CommandError, EditorOp, EditSession } from '../types';
-import type { RunProgress } from '@forgeax/editor-product';
+import {
+  createEntityObjectRef,
+  createCommandError,
+  type ErrorCategory,
+  type ErrorObjectRefs,
+  type RunProgress,
+} from '@forgeax/editor-product';
 import type { World } from '@forgeax/engine-ecs';
 import { clearSelection } from '../store/selection';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
@@ -14,6 +20,8 @@ import type { ValidateResult } from './args-schema';
 import { EngineFacade } from './engine-facade';
 import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
+import { assetsErrorRevision, recentAssetsErrors } from '../store/assets-error-bus';
+import { createDiagnosticsReadModel, type DiagnosticsReadModel } from './diagnostics';
 // gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
 // reader binding). None of them route a command or decide a domain.
@@ -66,6 +74,55 @@ export type DispatchResult =
   // made without re-reading the mutated op or diffing a query snapshot.
   | { ok: true; result?: { created: EntityHandle[]; operationRun?: OperationRun } }
   | { ok: false; error: CommandError };
+
+function requestIdOf(cmd: EditorOp): string | undefined {
+  const requestId = (cmd as { readonly requestId?: unknown }).requestId;
+  return typeof requestId === 'string' ? requestId : undefined;
+}
+
+/** Derive stable locator context from the operation payload, never from hint text. */
+function objectRefsOf(cmd: EditorOp): ErrorObjectRefs {
+  const refs: ErrorObjectRefs = {
+    operation: { kind: 'operation', id: cmd.kind },
+  };
+  const entity = (cmd as { readonly entity?: unknown }).entity;
+  const component = (cmd as { readonly component?: unknown }).component;
+  const guid = (cmd as { readonly guid?: unknown }).guid;
+  const sceneGuid = (cmd as { readonly sceneGuid?: unknown }).sceneGuid;
+  const path = (cmd as { readonly path?: unknown }).path;
+  const packPath = (cmd as { readonly packPath?: unknown }).packPath;
+  return {
+    ...refs,
+    ...(typeof entity === 'number' ? { entity: createEntityObjectRef({ handle: entity }) } : {}),
+    ...(typeof component === 'string' ? { component: { kind: 'component', id: component } } : {}),
+    ...(typeof guid === 'string' ? { asset: { kind: 'asset', id: guid } } : {}),
+    ...(typeof sceneGuid === 'string' ? { asset: { kind: 'scene-asset', id: sceneGuid } } : {}),
+    ...(typeof path === 'string' ? { file: { kind: 'file', id: path } } : {}),
+    ...(typeof packPath === 'string' ? { scene: { kind: 'scene', id: packPath } } : {}),
+  };
+}
+
+function categoryOf(error: CommandError): ErrorCategory {
+  if (error.category !== undefined) return error.category;
+  if (error.code === 'INVALID_ARGS') return 'validation';
+  if (error.code === 'UNKNOWN_OP' || error.code === 'OP_INTERRUPTED' || error.code === 'edit-rejected-in-play') return 'state';
+  return 'unknown';
+}
+
+/** Gateway's one boundary projection for all immediate dispatch failures. */
+function normalizeGatewayError(error: CommandError, cmd: EditorOp): CommandError {
+  const requestId = requestIdOf(cmd);
+  return createCommandError({
+    ...error,
+    owner: error.owner ?? 'editor-core',
+    category: categoryOf(error),
+    operationId: error.operationId ?? cmd.kind,
+    ...(error.requestId === undefined && requestId === undefined ? {} : { requestId: error.requestId ?? requestId }),
+    objectRefs: error.objectRefs ?? objectRefsOf(cmd),
+    retryable: error.retryable ?? false,
+    recoveryActions: error.recoveryActions ?? [],
+  }) as unknown as CommandError;
+}
 
 // Lightweight asset summary — the shared shape both describe legs (describeAsset
 // by-handle, describeAssetByGuid by-guid) return, so a caller reads one identity
@@ -187,6 +244,9 @@ export class EditGateway {
   private undoStack: StackEntry[] = [];
   private redoStack: StackEntry[] = [];
   private listeners = new Set<BusListener>();
+  /** Diagnostics consumers need session-ledger pulses too; document `subscribe`
+   * intentionally remains the World/docVersion signal. */
+  private diagnosticsListeners = new Set<() => void>();
   // Scene-reload listeners (M5 / D-4). Fired by replaceDoc — the SSOT collar every
   // scene reload funnels through (scene switch, disk/storage load). The super
   // (world-manager) subscribes to bump the sceneWorld epoch + revalidate the
@@ -253,6 +313,7 @@ export class EditGateway {
     }
     this.ledger.push(entry.cmd);
     this.origins.push(entry.origin);
+    this.emitDiagnostics();
     this.deferredEntry = null;
     return true;
   }
@@ -473,6 +534,22 @@ export class EditGateway {
   // The registry is Gateway-owned; wrappers and downstream projections read it
   // instead of maintaining a completion map of their own.
   readonly operationRuns = new OperationRunRegistry();
+
+  /**
+   * Read-only diagnostics projection. Each source remains owned by its
+   * existing producer: trace ring, ledger, asset-error bus, or OperationRun
+   * registry. The projection adds only bounded source-specific dedupe and
+   * exposes its policy in the returned snapshot.
+   */
+  readonly diagnostics: DiagnosticsReadModel = createDiagnosticsReadModel({
+    getRevision: () => this._rev,
+    getLedger: () => this.ledger,
+    getTraceRoots: recentRoots,
+    getDroppedTraceCount: droppedTracesCount,
+    getAssetErrors: recentAssetsErrors,
+    getAssetErrorRevision: assetsErrorRevision,
+    getOperationRunSnapshot: () => this.operationRuns.snapshot(),
+  });
 
   // ── Executor: EngineFacade (boot-constructed, plan-strategy §2 D-2) ───────
   // Created lazily and REBOUND when the underlying world changes. The same
@@ -734,8 +811,14 @@ export class EditGateway {
     return r;
   }
 
+  /**
+  * The public failure envelope is completed at this single Gateway boundary.
+  * Appliers remain domain owners of their stable codes and causal details;
+  * callers never need to parse a hint to recover operation context.
+  */
   dispatch(cmd: EditorOp, origin: CommandOrigin = 'human'): DispatchResult {
-    const kind = cmd.kind;
+    const result: DispatchResult = (() => {
+      const kind = cmd.kind;
 
     // Scan-lock guard: during startup scan, reject all dispatch until catalog is ready.
     // This is an infrastructure guard (not an op), matching the north-star §8 principle
@@ -1033,6 +1116,7 @@ export class EditGateway {
           if (run.status !== 'succeeded' || this.transientMode) return;
           this.ledger.push(cmd);
           this.origins.push(origin);
+          this.emitDiagnostics();
         });
       }
       return { ok: true, result: { created: [], operationRun: runningRun } };
@@ -1050,12 +1134,15 @@ export class EditGateway {
       if (!(desc && desc.source === 'defined')) {
         this.ledger.push(cmd);
         this.origins.push(origin);
+        this.emitDiagnostics();
       }
     } else if (!this.transientMode && this.deferHistory && domain === 'session') {
       const desc = getOp(kind);
       if (!(desc && desc.source === 'defined')) this.deferredEntry = { cmd, origin };
     }
-    return { ok: true };
+      return { ok: true };
+    })();
+    return result.ok ? result : { ok: false, error: normalizeGatewayError(result.error, cmd) };
   }
 
   // ── Lifecycle methods (plan-strategy §2 D-2) ────────────────────────────
@@ -1192,6 +1279,7 @@ export class EditGateway {
     // selection (panels) already sees the post-reload (cleared) state (D-4/AC-05).
     for (const fn of this.sceneReloadListeners) fn();
     for (const fn of this.listeners) fn(this.doc, null);
+    this.emitDiagnostics();
   }
 
   canUndo(): boolean {
@@ -1289,9 +1377,22 @@ export class EditGateway {
     return () => this.listeners.delete(fn);
   }
 
+  /** Subscribe to bounded diagnostics source facts. Unlike `subscribe`, this
+   * includes session-ledger entries that do not mutate the authored World
+   * (for example `assetValidationFailed`). */
+  subscribeDiagnostics(fn: () => void): () => void {
+    this.diagnosticsListeners.add(fn);
+    return () => this.diagnosticsListeners.delete(fn);
+  }
+
   private emit(last: EditorOp): void {
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, last);
+    this.emitDiagnostics();
+  }
+
+  private emitDiagnostics(): void {
+    for (const fn of this.diagnosticsListeners) fn();
   }
 
   // ── Trace read API (plan-strategy §2 D-3, AC-10) ──────────────────────────
@@ -1779,6 +1880,7 @@ export class EditGateway {
           if (!this.transientMode) {
             this.ledger.push(subOp);
             this.origins.push('ai'); // defined ops inherit AI origin (session-plan semantics)
+            this.emitDiagnostics();
           }
         }
 

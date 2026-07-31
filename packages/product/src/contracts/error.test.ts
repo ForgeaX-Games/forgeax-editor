@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
 
 import {
+  createEntityObjectRef,
+  createErrorCause,
   createCommandError,
   isCommandError,
+  withCommandErrorContext,
   type CommandError,
 } from './error';
 
@@ -40,4 +43,84 @@ test('error recognition does not depend on parsing the human message', () => {
 
   expect(isCommandError({ ...error, message: 'different wording' })).toBe(true);
   expect(isCommandError({ code: error.code, message: error.message })).toBe(false);
+});
+
+test('error envelope carries stable execution context and object references', () => {
+  const error = createCommandError({
+    owner: 'editor-core',
+    category: 'validation',
+    code: 'invalid-args',
+    hint: 'Provide a scene and entity.',
+    operationId: 'setComponent',
+    requestId: 'request-1',
+    objectRefs: {
+      scene: { kind: 'scene', id: 'scene-1' },
+      entity: { kind: 'entity', id: '42' },
+      component: { kind: 'component', id: 'Transform' },
+    },
+    retryable: false,
+    recoveryActions: ['editor.discover'],
+    cause: { code: 'schema-invalid', owner: 'editor-core', hint: 'required field is missing' },
+  });
+
+  expect(isCommandError(error)).toBe(true);
+  expect(error.operationId).toBe('setComponent');
+  expect(error.requestId).toBe('request-1');
+  expect(error.objectRefs?.entity).toEqual({ kind: 'entity', id: '42' });
+  expect(error.cause?.code).toBe('schema-invalid');
+  expect(Object.isFrozen(error)).toBe(true);
+  expect(Object.isFrozen(error.objectRefs)).toBe(true);
+
+  const projected = withCommandErrorContext(error, { requestId: 'request-2' });
+  expect(projected.requestId).toBe('request-2');
+  expect(projected.hint).toBe(error.hint);
+});
+
+test('entity object refs carry a stable id and an optional world-bound locator', () => {
+  const stable = createEntityObjectRef({ handle: 42 });
+  expect(stable).toEqual({ kind: 'entity', id: '42' });
+
+  const located = createEntityObjectRef({ handle: 42, worldRef: 1, epoch: 7 });
+  expect(located).toEqual({
+    kind: 'entity',
+    id: '42',
+    locator: { kind: 'entity-handle', handle: 42, worldRef: 1, epoch: 7 },
+  });
+
+  const error = createCommandError({
+    code: 'invalid-args',
+    hint: 'The entity is not selectable in this world.',
+    objectRefs: { entity: located },
+    retryable: false,
+    recoveryActions: ['editor.queryWorld'],
+  });
+  expect(isCommandError(error)).toBe(true);
+  expect(isCommandError({
+    ...error,
+    objectRefs: {
+      entity: {
+        kind: 'entity',
+        id: '42',
+        locator: { kind: 'entity-handle', handle: '42', worldRef: 1, epoch: 7 },
+      },
+    },
+  })).toBe(false);
+  expect(isCommandError({
+    ...error,
+    objectRefs: {
+      entity: { kind: 'asset', id: 'asset-1', locator: located.locator },
+    },
+  })).toBe(false);
+});
+
+test('exception causes remain structured and do not require message parsing', () => {
+  expect(createErrorCause(new Error('disk is unavailable'), 'platform-io')).toEqual({
+    code: 'exception',
+    owner: 'platform-io',
+    hint: 'disk is unavailable',
+  });
+  expect(createErrorCause('not-an-error')).toEqual({
+    code: 'unknown-cause',
+    hint: 'The operation threw a non-error value.',
+  });
 });

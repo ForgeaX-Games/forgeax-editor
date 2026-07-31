@@ -495,12 +495,19 @@ function install(): void {
   sh('pnpm', ['exec', 'tsc', '-b'], { cwd: ENGINE_DIR });
   ok('engine declarations built');
 
+  step('7/8 rebuilding engine declaration graph ...');
+  sh('pnpm', ['tsc', '-b', '--clean'], { cwd: ENGINE_DIR });
+  sh('pnpm', ['tsc', '-b'], { cwd: ENGINE_DIR });
+  ok('engine declarations built');
+
   step('verifying critical artifacts ...');
   let missing = false;
-  for (const pkg of ['vite-plugin-shader', 'app', 'runtime', 'ecs', 'types', 'shader', 'gltf']) {
-    if (!existsSync(join(ENGINE_DIR, 'packages', pkg, 'dist', 'index.mjs'))) {
-      warn(`missing engine dist: packages/${pkg}/dist/index.mjs`);
-      missing = true;
+  for (const pkg of ['vite-plugin-shader', 'app', 'runtime', 'ecs', 'types', 'shader', 'gltf', 'npc']) {
+    for (const artifact of ['index.mjs', 'index.d.ts', 'index.d.ts.map']) {
+      if (!existsSync(join(ENGINE_DIR, 'packages', pkg, 'dist', artifact))) {
+        warn(`missing engine dist: packages/${pkg}/dist/${artifact}`);
+        missing = true;
+      }
     }
   }
   if (!existsSync(WASM_FILE)) {

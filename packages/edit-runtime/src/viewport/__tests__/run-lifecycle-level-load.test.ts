@@ -90,6 +90,7 @@ function makeFakeRenderer() {
   const drawWorlds: unknown[] = [];
   const instantiateCalls: Array<{ handle: unknown; world: unknown }> = [];
   let disposeCalls = 0;
+  let onErrorUnsubscribeCalls = 0;
   const renderer = {
     ready: Promise.resolve({ ok: true }),
     assets: {
@@ -110,7 +111,7 @@ function makeFakeRenderer() {
       disposeCalls += 1;
     },
     onError(_cb: (e: unknown) => void) {
-      return () => {};
+      return () => { onErrorUnsubscribeCalls += 1; };
     },
   };
   return {
@@ -119,6 +120,9 @@ function makeFakeRenderer() {
     instantiateCalls,
     get disposeCalls() {
       return disposeCalls;
+    },
+    get onErrorUnsubscribeCalls() {
+      return onErrorUnsubscribeCalls;
     },
   };
 }
@@ -797,7 +801,14 @@ function makeCtxCapturingBootstrap(onCtx?: (ctx: Record<string, unknown>) => voi
 
 /** Lifecycle whose assemble threads a fake viewportContainer + ctx-capturing
  *  bootstrap, so uiRoot creation/removal + cleanup flush are observable. */
-function buildUiRootLifecycle(onCtx?: (ctx: Record<string, unknown>) => void) {
+function buildUiRootLifecycle(
+  onCtx?: (ctx: Record<string, unknown>) => void,
+  attachInput: (world: unknown) => (() => void) | undefined = () => undefined,
+  options: {
+    loadDefaultScene?: () => Promise<unknown>;
+    resolveBootstrap?: () => Promise<((world: unknown, ctx?: unknown) => void | Promise<void>) | null>;
+  } = {},
+) {
   const fr = makeFakeRenderer();
   const editorApp = makeFakeEditorApp();
   const gateway = makeFakeGateway();
@@ -807,9 +818,9 @@ function buildUiRootLifecycle(onCtx?: (ctx: Record<string, unknown>) => void) {
   const assemble = async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> =>
     assemblePlayWorld({
       renderer: fr.renderer as never,
-      loadDefaultScene: async () => makeSceneAsset(),
-      resolveBootstrap: async () => boot.entry as never,
-      attachInput: () => undefined,
+      loadDefaultScene: options.loadDefaultScene ?? (async () => makeSceneAsset()),
+      resolveBootstrap: options.resolveBootstrap ?? (async () => boot.entry as never),
+      attachInput,
       newWorld: () => new World() as never,
       viewportContainer: container as never,
     });
@@ -820,10 +831,48 @@ function buildUiRootLifecycle(onCtx?: (ctx: Record<string, unknown>) => void) {
     assemble: assemble as never,
   });
 
-  return { lifecycle, container, boot };
+  return { lifecycle, container, boot, fr, gateway, editorApp };
 }
 
 describe('▶ Play uiRoot + registerCleanup (■ Stop teardown)', () => {
+  it('detaches play input before game cleanup and remains idempotent on a stray Stop', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const order: string[] = [];
+      const t = buildUiRootLifecycle((ctx) => {
+        const reg = ctx.registerCleanup as (fn: () => void) => void;
+        reg(() => order.push('game-cleanup'));
+      }, () => {
+        order.push('input-attach');
+        return () => order.push('input-detach');
+      });
+
+      await t.lifecycle.playSimulation();
+      expect(order).toEqual(['input-attach']);
+      t.lifecycle.stopSimulation();
+      expect(order).toEqual(['input-attach', 'input-detach', 'game-cleanup']);
+      expect(t.container.children).toHaveLength(0);
+      t.lifecycle.stopSimulation();
+      expect(order).toEqual(['input-attach', 'input-detach', 'game-cleanup']);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('unsubscribes the play renderer error hook and keeps the shared renderer alive', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const t = buildUiRootLifecycle();
+      await t.lifecycle.playSimulation();
+      expect(t.fr.onErrorUnsubscribeCalls).toBe(0);
+      t.lifecycle.stopSimulation();
+      expect(t.fr.onErrorUnsubscribeCalls).toBe(1);
+      expect(t.fr.disposeCalls).toBe(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
   it('creates #game-ui-root inside the viewport container on play, exposed as ctx.uiRoot', async () => {
     const fakeRaf = installFakeRaf();
     try {
@@ -906,6 +955,68 @@ describe('▶ Play uiRoot + registerCleanup (■ Stop teardown)', () => {
       fakeRaf.restore();
     }
   });
+
+  it('a defaultScene load failure reaches terminal failed, cleans the attempt, and can retry', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      let fail = true;
+      const order: string[] = [];
+      const t = buildUiRootLifecycle((ctx) => {
+        const reg = ctx.registerCleanup as (fn: () => void) => void;
+        reg(() => order.push('game-cleanup'));
+      }, () => {
+        order.push('input-attach');
+        return () => order.push('input-detach');
+      }, {
+        loadDefaultScene: async () => {
+          if (fail) throw { code: 'play-default-scene-load-failed', hint: 'scene asset missing' };
+          return makeSceneAsset();
+        },
+      });
+
+      await t.lifecycle.playSimulation();
+      expect(t.gateway.events.map((event) => event.kind)).toEqual(['beginPlayAttempt', 'failPlayAttempt']);
+      expect(t.gateway.events[1]?.error).toEqual({ code: 'play-default-scene-load-failed', hint: 'scene asset missing' });
+      expect(t.editorApp.calls).toEqual(['pause', 'resume']);
+      expect(order).toEqual(['input-attach', 'input-detach']);
+      expect(t.container.children).toHaveLength(0);
+      expect(t.lifecycle.currentPlayWorld()).toBeNull();
+
+      fail = false;
+      await t.lifecycle.playSimulation();
+      expect(t.gateway.events.map((event) => event.kind)).toContain('enterPlay');
+      t.lifecycle.stopSimulation();
+      expect(t.container.children).toHaveLength(0);
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('a bootstrap throw reaches terminal failed, cleans the attempt, and can retry', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      let fail = true;
+      const t = buildUiRootLifecycle(undefined, () => undefined, {
+        resolveBootstrap: async () => {
+          if (fail) return async () => { throw new Error('bootstrap exploded'); };
+          return async () => {};
+        },
+      });
+
+      await t.lifecycle.playSimulation();
+      expect(t.gateway.events[1]?.error).toEqual({ code: 'play-bootstrap-failed', hint: 'bootstrap exploded' });
+      expect(t.editorApp.calls).toEqual(['pause', 'resume']);
+      expect(t.container.children).toHaveLength(0);
+      expect(t.lifecycle.currentPlayWorld()).toBeNull();
+
+      fail = false;
+      await t.lifecycle.playSimulation();
+      expect(t.gateway.events.map((event) => event.kind)).toContain('enterPlay');
+      t.lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
 });
 
 // ── round-8 #3: play-attempt observability wiring ──────────────────────────────
@@ -975,6 +1086,83 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
       expect(kinds).not.toContain('failPlayAttempt');
       expect(started).toBe(1);
       lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('an assemble rejection is terminal, resumes Edit, preserves its structured code, and permits retry', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const editorApp = makeFakeEditorApp();
+      const gateway = makeFakeGateway();
+      let fail = true;
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway: gateway as never,
+        assemble: async () => {
+          if (fail) throw { code: 'play-renderer-failed', hint: 'renderer bootstrap failed' };
+          return {
+            ok: true as const,
+            value: {
+              playApp: {
+                start: () => ({ ok: true }),
+                stop: () => ({ ok: true }),
+              },
+              playWorld: {},
+              detach: () => {},
+            } as never,
+          };
+        },
+      });
+
+      await lifecycle.playSimulation();
+      expect(gateway.events).toEqual([
+        { kind: 'beginPlayAttempt' },
+        { kind: 'failPlayAttempt', error: { code: 'play-renderer-failed', hint: 'renderer bootstrap failed' } },
+      ]);
+      expect(editorApp.calls).toEqual(['pause', 'resume']);
+      expect(lifecycle.currentPlayWorld()).toBeNull();
+
+      fail = false;
+      await lifecycle.playSimulation();
+      expect(gateway.events.at(-1)?.kind).toBe('enterPlay');
+      lifecycle.stopSimulation();
+    } finally {
+      fakeRaf.restore();
+    }
+  });
+
+  it('a Play App start failure is terminal and tears down the assembled world', async () => {
+    const fakeRaf = installFakeRaf();
+    try {
+      const editorApp = makeFakeEditorApp();
+      const gateway = makeFakeGateway();
+      let detached = 0;
+      const lifecycle = createRunLifecycle({
+        editorApp: editorApp as never,
+        gateway: gateway as never,
+        assemble: async () => ({
+          ok: true as const,
+          value: {
+            playApp: {
+              start: () => ({ ok: false, error: { code: 'renderer-start-failed', hint: 'device lost' } }),
+              stop: () => ({ ok: true }),
+            },
+            playWorld: {},
+            detach: () => { detached++; },
+          } as never,
+        }),
+      });
+
+      await lifecycle.playSimulation();
+      expect(gateway.events).toEqual([
+        { kind: 'beginPlayAttempt' },
+        { kind: 'failPlayAttempt', error: { code: 'renderer-start-failed', hint: 'device lost' } },
+      ]);
+      expect(editorApp.calls).toEqual(['pause', 'resume']);
+      expect(detached).toBe(1);
+      expect(lifecycle.currentPlayWorld()).toBeNull();
     } finally {
       fakeRaf.restore();
     }

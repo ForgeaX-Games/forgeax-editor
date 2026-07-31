@@ -43,6 +43,8 @@
 
 import { Name } from '@forgeax/engine-scene';
 import type { World } from '@forgeax/engine-ecs';
+import { createEntityObjectRef } from '@forgeax/editor-product';
+import type { ErrorSubjectRef } from '@forgeax/editor-product';
 import type { EntityHandle } from '../scene/scene-types';
 
 /** A world-bound entity handle: the entity plus the worldRef + epoch it was
@@ -75,7 +77,7 @@ export type HandlePairStaleReason = 'world-epoch-mismatch' | 'stale-entity';
 export interface WorldMismatchError {
   readonly code: 'world-mismatch';
   readonly hint: string;
-  readonly entity: EntityHandle;
+  readonly objectRefs: { readonly entity: ErrorSubjectRef };
   readonly detail: {
     readonly expectedWorldRef: number;
     readonly actualWorldRef: number;
@@ -87,7 +89,7 @@ export interface WorldMismatchError {
 export interface HandlePairStaleError {
   readonly code: 'stale-entity-handle';
   readonly hint: string;
-  readonly entity: EntityHandle;
+  readonly objectRefs: { readonly entity: ErrorSubjectRef };
   readonly detail: {
     readonly reason: HandlePairStaleReason;
     /** For the engine-passthrough case, the engine's own error code
@@ -96,11 +98,54 @@ export interface HandlePairStaleError {
   };
 }
 
+/** A stable entity ref without a world-bound locator cannot be selected safely. */
+export interface EntityObjectRefUnavailableError {
+  readonly code: 'entity-ref-unresolvable';
+  readonly hint: string;
+  readonly objectRefs: { readonly entity: ErrorSubjectRef };
+}
+
 /** validateHandlePair result: ok with the resolved entity, or a structured
  *  error. Shape mirrors gateway.dispatch / entity-state results (charter P4). */
 export type HandlePairResult =
   | { ok: true; entity: EntityHandle }
   | { ok: false; error: WorldMismatchError | HandlePairStaleError };
+
+export type EntityObjectRefResult =
+  | HandlePairResult
+  | { ok: false; error: EntityObjectRefUnavailableError };
+
+function objectRefs(pair: Pick<HandlePair, 'entity' | 'worldRef' | 'epoch'>): { readonly entity: ErrorSubjectRef } {
+  return {
+    entity: createEntityObjectRef({
+      handle: pair.entity,
+      worldRef: pair.worldRef,
+      epoch: pair.epoch,
+    }),
+  };
+}
+
+/** Validate a diagnostic entity locator through the same world/epoch gate as selection. */
+export function validateEntityObjectRef(
+  ref: ErrorSubjectRef,
+  binding: HandlePairBinding,
+): EntityObjectRefResult {
+  if (ref.kind !== 'entity' || ref.locator === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'entity-ref-unresolvable',
+        hint: 'entity reference has no world-bound locator; re-query the active world before locating it',
+        objectRefs: { entity: ref },
+      },
+    };
+  }
+  return validateHandlePair({
+    entity: ref.locator.handle as EntityHandle,
+    worldRef: ref.locator.worldRef,
+    epoch: ref.locator.epoch,
+  }, binding);
+}
 
 const EPOCH_HINT =
   'this world was reloaded; the handle is from a previous epoch — re-query the world or rebuild the selection for a fresh handle';
@@ -127,7 +172,7 @@ export function validateHandlePair(
         hint:
           `handle belongs to world ${pair.worldRef} but was used against world ${binding.worldRef} — ` +
           'route the operation to the correct world',
-        entity: pair.entity,
+        objectRefs: objectRefs(pair),
         detail: { expectedWorldRef: binding.worldRef, actualWorldRef: pair.worldRef },
       },
     };
@@ -140,7 +185,7 @@ export function validateHandlePair(
       error: {
         code: 'stale-entity-handle',
         hint: EPOCH_HINT,
-        entity: pair.entity,
+        objectRefs: objectRefs(pair),
         detail: { reason: 'world-epoch-mismatch' },
       },
     };
@@ -157,7 +202,7 @@ export function validateHandlePair(
       error: {
         code: 'stale-entity-handle',
         hint: STALE_HINT,
-        entity: pair.entity,
+        objectRefs: objectRefs(pair),
         detail: { reason: 'stale-entity', ...(engineCode ? { engineCode } : {}) },
       },
     };

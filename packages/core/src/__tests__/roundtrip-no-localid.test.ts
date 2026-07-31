@@ -141,7 +141,7 @@ describe('w26 — M3 integration (round-trip / stale-handle / hierarchy-live)', 
       expect(stale.error.code).toBe('stale-entity-handle');
       expect(typeof stale.error.hint).toBe('string');
       expect(stale.error.hint.length).toBeGreaterThan(0);
-      expect(stale.error.entity).toBe(playEnt);
+      expect(stale.error.objectRefs.entity.id).toBe(String(playEnt));
     }
   });
 

@@ -13,6 +13,7 @@ import { useState, useEffect } from 'react';
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
 import { ViewportHints } from './ViewportHints';
 import { GameOverlay } from './GameOverlay';
+import { PlayTerminal } from './PlayTerminal';
 
 interface ViewportChromeProps {
   fps: number;
@@ -34,17 +35,18 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControl
 
   if (isGame) {
     return (
-      <GameOverlay
-        fps={fps}
-        onPlay={onPlay}
-        onStop={onStop}
-        onToggleDisplay={onToggleDisplay}
-        onControlGame={onControlGame}
-      />
+      <>
+        <PlayTerminal onPlay={onPlay} onStop={onStop} />
+        <GameOverlay
+          fps={fps}
+          onPlay={onPlay}
+          onStop={onStop}
+          onToggleDisplay={onToggleDisplay}
+          onControlGame={onControlGame}
+        />
+      </>
     );
   }
 
-  return (
-    <ViewportHints />
-  );
+  return <><PlayTerminal onPlay={onPlay} onStop={onStop} /><ViewportHints /></>;
 }

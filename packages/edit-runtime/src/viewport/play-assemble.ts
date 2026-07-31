@@ -214,6 +214,37 @@ export interface AssemblePlayWorldDeps {
  * why this exists and when it retires.
  */
 export function shieldRendererDispose(renderer: ShieldableRenderer): ShieldableRenderer {
+  const postProcess = Reflect.get(renderer, 'postProcess') as {
+    register?: (id: string, entry: unknown) => void;
+  } | undefined;
+  const guardedPostProcess = postProcess === undefined
+    ? undefined
+    : new Proxy(postProcess, {
+      get(target, prop, receiver) {
+        if (prop !== 'register' || typeof target.register !== 'function') {
+          return Reflect.get(target, prop, receiver);
+        }
+        return (id: string, entry: unknown): void => {
+          try {
+            target.register!(id, entry);
+          } catch (error) {
+            // The editor intentionally reuses one renderer across fresh Play
+            // worlds. Game bootstrap runs once per world, while the renderer's
+            // user post-process registry lives for the renderer lifetime. A
+            // user effect therefore legitimately reaches this boundary twice
+            // on Play -> Stop -> Play. Keep the engine's public register API
+            // fail-fast; only this editor-owned shared-renderer seam absorbs
+            // the repeat, and never for an engine builtin id.
+            const code = typeof error === 'object' && error !== null && 'code' in error
+              ? (error as { code?: unknown }).code
+              : undefined;
+            if (id.startsWith('forgeax::') || code !== 'post-process-already-registered') {
+              throw error;
+            }
+          }
+        };
+      },
+    });
   return new Proxy(renderer, {
     get(target, prop, receiver) {
       if (prop === 'dispose') {
@@ -221,6 +252,9 @@ export function shieldRendererDispose(renderer: ShieldableRenderer): ShieldableR
         return () => {
           /* shielded — the host owns the renderer lifecycle (R-N2) */
         };
+      }
+      if (prop === 'postProcess' && guardedPostProcess !== undefined) {
+        return guardedPostProcess;
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -273,6 +307,62 @@ export async function assemblePlayWorld(
   // clear control so the closures are never discoverable before Gateway points to
   // the same fresh Play world, and never survive that world's Stop teardown.
   const gameProjection = deps.createGameProjection?.();
+  let audioBackend: ReturnType<typeof createWebAudioBackend> | undefined;
+  let playAppForCleanup: PlayApp | undefined;
+  let detached = false;
+
+  const startupError = (code: string, error: unknown): { code: string; hint: string } => {
+    const structured = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
+    let hint = String(error);
+    if (error instanceof Error) hint = error.message;
+    if (structured && typeof structured.hint === 'string') hint = structured.hint;
+    return { code: structured && typeof structured.code === 'string' ? structured.code : code, hint };
+  };
+
+  const detachHostResources = (): void => {
+    if (detached) return;
+    detached = true;
+    try {
+      gameProjection?.clear();
+    } catch (err) {
+      console.warn('[editor] ■ Stop game projection clear threw:', err);
+    }
+    try {
+      detachInput?.();
+    } catch (err) {
+      console.warn('[editor] ■ Stop input detach threw:', err);
+    }
+    try {
+      audioBackend?.destroy();
+    } catch (err) {
+      console.warn('[editor] ■ Stop audioBackend.destroy() threw:', err);
+    }
+    while (cleanups.length > 0) {
+      const fn = cleanups.pop()!;
+      try {
+        fn();
+      } catch (err) {
+        console.warn('[editor] ■ Stop cleanup threw:', err);
+      }
+    }
+    if (uiRoot) {
+      try {
+        uiRoot.remove();
+      } catch (err) {
+        console.warn('[editor] ■ Stop uiRoot.remove() threw:', err);
+      }
+      uiRoot = undefined;
+    }
+  };
+
+  const cleanupFailedAssembly = (): void => {
+    try {
+      playAppForCleanup?.stop();
+    } catch (err) {
+      console.warn('[editor] ▶ Play failed assembly stop threw:', err);
+    }
+    detachHostResources();
+  };
 
   // Resolve the module BEFORE statePlugin() builds the fresh world. A game calls
   // defineState() at module scope, which populates the engine's token registry;
@@ -281,7 +371,13 @@ export async function assemblePlayWorld(
   // resources do not, and setNextState returns state-not-registered in Play.
   // This resolves only the module/export; bootstrap still runs after defaultScene
   // instantiation below, so the asset-first game contract remains unchanged.
-  const entry = await deps.resolveBootstrap();
+  let entry: ((world: unknown, ctx?: unknown) => void | Promise<void>) | null;
+  try {
+    entry = await deps.resolveBootstrap();
+  } catch (error) {
+    detachHostResources();
+    return { ok: false, error: startupError('play-bootstrap-resolve-failed', error) };
+  }
 
   // Audio backend (round-17, P8): the assemble form does NOT auto-create the
   // WebAudioBackend (createAppFromAssemble: "host owns backend lifecycle") — so
@@ -300,7 +396,7 @@ export async function assemblePlayWorld(
   // unconditionally (unlike physics, whose rapier WASM load is expensive and thus
   // forge.json-gated) — matching D-8 "the play world is the same shape as a
   // standalone game runtime."
-  const audioBackend = createWebAudioBackend();
+  audioBackend = createWebAudioBackend();
   (playWorld as { insertResource(key: unknown, value: unknown): void }).insertResource(
     AUDIO_ENGINE_RESOURCE_KEY,
     audioBackend,
@@ -320,20 +416,21 @@ export async function assemblePlayWorld(
     ...(deps.physics ? [physicsPlugin(deps.physics)] : []),
   ];
 
-  const appRes = await createApp({
-    renderer: shielded as never,
-    world: playWorld as never,
-    plugins: plugins as never,
-    ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
-  });
+  let appRes: Awaited<ReturnType<typeof createApp>>;
+  try {
+    appRes = await createApp({
+      renderer: shielded as never,
+      world: playWorld as never,
+      plugins: plugins as never,
+      ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
+    });
+  } catch (error) {
+    detachHostResources();
+    return { ok: false, error: startupError('play-renderer-failed', error) };
+  }
   if (!appRes.ok) {
-    detachInput?.();
-    gameProjection?.clear();
-    // createApp failed AFTER the container was appended — the only exit between
-    // container creation and the success return. Remove it so ▶ Play's failure
-    // path (run-lifecycle resumes edit) never leaks a #game-ui-root.
-    uiRoot?.remove();
-    return { ok: false, error: appRes.error };
+    detachHostResources();
+    return { ok: false, error: startupError('play-renderer-failed', appRes.error) };
   }
   const playApp = appRes.value as unknown as PlayApp & {
     readonly renderer: unknown;
@@ -343,6 +440,7 @@ export async function assemblePlayWorld(
     // below can delegate the pointer-lock game gate to it.
     readonly input?: { setPointerLockAllowed?: (allowed: boolean) => void };
   };
+  playAppForCleanup = playApp;
 
   // Audio listener-sync (round-17, P8): the assemble form deliberately leaves
   // listener-sync to the host (create-app.ts:665 registers it ONLY on the canvas
@@ -488,7 +586,13 @@ export async function assemblePlayWorld(
   // Absent defaultScene → skip (graceful, AC-04).
   let defaultSceneRoot: unknown;
   let defaultScene: unknown;
-  const sceneAsset = await deps.loadDefaultScene();
+  let sceneAsset: unknown;
+  try {
+    sceneAsset = await deps.loadDefaultScene();
+  } catch (error) {
+    cleanupFailedAssembly();
+    return { ok: false, error: startupError('play-default-scene-load-failed', error) };
+  }
   if (sceneAsset !== null && sceneAsset !== undefined) {
     defaultScene = sceneAsset;
     const w = playWorld as { allocSharedRef(kind: string, payload: unknown): unknown };
@@ -500,6 +604,8 @@ export async function assemblePlayWorld(
       defaultSceneRoot = instRes.value;
     } else {
       console.warn('[editor] ▶ Play defaultScene instantiate failed:', instRes.error);
+      cleanupFailedAssembly();
+      return { ok: false, error: startupError('play-default-scene-instantiate-failed', instRes.error) };
     }
   }
 
@@ -521,7 +627,12 @@ export async function assemblePlayWorld(
       ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
       ...(defaultScene !== undefined ? { defaultScene } : {}),
     };
-    await entry(playWorld, ctx as never);
+    try {
+      await entry(playWorld, ctx as never);
+    } catch (error) {
+      cleanupFailedAssembly();
+      return { ok: false, error: startupError('play-bootstrap-failed', error) };
+    }
   } else {
     console.warn('[editor] ▶ Play: no bootstrap entry resolved — game logic will not run');
   }
@@ -545,46 +656,7 @@ export async function assemblePlayWorld(
     );
   }
 
-  const detach = (): void => {
-    // Clear game-owned closures before any app/world teardown. This is idempotent
-    // and prevents a stale Play callback from keeping the old world reachable.
-    gameProjection?.clear();
-    detachInput?.();
-    // Audio backend teardown (round-17, P8): the assemble form does NOT wire
-    // audioBackendDispose (create-app.ts: canvas form owns that; assemble hosts
-    // own lifecycle, OOS-5), so ■ Stop must destroy the backend we created above —
-    // stop all nodes, disconnect, close the AudioContext. Guarded + idempotent
-    // (WebAudioEngine.destroy is a no-op if the context was never built). Runs
-    // before the game cleanups so a game's registerCleanup(AudioContext) teardown
-    // can't race a still-live backend node.
-    try {
-      audioBackend.destroy();
-    } catch (err) {
-      console.warn('[editor] ■ Stop audioBackend.destroy() threw:', err);
-    }
-    // Flush the game's cleanup callbacks in REVERSE registration order (LIFO).
-    // pop() drains the array so a second detach() flushes nothing (idempotent);
-    // each is guarded so one throwing cleanup can't strand the rest or block the
-    // container removal below (mirrors run-lifecycle.ts's per-step try/catch).
-    while (cleanups.length > 0) {
-      const fn = cleanups.pop()!;
-      try {
-        fn();
-      } catch (err) {
-        console.warn('[editor] ■ Stop cleanup threw:', err);
-      }
-    }
-    // Remove the controlled UI root whole — discards all game DOM/HUD. Guarded +
-    // idempotent (null the ref so a second detach() is a no-op).
-    if (uiRoot) {
-      try {
-        uiRoot.remove();
-      } catch (err) {
-        console.warn('[editor] ■ Stop uiRoot.remove() threw:', err);
-      }
-      uiRoot = undefined;
-    }
-  };
+  const detach = (): void => { detachHostResources(); };
 
   return {
     ok: true,

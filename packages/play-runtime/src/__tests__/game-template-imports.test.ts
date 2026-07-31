@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveGameEngineEntry } from '../../vite.config';
 
@@ -30,5 +31,36 @@ describe('new-game template Play imports', () => {
     const unresolved = gameTemplateEngineImports(GAME_TEMPLATE)
       .filter((specifier) => resolveGameEngineEntry(specifier) === null);
     expect(unresolved).toEqual([]);
+  });
+
+  test('fresh scaffold can import and bundle the host-injected NPC adapter', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'forgeax-npc-scaffold-'));
+    try {
+      cpSync(GAME_TEMPLATE, dir, { recursive: true });
+      const engineNpc = resolveGameEngineEntry('@forgeax/engine-npc');
+      expect(engineNpc).not.toBeNull();
+      writeFileSync(join(dir, 'npc-smoke.ts'), [
+        `import { NpcBrain, createNpcClientAdapter, npcPlugin } from ${JSON.stringify(engineNpc)};`,
+        'const client = {',
+        '  declareAffordances() {},',
+        '  setLod() {},',
+        '  tick() {},',
+        '};',
+        'const adapter = createNpcClientAdapter(client, {',
+        '  affordances: () => [],',
+        '  sample: () => undefined,',
+        '});',
+        'void NpcBrain; void npcPlugin({ adapter });',
+      ].join('\n'));
+      const built = Bun.spawnSync({
+        cmd: ['bun', 'build', join(dir, 'npc-smoke.ts'), '--target=browser', '--outfile', join(dir, 'npc-smoke.js')],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(new TextDecoder().decode(built.stderr)).toBe('');
+      expect(built.exitCode).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

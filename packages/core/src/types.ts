@@ -10,6 +10,7 @@ export type {
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
 import type { SceneAsset } from '@forgeax/engine-types';
+import type { CommandErrorContext, ErrorSubjectRef } from '@forgeax/editor-product';
 import type { EntityHandle, EntityId, EntitySource } from './scene/scene-types';
 import type { SelectedAsset } from './store/asset-selection';
 
@@ -185,7 +186,7 @@ export type PlayDirtyPolicy = 'last-saved' | 'save-then-play' | 'cancel';
 
 // ── Error codes (plan-strategy §2 D-7) ──────────────────────────────────────
 
-export interface CommandError {
+export interface CommandError extends CommandErrorContext {
   code:
     // ── Existing document-domain codes (NO CHANGE) ──
     | 'NO_SUCH_ENTITY'
@@ -294,7 +295,7 @@ export interface CommandError {
   hint: string;
   readonly expected?: unknown;
   readonly current?: unknown;
-  readonly subjectRef?: { readonly kind: string; readonly id: string };
+  readonly subjectRef?: ErrorSubjectRef;
   readonly retryable?: boolean;
   readonly recoveryActions?: readonly string[];
 }

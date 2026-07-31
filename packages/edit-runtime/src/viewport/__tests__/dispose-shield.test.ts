@@ -33,8 +33,12 @@ function makeFakeRenderer() {
   let disposeCalls = 0;
   const drawCalls: unknown[] = [];
   const assets = { marker: 'the-real-assets' };
+  const postProcess = {
+    register(_id: string, _entry: unknown) {},
+  };
   const renderer = {
     assets,
+    postProcess,
     draw(world: unknown) {
       drawCalls.push(world);
       return { ok: true } as const;
@@ -53,6 +57,7 @@ function makeFakeRenderer() {
     },
     drawCalls,
     assets,
+    postProcess,
   };
 }
 
@@ -102,5 +107,31 @@ describe('w8 — renderer dispose-shield Proxy', () => {
     // bound-through method; assets is a stable reference).
     expect(shielded.assets).toBe(shielded.assets);
     expect(shielded.assets).toBe(fr.assets);
+  });
+
+  it('(e) repeated user post-process registration is scoped to the shared-renderer seam', () => {
+    const fr = makeFakeRenderer();
+    const calls: string[] = [];
+    fr.postProcess.register = (id) => {
+      calls.push(id);
+      if (calls.length > 1) throw { code: 'post-process-already-registered' };
+    };
+    const shielded = shieldRendererDispose(fr.renderer as never) as unknown as typeof fr.renderer;
+
+    expect(() => shielded.postProcess.register('game-default::depth-of-field', {})).not.toThrow();
+    expect(() => shielded.postProcess.register('game-default::depth-of-field', {})).not.toThrow();
+    expect(calls).toEqual(['game-default::depth-of-field', 'game-default::depth-of-field']);
+  });
+
+  it('(f) engine builtin collisions and unrelated errors still fail fast', () => {
+    const fr = makeFakeRenderer();
+    fr.postProcess.register = (id) => {
+      if (id === 'forgeax::tonemap') throw { code: 'post-process-already-registered' };
+      throw new Error('shader source invalid');
+    };
+    const shielded = shieldRendererDispose(fr.renderer as never) as unknown as typeof fr.renderer;
+
+    expect(() => shielded.postProcess.register('forgeax::tonemap', {})).toThrow();
+    expect(() => shielded.postProcess.register('game-default::depth-of-field', {})).toThrow('shader source invalid');
   });
 });

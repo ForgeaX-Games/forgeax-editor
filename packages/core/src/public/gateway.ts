@@ -46,3 +46,21 @@ export type {
   GatewayCommitRequest,
   GatewayReplayRequest,
 } from '../product/commit-collar';
+export { createDiagnosticsReadModel, queryDiagnosticsSnapshot } from '../io/diagnostics';
+export type {
+  CreateDiagnosticsReadModelDeps,
+  DiagnosticsAssetSource,
+  DiagnosticsDedupe,
+  DiagnosticsOperationRunSource,
+  DiagnosticsQueryItem,
+  DiagnosticsQueryRequest,
+  DiagnosticsQueryResult,
+  DiagnosticsReadModel,
+  DiagnosticsReadModelOptions,
+  DiagnosticsRetention,
+  DiagnosticsScanSource,
+  DiagnosticsSeverity,
+  DiagnosticsSource,
+  DiagnosticsSnapshot,
+  DiagnosticsTraceSource,
+} from '../io/diagnostics';

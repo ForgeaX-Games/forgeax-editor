@@ -236,6 +236,22 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     }
   }
 
+  function reportPlayFailure(error: unknown): void {
+    const structured = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
+    let hint = String(error);
+    if (error instanceof Error) hint = error.message;
+    if (structured && typeof structured.hint === 'string') hint = structured.hint;
+    const code = structured && typeof structured.code === 'string'
+      ? structured.code
+      : 'play-assemble-failed';
+    deps.gateway.failPlayAttempt?.({ code, hint });
+    if (playRunId !== null) {
+      deps.runProjection?.failed(playRunId, { code, hint, retryable: true, recoveryActions: ['operation.retry'] });
+      playRunId = null;
+    }
+    deps.onPlayFailed?.();
+  }
+
   async function playSimulation(): Promise<void> {
     if (disposed) return;
     if (starting) return;
@@ -264,7 +280,17 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // Assemble the fresh play world + App (level-load, AC-04). On failure, thaw
     // the edit world and stay in edit mode (graceful degradation — never leave the
     // editor wedged mid-play).
-    const res = await deps.assemble();
+    let res: AssembleResult;
+    try {
+      res = await deps.assemble();
+    } catch (error) {
+      starting = false;
+      if (disposed || token !== generation) return;
+      console.warn('[editor] ▶ Play assemble threw:', error);
+      resumeEditorIfLive();
+      reportPlayFailure(error);
+      return;
+    }
     starting = false;
     if (disposed || token !== generation) {
       if (res.ok) stopAssembly(res.value, '▶ Play canceled');
@@ -276,20 +302,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       // solo round-8 #3: surface the failure through the front door so playPhase
       // reads 'failed' + lastPlayError carries why — instead of silently degrading
       // to edit while dispatch already returned {ok:true} (the round-3/5 trap).
-      // Normalize the loose assemble error into a hint string (CommandError.hint is
-      // required): a structured error contributes its own hint, an Error its message,
-      // anything else is stringified.
-      const err = res.error;
-      const structured = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : null;
-      let hint = String(err);
-      if (err instanceof Error) hint = err.message;
-      if (structured && typeof structured.hint === 'string') hint = structured.hint;
-      deps.gateway.failPlayAttempt?.({ code: 'play-assemble-failed', hint });
-      if (playRunId !== null) {
-        deps.runProjection?.failed(playRunId, { code: 'play-assemble-failed', hint, retryable: true, recoveryActions: ['operation.retry'] });
-        playRunId = null;
-      }
-      deps.onPlayFailed?.();
+      reportPlayFailure(res.error);
       return;
     }
     active = res.value;
@@ -301,6 +314,14 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     const startR = active.playApp.start();
     if (!startR.ok) {
       console.warn('[editor] ▶ Play playApp.start() failed:', startR.error);
+      const failedAssembly = active;
+      active = null;
+      stopAssembly(failedAssembly, '▶ Play start failure');
+      deps.publisher?.unbind(failedAssembly.playWorld as LiveWorldFrameEndWorld);
+      if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);
+      resumeEditorIfLive();
+      reportPlayFailure(startR.error ?? { code: 'play-renderer-failed', hint: 'The Play renderer could not start.' });
+      return;
     }
 
     // Follow-the-live-world bridge: the edit app is paused, so attach the eval

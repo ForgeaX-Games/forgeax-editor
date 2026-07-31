@@ -64,6 +64,10 @@
     "signature": "(spec: { id: string; domain: \"document\" | \"session\"; argsSchema: Record<string, unknown> | null; plan: PlanFn; }) => { ok: true; } | { ok: false; error: CommandError; }"
   },
   {
+    "name": "diagnostics",
+    "signature": "DiagnosticsReadModel"
+  },
+  {
     "name": "discardDeferred",
     "signature": "(cmd: EditorOp) => boolean"
   },
@@ -169,7 +173,7 @@
   },
   {
     "name": "mode",
-    "signature": "\"play\" | \"edit\""
+    "signature": "\"edit\" | \"play\""
   },
   {
     "name": "onSceneReload",
@@ -193,7 +197,7 @@
   },
   {
     "name": "playPhase",
-    "signature": "\"failed\" | \"play\" | \"edit\" | \"starting\""
+    "signature": "\"edit\" | \"play\" | \"failed\" | \"starting\""
   },
   {
     "name": "publishDeferred",
@@ -250,6 +254,10 @@
   {
     "name": "subscribe",
     "signature": "(fn: BusListener) => () => void"
+  },
+  {
+    "name": "subscribeDiagnostics",
+    "signature": "(fn: () => void) => () => void"
   },
   {
     "name": "trace",

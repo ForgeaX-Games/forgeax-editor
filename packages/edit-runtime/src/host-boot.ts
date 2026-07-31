@@ -61,13 +61,17 @@ import {
   getSelection,
   onSelectionChange,
   broadcastAssetsChanged,
+  panelBridge,
   worldEntityHandles,
   resolveGamePath,
   scanAssetsIntegrity,
   repairAssets,
 } from '@forgeax/editor-core';
 import { installAssetHmrBridge } from '@forgeax/editor-core/assets/asset-hmr-bridge';
-import { installOperationProjectionSource } from '@forgeax/editor-panels';
+import {
+  installDiagnosticsProjectionSource,
+  installOperationProjectionSource,
+} from '@forgeax/editor-panels';
 import {
   createHostSession,
   type HostSessionContext,
@@ -264,6 +268,53 @@ installOperationProjectionSource({
       const path = row.subject?.sourcePaths[0];
       if (path !== undefined) gateway.dispatch({ kind: 'revealInFileManager', path }, 'human');
     }
+  },
+});
+
+// Capabilities diagnostics consumes the same bounded Gateway snapshot as AI.
+// The panel owns filtering/details/copy only; these host actions keep locating,
+// retry, and source reveal on the composition-root side of the package DAG.
+installDiagnosticsProjectionSource({
+  getSnapshot: () => gateway.diagnostics.snapshot(),
+  subscribe: (listener) => {
+    const offGateway = gateway.subscribeDiagnostics(() => listener());
+    const offRuns = gateway.subscribeOperationRuns(() => listener());
+    const offAssetErrors = panelBridge.on('assetsError', () => listener());
+    return () => {
+      offGateway();
+      offRuns();
+      offAssetErrors();
+    };
+  },
+  dispatchAction: (action, row) => {
+    if (action === 'retry' && row.requestId !== undefined) {
+      gateway.retryOperationRun(row.requestId, globalThis.crypto.randomUUID(), 'human');
+      return;
+    }
+    if (action === 'open-source' && row.path !== undefined) {
+      gateway.dispatch({ kind: 'revealInFileManager', path: row.path }, 'human');
+      return;
+    }
+    if (action !== 'locate' || row.location === undefined) return;
+    if (row.location.kind === 'file') {
+      gateway.dispatch({
+        kind: 'setFolderSelection',
+        paths: [row.location.id],
+        items: [{ path: row.location.id, kind: 'file' }],
+      }, 'human');
+      return;
+    }
+    const asset = gateway.assetCatalog().find((candidate) => candidate.guid?.toLowerCase() === row.location?.id.toLowerCase());
+    if (asset?.guid === undefined) return;
+    gateway.dispatch({
+      kind: 'setAssetSelectionOne',
+      asset: {
+        guid: asset.guid,
+        kind: asset.kind,
+        name: asset.name ?? asset.guid,
+        packPath: asset.sourcePath ?? asset.guid,
+      },
+    }, 'human');
   },
 });
 

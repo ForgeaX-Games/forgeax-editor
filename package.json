@@ -104,6 +104,7 @@
     "@forgeax/editor-ui": "workspace:*",
     "@forgeax/interface": "workspace:*",
     "@forgeax/platform-io": "workspace:*",
+    "hono": "^4.6.0",
     "lucide-react": "^0.460.0",
     "zod": "^3.25.0"
   },

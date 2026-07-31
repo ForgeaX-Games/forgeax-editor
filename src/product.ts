@@ -59,6 +59,57 @@ export type {
 } from '@forgeax/editor-product';
 
 export {
+  acceptedEvent,
+  createOperationRun,
+  isTerminalRunStatus,
+  reduceOperationRun,
+  OPERATION_RUN_SCHEMA_VERSION,
+  REPRESENTATIVE_OPERATION_IDS,
+} from '@forgeax/editor-product';
+
+export {
+  ASSET_WORKSPACE_SCHEMA_VERSION,
+  authorizeAssetMutation,
+  compareAssetWorkspaceSnapshots,
+  createAssetLifecycleAdapter,
+  createAssetSubject,
+  createAssetWorkspaceSnapshot,
+  findAssetSubject,
+  getAssetSubjectCapability,
+  preflightAssetMutation,
+  preflightAssetSubject,
+  subjectSupports,
+} from '@forgeax/editor-product';
+export type {
+  AssetLifecycleAdapter,
+  AssetLifecycleAdapterOptions,
+  AssetMutationCommitResult,
+  AssetMutationError,
+  AssetMutationErrorCode,
+  AssetMutationImpact,
+  AssetMutationOperation,
+  AssetMutationRequest,
+  AssetMutationResult,
+  AssetProvenance,
+  AssetProvenanceOwner,
+  AssetRelation,
+  AssetRelationKind,
+  AssetSubject,
+  AssetSubjectAction,
+  AssetSubjectCapabilities,
+  AssetSubjectId,
+  AssetSubjectInput,
+  AssetSubjectKind,
+  AssetWorkspaceIssue,
+  AssetWorkspaceIssueCode,
+  AssetWorkspaceIssueSeverity,
+  AssetWorkspaceSnapshot,
+  AssetPreflightOptions,
+  AssetPreflightResult,
+  CreateAssetWorkspaceSnapshotInput,
+} from '@forgeax/editor-product';
+
+export {
   RUNTIME_CONTRACT_VERSION,
   TRANSPORT_PROTOCOL_VERSION,
   createRuntimeAvailability,

@@ -50,3 +50,9 @@ export type EditorPanelId = (typeof EDITOR_PANELS)[number];
 |:--|:--|:--|
 | `Module '"@forgeax/editor-panels/panels"' has no exported member 'EDITOR_PANELS'` | `src/manifest.ts` 未从 shared re-export | 检查 `manifest.ts` 是否 `export { EDITOR_PANELS } from '@forgeax/editor-shared'` |
 | 面板 ID 列表与 `sync-channel` 不一致 | core 的 sync-channel.ts 内联了复制 | sync-channel.ts 内联了面板列表以断 core↔shared 环——新增面板时需同时更新 `@forgeax/editor-shared/src/manifest.ts` 与 `editor-core/src/sync-channel.ts` |
+
+## Diagnostics projection
+
+`CapabilitiesPanel` renders the bounded, read-only `gateway.diagnostics.query()` projection through `diagnostics-view-model.ts`; the view model uses the same core query helper as AI callers. It provides source/severity/text filters, structured detail copy, and action buttons for locate, retry, and source reveal. The panel never implements a repair: the edit-runtime composition root installs the snapshot subscription and dispatches those actions through the existing Gateway operations (`setFolderSelection`, `setAssetSelectionOne`, `revealInFileManager`, and `retryOperationRun`).
+
+When the host has not installed a projection source, the panel remains mountable and shows no diagnostics. This keeps the panel package testable without a World or a second diagnostic store.

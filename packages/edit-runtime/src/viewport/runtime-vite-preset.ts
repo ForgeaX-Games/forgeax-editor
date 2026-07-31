@@ -132,23 +132,35 @@ interface PackageExports {
  * the producer package's exports map instead: it is the one canonical map from a
  * public specifier to its browser entry, and bypasses the consuming host graph.
  */
-export function resolveGameEngineEntry(id: string): string | null {
+export function resolveGameEngineEntry(
+  id: string,
+  hostPackageRoot = process.env.FORGEAX_HOST_PACKAGE_ROOT,
+): string | null {
   const rest = id.slice('@forgeax/'.length);
   const [packageName, ...subpath] = rest.split('/');
   if (!packageName) return null;
 
-  const packageDir = resolve(EDIT_RUNTIME_DIR, 'node_modules/@forgeax', packageName);
-  try {
-    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
-      exports?: PackageExports;
-    };
-    const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
-    const entry = manifest.exports?.[exportKey];
-    const importPath = typeof entry === 'string' ? entry : entry?.import;
-    return typeof importPath === 'string' ? resolve(packageDir, importPath) : null;
-  } catch {
-    return null;
+  const packageRoots = [resolve(EDIT_RUNTIME_DIR, 'node_modules')];
+  if (hostPackageRoot) {
+    const hostRoot = resolve(hostPackageRoot);
+    packageRoots.push(hostRoot, resolve(hostRoot, 'node_modules'), resolve(hostRoot, 'packages'));
   }
+  for (const root of packageRoots) {
+    for (const packageDir of [resolve(root, '@forgeax', packageName), resolve(root, packageName)]) {
+      try {
+        const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+          name?: string;
+          exports?: PackageExports;
+        };
+        if (manifest.name !== id.split('/').slice(0, 2).join('/')) continue;
+        const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
+        const entry = manifest.exports?.[exportKey];
+        const importPath = typeof entry === 'string' ? entry : entry?.import;
+        if (typeof importPath === 'string') return resolve(packageDir, importPath);
+      } catch { /* try the next producer-owned package root */ }
+    }
+  }
+  return null;
 }
 
 function gameEngineResolve(gameDirAbs: string | null): PluginOption {

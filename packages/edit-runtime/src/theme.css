@@ -503,6 +503,31 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 }
 .vp-hints-toggle:hover { color: var(--fg, #e8eaed); border-color: var(--lime, #7ee04a); }
 
+/* Gateway-owned Play lifecycle projection (R0-06B). This stays visible in both
+   scene and game display modes; the game overlay remains a hover affordance. */
+.play-terminal {
+  position: absolute; top: 8px; right: 12px; z-index: 1001;
+  display: inline-flex; align-items: center; gap: 6px; max-width: min(520px, calc(100% - 24px));
+  padding: 4px 6px 4px 8px; pointer-events: auto;
+  background: rgba(21, 22, 24, 0.88); border: 1px solid var(--line, #2a2d30);
+  border-radius: 6px; backdrop-filter: blur(8px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px;
+}
+.play-terminal-indicator { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--fg3, #6b7177); }
+.play-terminal--starting .play-terminal-indicator { background: #e5b84b; box-shadow: 0 0 0 3px rgba(229, 184, 75, 0.14); }
+.play-terminal--play .play-terminal-indicator { background: var(--lime, #d4ff48); box-shadow: 0 0 0 3px rgba(212, 255, 72, 0.14); }
+.play-terminal--failed { border-color: rgba(255, 140, 130, 0.55); }
+.play-terminal--failed .play-terminal-indicator { background: #ff8c82; box-shadow: 0 0 0 3px rgba(255, 140, 130, 0.14); }
+.play-terminal-label { color: var(--fg, #e8eaed); white-space: nowrap; }
+.play-terminal-error { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ffb4ad; max-width: 280px; }
+.play-terminal-action {
+  flex: 0 0 auto; padding: 2px 6px; color: var(--fg2, #aaa); background: transparent;
+  border: 1px solid var(--line, #2a2d30); border-radius: 4px; cursor: pointer;
+  font: inherit; font-family: inherit; font-size: 10px;
+}
+.play-terminal-action:hover:not(:disabled) { color: var(--fg, #e8eaed); border-color: var(--lime, #7ee04a); }
+.play-terminal-action:disabled { opacity: 0.55; cursor: default; }
+
 /* Bespoke component banner in Inspector */
 .bespoke-hint { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: var(--fg3); font-style: italic; border-bottom: 1px solid var(--line); }
 .bespoke-icon { font-size: 14px; color: var(--lime, #d4ff48); }
@@ -525,6 +550,39 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .cap-fields { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .cap-field { font-family: var(--mono); font-size: 10px; color: var(--fg2); background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 .cap-type { color: var(--fg3); }
+
+/* Gateway diagnostics projection (R0-07D). The panel is a read-only consumer;
+   locate/retry/open-source actions are injected by the host composition root. */
+.cap-diagnostics { border-bottom: 1px solid var(--line); padding: 8px; }
+.cap-diagnostics-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.cap-diagnostics-header h3 { margin: 0; }
+.cap-diagnostics-count { display: block; margin-top: 2px; font-size: 10px; }
+.cap-diagnostics-policy { color: var(--fg3); font: 10px var(--mono); }
+.cap-diagnostics-filters { display: flex; gap: 4px; margin-top: 8px; }
+.cap-diagnostics-filters input,
+.cap-diagnostics-filters select { min-width: 0; height: 24px; color: var(--fg2); background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; font: 10px var(--mono); }
+.cap-diagnostics-filters input { flex: 1 1 auto; padding: 2px 6px; }
+.cap-diagnostics-filters select { max-width: 92px; padding: 2px; }
+.cap-diagnostics-list { display: grid; gap: 5px; margin-top: 8px; max-height: 300px; overflow: auto; }
+.cap-diagnostics-empty { padding: 8px 2px; }
+.cap-diagnostic-row { padding: 6px; color: var(--fg2); background: var(--bg2); border: 1px solid var(--line); border-left: 3px solid var(--fg3); border-radius: 4px; font-size: 10px; }
+.cap-diagnostic-error { border-left-color: #ff8c82; }
+.cap-diagnostic-warn { border-left-color: #e5b84b; }
+.cap-diagnostic-info { border-left-color: var(--fg3); }
+.cap-diagnostic-main { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.cap-diagnostic-main strong { min-width: 0; overflow: hidden; color: var(--fg); text-overflow: ellipsis; white-space: nowrap; }
+.cap-diagnostic-severity { color: var(--fg3); font: 9px var(--mono); text-transform: uppercase; }
+.cap-diagnostic-source { margin-left: auto; color: var(--fg3); font: 9px var(--mono); }
+.cap-diagnostic-message { margin-top: 4px; color: var(--fg2); line-height: 1.35; }
+.cap-diagnostic-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; color: var(--fg3); font: 9px var(--mono); }
+.cap-diagnostic-meta code { color: var(--fg2); }
+.cap-diagnostic-details { margin-top: 4px; color: var(--fg3); }
+.cap-diagnostic-details summary { cursor: pointer; }
+.cap-diagnostic-details pre { max-height: 130px; margin: 4px 0 0; overflow: auto; color: var(--fg2); white-space: pre-wrap; word-break: break-word; }
+.cap-diagnostic-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.cap-diagnostic-actions button { padding: 2px 6px; color: var(--fg2); background: transparent; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; font: 10px var(--mono); }
+.cap-diagnostic-actions button:hover:not(:disabled) { color: var(--fg); border-color: var(--lime, #7ee04a); }
+.cap-diagnostic-actions button:disabled { cursor: default; opacity: 0.45; }
 
 /* ── Game overlay: minimal semi-transparent hover bar for display='game' (w24) ── */
 .vp-game-overlay-container {

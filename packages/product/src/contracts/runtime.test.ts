@@ -6,6 +6,7 @@ import {
   RuntimeOperationSchema,
   createRuntimeAvailability,
   createStaleRuntimeHandleError,
+  unavailableRuntimeError,
 } from './runtime';
 
 test('runtime contract keeps simulation operations independent from display operations', () => {
@@ -32,6 +33,11 @@ test('runtime contract keeps simulation operations independent from display oper
   expect(availability.capabilities.capture?.available).toBe(false);
   expect(availability.capabilities.play?.available).toBe(true);
   expect(availability.blocking).toBe(false);
+
+  expect(unavailableRuntimeError('capture', 'Bun has no canvas.')).toMatchObject({
+    recoveryActions: ['transport.describe'],
+    subjectRef: { kind: 'runtime-operation', id: 'capture' },
+  });
 });
 
 test('stale handles fail with a structured cross-world error', () => {

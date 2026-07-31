@@ -7,7 +7,7 @@
 // gateway.activeWorld). This test pins the new API:
 //   (a) entName/entComponent/entComponents/entExists/entParent take (world, handle);
 //   (b) entComponent returns a StaleHandleResult — { ok:true, value } for a live
-//       handle, { ok:false, error:{ code:'stale-entity-handle', hint, entity } }
+//       handle, { ok:false, error:{ code:'stale-entity-handle', hint, objectRefs } }
 //       for a stale/despawned handle (AC-14, research Finding 13 P3 fix — no more
 //       silent undefined conflating "absent" with "stale");
 //   (c) the handle<->id mapping ops are DELETED (entHandle/entLegacyId/entMap/
@@ -102,7 +102,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
       expect(r.error.code).toBe('stale-entity-handle');
       expect(typeof r.error.hint).toBe('string');
       expect(r.error.hint.length).toBeGreaterThan(0);
-      expect(r.error.entity).toBe(stale);
+      expect(r.error.objectRefs.entity.id).toBe(String(stale));
     }
   });
 
@@ -113,7 +113,13 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
     // Live handle, component simply not present: ok:false but NOT stale-entity-handle.
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.error.code).not.toBe('stale-entity-handle');
+      expect(r.error.code).toBe('component-absent');
+      if (r.error.code === 'component-absent') {
+        expect(r.error.objectRefs).toEqual({
+          entity: { kind: 'entity', id: String(h) },
+          component: { kind: 'component', id: 'ChildOf' },
+        });
+      }
     }
   });
 
@@ -147,7 +153,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
     expect(r.ok).toBe(false);
     if (!r.ok && r.error.code === 'stale-entity-handle') {
       expect(r.error.detail?.reason).toBe('world-epoch-mismatch');
-      expect(r.error.entity).toBe(h);
+      expect(r.error.objectRefs.entity.locator).toMatchObject({ handle: h, worldRef: WORLD_REF_SCENE, epoch: 0 });
     } else {
       throw new Error(`expected stale-entity-handle, got ${r.ok ? 'ok' : r.error.code}`);
     }

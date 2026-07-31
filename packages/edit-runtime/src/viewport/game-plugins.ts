@@ -57,6 +57,16 @@ export interface GamePluginLoad {
   readonly errors: Array<{ clientPath: string; message: string }>;
 }
 
+/** Convert a per-file plugin import failure into the Play startup terminal fact. */
+export function getPlayPluginFailure(load: Pick<GamePluginLoad, 'errors'>): { code: 'play-plugin-failed'; hint: string } | null {
+  const first = load.errors[0];
+  if (!first) return null;
+  return {
+    code: 'play-plugin-failed',
+    hint: `Play plugin ${first.clientPath} failed to load: ${first.message}`,
+  };
+}
+
 /** Explicit inputs (Pipeline Isolation — the headless test can fake all three). */
 export interface GamePluginDeps {
   /** Platform fetch (deps.fetch) — same-origin `/api` router. */

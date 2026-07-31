@@ -5,6 +5,8 @@
 // request-correlated run surface.
 
 import {
+  createCommandError,
+  createErrorCause,
   isCommandError,
   isTerminalRunStatus,
   RunJournal,
@@ -78,12 +80,15 @@ function failure(
 
 function effectError(cause: unknown): CommandError {
   if (isCommandError(cause)) return cause;
-  return {
+  return createCommandError({
     code: 'operation-failed',
     hint: cause instanceof Error ? cause.message : 'The operation effect failed.',
     retryable: true,
     recoveryActions: ['operation.retry'],
-  };
+    owner: 'editor-core',
+    category: 'runtime',
+    cause: createErrorCause(cause, 'editor-core'),
+  });
 }
 
 function isEffectFailure(value: unknown): value is { readonly ok: false; readonly error: CommandError } {
@@ -220,11 +225,16 @@ export class OperationRunRegistry {
   }
 
   fail(runId: string, error: CommandError): OperationRunReadResult {
-    const normalizedError: CommandError = {
+    const run = this.journal.getRun(runId);
+    const normalizedError = createCommandError({
       ...error,
+      ...(error.owner === undefined ? { owner: 'editor-core' as const } : {}),
+      ...(error.category === undefined ? { category: 'unknown' as const } : {}),
+      ...(error.operationId === undefined && run !== undefined ? { operationId: run.operationId } : {}),
+      ...(error.requestId === undefined && run?.requestId !== undefined ? { requestId: run.requestId } : {}),
       retryable: error.retryable ?? false,
       recoveryActions: error.recoveryActions ?? [],
-    };
+    });
     const result = this.journal.append({ type: 'failed', runId, at: this.now(), error: normalizedError });
     if (result.ok) {
       this.cancelHandlers.delete(runId);
@@ -367,9 +377,12 @@ export class OperationRunRegistry {
     outcome: { readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: CommandError },
     onTerminal?: (run: OperationRun) => void,
   ): void {
-    const result = outcome.ok
-      ? this.journal.append({ type: 'succeeded', runId, at: this.now(), result: outcome.result })
-      : this.journal.append({ type: 'failed', runId, at: this.now(), error: outcome.error });
+    if (!outcome.ok) {
+      const failed = this.fail(runId, outcome.error);
+      if (failed.ok) onTerminal?.(failed.value);
+      return;
+    }
+    const result = this.journal.append({ type: 'succeeded', runId, at: this.now(), result: outcome.result });
     if (!result.ok) return;
     this.cancelHandlers.delete(runId);
     if (this.activeSaveRunId === runId) this.activeSaveRunId = null;
