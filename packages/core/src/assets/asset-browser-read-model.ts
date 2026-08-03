@@ -22,6 +22,8 @@ export interface AssetBrowserRegistryEntry {
   readonly packageUrl: string;
   readonly refs?: readonly string[];
   readonly sourcePath?: string;
+  readonly sourceKey?: string;
+  readonly revision?: string;
   /** Producer-owned placement/binding facts; consumers must not infer from kind. */
   readonly authoring?: AssetAuthoringCapability;
 }
@@ -58,6 +60,9 @@ export interface AssetBrowserAsset {
   /** Original catalog coordinate for an inline `.pack.json` CRUD target. */
   readonly storagePackageUrl: string;
   readonly sourcePath?: string;
+  readonly sourceKey?: string;
+  readonly revision?: string;
+  readonly metaPath?: string;
   /** Original catalog coordinate for file mutations. `sourcePath` is projected
    * into the browser's declared-root coordinate space for joining and display;
    * this value deliberately remains in the file backend's address space. */
@@ -273,6 +278,8 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
         packageUrl,
         storagePackageUrl: row.packageUrl,
         ...(sourcePath ? { sourcePath } : {}),
+        ...(row.sourceKey === undefined ? {} : { sourceKey: row.sourceKey }),
+        ...(row.revision === undefined ? {} : { revision: String(row.revision) }),
         ...(row.sourcePath ? { storageSourcePath: row.sourcePath } : {}),
         refs: [...(row.refs ?? [])],
         ...(row.authoring !== undefined ? { authoring: row.authoring } : {}),
@@ -356,11 +363,16 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       sources.push({ sourcePath, ...(sidecar ? { metaPath: sidecar.metaPath } : {}), phase, catalogGuids, observedMetaGuids });
     }
     sources.sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
+    const enrichedAssets = assets.map((asset) => {
+      if (asset.sourcePath === undefined) return asset;
+      const metaPath = sidecarBySource.get(asset.sourcePath)?.metaPath;
+      return metaPath === undefined ? asset : { ...asset, metaPath };
+    });
 
     const workspaceResult = workspace.reconcile({
       resourceRevision: `browser:${generation}`,
       logicalCommitId: `browser-refresh:${generation}`,
-      subjects: assets.map((asset) => ({
+      subjects: enrichedAssets.map((asset) => ({
         id: asset.guid,
         kind: 'imported-output' as const,
         provenance: { owner: 'engine' as const, source: 'asset-producer', packageId: asset.storagePackageUrl },
@@ -369,7 +381,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
         capabilities: { canImport: false, canMove: true, canDelete: true, canPreflight: true },
         name: asset.name,
       })),
-      relations: assets.flatMap((asset) => asset.refs.map((ref) => ({
+      relations: enrichedAssets.flatMap((asset) => asset.refs.map((ref) => ({
         kind: 'depends-on' as const,
         from: asset.guid,
         to: ref,
@@ -384,7 +396,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       generation,
       files: Object.freeze(files),
       directories: Object.freeze(directories),
-      assets: Object.freeze(assets),
+      assets: Object.freeze(enrichedAssets),
       sources: Object.freeze(sources),
       diagnostics: Object.freeze([...diagnostics, ...sidecarDiagnostics]),
       workspace: workspaceResult.snapshot,

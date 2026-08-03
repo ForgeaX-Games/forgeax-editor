@@ -78,6 +78,13 @@ export interface HostSessionContext {
    * viewport AND survive Stop as a remnant.
    */
   readonly viewportContainer: HTMLElement;
+  /**
+   * The viewport's one host-owned canvas. Threaded into the play assembly so
+   * the play world can mirror the canvas-form camera aspect-sync sidecar
+   * (play-camera-aspect-sync) — without it a resize during ▶ Play leaves every
+   * play-world Camera.aspect frozen (Edit≠Play).
+   */
+  readonly canvas: HTMLCanvasElement;
   /** Boot breadcrumb emitter (shared with the viewport watchdog). */
   readonly emitBoot: (message: string, level?: 'info' | 'warn' | 'error') => void;
   /** Boot-stage setter (shared with the viewport watchdog). */
@@ -641,7 +648,7 @@ export function createHostSession(deps: HostSessionDeps): {
           hint?: string;
           detail?: unknown;
         };
-        console.info('[editor] ▶ Play defaultScene load skipped:', JSON.stringify({
+        console.error('[editor] ▶ Play defaultScene load failed:', JSON.stringify({
           code: error.code,
           expected: error.expected,
           hint: error.hint,
@@ -705,6 +712,9 @@ export function createHostSession(deps: HostSessionDeps): {
           // and removes it on ■ Stop (play-assemble detach()). Threaded here so the
           // game HUD is clipped to the viewport and can never survive a stop.
           viewportContainer: ctx.viewportContainer,
+          // The play world mirrors the canvas-form aspect-sync sidecar off this
+          // canvas's live width/height (host ResizeObserver keeps them fresh).
+          canvas: ctx.canvas,
           // Game code owns action/read IDs and closures. The host owns their
           // lifetime: install only after gateway.enterPlay, clear on every teardown.
           createGameProjection: () => {

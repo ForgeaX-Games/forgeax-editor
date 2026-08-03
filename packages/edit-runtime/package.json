@@ -26,6 +26,10 @@
       "types": "./src/fps-store.ts",
       "import": "./src/fps-store.ts"
     },
+    "./save-operation-projection": {
+      "types": "./src/save-operation-projection.ts",
+      "import": "./src/save-operation-projection.ts"
+    },
     "./visual-source": {
       "types": "./src/viewport/visual-source.ts",
       "import": "./src/viewport/visual-source.ts"

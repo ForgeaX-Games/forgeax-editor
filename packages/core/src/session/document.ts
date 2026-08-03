@@ -31,6 +31,7 @@ import { EditorHidden } from '../components/EditorHidden';
 import { EngineFacade } from '../io/engine-facade';
 import { assetIO } from '../io/asset-io-facade';
 import { worldRootHandles } from '../store/entity-state';
+import { getComponentSchema, type FieldSchema } from '../scene/schema';
 
 export { createEditSession } from './edit-session';
 
@@ -119,6 +120,196 @@ function resolveToken(name: string): CToken | undefined {
 
 function clone<T>(v: T): T {
   return structuredClone(v);
+}
+
+type ComponentWriteValidation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly hint: string; readonly details: Record<string, unknown> };
+
+function isArrayLikeValue(value: unknown): value is ArrayLike<unknown> {
+  return Array.isArray(value) || ArrayBuffer.isView(value);
+}
+
+function componentFieldSchema(component: string, field: string): FieldSchema | undefined {
+  return getComponentSchema(component)?.fields.find((candidate) => candidate.key === field);
+}
+
+function rawComponentSchema(component: string): Record<string, string> | undefined {
+  const token = resolveComponent(component) as { schema?: Record<string, string> } | undefined;
+  return token?.schema;
+}
+
+function arrayFieldInfo(component: string, field: string): { rawType: string; schema?: FieldSchema } | undefined {
+  const rawType = rawComponentSchema(component)?.[field];
+  if (typeof rawType !== 'string' || !rawType.startsWith('array<')) return undefined;
+  return { rawType, schema: componentFieldSchema(component, field) };
+}
+
+function arrayLength(value: unknown): number | null {
+  return isArrayLikeValue(value) ? value.length : null;
+}
+
+function fixedArrayLength(rawType: string): number | undefined {
+  const match = /^array<[^,>]+,\s*(\d+)>$/.exec(rawType);
+  return match === null ? undefined : Number(match[1]);
+}
+
+function defaultArrayElement(field: FieldSchema): unknown {
+  if (field.arrayElementDefault !== undefined) return clone(field.arrayElementDefault);
+  const elementType = field.arrayMeta?.elementType ?? '';
+  if (elementType === 'bool') return false;
+  if (elementType === 'string') return '';
+  return 0;
+}
+
+type CompleteGroupedArrays =
+  | { readonly ok: true; readonly values: Record<string, unknown> }
+  | { readonly ok: false; readonly hint: string; readonly details: Record<string, unknown> };
+
+/** Fill omitted members of a producer-declared parallel group from the engine
+ * state (or schema defaults when adding a new component). A partial patch that
+ * changes an already-populated group to a different length remains a precise
+ * field-path error; array add/remove/reorder callers use the pure planner and
+ * send one complete patch explicitly. */
+function completeGroupedArrays(
+  component: string,
+  values: Record<string, unknown>,
+  base: Record<string, unknown> | undefined,
+): CompleteGroupedArrays {
+  const fields = getComponentSchema(component)?.fields ?? [];
+  const groups = new Map<string, FieldSchema[]>();
+  for (const field of fields) {
+    if (field.arrayGroup === undefined) continue;
+    const group = groups.get(field.arrayGroup) ?? [];
+    group.push(field);
+    groups.set(field.arrayGroup, group);
+  }
+  const complete = { ...values };
+  for (const [groupName, groupFields] of groups) {
+    const provided = groupFields.filter((field) => field.key in values);
+    if (provided.length === 0) continue;
+    const providedLengths = provided.map((field) => ({ field: field.key, length: arrayLength(values[field.key]) }));
+    if (providedLengths.some((entry) => entry.length === null)) continue;
+    const expected = providedLengths[0]!.length;
+    if (expected === null) continue;
+    const mismatch = providedLengths.find((entry) => entry.length !== expected);
+    if (mismatch !== undefined) {
+      const fieldPath = `${component}.${mismatch.field}`;
+      return {
+        ok: false,
+        hint: `parallel arrays in ${groupName} must share one length; ${fieldPath} has ${mismatch.length}, expected ${expected}`,
+        details: { fieldPath, reason: 'parallel-array-length', group: groupName, lengths: providedLengths },
+      };
+    }
+
+    const baseLengths = base === undefined
+      ? []
+      : groupFields.map((field) => ({ field: field.key, length: arrayLength(base[field.key]) }));
+    const baseExpected = baseLengths.length > 0 && baseLengths.every((entry) => entry.length !== null && entry.length === baseLengths[0]!.length)
+      ? baseLengths[0]!.length
+      : null;
+    if (provided.length !== groupFields.length && baseExpected !== null && baseExpected > 0 && expected !== baseExpected) {
+      const fieldPath = `${component}.${provided[0]!.key}`;
+      return {
+        ok: false,
+        hint: `${fieldPath} changes a populated ${groupName} group from ${baseExpected} to ${expected} items; use one complete group patch`,
+        details: {
+          fieldPath,
+          reason: 'parallel-array-length',
+          group: groupName,
+          lengths: groupFields.map((field) => ({ field: field.key, length: field.key in values ? arrayLength(values[field.key]) : arrayLength(base?.[field.key]) })),
+        },
+      };
+    }
+    for (const field of groupFields) {
+      if (field.key in values) continue;
+      if (baseExpected !== null && baseExpected === expected) {
+        complete[field.key] = clone(base?.[field.key]);
+      } else {
+        complete[field.key] = Array.from({ length: expected }, () => defaultArrayElement(field));
+      }
+    }
+  }
+  return { ok: true, values: complete };
+}
+
+/** Validate the complete authoring boundary before the engine gets a partial
+ * write. `details.fieldPath` is the machine-readable breadcrumb; callers must
+ * not parse the human hint. */
+function validateComponentWrite(
+  component: string,
+  values: Record<string, unknown>,
+  base: Record<string, unknown> | undefined,
+  code: 'SET_FAILED' | 'ADD_FAILED',
+): ComponentWriteValidation {
+  const schema = rawComponentSchema(component);
+  if (schema === undefined) {
+    return { ok: false, hint: `unknown component ${component}`, details: { fieldPath: component } };
+  }
+
+  for (const [field, value] of Object.entries(values)) {
+    if (!(field in schema)) {
+      const fieldPath = `${component}.${field}`;
+      return {
+        ok: false,
+        hint: `${code === 'SET_FAILED' ? 'setComponent' : 'addComponent'} rejected unknown field ${fieldPath}`,
+        details: { fieldPath, reason: 'unknown-field', knownFields: Object.keys(schema).sort() },
+      };
+    }
+    const arrayInfo = arrayFieldInfo(component, field);
+    if (arrayInfo === undefined) continue;
+    const fieldPath = `${component}.${field}`;
+    const length = arrayLength(value);
+    if (length === null) {
+      return {
+        ok: false,
+        hint: `${fieldPath} requires an array value`,
+        details: { fieldPath, reason: 'array-required' },
+      };
+    }
+    const capacity = fixedArrayLength(arrayInfo.rawType);
+    if (capacity !== undefined && length !== capacity) {
+      return {
+        ok: false,
+        hint: `${fieldPath} requires exactly ${capacity} items (received ${length})`,
+        details: { fieldPath, reason: 'fixed-array-length', expectedLength: capacity, actualLength: length },
+      };
+    }
+  }
+
+  const effective = base === undefined ? values : { ...base, ...values };
+  const schemaFields = getComponentSchema(component)?.fields ?? [];
+  const groups = new Map<string, FieldSchema[]>();
+  for (const field of schemaFields) {
+    if (field.arrayGroup === undefined) continue;
+    const group = groups.get(field.arrayGroup) ?? [];
+    group.push(field);
+    groups.set(field.arrayGroup, group);
+  }
+  for (const [groupName, fields] of groups) {
+    if (!fields.some((field) => field.key in values)) continue;
+    const lengths = fields.map((field) => ({ field: field.key, length: arrayLength(effective[field.key]) }));
+    if (lengths.some((entry) => entry.length === null)) {
+      const culprit = lengths.find((entry) => entry.length === null)!.field;
+      const fieldPath = `${component}.${culprit}`;
+      return {
+        ok: false,
+        hint: `${fieldPath} must be present with the other ${groupName} parallel arrays`,
+        details: { fieldPath, reason: 'parallel-array-missing', group: groupName, lengths },
+      };
+    }
+    const expected = lengths[0]!.length;
+    const mismatch = lengths.find((entry) => entry.length !== expected);
+    if (mismatch !== undefined) {
+      const fieldPath = `${component}.${mismatch.field}`;
+      return {
+        ok: false,
+        hint: `parallel arrays in ${groupName} must share one length; ${fieldPath} has ${mismatch.length}, expected ${expected}`,
+        details: { fieldPath, reason: 'parallel-array-length', group: groupName, lengths },
+      };
+    }
+  }
+  return { ok: true };
 }
 
 function spawnComponentData(
@@ -224,10 +415,28 @@ export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
     return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
   }
   const compData = spawnComponentData(cmd.name ?? 'Entity', parentEng, cmd.components);
+  console.info(`[placement-diag] spawn-applier.before ${JSON.stringify({
+    name: cmd.name ?? 'Entity',
+    parent: parentEng,
+    requestedComponents: Object.keys((cmd.components ?? {}) as Record<string, unknown>),
+    materializedComponents: compData.map((entry) =>
+      (entry.component as unknown as { name?: string }).name ?? 'unknown'),
+  })}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const r = engine.spawn(...(compData as any));
-  if (!r.ok) return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } };
+  if (!r.ok) {
+    console.error(`[placement-diag] spawn-applier.failed ${JSON.stringify({
+      name: cmd.name ?? 'Entity',
+      error: String(r.error),
+    })}`);
+    return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } };
+  }
   const eH = r.value as EntityHandle;
+  console.info(`[placement-diag] spawn-applier.created ${JSON.stringify({
+    name: cmd.name ?? 'Entity',
+    entity: eH,
+    parent: parentEng,
+  })}`);
   // Rewrite _id in place to the real handle: the committed ledger op keeps the
   // concrete handle, and a NEGATIVE placeholder must resolve for later sub-ops in
   // the same transaction (alias forward-reference). Post-dispatch readers use the
@@ -389,13 +598,18 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
     return { ok: false, error: { code: 'INVALID_ARGS', hint: `setComponent requires an object "patch" field (got ${cmd.patch === null ? 'null' : Array.isArray(cmd.patch) ? 'array' : typeof cmd.patch}); note setComponent uses "patch", addComponent uses "value"` } };
   }
   const before = clone(cur.value) as Record<string, unknown>;
+  const completed = completeGroupedArrays(cmd.component, cmd.patch as Record<string, unknown>, before);
+  if (!completed.ok) return { ok: false, error: { code: 'SET_FAILED', hint: completed.hint, details: completed.details } };
+  const patch = completed.values;
+  const validation = validateComponentWrite(cmd.component, patch, before, 'SET_FAILED');
+  if (!validation.ok) return { ok: false, error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details } };
   const restore: Record<string, unknown> = {};
-  for (const k of Object.keys(cmd.patch)) restore[k] = before[k];
+  for (const k of Object.keys(patch)) restore[k] = before[k];
   // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
   // in shared fields of the patch to live handles first (same step as
   // applyAddComponent — the setComponent path binds a clip onto an existing
   // AnimationPlayer). Fail Fast on a resolve miss; never pass the string to set().
-  const resolvedPatch = resolveSharedFields(engine, cmd.component, cmd.patch as Record<string, unknown>);
+  const resolvedPatch = resolveSharedFields(engine, cmd.component, patch);
   if (!resolvedPatch.ok) return { ok: false, error: { code: 'SET_FAILED', hint: resolvedPatch.hint } };
   const r = engine.set(eH, tok, resolvedPatch.value as Parameters<typeof engine.set>[2]);
   if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
@@ -517,10 +731,21 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   if (engine.get(eH, tok).ok) return { ok: false, error: { code: 'COMPONENT_EXISTS', hint: `component ${cmd.component} already on entity ${cmd.entity}` } };
+  if (cmd.value !== undefined && (typeof cmd.value !== 'object' || cmd.value === null || Array.isArray(cmd.value))) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `addComponent requires an object "value" field (got ${cmd.value === null ? 'null' : Array.isArray(cmd.value) ? 'array' : typeof cmd.value})` } };
+  }
+  const inputValue = Object.fromEntries(
+    Object.entries((cmd.value ?? {}) as Record<string, unknown>)
+      .filter(([, value]) => value !== undefined),
+  );
+  const completed = completeGroupedArrays(cmd.component, inputValue, undefined);
+  if (!completed.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: completed.hint, details: completed.details } };
+  const validation = validateComponentWrite(cmd.component, completed.values, undefined, 'ADD_FAILED');
+  if (!validation.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: validation.hint, details: validation.details } };
   // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
   // in shared fields to live handles before the engine sees them (Fail Fast on a
   // resolve miss — never pass the string through to the P3 gate / a silent 0).
-  const resolved = resolveSharedFields(engine, cmd.component, (cmd.value ?? {}) as Record<string, unknown>);
+  const resolved = resolveSharedFields(engine, cmd.component, completed.values);
   if (!resolved.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: resolved.hint } };
   const r = engine.addComponent(eH, { component: tok, data: resolved.value as never });
   if (!r.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: String(r.error) } };

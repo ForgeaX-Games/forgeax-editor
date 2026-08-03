@@ -87,6 +87,59 @@ test('save dispatch is request-correlated and terminal-only', async () => {
   }
 });
 
+test('createSceneFile dispatch is request-correlated and publishes only its terminal success', async () => {
+  const completion = deferred<unknown>();
+  const previousApplier = sessionAppliers.get('createSceneFile');
+  sessionAppliers.set('createSceneFile', () => ({ ok: true, completion: completion.promise }));
+
+  try {
+    const gateway = new EditGateway(createEditSession());
+    const missingRequestId = gateway.dispatch({
+      kind: 'createSceneFile',
+      id: 'level-c',
+      duplicateCurrent: false,
+    } as never, 'ai');
+    expect(missingRequestId).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
+
+    const accepted = gateway.dispatch({
+      kind: 'createSceneFile',
+      id: 'level-c',
+      duplicateCurrent: true,
+      requestId: 'create-level-c-1',
+    }, 'ai');
+    expect(accepted).toMatchObject({
+      ok: true,
+      result: { operationRun: { requestId: 'create-level-c-1', operationId: 'createSceneFile', status: 'running' } },
+    });
+    expect(gateway.ledger).toHaveLength(0);
+
+    completion.resolve({
+      ok: true,
+      result: {
+        requestId: 'create-level-c-1',
+        sceneId: 'level-c',
+        sceneGuid: '019f5545-087e-7f92-9041-f5b839605afe',
+        pack: 'assets/scenes/level-c.pack.json',
+        duplicateCurrent: true,
+      },
+    });
+    const terminal = await gateway.waitOperationRun('create-level-c-1');
+    expect(terminal).toMatchObject({
+      ok: true,
+      value: {
+        operationId: 'createSceneFile',
+        requestId: 'create-level-c-1',
+        status: 'succeeded',
+        result: { sceneId: 'level-c', duplicateCurrent: true },
+      },
+    });
+    expect(gateway.ledger).toHaveLength(1);
+  } finally {
+    if (previousApplier === undefined) sessionAppliers.delete('createSceneFile');
+    else sessionAppliers.set('createSceneFile', previousApplier);
+  }
+});
+
 test('human save without a requestId cannot bypass the Gateway OperationRun path', () => {
   const previousApplier = sessionAppliers.get('saveDocToDisk');
   sessionAppliers.set('saveDocToDisk', () => ({ ok: true }));

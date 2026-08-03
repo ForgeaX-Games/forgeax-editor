@@ -7,7 +7,7 @@
 // its selected GUID before bootstrap, while the game owns campaign semantics.
 import { useEffect, useState } from 'react';
 import {
-  getSceneId, useSceneList, useSceneFile, readPlayConfig, writePlayConfig,
+  useSceneReadModel, readPlayConfig, writePlayConfig,
 } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 
@@ -15,12 +15,12 @@ const CAMPAIGN = '__campaign__';
 
 export function LauncherPanel() {
   const { t } = useTranslation();
-  const scenes = useSceneList();
-  const current = useSceneFile();
+  const sceneModel = useSceneReadModel();
+  const scenes = sceneModel.scenes;
   const [value, setValue] = useState<string>(CAMPAIGN);
   const [savedAt, setSavedAt] = useState<number>(0);
   const levels = scenes;
-  const currentEntry = scenes.find((s) => s.id === current);
+  const currentEntry = scenes.find((s) => s.isCurrent);
 
   useEffect(() => {
     void readPlayConfig().then((cfg) => {
@@ -28,7 +28,7 @@ export function LauncherPanel() {
     });
   }, []);
 
-  if (getSceneId() === 'default') {
+  if (sceneModel.gameId === null) {
     return <div className="panel ed-launcher"><h3>{t('editor.launcher.title')}</h3><div className="muted" style={{ padding: '4px 10px' }}>{t('editor.launcher.noGameOpen')}</div></div>;
   }
 

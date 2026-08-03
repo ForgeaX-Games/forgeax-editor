@@ -96,7 +96,9 @@ export function registerPostAssetWriteCatalogSync(fn: ((guid: string) => Promise
   postAssetWriteCatalogSync = fn;
 }
 
-/** Await the host-owned catalog visibility barrier for a newly written asset. */
+/** Await the host-owned catalog visibility barrier for a newly written asset or
+ * scene pack. The producer remains the owner of the write; the host owns the
+ * pack-index/catalog visibility barrier before a navigation/load can consume it. */
 export async function awaitPostAssetWriteCatalogSync(guid: string): Promise<void> {
   await postAssetWriteCatalogSync?.(guid);
 }

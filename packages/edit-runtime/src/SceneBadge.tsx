@@ -4,15 +4,14 @@
 // in-memory ctx). Switching what a window edits happens by double-clicking a
 // level / asset in the Assets panel — never from a toolbar dropdown. Play
 // settings live in the standalone 启动器 panel.
-import { getSceneId, useSceneFile, useSceneList } from '@forgeax/editor-core';
+import { useSceneReadModel } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 
 export function SceneBadge() {
   const { t } = useTranslation();
-  const scenes = useSceneList();
-  const current = useSceneFile();
-  if (getSceneId() === 'default') return null;
-  const entry = scenes.find((s) => s.id === current);
+  const sceneModel = useSceneReadModel();
+  if (sceneModel.gameId === null) return null;
+  const entry = sceneModel.scenes.find((s) => s.isCurrent);
   const label = entry
     ? `🗺 ${entry.name ?? entry.id}`
     : `🗺 ${t('editor.sceneBadge.mainScene')}`;

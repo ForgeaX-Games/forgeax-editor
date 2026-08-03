@@ -9,7 +9,7 @@
   },
   {
     "name": "assetCatalog",
-    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; authoring?: AssetAuthoringCapability | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; sourcePath?: string | undefined; }[]"
+    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; authoring?: AssetAuthoringCapability | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; subject?: CatalogSubject | undefined; execution?: CookExecution | undefined; lifecycle?: CatalogLifecycle | undefined; projection?: CatalogProjection | undefined; sourcePath?: string | undefined; }[]"
   },
   {
     "name": "auditLog",
@@ -81,7 +81,7 @@
   },
   {
     "name": "describeComponent",
-    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; enums?: Record<string, Record<string, number>> | undefined; transient?: Record<string, true> | undefined; } | { ok: false; error: CommandError; }"
+    "signature": "(name: string) => { ok: true; name: string; schema: Record<string, string>; defaults?: Record<string, unknown> | undefined; enums?: Record<string, Record<string, number>> | undefined; shapes?: Record<string, FieldShapeKind> | undefined; arrays?: Record<string, { elementType: string; length?: number | undefined; group?: string | undefined; }> | undefined; transient?: Record<string, true> | undefined; } | { ok: false; error: CommandError; }"
   },
   {
     "name": "dispatch",
@@ -216,6 +216,14 @@
     "signature": "(provider: () => boolean) => () => void"
   },
   {
+    "name": "registerSceneAuthoringSessionProvider",
+    "signature": "(provider: () => SceneAuthoringSessionReadModel) => () => void"
+  },
+  {
+    "name": "registerSceneReadProvider",
+    "signature": "(provider: () => SceneReadModel) => () => void"
+  },
+  {
     "name": "retryOperationRun",
     "signature": "(requestId: string, retryRequestId: string, origin?: CommandOrigin) => DispatchResult"
   },
@@ -234,6 +242,14 @@
   {
     "name": "scanLocked",
     "signature": "boolean"
+  },
+  {
+    "name": "sceneAuthoringSession",
+    "signature": "() => SceneAuthoringSessionReadModel"
+  },
+  {
+    "name": "sceneReadModel",
+    "signature": "() => SceneReadModel"
   },
   {
     "name": "sourceFileDeleteStatus",

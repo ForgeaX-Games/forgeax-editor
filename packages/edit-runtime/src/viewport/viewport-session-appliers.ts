@@ -16,10 +16,43 @@ export interface ViewportSessionApplierDeps {
   readonly setDisplay: (display: 'scene' | 'game') => void;
   readonly grantGameControl: () => void;
   readonly releaseGameControl: () => void;
+  /** Optional engine RHI debug capture, injected by the runtime owner. */
+  readonly captureFrame?: (frames: number) => Promise<unknown>;
   readonly world: World;
 }
 
 const invalidArgs = (hint: string) => ({ ok: false as const, error: { code: 'INVALID_ARGS' as const, hint } });
+
+function rhiCaptureFailure(error: unknown) {
+  const candidate = error !== null && typeof error === 'object'
+    ? error as { code?: unknown; expected?: unknown; detail?: unknown; hint?: unknown }
+    : undefined;
+  const sourceCode = typeof candidate?.code === 'string' ? candidate.code : 'exception';
+  const sourceHint = typeof candidate?.hint === 'string'
+    ? candidate.hint
+    : error instanceof Error ? error.message : String(error);
+  const details = {
+    ...(candidate?.expected === undefined ? {} : { expected: candidate.expected }),
+    ...(candidate?.detail === undefined ? {} : { detail: candidate.detail }),
+  };
+  return {
+    ok: false as const,
+    error: {
+      code: 'rhi-capture-failed' as const,
+      owner: 'engine',
+      category: 'runtime',
+      hint: sourceHint,
+      retryable: true,
+      recoveryActions: ['capture.retry'],
+      cause: {
+        code: sourceCode,
+        owner: 'engine',
+        hint: sourceHint,
+        ...(Object.keys(details).length === 0 ? {} : { details }),
+      },
+    },
+  };
+}
 
 function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
   const disposers: Array<() => void> = [];
@@ -51,6 +84,29 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
     });
     register('grantGameControl', () => { deps.grantGameControl(); return { ok: true }; }, 'Grant Game Control');
     register('releaseGameControl', () => { deps.releaseGameControl(); return { ok: true }; }, 'Release Game Control');
+    register('captureFrame', (op) => {
+      const request = op as { frames?: unknown };
+      const frames = request.frames === undefined ? 1 : request.frames;
+      if (typeof frames !== 'number' || !Number.isInteger(frames) || frames < 1 || frames > 8) {
+        return invalidArgs('frames must be an integer between 1 and 8');
+      }
+      if (deps.captureFrame === undefined) {
+        return {
+          ok: false as const,
+          error: {
+            code: 'rhi-debug-unavailable' as const,
+            hint: 'Start the editor with --rhi-debug before dispatching captureFrame',
+            retryable: true,
+            recoveryActions: ['capture.retry'],
+          },
+        };
+      }
+      const completion = Promise.resolve().then(() => deps.captureFrame!(frames)).catch(rhiCaptureFailure);
+      return { ok: true as const, completion };
+    }, 'Capture RHI Frame', {
+      type: 'object',
+      properties: { frames: { type: 'number', minimum: 1, maximum: 8 } },
+    });
     register('addSystem', (op) => {
       const name = (op as { name?: unknown }).name;
       if (typeof name !== 'string' || name.trim() === '') return invalidArgs('name must be a non-empty system name');

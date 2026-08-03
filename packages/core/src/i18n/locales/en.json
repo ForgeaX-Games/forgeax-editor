@@ -4,6 +4,21 @@
       "mainScene": "Main scene",
       "title": "What this window is editing (level/asset) — double-click another item in the Assets panel to switch"
     },
+    "sceneEntry": {
+      "title": "Scene",
+      "selectLabel": "Switch scene",
+      "targetLabel": "Manage scene",
+      "noScene": "No scene",
+      "ready": "Ready",
+      "create": "Create Scene",
+      "duplicate": "Duplicate",
+      "setDefault": "Set Default",
+      "delete": "Delete Scene",
+      "createTitle": "Create Scene",
+      "duplicateTitle": "Duplicate Scene",
+      "nameLabel": "Scene name",
+      "guidUnavailable": "This scene has no stable GUID and cannot be changed."
+    },
     "viewportHints": {
       "toggleTitle": "Show controls",
       "closeTitle": "Close (click the ? at the bottom-right to reopen)",
@@ -297,7 +312,14 @@
         "ok": "OK",
         "cancel": "Cancel",
         "deleteFolderConfirm": "Delete folder \"{{name}}\" and all its contents?",
-        "deleteFileConfirm": "Delete file \"{{name}}\"?"
+        "deleteFileConfirm": "Delete file \"{{name}}\"?",
+        "sceneSwitch": {
+          "title": "Unsaved scene changes",
+          "body": "Switching to \"{{name}}\" would replace the current authored scene. Choose how to handle unsaved edits.",
+          "cancel": "Cancel",
+          "discard": "Discard",
+          "save": "Save and switch"
+        }
       },
       "preview": {
         "folderMeta": "Folder · {{path}}",
@@ -348,7 +370,10 @@
         "note": "This action cannot be undone.",
         "cancel": "Cancel",
         "confirm": "Delete",
-        "confirmAnyway": "Delete anyway"
+        "confirmAnyway": "Delete anyway",
+        "sceneCurrent": "This is the current scene and must be switched away before deletion.",
+        "sceneDefault": "This is the default scene and must be reassigned before deletion.",
+        "sceneProtectedWarn": "This scene is protected. Resolve the impact above before deleting it."
       }
     }
   }

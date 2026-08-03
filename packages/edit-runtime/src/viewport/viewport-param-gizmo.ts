@@ -10,13 +10,13 @@
 // (sceneWorld) via the caller-supplied getSelectionComponents helper.
 
 import { Transform } from '@forgeax/engine-scene';
-import { Materials } from '@forgeax/engine-render';
 import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
 import type { EngineFacade } from '@forgeax/editor-core';
 
 import type { Vec3 } from './viewport-ray';
 import { num } from './viewport-ray';
 import { cameraGizmoPoints } from './viewport-gizmo-geometry';
+import { createOverlayMaterial } from './viewport-gizmo';
 import type { EditorTransform } from './viewport-entity-read';
 
 export interface ParamGizmoDeps {
@@ -55,7 +55,7 @@ export function createParamGizmo({
   let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
 
   function ensureParamMat(): Handle<'MaterialAsset', 'shared'> {
-    if (!paramMat) paramMat = editorEngine.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.82, 0.25, 1], { castShadow: false }));
+    if (!paramMat) paramMat = createOverlayMaterial(editorEngine, [1.0, 0.82, 0.25], 4002);
     return paramMat;
   }
 

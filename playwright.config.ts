@@ -30,6 +30,10 @@ const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
 const e2eTempRoot = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'forgeax-save-e2e-'));
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
+// J1 stages its disposable source fixture from the assets submodule in the
+// test worker. Exposing only the temp path keeps the product tree binary-free
+// while letting that test exercise the same on-disk import contract as a user.
+process.env.FORGEAX_E2E_GAME_DIR = e2eGameDir;
 process.once('exit', () => rmSync(e2eTempRoot, { recursive: true, force: true }));
 
 export default defineConfig({

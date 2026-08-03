@@ -36,6 +36,10 @@ export type SourceFileDeleteResult =
   | { ok: true }
   | { ok: false; error: CommandError };
 
+export type SourceFileAbsenceResult =
+  | { ok: true; absent: boolean }
+  | { ok: false; error: CommandError };
+
 export interface AssetIoError {
   readonly kind: 'http' | 'network';
   readonly hint: string;
@@ -46,11 +50,71 @@ export type AssetIoResult<T = void> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: AssetIoError };
 
+export type CreateAuthoredPackResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: 'collision' | 'write-failed'; readonly hint: string };
+
+export const SOURCE_SIDECAR_REVISION_DOMAIN = 'source-sidecar-file-v1';
+
+export interface AssetResourceRef {
+  readonly kind: 'source-sidecar';
+  readonly path: string;
+}
+
+export interface AssetResourceSnapshot {
+  readonly contents: string;
+  readonly revision: string;
+}
+
 export interface AssetResourceTransactionPort<TInput = unknown> {
+  /**
+   * Explicit revision-domain contract. A port is eligible for source-sidecar
+   * CAS only when the baseline snapshot and commit belong to this same domain.
+   */
+  readonly supportsExpectedRevision: true;
+  readonly revisionDomain: typeof SOURCE_SIDECAR_REVISION_DOMAIN;
+  readonly readResource: (resource: AssetResourceRef) => Promise<AssetResourceSnapshot>;
   readonly prepare: (input: TInput) => Promise<{
     readonly commit: () => Promise<{ readonly revision: string; readonly result?: unknown }>;
     readonly rollback?: () => Promise<void>;
   }>;
+}
+
+export class AssetResourceConflictError extends Error {
+  readonly code = 'asset-resource-conflict';
+
+  constructor(
+    readonly expectedRevision: string,
+    readonly currentRevision: string | null,
+  ) {
+    super(`resource revision mismatch (expected ${expectedRevision}, current ${currentRevision ?? 'missing'})`);
+    this.name = 'AssetResourceConflictError';
+  }
+}
+
+function isSourceSidecarPort(port: AssetResourceTransactionPort | undefined): port is AssetResourceTransactionPort {
+  return port?.supportsExpectedRevision === true
+    && port.revisionDomain === SOURCE_SIDECAR_REVISION_DOMAIN
+    && typeof port.readResource === 'function';
+}
+
+interface SourceSidecarPutInput {
+  readonly resource: AssetResourceRef;
+  readonly expectedRevision: string;
+  readonly content: string;
+  readonly changes?: readonly [{
+    readonly kind: 'put';
+    readonly path: string;
+    readonly content: string;
+  }];
+}
+
+function isSourceSidecarPutInput(input: unknown): input is SourceSidecarPutInput {
+  const candidate = input as Partial<SourceSidecarPutInput> | null;
+  return candidate?.resource?.kind === 'source-sidecar'
+    && typeof candidate.resource.path === 'string'
+    && typeof candidate.expectedRevision === 'string'
+    && typeof candidate.content === 'string';
 }
 
 const isMetaPath = (packPath: string): boolean => packPath.endsWith('.meta.json');
@@ -104,9 +168,52 @@ export class AssetIOFacade {
     this.resourceTransaction = port;
   }
 
+  hasResourceTransactionPort(): boolean {
+    return this.resourceTransaction !== undefined;
+  }
+
   async prepareResourceTransaction(input: unknown): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
     if (this.resourceTransaction === undefined) return null;
     return this.resourceTransaction.prepare(input);
+  }
+
+  async prepareRevisionAwareResourceTransaction(
+    input: unknown,
+  ): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
+    if (this.resourceTransaction !== undefined) {
+      if (!isSourceSidecarPort(this.resourceTransaction)) return null;
+      return this.resourceTransaction.prepare(input);
+    }
+    if (!isSourceSidecarPutInput(input)) return null;
+    // Prepare is deliberately side-effect free. The file router owns the only
+    // disk write and performs compare + replace under its per-path serializer.
+    const prepared = { ...input, resource: { ...input.resource } };
+    return {
+      commit: async () => {
+        const response = await fetch('/api/files', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            path: prepared.resource.path,
+            content: prepared.content,
+            expectedRevision: prepared.expectedRevision,
+          }),
+        });
+        if (response.status === 409) {
+          const body = await response.json().catch(() => ({})) as { currentRevision?: unknown };
+          throw new AssetResourceConflictError(
+            prepared.expectedRevision,
+            typeof body.currentRevision === 'string' ? body.currentRevision : null,
+          );
+        }
+        if (!response.ok) throw new Error(`sidecar CAS failed (HTTP ${response.status})`);
+        const body = await response.json() as { revision?: unknown };
+        if (typeof body.revision !== 'string' || body.revision.length === 0) {
+          throw new Error('sidecar CAS response did not include a revision');
+        }
+        return { revision: body.revision, result: body };
+      },
+    };
   }
 
   /** Delete exactly one resolved source file. This is separate from pack-entry
@@ -133,6 +240,46 @@ export class AssetIOFacade {
         error: {
           code: 'SOURCE_FILE_DELETE_FAILED',
           hint: `source file delete failed for ${resolvedPath}: ${(err as Error)?.message ?? String(err)}`,
+          retryable: true,
+          recoveryActions: ['operation.retry'],
+        },
+      };
+    }
+  }
+
+  /** Read one complete pack through the asset gate's read side. Scene lifecycle
+   * guards use this to inspect the producer-owned refs[] before deleting a pack. */
+  async readPack(packPath: string): Promise<PackFile | null> {
+    recordAssetLeaf('assetIO.readPack');
+    return readPack(packPath);
+  }
+
+  /** Verify a file really disappeared after a successful DELETE response. */
+  async verifySourceFileAbsent(resolvedPath: string): Promise<SourceFileAbsenceResult> {
+    recordAssetLeaf('assetIO.verifySourceFileAbsent');
+    try {
+      const response = await fetch(`/api/files?path=${encodeURIComponent(resolvedPath)}`, {
+        cache: 'no-store',
+      });
+      if (response.status === 404) return { ok: true, absent: true };
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: {
+            code: 'SOURCE_FILE_VERIFY_FAILED',
+            hint: `source file absence check failed for ${resolvedPath} (HTTP ${response.status})`,
+            retryable: true,
+            recoveryActions: ['operation.retry'],
+          },
+        };
+      }
+      return { ok: true, absent: false };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          code: 'SOURCE_FILE_VERIFY_FAILED',
+          hint: `source file absence check failed for ${resolvedPath}: ${(err as Error)?.message ?? String(err)}`,
           retryable: true,
           recoveryActions: ['operation.retry'],
         },
@@ -198,6 +345,38 @@ export class AssetIOFacade {
     });
     const ok = await writePack(opts.packPath, pack);
     return { ok };
+  }
+
+  /**
+   * Create one authored pack without reading or modifying imported source,
+   * metadata, or DDC. The existence probe is read-only; success performs exactly
+   * one candidate write through the asset gate.
+   */
+  async createAuthoredPackIfAbsent(packPath: string, content: string): Promise<CreateAuthoredPackResult> {
+    recordAssetLeaf('assetIO.writePackEntry');
+    try {
+      const existing = await fetch(`/api/files/raw?path=${encodeURIComponent(packPath)}`);
+      if (existing.ok) {
+        return { ok: false, reason: 'collision', hint: `An authored resource already exists at ${packPath}.` };
+      }
+      if (existing.status !== 404) {
+        return { ok: false, reason: 'write-failed', hint: `Could not validate target availability (HTTP ${existing.status}).` };
+      }
+      const written = await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: packPath, content }),
+      });
+      return written.ok
+        ? { ok: true }
+        : { ok: false, reason: 'write-failed', hint: `Authored pack write failed (HTTP ${written.status}).` };
+    } catch (cause) {
+      return {
+        ok: false,
+        reason: 'write-failed',
+        hint: `Authored pack write failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      };
+    }
   }
 
   /** Rename one asset entry (change its `name` field), returning the REPLACED
@@ -348,6 +527,47 @@ export class AssetIOFacade {
       return JSON.parse(await r.text());
     } catch {
       return undefined;
+    }
+  }
+
+  /** Read exact sidecar bytes and their same-snapshot strong revision. */
+  async readMetaSidecar(metaPath: string): Promise<AssetIoResult<AssetResourceSnapshot>> {
+    recordAssetLeaf('assetIO.readSourceBytes');
+    if (this.resourceTransaction !== undefined) {
+      if (!isSourceSidecarPort(this.resourceTransaction)) {
+        return {
+          ok: false,
+          error: {
+            kind: 'network',
+            hint: `installed resource transaction port does not expose the ${SOURCE_SIDECAR_REVISION_DOMAIN} snapshot domain`,
+          },
+        };
+      }
+      try {
+        return {
+          ok: true,
+          value: await this.resourceTransaction.readResource({ kind: 'source-sidecar', path: metaPath }),
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: { kind: 'network', hint: `sidecar snapshot failed: ${(err as Error)?.message ?? String(err)}` },
+        };
+      }
+    }
+    try {
+      const response = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}&revision=1`);
+      if (!response.ok) {
+        return { ok: false, error: { kind: 'http', status: response.status, hint: `sidecar read failed (HTTP ${response.status})` } };
+      }
+      const revision = response.headers.get('etag');
+      if (revision === null || revision.startsWith('W/')) {
+        return { ok: false, error: { kind: 'http', status: response.status, hint: 'sidecar read did not return a strong revision' } };
+      }
+      const contents = await response.text();
+      return { ok: true, value: { contents, revision } };
+    } catch (err) {
+      return { ok: false, error: { kind: 'network', hint: `sidecar read network error: ${(err as Error)?.message ?? String(err)}` } };
     }
   }
 

@@ -16,6 +16,7 @@ import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
@@ -23,6 +24,8 @@ import { EditGateway } from '../io/gateway';
 import { childrenOf, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
+
+void AnimationPlayer;
 
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
 const TEXTURE_GUID = 'd1f2a3b4-c5d6-5e70-8901-234567890abc';
@@ -671,6 +674,50 @@ describe('Gateway component read surface', () => {
       // a non-enum field carries no entry (only labelled fields appear)
       expect(d.enums?.mass).toBeUndefined();
       // still JSON-safe (no live handles)
+      expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+    }
+  });
+
+  it('describeComponent projects producer-owned field shapes without a second registry', () => {
+    const compName = `R0_03A_FieldShapes_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    defineComponent(compName, {
+      scalar: { type: 'f32', shape: 'scalar', default: 0 },
+      enabled: { type: 'bool', shape: 'boolean', default: false },
+      mode: { type: 'enum', shape: 'enum', labels: { idle: 0, active: 1 } },
+      vector: { type: 'array<f32, 3>', shape: 'vector' },
+      quaternion: { type: 'array<f32, 4>', shape: 'quaternion' },
+      optionalEntity: { type: 'entity', shape: 'optional', default: null },
+      nestedState: { type: 'unique<R0_03A_NestedState>', shape: 'nested' },
+      values: { type: 'array<f32>', shape: 'array' },
+      material: { type: 'shared<MaterialAsset>', shape: 'asset-ref' },
+    });
+
+    const d = gw().describeComponent(compName);
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.shapes).toEqual({
+        scalar: 'scalar',
+        enabled: 'boolean',
+        mode: 'enum',
+        vector: 'vector',
+        quaternion: 'quaternion',
+        optionalEntity: 'optional',
+        nestedState: 'nested',
+        values: 'array',
+        material: 'asset-ref',
+      });
+      expect(d.enums?.mode).toEqual({ idle: 0, active: 1 });
+      expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+    }
+  });
+
+  it('describeComponent projects array element/capacity and editor group facts', () => {
+    const d = gw().describeComponent('AnimationPlayer');
+    expect(d.ok).toBe(true);
+    if (d.ok) {
+      expect(d.shapes?.times).toBe('array');
+      expect(d.arrays?.times).toEqual({ elementType: 'f32', group: 'slots' });
+      expect(d.arrays?.clips).toEqual({ elementType: 'shared<AnimationClip>', group: 'slots' });
       expect(JSON.parse(JSON.stringify(d))).toEqual(d);
     }
   });

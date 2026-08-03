@@ -123,6 +123,45 @@ export interface ExtensionListResponse {
   items: ExtensionInfo[];
 }
 
+export type SharedCapabilityKind = 'skill' | 'command' | 'mcp' | 'extension' | 'memory' | 'tool';
+
+export interface SharedCapabilityInfo {
+  capabilityId: string;
+  kind: SharedCapabilityKind;
+  extensionId: string;
+  extensionVersion: string;
+  origin: 'builtin' | 'user' | 'project';
+  trustTier: 'own' | 'imported';
+  localId: string;
+  generation: number;
+  lifecycle: {
+    state: 'load' | 'activate' | 'ready' | 'reload' | 'deactivate' | 'broken';
+    reloadable: boolean;
+    requiresRestart: boolean;
+  };
+  shadowedBy: Array<{ origin: string; originPath: string }>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SharedCapabilityListResponse {
+  generation: number;
+  loadedAt: number;
+  capabilities: SharedCapabilityInfo[];
+  issues: string[];
+}
+
+export async function listSharedCapabilities(): Promise<SharedCapabilityListResponse> {
+  const empty: SharedCapabilityListResponse = {
+    generation: 0,
+    loadedAt: 0,
+    capabilities: [],
+    issues: [],
+  };
+  const res = await fetch('/api/extensions/capabilities');
+  if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return empty;
+  return (await res.json()) as SharedCapabilityListResponse;
+}
+
 export function pickLang(
   text: ExtensionInfo['displayName'] | ExtensionInfo['description'],
   lang: 'zh' | 'en' = 'zh',

@@ -52,6 +52,10 @@
     "signature": "() => MeshStatsWire | null"
   },
   {
+    "name": "getSceneAuthoringSession",
+    "signature": "() => SceneAuthoringSessionReadModel"
+  },
+  {
     "name": "getSceneFile",
     "signature": "() => string | null"
   },
@@ -124,6 +128,10 @@
     "signature": "(fn: (id: number) => void) => () => void"
   },
   {
+    "name": "onSceneAuthoringSessionChange",
+    "signature": "(listener: () => void) => () => void"
+  },
+  {
     "name": "onSceneListChange",
     "signature": "(fn: () => void) => () => void"
   },
@@ -134,6 +142,10 @@
   {
     "name": "PlayConfig",
     "signature": "PlayConfig"
+  },
+  {
+    "name": "previewImportedScene",
+    "signature": "(facts: { readonly guid: string; readonly sourceKey: string; readonly sourcePath?: string | undefined; readonly revision: string; }) => Promise<boolean>"
   },
   {
     "name": "publishMeshStats",
@@ -177,7 +189,7 @@
   },
   {
     "name": "switchSceneFile",
-    "signature": "(id: string) => Promise<boolean>"
+    "signature": "(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy | undefined) => Promise<boolean>"
   },
   {
     "name": "subscribeDocVersion",
@@ -228,12 +240,20 @@
     "signature": "() => MeshStatsWire | null"
   },
   {
+    "name": "useSceneAuthoringSession",
+    "signature": "() => SceneAuthoringSessionReadModel"
+  },
+  {
     "name": "useSceneFile",
     "signature": "() => string | null"
   },
   {
     "name": "useSceneList",
     "signature": "() => SceneFileEntry[]"
+  },
+  {
+    "name": "useSceneReadModel",
+    "signature": "() => SceneReadModel"
   },
   {
     "name": "useSelection",

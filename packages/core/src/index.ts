@@ -18,7 +18,7 @@ export type {
 // reach them from the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 
-export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy } from './types';
+export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy, SceneSwitchDirtyPolicy } from './types';
 export type { EditorOpLifecycle } from './types';
 export type {
   CommandErrorContext,
@@ -75,6 +75,7 @@ export type {
   ImportProgressStage,
   ImportSubAsset,
   PackAsset,
+  SceneActivationDescriptor,
 } from './public/assets';
 
 // ── Eval channel (dev-accessible AI eval) ──
@@ -93,6 +94,13 @@ export type {
 
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
+export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from './io/scene-read-model';
+export type {
+  ImportedSceneSessionIdentity,
+  SceneAuthoringMode,
+  SceneAuthoringSaveTarget,
+  SceneAuthoringSessionReadModel,
+} from './io/scene-authoring-session';
 
 // Diagnostics are a read-only projection of existing trace, scan, asset-bus,
 // and OperationRun facts. Console output is intentionally not an input source.
@@ -215,7 +223,10 @@ export type {
   FieldSchema,
   ComponentSchema,
   FieldType,
+  ArrayFieldMeta,
 } from './scene/schema';
+export { planArrayEdit } from './scene/array-edit';
+export type { ArrayEditAction, ArrayEditRequest, ArrayEditPlan } from './scene/array-edit';
 // Editor-owned component metadata overlay (SSOT), injected into
 // `Component.meta.editor` post-registration; the engine stays agnostic.
 export {
@@ -304,7 +315,12 @@ export {
   onSceneListChange,
   useSceneList,
   useSceneFile,
+  useSceneReadModel,
+  getSceneAuthoringSession,
+  onSceneAuthoringSessionChange,
+  useSceneAuthoringSession,
   switchSceneFile,
+  previewImportedScene,
   createSceneFile,
   readPlayConfig,
   writePlayConfig,

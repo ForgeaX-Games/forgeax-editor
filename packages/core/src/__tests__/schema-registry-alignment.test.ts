@@ -71,6 +71,11 @@ function ensurePhysicsAndFilterFixtures(): void {
     snapToGroundDist: 'f32',
     grounded: { type: 'bool', transient: true },
   });
+  ensureComponent('R0_03A_SchemaShapeFixture', {
+    scalar: { type: 'f32', shape: 'scalar' },
+    optionalScalar: { type: 'f32', shape: 'optional' },
+    nestedState: { type: 'unique<R0_03A_NestedState>', shape: 'nested' },
+  });
   // Do NOT stub Skin/Tilemap/Instances/… here — fake defineComponent tokens
   // poison later suites (destroy/duplicate material round-trip). Exclude
   // assertions only need getComponentSchema(...) === undefined, which holds
@@ -183,9 +188,18 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   });
 
   it('AnimationPlayer: direct clips plus optional animation graph', () => {
-    expectKeys('AnimationPlayer', 'clips', 'graph', 'paused', 'looping');
+    expectKeys('AnimationPlayer', 'clips', 'graph', 'targetRoot', 'paused', 'looping');
     expectFieldType('AnimationPlayer', 'clips', 'asset');
+    expectFieldType('AnimationPlayer', 'times', 'array');
+    expect(fieldSchema('AnimationPlayer', 'times')).toMatchObject({
+      shape: 'array',
+      arrayMeta: { elementType: 'f32' },
+      arrayGroup: 'slots',
+      arrayElementDefault: 0,
+    });
+    expect(fieldSchema('AnimationPlayer', 'weights')).toMatchObject({ arrayGroup: 'slots', arrayElementDefault: 1 });
     expectFieldType('AnimationPlayer', 'graph', 'asset');
+    expect(fieldSchema('AnimationPlayer', 'targetRoot')).toMatchObject({ type: 'number', shape: 'optional', default: null });
   });
 
   it('GlyphText: fontHandle (asset), text, fontSize, color', () => {
@@ -215,11 +229,27 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   });
 });
 
+describe('Reflection: producer-owned field shapes', () => {
+  it('projects semantic shape tags into the core schema without a UI registry', () => {
+    expect(fieldSchema('R0_03A_SchemaShapeFixture', 'scalar')?.shape).toBe('scalar');
+    // Optional semantics are visible when the underlying storage field is an
+    // Inspector-supported scalar. Nested payloads preserve their producer
+    // declaration even though an opaque unique-ref handle remains read-only.
+    expect(fieldSchema('R0_03A_SchemaShapeFixture', 'optionalScalar')?.shape).toBe('optional');
+    expect(fieldSchema('R0_03A_SchemaShapeFixture', 'nestedState')).toMatchObject({ type: 'nested', shape: 'nested' });
+  });
+});
+
 describe('Reflection: physics components', () => {
-  it('RigidBody: 6 fields, type is number with enum labels in tooltip', () => {
+  it('RigidBody: 6 fields, type is enum with engine-owned options', () => {
     expectKeys('RigidBody', 'type', 'mass', 'linearDamping', 'angularDamping', 'gravityScale', 'ccdEnabled');
     const fs = fieldSchema('RigidBody', 'type');
-    expect(fs?.type).toBe('number');
+    expect(fs?.type).toBe('enum');
+    expect(fs?.enumOptions).toEqual([
+      { label: 'static', value: 0 },
+      { label: 'dynamic', value: 1 },
+      { label: 'kinematic', value: 2 },
+    ]);
   });
 
   it('Collider: 10 fields (shape, extents, physics params)', () => {
@@ -228,7 +258,12 @@ describe('Reflection: physics components', () => {
       'friction', 'restitution',
       'density', 'isSensor', 'collisionGroups', 'solverGroups',
     );
-    expectFieldType('Collider', 'shape', 'number');
+    expectFieldType('Collider', 'shape', 'enum');
+    expect(fieldSchema('Collider', 'shape')?.enumOptions).toEqual([
+      { label: 'cuboid', value: 0 },
+      { label: 'sphere', value: 1 },
+      { label: 'capsule', value: 2 },
+    ]);
   });
 
   it('CharacterController: 6 authored fields, grounded excluded (transient)', () => {
@@ -307,7 +342,9 @@ describe('Reflection: listComponentSchemas completeness', () => {
       for (const f of cs.fields) {
         const dv = defaultFieldValue(f);
         if (f.type === 'bool') expect(typeof dv).toBe('boolean');
-        else if (f.type === 'number') expect(typeof dv).toBe('number');
+        else if (f.type === 'number') {
+          expect(f.shape === 'optional' ? dv === null || typeof dv === 'number' : typeof dv === 'number').toBe(true);
+        }
         else if (f.type === 'string') expect(typeof dv).toBe('string');
         else if (f.type === 'vec') expect(Array.isArray(dv)).toBe(true);
       }
@@ -323,5 +360,16 @@ describe('Reflection: _resetSchemaCache', () => {
     const after = getComponentSchema('Transform');
     expect(after).toBeDefined();
     expect(after!.fields.length).toBe(before!.fields.length);
+  });
+
+  it('refreshes when a producer registers a component after the first query', () => {
+    expect(getComponentSchema('R0_03C_LateEnum')).toBeUndefined();
+    ensureComponent('R0_03C_LateEnum', {
+      mode: { type: 'enum', default: 1, labels: { idle: 0, active: 1 } },
+    });
+    expect(fieldSchema('R0_03C_LateEnum', 'mode')).toMatchObject({
+      type: 'enum',
+      enumOptions: [{ label: 'idle', value: 0 }, { label: 'active', value: 1 }],
+    });
   });
 });

@@ -134,6 +134,10 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
       components: {
         Transform: nativeTransform({ y: 0.5 }, [1, 1, 1]),
         MeshFilter: { assetHandle: HANDLE_CUBE }, // proxy geometry (not a placeholder — a material needs a mesh to display on)
+        // Reuse the existing material GUID resolver: the proxy cube has one
+        // submesh, so one catalogued MaterialAsset GUID must produce one
+        // MeshRenderer.materials slot instead of leaving the default white material.
+        EditorPendingMeshMaterials: { guids: [ref.guid] },
       },
     };
   }

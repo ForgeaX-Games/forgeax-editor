@@ -7,9 +7,10 @@
 // M2 (w7): a `createSceneList(deps)` DI factory. Its state edge is deps.ctx (the
 // manifest + current-file live on the shared handle); its side-effect edges — the
 // network read (deps.fetchWithTimeout), the host path resolver, and the
-// cross-cluster save/load/replace operations (deps.flushPendingSaveBeacon /
-// loadDocFromDisk / loadDocFromStorage / replaceDoc, wired by the composition
-// root from the disk-io + storage units) — all arrive THROUGH deps, so a headless
+// cross-cluster save/discard/load/replace operations (deps.savePendingScene /
+// deps.clearPendingScene / loadDocFromDisk / loadDocFromStorage / replaceDoc,
+// wired by the composition root from the disk-io + storage units) — all arrive
+// THROUGH deps, so a headless
 // test drives init + switch with fakes (AC-02). Scene discovery via
 // findAllScenePacks / findScenePackByGuid is a pure editor-assets call reached
 // only on the non-default path; the default-slug guard short-circuits before any
@@ -38,6 +39,11 @@ import { loadGameProject, FORGE_JSON, type GameProject } from '@forgeax/engine-p
 import { findScenePackByGuid, findAllScenePacks } from '../../assets/assets';
 import type { ScenePersistenceContext, SceneFileEntry } from '../scene-persistence';
 import type { PersistenceGateway } from './disk-io';
+import type { SceneReadModel } from '../../io/scene-read-model';
+import type { CommandOrigin } from '../../io/gateway-history';
+import type { SceneSwitchDirtyPolicy } from '../../types';
+import type { AssetIOFacade } from '../../io/asset-io-facade';
+import { broadcastAssetsChanged } from '../assets-changed';
 
 /** All createSceneList needs, declared explicitly (Pipeline Isolation). The
  *  cross-cluster save/load/replace ops are wired by the composition root from the
@@ -50,10 +56,16 @@ export interface SceneListDeps {
   /** Timeout-guarded fetch for the forge.json read (io/net.ts). Injected so a
    *  headless test drives discovery without a server. */
   readonly fetchWithTimeout: (url: string, ms?: number) => Promise<Response>;
+  /** Platform fetch used for the forge.json write boundary. */
+  readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;
   /** Host path resolver — game-relative name -> absolute /api path. */
   readonly resolveGamePath: (rel: string) => string;
-  /** Flush the outgoing scene's pending save before a switch (disk-io unit). */
-  readonly flushPendingSaveBeacon: () => void;
+  /** Asset/pack read-write gate used by scene deletion and its ref guard. */
+  readonly assetIO: Pick<AssetIOFacade, 'readPack' | 'deleteSourceFile' | 'verifySourceFileAbsent'>;
+  /** Persist the outgoing scene through the canonical Gateway save run. */
+  readonly savePendingScene: (origin: CommandOrigin) => Promise<boolean>;
+  /** Clear dirty without writing when the caller explicitly chooses discard. */
+  readonly clearPendingScene: () => void;
   /** Load the active scene from disk — the impl, not the dispatch wrapper (no
    *  nested dispatch during an in-place switch) (disk-io unit). */
   readonly loadDocFromDisk: () => Promise<boolean>;
@@ -68,23 +80,126 @@ export interface SceneList {
   getSceneId(): string;
   getSceneFile(): string | null;
   getSceneList(): SceneFileEntry[];
+  getSceneReadModel(): SceneReadModel;
   getLoadedSceneEntities(): number[];
   onSceneListChange(fn: () => void): () => void;
+  /** Invalidate the read model after an owner performs an atomic rollback. */
+  notifySceneListChanged(): void;
+  setDefaultScene(sceneGuid: string, requestId: string): Promise<SetDefaultSceneEffect>;
+  deleteScene(sceneGuid: string, requestId: string): Promise<DeleteSceneEffect>;
   useSceneList(): SceneFileEntry[];
   useSceneFile(): string | null;
+  useSceneReadModel(): SceneReadModel;
   initSceneList(): Promise<void>;
-  doSwitchSceneFile(id: string): Promise<boolean>;
+  doSwitchSceneFile(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy, origin?: CommandOrigin): Promise<boolean>;
+  activateNewScene(entry: SceneFileEntry): void;
 }
+
+export type SetDefaultSceneEffect =
+  | {
+      ok: true;
+      result: {
+        requestId: string;
+        sceneGuid: string;
+        sceneId: string;
+        previousSceneGuid: string | null;
+        changed: boolean;
+      };
+    }
+  | {
+      ok: false;
+      error: {
+        code: 'scene-default-invalid' | 'scene-default-read-failed' | 'scene-default-write-failed' | 'scene-default-verify-failed';
+        hint: string;
+        current?: unknown;
+        retryable?: boolean;
+        recoveryActions?: readonly string[];
+      };
+    };
+
+export interface SceneDeleteReference {
+  readonly sceneId: string;
+  readonly sceneGuid: string | null;
+  readonly pack: string;
+  readonly assetGuid: string;
+  readonly assetKind: string;
+}
+
+export interface SceneDeleteImpact {
+  readonly sceneId: string;
+  readonly sceneGuid: string;
+  readonly pack: string;
+  readonly isCurrent: boolean;
+  readonly isDefault: boolean;
+  readonly referencedBy: readonly SceneDeleteReference[];
+}
+
+export type DeleteSceneEffect =
+  | {
+      ok: true;
+      result: {
+        requestId: string;
+        sceneId: string;
+        sceneGuid: string;
+        pack: string;
+        impact: SceneDeleteImpact;
+        currentScene: { id: string; guid: string | null } | null;
+        defaultScene: { id: string; guid: string | null } | null;
+      };
+    }
+  | {
+      ok: false;
+      error: {
+        code: 'scene-delete-invalid' | 'scene-delete-guarded' | 'scene-delete-read-failed' | 'scene-delete-write-failed' | 'scene-delete-verify-failed';
+        hint: string;
+        current?: unknown;
+        retryable?: boolean;
+        recoveryActions?: readonly string[];
+      };
+    };
 
 export function createSceneList(deps: SceneListDeps): SceneList {
   const { ctx, gateway } = deps;
   const sceneListListeners = new Set<() => void>();
-  function emitSceneList(): void { for (const fn of sceneListListeners) fn(); }
+  let cachedReadModel: SceneReadModel | null = null;
+  function emitSceneList(): void {
+    cachedReadModel = null;
+    for (const fn of sceneListListeners) fn();
+  }
   function sceneFileStorageKey(): string { return `forgeax:editor:sceneFile:${ctx.currentSceneId}`; }
 
   function getSceneId(): string { return ctx.currentSceneId; }
   function getSceneFile(): string | null { return ctx.currentSceneFile; }
   function getSceneList(): SceneFileEntry[] { return ctx.sceneList; }
+  function getSceneReadModel(): SceneReadModel {
+    if (cachedReadModel !== null) return cachedReadModel;
+    const currentEntry = ctx.sceneList.find((entry) => entry.id === ctx.currentSceneFile)
+      ?? (ctx.currentSceneGuid === null
+        ? undefined
+        : ctx.sceneList.find((entry) => entry.guid === ctx.currentSceneGuid));
+    const defaultEntry = ctx.defaultSceneGuid === null
+      ? undefined
+      : ctx.sceneList.find((entry) => entry.guid === ctx.defaultSceneGuid);
+    const scenes = ctx.sceneList.map((entry) => ({
+      id: entry.id,
+      name: entry.name ?? entry.id,
+      pack: entry.pack,
+      guid: entry.guid ?? null,
+      isCurrent: currentEntry === entry,
+      isDefault: entry.guid !== undefined && entry.guid === ctx.defaultSceneGuid,
+    }));
+    cachedReadModel = {
+      gameId: ctx.currentSceneId === 'default' ? null : ctx.currentSceneId,
+      currentScene: currentEntry === undefined
+        ? null
+        : { id: currentEntry.id, guid: currentEntry.guid ?? null },
+      defaultScene: ctx.defaultSceneGuid === null
+        ? null
+        : { id: defaultEntry?.id ?? null, guid: ctx.defaultSceneGuid },
+      scenes,
+    };
+    return cachedReadModel;
+  }
   function getLoadedSceneEntities(): number[] { return ctx.currentSceneEntities.slice(); }
   function onSceneListChange(fn: () => void): () => void {
     sceneListListeners.add(fn);
@@ -95,6 +210,9 @@ export function createSceneList(deps: SceneListDeps): SceneList {
   }
   function useSceneFile(): string | null {
     return useSyncExternalStore(onSceneListChange, getSceneFile, getSceneFile);
+  }
+  function useSceneReadModel(): SceneReadModel {
+    return useSyncExternalStore(onSceneListChange, getSceneReadModel, getSceneReadModel);
   }
 
   function forgeJsonPath(): string | null {
@@ -137,6 +255,302 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     } catch { return null; }
   }
 
+  /** Persist the canonical project default by stable scene GUID. Preserve the
+   * raw object because forge.json may carry fields outside the strict engine
+   * project schema; publish the in-memory read model only after read-back. */
+  async function setDefaultScene(sceneGuid: string, requestId: string): Promise<SetDefaultSceneEffect> {
+    if (ctx.currentSceneId === 'default') {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-default-invalid',
+          hint: 'setDefaultScene requires an active game scene manifest, not the default legacy slot.',
+          current: { requestId, sceneGuid },
+          retryable: false,
+          recoveryActions: ['editor.discover'],
+        },
+      };
+    }
+    const target = ctx.sceneList.find((entry) => entry.guid === sceneGuid);
+    if (target?.guid === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-default-invalid',
+          hint: `scene GUID "${sceneGuid}" is not present in the active scene manifest.`,
+          current: { requestId, sceneGuid, sceneIds: ctx.sceneList.map((entry) => entry.id) },
+          retryable: false,
+          recoveryActions: ['editor.scene.discover'],
+        },
+      };
+    }
+    const path = forgeJsonPath();
+    if (path === null) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-default-invalid',
+          hint: 'The active game has no forge.json path for a default scene.',
+          current: { requestId, sceneGuid },
+          retryable: false,
+          recoveryActions: ['editor.discover'],
+        },
+      };
+    }
+
+    const raw = await readRawForgeJson();
+    if (raw === null) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-default-read-failed',
+          hint: `Could not read ${FORGE_JSON} before setting the default scene.`,
+          current: { requestId, sceneGuid, path, phase: 'read' },
+          retryable: true,
+          recoveryActions: ['operation.retry'],
+        },
+      };
+    }
+    const previousSceneGuid = typeof raw.defaultScene === 'string' ? raw.defaultScene : null;
+    const next = { ...raw, defaultScene: sceneGuid };
+    if (previousSceneGuid !== sceneGuid) {
+      try {
+        const response = await deps.fetch('/api/files', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path, content: JSON.stringify(next, null, 2) + '\n' }),
+        });
+        if (!response.ok) {
+          return {
+            ok: false,
+            error: {
+              code: 'scene-default-write-failed',
+              hint: `Could not write ${FORGE_JSON} (HTTP ${response.status}).`,
+              current: { requestId, sceneGuid, previousSceneGuid, path, phase: 'write' },
+              retryable: true,
+              recoveryActions: ['operation.retry'],
+            },
+          };
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: 'scene-default-write-failed',
+            hint: `Could not write ${FORGE_JSON}: ${error instanceof Error ? error.message : String(error)}`,
+            current: { requestId, sceneGuid, previousSceneGuid, path, phase: 'write' },
+            retryable: true,
+            recoveryActions: ['operation.retry'],
+          },
+        };
+      }
+
+      const verified = await readRawForgeJson();
+      if (verified?.defaultScene !== sceneGuid) {
+        return {
+          ok: false,
+          error: {
+            code: 'scene-default-verify-failed',
+            hint: `The ${FORGE_JSON} write did not read back the requested default scene GUID.`,
+            current: { requestId, sceneGuid, previousSceneGuid, path, phase: 'verify', verifiedDefaultScene: verified?.defaultScene ?? null },
+            retryable: true,
+            recoveryActions: ['operation.retry', 'editor.scene.inspect'],
+          },
+        };
+      }
+    }
+
+    ctx.defaultSceneGuid = sceneGuid;
+    emitSceneList();
+    return { ok: true, result: { requestId, sceneGuid, sceneId: target.id, previousSceneGuid, changed: previousSceneGuid !== sceneGuid } };
+  }
+
+  async function deleteScene(sceneGuid: string, requestId: string): Promise<DeleteSceneEffect> {
+    if (ctx.currentSceneId === 'default') {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-invalid',
+          hint: 'deleteScene requires an active game scene manifest, not the default legacy slot.',
+          current: { requestId, sceneGuid },
+          retryable: false,
+          recoveryActions: ['editor.discover'],
+        },
+      };
+    }
+    const target = ctx.sceneList.find((entry) => entry.guid === sceneGuid);
+    if (target?.guid === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-invalid',
+          hint: `scene GUID "${sceneGuid}" is not present in the active scene manifest.`,
+          current: { requestId, sceneGuid, sceneIds: ctx.sceneList.map((entry) => entry.id) },
+          retryable: false,
+          recoveryActions: ['editor.scene.discover'],
+        },
+      };
+    }
+
+    const currentEntry = ctx.sceneList.find((entry) => entry.id === ctx.currentSceneFile)
+      ?? (ctx.currentSceneGuid === null ? undefined : ctx.sceneList.find((entry) => entry.guid === ctx.currentSceneGuid));
+    const defaultEntry = ctx.defaultSceneGuid === null
+      ? undefined
+      : ctx.sceneList.find((entry) => entry.guid === ctx.defaultSceneGuid);
+    const baseImpact: SceneDeleteImpact = {
+      sceneId: target.id,
+      sceneGuid,
+      pack: target.pack,
+      isCurrent: currentEntry === target,
+      isDefault: defaultEntry === target,
+      referencedBy: [],
+    };
+    if (baseImpact.isCurrent || baseImpact.isDefault) {
+      const reason = baseImpact.isCurrent && baseImpact.isDefault
+        ? 'current and default'
+        : baseImpact.isCurrent ? 'current' : 'default';
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-guarded',
+          hint: `Scene "${target.name ?? target.id}" cannot be deleted because it is the ${reason} scene.`,
+          current: { requestId, impact: baseImpact },
+          retryable: false,
+          recoveryActions: baseImpact.isCurrent ? ['scene.switch', 'scene.delete.retry'] : ['scene.set-default', 'scene.delete.retry'],
+        },
+      };
+    }
+
+    let targetPack: Awaited<ReturnType<SceneListDeps['assetIO']['readPack']>>;
+    try {
+      targetPack = await deps.assetIO.readPack(deps.resolveGamePath(target.pack));
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-read-failed',
+          hint: `Could not read scene pack "${target.pack}" before deletion: ${error instanceof Error ? error.message : String(error)}`,
+          current: { requestId, impact: baseImpact, phase: 'read-target' },
+          retryable: true,
+          recoveryActions: ['operation.retry'],
+        },
+      };
+    }
+    if (targetPack === null || !targetPack.assets.some((asset) => asset.guid === sceneGuid && asset.kind === 'scene')) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-read-failed',
+          hint: `Scene pack "${target.pack}" no longer contains scene GUID "${sceneGuid}".`,
+          current: { requestId, impact: baseImpact, phase: 'read-target' },
+          retryable: false,
+          recoveryActions: ['editor.scene.discover'],
+        },
+      };
+    }
+
+    const referencedBy: SceneDeleteReference[] = [];
+    for (const entry of ctx.sceneList) {
+      if (entry === target || entry.guid === undefined) continue;
+      let pack: Awaited<ReturnType<SceneListDeps['assetIO']['readPack']>>;
+      try {
+        pack = await deps.assetIO.readPack(deps.resolveGamePath(entry.pack));
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: 'scene-delete-read-failed',
+            hint: `Could not inspect scene references in "${entry.pack}": ${error instanceof Error ? error.message : String(error)}`,
+            current: { requestId, impact: baseImpact, phase: 'read-references', referrerPack: entry.pack },
+            retryable: true,
+            recoveryActions: ['operation.retry'],
+          },
+        };
+      }
+      if (pack === null) {
+        return {
+          ok: false,
+          error: {
+            code: 'scene-delete-read-failed',
+            hint: `Could not inspect scene references in "${entry.pack}".`,
+            current: { requestId, impact: baseImpact, phase: 'read-references', referrerPack: entry.pack },
+            retryable: true,
+            recoveryActions: ['operation.retry'],
+          },
+        };
+      }
+      for (const asset of pack.assets) {
+        if (asset.refs.includes(sceneGuid)) {
+          referencedBy.push({
+            sceneId: entry.id,
+            sceneGuid: entry.guid,
+            pack: entry.pack,
+            assetGuid: asset.guid,
+            assetKind: asset.kind,
+          });
+        }
+      }
+    }
+    const impact: SceneDeleteImpact = { ...baseImpact, referencedBy };
+    if (referencedBy.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-guarded',
+          hint: `Scene "${target.name ?? target.id}" is referenced by ${referencedBy.length} scene asset${referencedBy.length === 1 ? '' : 's'} and cannot be deleted silently.`,
+          current: { requestId, impact },
+          retryable: false,
+          recoveryActions: ['scene.reference.inspect', 'scene.delete.retry'],
+        },
+      };
+    }
+
+    const resolvedPath = deps.resolveGamePath(target.pack);
+    const deleted = await deps.assetIO.deleteSourceFile(resolvedPath);
+    if (!deleted.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-write-failed',
+          hint: deleted.error.hint,
+          current: { requestId, impact, phase: 'delete-file', path: resolvedPath },
+          retryable: deleted.error.retryable ?? true,
+          recoveryActions: deleted.error.recoveryActions ?? ['operation.retry'],
+        },
+      };
+    }
+    const verified = await deps.assetIO.verifySourceFileAbsent(resolvedPath);
+    if (!verified.ok || !verified.absent) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-verify-failed',
+          hint: !verified.ok ? verified.error.hint : `Scene pack "${target.pack}" still exists after deletion.`,
+          current: { requestId, impact, phase: 'verify-file', path: resolvedPath, absent: verified.ok ? verified.absent : null },
+          retryable: true,
+          recoveryActions: ['operation.retry', 'editor.scene.inspect'],
+        },
+      };
+    }
+
+    const listIndex = ctx.sceneList.indexOf(target);
+    if (listIndex >= 0) ctx.sceneList.splice(listIndex, 1);
+    emitSceneList();
+    broadcastAssetsChanged('pack-changed', 'local-op');
+    return {
+      ok: true,
+      result: {
+        requestId,
+        sceneId: target.id,
+        sceneGuid,
+        pack: target.pack,
+        impact,
+        currentScene: currentEntry === undefined ? null : { id: currentEntry.id, guid: currentEntry.guid ?? null },
+        defaultScene: defaultEntry === undefined ? null : { id: defaultEntry.id, guid: defaultEntry.guid ?? null },
+      },
+    };
+  }
+
   async function readForgeJson(): Promise<Record<string, unknown> | null> {
     // Legacy alias — delegates to the raw reader for scenes[] access (D-5).
     return readRawForgeJson();
@@ -148,7 +562,9 @@ export function createSceneList(deps: SceneListDeps): SceneList {
   async function initSceneList(): Promise<void> {
     ctx.currentSceneFile = null;
     ctx.sceneList = [];
+    ctx.defaultSceneGuid = null;
     const fj = await readForgeJson();
+    ctx.defaultSceneGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
     if (ctx.currentSceneId !== 'default') {
       // A2: scene discovery is kind-driven — scan all packs under the game dir and
       // filter by `kind === 'scene'`.
@@ -218,16 +634,28 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     emitSceneList();
   }
 
-  /** Open another scene/asset pack IN THIS WINDOW: flush the outgoing scene's
-   *  pending save, persist the selection in localStorage, and switch in-place
+  /** Open another scene/asset pack IN THIS WINDOW: apply an explicit dirty
+   *  policy, persist the selection in localStorage, and switch in-place
    *  (no location.reload — reloading recreates the WebGPU device, wedging
    *  WKWebView's GPU process). No URL round-trip: the binding lives in
    *  localStorage and the in-memory ctx; on next boot, initSceneList reads
    *  localStorage to restore it. Falls back to a clean reload if in-place fails. */
-  async function doSwitchSceneFile(id: string): Promise<boolean> {
+  async function doSwitchSceneFile(
+    id: string,
+    dirtyPolicy?: SceneSwitchDirtyPolicy,
+    origin: CommandOrigin = 'human',
+  ): Promise<boolean> {
     if (id === ctx.currentSceneFile) return true;
     if (!ctx.sceneList.some((s) => s.id === id)) return false;
-    deps.flushPendingSaveBeacon();
+    if (ctx.isDirty) {
+      if (dirtyPolicy === 'save') {
+        if (!(await deps.savePendingScene(origin))) return false;
+      } else if (dirtyPolicy === 'discard') {
+        deps.clearPendingScene();
+      } else {
+        return false;
+      }
+    }
     try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
     try {
       ctx.currentSceneFile = id;
@@ -239,12 +667,21 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       // (re)build the RENDERED scene — fire them via replaceDoc, which also clears
       // the previous scene's undo history (correct for a swap).
       deps.replaceDoc(gateway.doc);
+      emitSceneList();
       return true;
     } catch (e) {
       console.warn('[sync] in-place scene switch failed — falling back to reload:', e);
       location.reload();
       return true;
     }
+  }
+
+  /** Publish a pack that was already validated, written, and instantiated. */
+  function activateNewScene(entry: SceneFileEntry): void {
+    ctx.sceneList.push(entry);
+    ctx.currentSceneFile = entry.id;
+    try { localStorage.setItem(sceneFileStorageKey(), entry.id); } catch { /* unavailable */ }
+    emitSceneList();
   }
 
   // readGameProject is retained for the contract-typed forge.json path (AC-11);
@@ -255,11 +692,17 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     getSceneId,
     getSceneFile,
     getSceneList,
+    getSceneReadModel,
     getLoadedSceneEntities,
     onSceneListChange,
+    notifySceneListChanged: emitSceneList,
+    setDefaultScene,
+    deleteScene,
     useSceneList,
     useSceneFile,
+    useSceneReadModel,
     initSceneList,
     doSwitchSceneFile,
+    activateNewScene,
   };
 }

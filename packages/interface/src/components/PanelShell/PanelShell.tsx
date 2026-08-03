@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useSyncExternalStore, useReducer, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useReducer,
+  type ReactNode,
+} from 'react';
 import {
   AlertCircle,
   Bell,
@@ -29,6 +39,7 @@ import {
   Magnet,
   Maximize2,
   Monitor,
+  MoreHorizontal,
   Move,
   Music,
   Package,
@@ -64,6 +75,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '../ui/tooltip';
+import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover';
 import { useHost } from '../../core/app-shell';
 import {
   getContextExpressionKeys,
@@ -421,6 +433,218 @@ function PanelRegisteredControl({
   );
 }
 
+function OverflowMenu({
+  panelId,
+  actions,
+  location,
+}: {
+  panelId: string;
+  actions: readonly PanelActionContribution[];
+  location: Exclude<PanelActionLocation, 'context'>;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const lockedRef = useRef(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const clearClose = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = undefined;
+    }
+  };
+  const scheduleClose = () => {
+    clearClose();
+    closeTimer.current = setTimeout(() => {
+      if (!lockedRef.current) setOpen(false);
+    }, 180);
+  };
+  useEffect(() => clearClose, []);
+  const align = location === 'header/right' ? 'end' : location === 'header/center' ? 'center' : 'start';
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) lockedRef.current = false;
+      }}
+    >
+      <PopoverAnchor asChild>
+        <button
+          type="button"
+          className="fx-panel-action fx-panel-overflow-trigger no-motion-lift"
+          data-panel-id={panelId}
+          data-has-label="false"
+          data-location={location}
+          data-active={open ? 'true' : 'false'}
+          aria-label="More actions"
+          aria-expanded={open}
+          onPointerEnter={() => {
+            clearClose();
+            setOpen(true);
+          }}
+          onPointerLeave={scheduleClose}
+          onClick={() => {
+            const next = !lockedRef.current;
+            lockedRef.current = next;
+            setOpen(next);
+          }}
+        >
+          <MoreHorizontal size={14} />
+        </button>
+      </PopoverAnchor>
+      <PopoverContent
+        className="fx-panel-overflow-flyout"
+        style={{ width: 'auto' }}
+        align={align}
+        sideOffset={6}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onPointerEnter={clearClose}
+        onPointerLeave={scheduleClose}
+      >
+        {actions.map((action) => (
+          <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function foldPriority(action: PanelActionContribution): number {
+  return action.overflowPriority ?? action.order ?? 0;
+}
+
+/**
+ * Renders a header toolbar zone whose icon buttons fold into a hover flyout when
+ * the zone is too narrow. Folded actions keep the exact same `PanelActionControl`
+ * rendering — they are relocated, not restyled. Natural (unfolded) width is
+ * measured off-screen so the flex-basis stays constant, which prevents the
+ * fold→shrink→fold oscillation that a content-sized container would cause.
+ */
+function OverflowGroup({
+  panelId,
+  actions,
+  location,
+}: {
+  panelId: string;
+  actions: readonly PanelActionContribution[];
+  location: Exclude<PanelActionLocation, 'context'>;
+}): ReactNode {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [foldCount, setFoldCount] = useState(0);
+  const [naturalWidth, setNaturalWidth] = useState<number | undefined>(undefined);
+
+  const foldOrder = useMemo(
+    () =>
+      actions
+        .map((action, index) => ({ action, index }))
+        .filter(({ action }) => action.pinned !== true)
+        .sort((a, b) => {
+          const pa = foldPriority(a.action);
+          const pb = foldPriority(b.action);
+          if (pa !== pb) return pa - pb; // lower priority folds first
+          return b.index - a.index; // otherwise the later (rightmost) folds first
+        })
+        .map(({ action }) => action.id),
+    [actions],
+  );
+  const maxFold = foldOrder.length;
+  const clampedFold = Math.min(foldCount, maxFold);
+  const foldedSet = useMemo(() => new Set(foldOrder.slice(0, clampedFold)), [foldOrder, clampedFold]);
+
+  const visible = actions.filter((action) => !foldedSet.has(action.id));
+  const overflow = actions.filter((action) => foldedSet.has(action.id));
+
+  // Deterministically derive the exact number of items to fold from the live
+  // container width + measured per-item widths. Runs on every ResizeObserver
+  // tick (panel drag) for BOTH container and measure row, so it handles grow
+  // and shrink symmetrically without any "reset then converge" state dance.
+  const recompute = useCallback(() => {
+    const container = containerRef.current;
+    const measure = measureRef.current;
+    if (!container || !measure) return;
+
+    const GAP = 6;
+    const TRIGGER = 26;
+    const items = actions
+      .map((action) => {
+        const el = measure.querySelector<HTMLElement>(`[data-fold-id="${CSS.escape(action.id)}"]`);
+        return { id: action.id, width: el ? el.getBoundingClientRect().width : 0 };
+      })
+      .filter((item) => item.width > 0.5);
+
+    const rowWidth = (widths: readonly number[]): number =>
+      widths.reduce((sum, w) => sum + w, 0) + GAP * Math.max(0, widths.length - 1);
+
+    setNaturalWidth(Math.ceil(rowWidth(items.map((item) => item.width))));
+
+    const available = container.clientWidth;
+    const presentIds = new Set(items.map((item) => item.id));
+    const foldable = foldOrder.filter((id) => presentIds.has(id));
+
+    const fits = (count: number): boolean => {
+      const hidden = new Set(foldable.slice(0, count));
+      const visibleWidths = items.filter((item) => !hidden.has(item.id)).map((item) => item.width);
+      let width = rowWidth(visibleWidths);
+      if (count > 0) width += TRIGGER + (visibleWidths.length > 0 ? GAP : 0);
+      return width <= available + 0.5;
+    };
+
+    let next = 0;
+    while (next < foldable.length && !fits(next)) next += 1;
+    setFoldCount(next);
+
+    // The off-screen measure row duplicates every action's DOM purely to size
+    // it (width is read via data-fold-id). Those clones also carry the consumer
+    // data-testid (e.g. vp-play / vp-save), which would make getByTestId resolve
+    // to two elements. Strip identity from the clones so queries and tests match
+    // only the live visible instance.
+    measure.querySelectorAll('[data-testid]').forEach((el) => el.removeAttribute('data-testid'));
+  }, [actions, foldOrder]);
+
+  useLayoutEffect(() => {
+    // Keep the measure row out of the a11y tree, tab order and pointer/query
+    // surface — it exists solely to measure natural widths off-screen.
+    measureRef.current?.setAttribute('inert', '');
+    recompute();
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(recompute);
+    };
+    const ro = new ResizeObserver(schedule);
+    if (containerRef.current) ro.observe(containerRef.current);
+    if (measureRef.current) ro.observe(measureRef.current);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [recompute]);
+
+  if (actions.length === 0) return null;
+  return (
+    <>
+      <div
+        ref={containerRef}
+        className="fx-panel-toolbar fx-panel-toolbar-overflow"
+        data-location={location}
+        style={naturalWidth != null ? { flexBasis: `${naturalWidth}px` } : undefined}
+      >
+        {visible.map((action) => (
+          <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
+        ))}
+        {overflow.length > 0 && <OverflowMenu panelId={panelId} actions={overflow} location={location} />}
+      </div>
+      <div ref={measureRef} className="fx-panel-overflow-measure" aria-hidden="true">
+        {actions.map((action) => (
+          <span key={action.id} data-fold-id={action.id} className="fx-panel-overflow-measure-item">
+            <PanelActionControl action={action} panelId={panelId} location={location} />
+          </span>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function PanelToolbar({
   panelId,
   panel,
@@ -439,13 +663,16 @@ function PanelToolbar({
   ).filter((action) => (action.location ?? 'header/right') === location), [actionVersion, host, location, panel.actions, panelId]);
 
   if (actions.length === 0) return null;
-  return (
-    <div className="fx-panel-toolbar" data-location={location}>
-      {actions.map((action) => (
-        <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
-      ))}
-    </div>
-  );
+  if (location === 'context') {
+    return (
+      <div className="fx-panel-toolbar" data-location={location}>
+        {actions.map((action) => (
+          <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
+        ))}
+      </div>
+    );
+  }
+  return <OverflowGroup panelId={panelId} actions={actions} location={location} />;
 }
 
 function PanelHeader({ panelId, panel }: { panelId: string; panel: PanelDescriptor }): ReactNode {

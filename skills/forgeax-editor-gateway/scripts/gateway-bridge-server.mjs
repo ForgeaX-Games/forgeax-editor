@@ -10,22 +10,26 @@
 // channel from a shell WITHOUT relaunching the browser under CDP.
 //
 // This relay is the meeting point both sides CAN reach:
-//   • the editor page connects OUT to  ws://127.0.0.1:15295/bridge  (page dials the relay)
-//   • the CLI POSTs code to            http://127.0.0.1:15295/eval  (shell dials the relay)
+//   • the editor page connects OUT to  ws://127.0.0.1:15296/bridge  (page dials the relay)
+//   • the CLI POSTs code to            http://127.0.0.1:15296/eval  (shell dials the relay)
 // The relay forwards {id, code} to the page, awaits {id, result}, and answers
 // the CLI's still-open HTTP request with that JSON. One in-memory pending-map
 // correlates request↔reply by id. No persistence, no new dependency (reuses the
 // `ws` package the editor already vendors), 127.0.0.1-only, DEV-only.
 //
 // SECURITY: this grants "run arbitrary JS in the editor page" to anything that
-// can POST to :15295. It is bound to loopback and is only started by the dev
+// can POST to :15296. It is bound to loopback and is only started by the dev
 // stack. Never run it against a production build / public interface.
 
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 
-const PORT = Number(process.env.FORGEAX_BRIDGE_PORT ?? 15295);
+const PORT = Number(process.env.FORGEAX_BRIDGE_PORT ?? 15296);
 const HOST = '127.0.0.1';
+const DEFAULT_EVAL_TIMEOUT_MS = parseTimeout(
+  process.env.FORGEAX_BRIDGE_EVAL_TIMEOUT_MS,
+  120_000,
+);
 
 // The single page socket (last connection wins — one editor window at a time).
 let pageSocket = null;
@@ -38,7 +42,12 @@ const server = http.createServer((req, res) => {
 
   // Health / status probe — lets the CLI tell "relay down" from "page not connected".
   if (req.method === 'GET' && url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, pageConnected: !!pageSocket, pending: pending.size });
+    return sendJson(res, 200, {
+      ok: true,
+      pageConnected: !!pageSocket,
+      pending: pending.size,
+      evalTimeoutMs: DEFAULT_EVAL_TIMEOUT_MS,
+    });
   }
 
   // CLI entrypoint: POST { code } → forward to page → reply with { ok, value|error }.
@@ -53,18 +62,26 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 5_000_000) req.destroy(); });
     req.on('end', () => {
-      let code;
-      try { code = JSON.parse(body).code; } catch { code = undefined; }
+      let request;
+      try { request = JSON.parse(body); } catch { request = undefined; }
+      const code = request?.code;
       if (typeof code !== 'string') {
         return sendJson(res, 200, { ok: false, error: { code: 'BAD_REQUEST', hint: 'POST body must be JSON {"code": "<js>"}' } });
       }
+      const timeoutMs = parseTimeout(request?.timeoutMs, DEFAULT_EVAL_TIMEOUT_MS);
       const id = nextId++;
       const timer = setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
-          sendJson(res, 200, { ok: false, error: { code: 'EVAL_TIMEOUT', hint: 'page did not answer within 30s (dead loop? refresh the window)' } });
+          sendJson(res, 200, {
+            ok: false,
+            error: {
+              code: 'EVAL_TIMEOUT',
+              hint: `page did not answer within ${timeoutMs}ms (dead loop? refresh the window)`,
+            },
+          });
         }
-      }, 30_000);
+      }, timeoutMs);
       pending.set(id, { res, timer });
       try {
         pageSocket.send(JSON.stringify({ type: 'eval', id, code }));
@@ -111,5 +128,11 @@ function sendJson(res, status, obj) {
   const s = JSON.stringify(obj);
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(s) });
   res.end(s);
+}
+function parseTimeout(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 300_000
+    ? Math.floor(parsed)
+    : fallback;
 }
 function log(m) { console.log(`[gateway-bridge] ${m}`); }

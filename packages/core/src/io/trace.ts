@@ -8,8 +8,8 @@
 // trees; eviction increments droppedTraces (Plan D-3 Q-4).
 //
 // ASYNC SESSION OP DISCLAIMER (research F-2):
-// 4 async session ops (saveDocToDisk / loadDocFromDisk / switchSceneFile /
-// createSceneFile) use fire-and-forget runAsyncOp — the applier returns
+// 2 legacy async session ops (loadDocFromDisk / switchSceneFile) use
+// fire-and-forget runAsyncOp — the applier returns
 // synchronously while the real disk I/O continues in a detached promise.
 // The span covers ONLY the synchronous applier body; the detached
 // continuation is NOT inside any span interval. This is consistent with
@@ -54,6 +54,8 @@ export type EngineInterfaceName =
   | 'assetIO.triggerCook'
   | 'assetIO.readSourceBytes'
   | 'assetIO.deleteSourceFile'
+  | 'assetIO.readPack'
+  | 'assetIO.verifySourceFileAbsent'
   | 'registry.invalidate'
   | 'registry.patchMaterial';
 

@@ -80,11 +80,10 @@ const REQUIRED_KEYWORDS = [
   // docs-only AI defines an op it cannot correctly call, and trusts a schema that
   // used to be decorative (EXPERIMENT-REPORT round-4 friction #1/#2).
   'Dispatch a composed op',
-  // RHI frame capture (render-debug) — an ENGINE capability reached via
-  // globalThis.__forgeax.captureFrame, deliberately OUTSIDE the gateway (not an
-  // op). A docs-only AI reading the "one door" narrative could not find how to
-  // capture a frame until round-4 (rhi-debug). These anchors keep the "Debug
-  // rendering" section (which also states WHY it's out-of-door) from vanishing.
+  // RHI frame capture (render-debug) — a session operation reached through the
+  // gateway, with globalThis.__forgeax.captureFrame retained only as the
+  // edit-runtime implementation seam. These anchors keep the gateway-owned
+  // Debug rendering section from vanishing.
   'captureFrame',
   '__forgeax',
   // Asset WRITE legs — import a file into the catalog + place a catalogued scene

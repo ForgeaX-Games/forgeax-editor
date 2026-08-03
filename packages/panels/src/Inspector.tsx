@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
-import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, isComponentHidden, listComponentSchemas, quatToEuler, type FieldSchema } from '@forgeax/editor-core';
+import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, isComponentHidden, listComponentSchemas, planArrayEdit, quatToEuler, type ArrayEditAction, type FieldSchema } from '@forgeax/editor-core';
 // Shared component-name localization (SSOT with the hierarchy type column/filter):
 // engine component names → per-name i18n label, raw English fallback for unmapped.
 import { componentTypeLabel } from './hierarchy-state';
 // M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
-import { createInspectorFieldSelector, gateway, getActiveRuntimeUiGraph, requestRefComponent, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
+import { createInspectorFieldSelector, gateway, getActiveRuntimeUiGraph, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entComponent, entComponents } from '@forgeax/editor-core';
 // VERIFY finding-3 (defense-in-depth): the world-bound handle-pair + the live
 // active-read-world binding, so the primary Inspector reads run the three-layer
@@ -50,6 +50,7 @@ import {
 } from '@forgeax/editor-ui';
 import { useNumberDraft } from './useNumberDraft';
 import { AssetPicker } from './AssetPicker';
+import { inspectorFieldRendererKind, isUnsupportedRendererKind, isVectorRendererKind } from './inspector-field-shape';
 import './inspector.css';
 import { getOperationProjectionSource } from './operations/run-view-model';
 
@@ -156,6 +157,13 @@ function NameField({ value, onCommit }: { value: string; onCommit: (name: string
   );
 }
 
+type LiveFieldBinding = {
+  entity: EntityHandle;
+  component: string;
+  field: string;
+  read: (world: unknown) => unknown;
+};
+
 // DCC-style scrub-able number box. A single click focuses the box for typing; a
 // horizontal drag (past a small threshold) scrubs the value with a LOCAL preview
 // and commits once on release (one undo step). Typing still commits on blur/Enter.
@@ -170,7 +178,7 @@ function ScrubInput({
   className: string;
   title?: string | undefined;
   onCommit: (n: number) => void;
-  liveField?: { entity: EntityHandle; component: string; field: string; read: (world: unknown) => unknown } | undefined;
+  liveField?: LiveFieldBinding | undefined;
   axis?: number | undefined;
 }) {
   const [drag, setDrag] = useState<{ ox: number; base: number; v: number } | null>(null);
@@ -265,20 +273,115 @@ function AssetPreview({ bound, kind, meta, guid }: { bound: boolean; kind?: stri
 
 // enum widget — editor-ui Select (Radix) styled compact to sit in a field row.
 // The listbox is portaled and picks up the shared `.fx-insp-menu` panel skin.
-function EnumSelect({ value, options, testid, onChange }: { value: string; options: string[]; testid: string; onChange: (v: string) => void }) {
-  const current = value || options[0] || '';
+// Labels are presentation; the numeric value is the engine-owned SSOT payload.
+function EnumSelect({ value, options, testid, onChange, liveField }: {
+  value: number;
+  options: ReadonlyArray<{ label: string; value: number }>;
+  testid: string;
+  onChange: (v: number) => void;
+  liveField?: LiveFieldBinding | undefined;
+}) {
+  const liveValue = useLiveFieldNumber(value, liveField, undefined);
+  const current = String(Number.isFinite(liveValue) ? liveValue : options[0]?.value ?? '');
   return (
     <span className="ddc">
-      <Select value={current} onValueChange={onChange}>
+      <Select value={current} onValueChange={(raw) => {
+        const option = options.find((candidate) => String(candidate.value) === raw);
+        if (option !== undefined) onChange(option.value);
+      }}>
         <SelectTrigger className="fx-insp-select" data-testid={testid}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent className="fx-insp-menu">
           {options.map((opt) => (
-            <SelectItem key={opt} value={opt} className="fx-insp-opt">{opt}</SelectItem>
+            <SelectItem key={opt.label} value={String(opt.value)} className="fx-insp-opt">{opt.label}</SelectItem>
           ))}
         </SelectContent>
       </Select>
+    </span>
+  );
+}
+
+// Optional scalar/entity field. Empty text is the producer-owned null/unset
+// sentinel; a present numeric value is dispatched as the live EntityHandle (or
+// scalar number), never as a panel-local id. Enter and blur share one commit
+// path, while the clear button gives reset/unset an explicit keyboard target.
+function OptionalInput({ value, fs, testid, onCommit, liveField }: {
+  value: unknown;
+  fs?: FieldSchema | undefined;
+  testid: string;
+  onCommit: (value: unknown) => void;
+  liveField?: LiveFieldBinding | undefined;
+}) {
+  const liveValue = useLiveFieldValue(value, liveField);
+  const [draft, setDraft] = useState(liveValue === null || liveValue === undefined ? '' : String(liveValue));
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => {
+    setDraft(liveValue === null || liveValue === undefined ? '' : String(liveValue));
+    setInvalid(false);
+  }, [liveValue]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === '') {
+      setInvalid(false);
+      onCommit(null);
+      return;
+    }
+    if (fs?.type === 'number') {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed)) {
+        setInvalid(true);
+        return;
+      }
+      setInvalid(false);
+      onCommit(parsed);
+      return;
+    }
+    setInvalid(false);
+    onCommit(trimmed);
+  };
+
+  return (
+    <span className="optfield">
+      <input
+        type="text"
+        inputMode={fs?.type === 'number' ? 'decimal' : 'text'}
+        className="box-i txt optional"
+        data-testid={testid}
+        value={draft}
+        placeholder="unset"
+        aria-label={`${testid} optional value`}
+        aria-invalid={invalid || undefined}
+        title={fs?.tooltip ?? 'empty = unset'}
+        onChange={(e) => { setDraft(e.target.value); setInvalid(false); }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); }
+          else if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(liveValue === null || liveValue === undefined ? '' : String(liveValue));
+            setInvalid(false);
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="fbtn opt-clear"
+        data-testid={`${testid}-clear`}
+        title="unset"
+        aria-label="unset"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          setDraft('');
+          setInvalid(false);
+          onCommit(null);
+        }}
+      >
+        unset
+      </button>
+      {invalid && <span className="unsupported-field" role="status">invalid value</span>}
     </span>
   );
 }
@@ -348,14 +451,115 @@ function srgbHexToLinear(hex: string): [number, number, number] {
 
 // Addable/resettable components + their default payloads are derived straight from
 // the schema registry (SSOT shared with the Capabilities panel + AI bridge).
-const ADDABLE_COMPONENTS: string[] = listComponentSchemas().map((cs) => cs.name);
-
 // Union of a component's schema-declared fields with whatever keys the instance
 // actually carries (schema order first) → the inspector surfaces the FULL
 // component shape (e.g. empty asset slots) even when the data omits them.
 function mergedFieldKeys(comp: string, value: Record<string, unknown>): string[] {
   const schemaKeys = getComponentSchema(comp)?.fields.map((f) => f.key) ?? [];
   return [...new Set([...schemaKeys, ...Object.keys(value)])];
+}
+
+function UnsupportedField({ component, field, kind }: { component: string; field: string; kind: string }): ReactNode {
+  const label = kind === 'unsupported' ? 'unknown' : kind;
+  return (
+    <div className="f-row" data-testid={`insp-field-${component}-${field}`}>
+      <span className="f-name">{field}</span>
+      <span className="f-val">
+        <span className="unsupported-field" role="status" data-testid={`insp-${component}-${field}-unsupported`}>
+          Unsupported field shape: {label}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function ArrayFieldEditor({
+  entity,
+  component,
+  field,
+  fs,
+  value,
+  data,
+  readOnly,
+  dispatch,
+  reset,
+}: {
+  entity: EntityHandle;
+  component: string;
+  field: string;
+  fs: FieldSchema;
+  value: unknown;
+  data: Record<string, unknown>;
+  readOnly: boolean;
+  dispatch: (op: EditorOp) => void;
+  reset: ReactNode;
+}): ReactNode {
+  const [error, setError] = useState<string | null>(null);
+  const items = Array.isArray(value) ? value : ArrayBuffer.isView(value) ? Array.from(value as unknown as ArrayLike<unknown>) : [];
+  const elementType = fs.arrayMeta?.elementType ?? 'f32';
+
+  const apply = (action: ArrayEditAction, index?: number, toIndex?: number, nextValue?: unknown) => {
+    const plan = planArrayEdit({
+      component,
+      field,
+      action,
+      ...(index === undefined ? {} : { index }),
+      ...(toIndex === undefined ? {} : { toIndex }),
+      ...(nextValue === undefined ? {} : { value: nextValue }),
+    }, data);
+    if (!plan.ok) {
+      setError(plan.hint);
+      return;
+    }
+    setError(null);
+    dispatch({ kind: 'setComponent', entity, component, patch: plan.patch });
+  };
+
+  return (
+    <div className="array-editor" data-testid={`insp-${component}-${field}-array`}>
+      {items.length === 0 && <span className="asset-slotnote">empty</span>}
+      {items.map((item, index) => {
+        const numeric = typeof item === 'number' ? item : Number(item ?? 0);
+        const input = elementType === 'bool' ? (
+          <input
+            type="checkbox"
+            checked={item === true}
+            disabled={readOnly}
+            data-testid={`insp-${component}-${field}-item-${index}`}
+            onChange={(event) => apply('update', index, undefined, event.target.checked)}
+          />
+        ) : (
+          <input
+            className="box-i num"
+            type={elementType === 'string' ? 'text' : 'number'}
+            defaultValue={elementType === 'string' ? String(item ?? '') : numeric}
+            disabled={readOnly}
+            data-testid={`insp-${component}-${field}-item-${index}`}
+            onBlur={(event) => apply('update', index, undefined, elementType === 'string' ? event.currentTarget.value : Number(event.currentTarget.value))}
+            onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+          />
+        );
+        return (
+          <div className="array-item" key={`${component}.${field}:${index}:${String(item)}`}>
+            <span className="array-index">{index}</span>
+            {input}
+            <span className="abtn">
+              <button type="button" title="move up" disabled={readOnly || index === 0} onClick={() => apply('reorder', index, index - 1)}>↑</button>
+              <button type="button" title="move down" disabled={readOnly || index === items.length - 1} onClick={() => apply('reorder', index, index + 1)}>↓</button>
+              <button type="button" title="remove item" disabled={readOnly} onClick={() => apply('remove', index)}>×</button>
+            </span>
+          </div>
+        );
+      })}
+      <div className="asset-actions">
+        <button type="button" className="fbtn" disabled={readOnly} data-testid={`insp-${component}-${field}-add`} onClick={() => apply('add')}>
+          <ForgeaxIcon name="plus" size={11} /> item
+        </button>
+        {reset}
+      </div>
+      {error !== null && <span className="unsupported-field" role="status">{error}</span>}
+    </div>
+  );
 }
 
 // Shallow-equal helper for per-field reset detection (default vs current).
@@ -472,7 +676,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
               <div className="cat-fields">
                 {(() => {
                   const data = valueR.value as Record<string, unknown>;
-                  const vecFields = (getComponentSchema(comp)?.fields ?? []).filter((f) => f.type === 'vec');
+              const vecFields = (getComponentSchema(comp)?.fields ?? []).filter((f) => isVectorRendererKind(inspectorFieldRendererKind(f)));
                   const vecKeys = new Set(vecFields.map((f) => f.key));
                   const rows: ReactNode[] = [];
                   for (const f of vecFields) {
@@ -541,18 +745,21 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                       .filter(([k]) => !vecKeys.has(k) && fieldVisible(comp, fieldSchema(comp, k), data))
                       .map(([k, v]) => {
                         const fs = fieldSchema(comp, k);
-                        const type = fs?.type ?? (typeof v === 'number' ? 'number' : 'string');
+                        const renderer = inspectorFieldRendererKind(fs ?? { type: typeof v === 'number' ? 'number' : 'string' });
+                        if (isUnsupportedRendererKind(renderer) || renderer === 'array' || renderer === 'asset-ref') {
+                          return <UnsupportedField component={comp} field={k} kind={fs?.shape ?? renderer} key={k} />;
+                        }
                         return (
                           <div className="f-row" key={k}>
                             <span className="f-name" title={fs?.tooltip}>{k}</span>
                             <span className="f-val">
-                              {type === 'bool' ? (
+                              {renderer === 'boolean' ? (
                                 <BoolCheckbox checked={v === true} testid={`batch-${comp}-${k}`} onToggle={(c) => setAll(comp, k, c)} />
-                              ) : type === 'color' ? (
-                                <input type="color" className="swatch" data-testid={`batch-${comp}-${k}`} value={String(v) || '#cccccc'} onChange={(e) => setAll(comp, k, e.target.value)} />
-                              ) : type === 'enum' ? (
-                                <EnumSelect value={String(v)} options={fs?.options ?? []} testid={`batch-${comp}-${k}`} onChange={(val) => setAll(comp, k, val)} />
-                              ) : type === 'number' ? (
+                              ) : renderer === 'enum' ? (
+                                <EnumSelect value={Number(v)} options={fs?.enumOptions ?? []} testid={`batch-${comp}-${k}`} onChange={(val) => setAll(comp, k, val)} />
+                              ) : renderer === 'optional' ? (
+                                <OptionalInput value={v} fs={fs} testid={`batch-${comp}-${k}`} onCommit={(val) => setAll(comp, k, val)} />
+                              ) : renderer === 'scalar' ? (
                                 <ScrubInput key={`${primary}:${comp}:${k}`} value={Number(v)} fs={fs} testid={`batch-${comp}-${k}`} className="box-i num" onCommit={(n) => setAll(comp, k, n)} />
                               ) : (
                                 <input className="box-i txt" data-testid={`batch-${comp}-${k}`} value={String(v)} onChange={(e) => setAll(comp, k, e.target.value)} />
@@ -583,11 +790,11 @@ function readOptsFor(sel: EntityHandle): HandleCheckOpts | undefined {
   return { binding, pair: { worldRef: pair.worldRef, epoch: pair.epoch } };
 }
 
-function useLiveFieldNumber(
-  fallback: number,
-  field: { entity: EntityHandle; component: string; field: string; read: (world: unknown) => unknown } | undefined,
-  axis: number | undefined,
-): number {
+function useLiveFieldValue(
+  fallback: unknown,
+  field: LiveFieldBinding | undefined,
+  axis?: number,
+): unknown {
   const graph = getActiveRuntimeUiGraph();
   const holder = useRef<{ graph: typeof graph; key: string; mounted: ReturnType<ReturnType<typeof createInspectorFieldSelector>['mount']> } | null>(null);
   const worldGeneration = graph?.stats().worldGeneration ?? 0;
@@ -608,15 +815,30 @@ function useLiveFieldNumber(
     const snapshot = holder.current?.mounted.getSnapshot();
     if (snapshot?.status !== 'available') return fallback;
     const raw = snapshot.value;
-    return axis === undefined ? (typeof raw === 'number' ? raw : fallback) : Number((raw as ArrayLike<unknown>)[axis] ?? fallback);
+    return axis === undefined ? raw : Number((raw as ArrayLike<unknown>)[axis] ?? fallback);
   };
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function useLiveFieldNumber(
+  fallback: number,
+  field: LiveFieldBinding | undefined,
+  axis: number | undefined,
+): number {
+  const value = useLiveFieldValue(fallback, field, axis);
+  return typeof value === 'number' ? value : fallback;
 }
 
 export function InspectorPanel() {
   const { t } = useTranslation();
   const sel = useSelection();
   const selList = useSelectionList();
+  // Component values are the authored document snapshot. Asset binding resolves
+  // asynchronously through bindAssetRef and may keep the same selection, so the
+  // Inspector must re-read the selected entity after the Gateway's document
+  // notification; otherwise the input can display the previous asset name while
+  // the operation center and Gateway already show the new GUID.
+  useDocVersion();
   const fieldPrev = useFieldPreview();
   const readOnly = gateway.mode === 'play';
   const dispatchMutation = (op: EditorOp) => {
@@ -681,7 +903,10 @@ export function InspectorPanel() {
   const clearPicked = (): void => {
     if (!picker || sel === null) return;
     if (picker.slot === undefined) {
-      dispatchMutation({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: '' } });
+      const cur = entComponent(gateway.activeWorld, sel, picker.comp);
+      const currentValue = cur.ok ? (cur.value as Record<string, unknown>)[picker.field] : undefined;
+      const clearValue = typeof currentValue === 'number' ? 0 : '';
+      dispatchMutation({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: clearValue } });
       return;
     }
     const cur = entComponent(gateway.activeWorld, sel, picker.comp);
@@ -702,7 +927,9 @@ export function InspectorPanel() {
   }
   const nodeName = entName(gateway.activeWorld, sel);
   const nodeComponents = entComponents(gateway.activeWorld, sel, readOptsFor(sel));
-  const missingComponents = ADDABLE_COMPONENTS.filter((c) => nodeComponents[c] === undefined);
+  const missingComponents = listComponentSchemas()
+    .map((schema) => schema.name)
+    .filter((c) => nodeComponents[c] === undefined);
   // Drop `Name` (rendered via NameField in the header) and any component the
   // editor overlay marks `meta.editor.hidden` (Entity / Children / ChildOf,
   // injected post-registration from editor-component-meta.json). The strip
@@ -938,7 +1165,7 @@ export function InspectorPanel() {
 
                     // vec fields (skip Transform.quat — the euler overlay is its surface).
                     for (const f of getComponentSchema(comp)?.fields ?? []) {
-                      if (f.type !== 'vec') continue;
+                      if (!isVectorRendererKind(inspectorFieldRendererKind(f))) continue;
                       if (comp === 'Transform' && f.key === 'quat') continue;
                       if (!fieldMatches(comp, f.key)) continue;
                       const vec = readVec(f, data[f.key]);
@@ -1046,7 +1273,7 @@ export function InspectorPanel() {
 
                     // array<asset> fields (e.g. MeshRenderer.materials) as slots.
                     for (const f of getComponentSchema(comp)?.fields ?? []) {
-                      if (f.type !== 'asset') continue;
+                      if (inspectorFieldRendererKind(f) !== 'asset-ref') continue;
                       if (!fieldMatches(comp, f.key)) continue;
                       const arrVal = data[f.key];
                       if (!Array.isArray(arrVal) && !ArrayBuffer.isView(arrVal)) continue;
@@ -1101,6 +1328,7 @@ export function InspectorPanel() {
                                 const rawItem = items[i];
                                 const handleNum = typeof rawItem === 'number' ? rawItem : 0;
                                 const desc = handleNum > 0 ? gateway.describeAsset(handleNum) : null;
+                                const assetMissing = handleNum > 0 && desc?.ok !== true;
                                 const matName = desc?.ok ? ((desc.name && desc.name.trim()) || (desc.guid ? desc.guid.slice(0, 8) : '')) : '';
                                 const slotGuid = desc?.ok ? desc.guid : undefined;
                                 const slotKind = desc?.ok ? desc.kind : undefined;
@@ -1143,10 +1371,11 @@ export function InspectorPanel() {
                                     }}
                                     onDragOver={(e) => e.preventDefault()}
                                   >
-                                    <AssetPreview bound={handleNum > 0} kind={slotKind} meta={slotMeta} guid={slotGuid ?? undefined} />
-                                    <span className={`an${handleNum > 0 ? '' : ' empty'}`} title={matName}>
-                                      {handleNum > 0 ? matName : (locked ? `slot ${i} — browse ${arrType}` : `click / drop ${arrType}`)}
+                                    <AssetPreview bound={handleNum > 0 && !assetMissing} kind={slotKind} meta={slotMeta} guid={slotGuid ?? undefined} />
+                                    <span className={`an${handleNum > 0 && !assetMissing ? '' : ' empty'}`} title={matName}>
+                                      {assetMissing ? 'Missing asset — browse to repair' : handleNum > 0 ? matName : (locked ? `slot ${i} — browse ${arrType}` : `click / drop ${arrType}`)}
                                     </span>
+                                    {assetMissing && <span className="asset-missing" role="status" data-testid={`insp-${comp}-${f.key}-slot-${i}-missing`}>missing</span>}
                                     <span className="abtn">
                                       {locked && handleNum > 0 && (
                                         <button type="button" title="clear slot" onClick={(e) => {
@@ -1186,16 +1415,75 @@ export function InspectorPanel() {
                     // scalar fields
                     for (const k of keys) {
                       const v = data[k];
-                      if (fieldSchema(comp, k)?.type === 'vec') continue;
-                      if (v !== null && typeof v === 'object') continue;
                       const fs = fieldSchema(comp, k);
+                      const inferredType = typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'bool' : typeof v === 'string' ? 'string' : undefined;
+                      const renderer = inspectorFieldRendererKind(fs ?? (inferredType ? { type: inferredType } : undefined));
+                      if (isVectorRendererKind(renderer)) continue;
+                      if (renderer === 'asset-ref' && (Array.isArray(v) || ArrayBuffer.isView(v))) continue;
+                      if (isUnsupportedRendererKind(renderer)) {
+                        out.push(<UnsupportedField component={comp} field={k} kind={fs?.shape ?? renderer} key={k} />);
+                        continue;
+                      }
+                      if (renderer === 'array' && fs !== undefined) {
+                        out.push(
+                          <div className="f-row" key={`${sel}:${comp}:${k}`} data-testid={`insp-field-${comp}-${k}`} style={{ alignItems: 'flex-start' }}>
+                            <span className="f-name" title={fs.tooltip}>{k}</span>
+                            <span className="f-val">
+                              <ArrayFieldEditor
+                                entity={sel}
+                                component={comp}
+                                field={k}
+                                fs={fs}
+                                value={v}
+                                data={data}
+                                readOnly={readOnly}
+                                dispatch={dispatchMutation}
+                                reset={resetBtn(k, v, () => {
+                                  const group = fs.arrayGroup;
+                                  const resetFields = (getComponentSchema(comp)?.fields ?? [])
+                                    .filter((candidate) => candidate.arrayMeta !== undefined && (group === undefined ? candidate.key === k : candidate.arrayGroup === group));
+                                  dispatchMutation({
+                                    kind: 'setComponent',
+                                    entity: sel,
+                                    component: comp,
+                                    patch: Object.fromEntries(resetFields.map((candidate) => [candidate.key, defaults[candidate.key] ?? []])),
+                                  });
+                                })}
+                              />
+                            </span>
+                          </div>,
+                        );
+                        continue;
+                      }
+                      if (v !== null && typeof v === 'object') continue;
                       const setField = (val: unknown) => {
                         if (readOnly) return;
                         dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [k]: val } });
                       };
-                      const type = fs?.type ?? (typeof v === 'number' ? 'number' : 'string');
                       const reset = resetBtn(k, v, () => setField(defaults[k]));
-                      if (type === 'number') {
+                      if (renderer === 'optional') {
+                        out.push(
+                          <div className="f-row" key={`${sel}:${comp}:${k}`} data-testid={`insp-field-${comp}-${k}`}>
+                            <span className="f-name" title={fs?.tooltip}>{k}</span>
+                            <span className="f-val">
+                              <OptionalInput
+                                value={v}
+                                fs={fs}
+                                testid={`insp-${comp}-${k}`}
+                                liveField={{ entity: sel, component: comp, field: k, read: (world) => {
+                                  const result = entComponent(world as Parameters<typeof entComponent>[0], sel, comp, readOptsFor(sel));
+                                  if (!result.ok) throw new Error(result.error.code);
+                                  return result.value[k];
+                                } }}
+                                onCommit={setField}
+                              />
+                              {reset}
+                            </span>
+                          </div>,
+                        );
+                        continue;
+                      }
+                      if (renderer === 'scalar') {
                         const liveNum = fieldPrev && fieldPrev.id === sel && fieldPrev.key === `${comp}.${k}` ? fieldPrev.value : (typeof v === 'number' ? v : 0);
                         const ranged = fs?.min !== undefined && fs?.max !== undefined;
                         out.push(
@@ -1228,30 +1516,36 @@ export function InspectorPanel() {
                       // Asset (shared<T>) fields store a numeric handle where 0 = unbound.
                       // Never surface the raw handle ("0" / "1025"): only a positive handle
                       // (or a non-empty guid string) counts as "bound".
-                      const assetBound = type === 'asset' ? (typeof v === 'number' ? v > 0 : strVal !== '') : false;
+                      const assetBound = renderer === 'asset-ref' ? (typeof v === 'number' ? v > 0 : strVal !== '') : false;
                       out.push(
                         <div className="f-row" key={k} data-testid={`insp-field-${comp}-${k}`}>
                           <span className="f-name" title={fs?.tooltip}>
                             {k}
-                            {type === 'asset' && <span className="asset-dot" data-testid={`insp-${comp}-${k}-dot`}>{assetBound ? <ForgeaxIcon name="dot" size={9} /> : <ForgeaxIcon name="hexagon" size={9} />}</span>}
+                            {renderer === 'asset-ref' && <span className="asset-dot" data-testid={`insp-${comp}-${k}-dot`}>{assetBound ? <ForgeaxIcon name="dot" size={9} /> : <ForgeaxIcon name="hexagon" size={9} />}</span>}
                           </span>
                           <span className="f-val">
-                            {type === 'bool' ? (
+                            {renderer === 'boolean' ? (
                               <BoolCheckbox checked={v === true} testid={`insp-${comp}-${k}`} onToggle={(c) => setField(c)} />
-                            ) : type === 'color' ? (
-                              <>
-                                <input type="color" className="swatch" data-testid={`insp-${comp}-${k}`} value={strVal || '#cccccc'} onChange={(e) => setField(e.target.value)} />
-                                <span className="hexval" data-testid={`insp-${comp}-${k}-hex`}>{strVal || '#cccccc'}</span>
-                              </>
-                            ) : type === 'enum' ? (
-                              <EnumSelect value={strVal} options={fs?.options ?? []} testid={`insp-${comp}-${k}`} onChange={setField} />
-                            ) : type === 'asset' ? (
+                            ) : renderer === 'enum' ? (
+                              <EnumSelect
+                                value={Number(v)}
+                                options={fs?.enumOptions ?? []}
+                                testid={`insp-${comp}-${k}`}
+                                liveField={{ entity: sel, component: comp, field: k, read: (world) => {
+                                  const result = entComponent(world as Parameters<typeof entComponent>[0], sel, comp, readOptsFor(sel));
+                                  if (!result.ok) throw new Error(result.error.code);
+                                  return result.value[k];
+                                } }}
+                                onChange={setField}
+                              />
+                            ) : renderer === 'asset-ref' ? (
                               (() => {
                                 const scalarType = expectedAssetType(comp, k) ?? 'MeshAsset';
                                 const curDesc = typeof v === 'number' && v > 0 ? gateway.describeAsset(v) : null;
                                 const curGuid = curDesc?.ok ? curDesc.guid : undefined;
                                 const curKind = curDesc?.ok ? curDesc.kind : undefined;
                                 const curMeta = curDesc?.ok ? curDesc.meta : undefined;
+                                const assetMissing = assetBound && curDesc?.ok !== true;
                                 // Numeric handle → show the resolved asset name (never the
                                 // raw #handle); fall back to a short guid, else empty so the
                                 // placeholder shows. unbound (0) → empty.
@@ -1286,6 +1580,7 @@ export function InspectorPanel() {
                                       readOnly={typeof v === 'number' && v > 0}
                                       onChange={(e) => setField(e.target.value)}
                                     />
+                                    {assetMissing && <span className="asset-missing" role="status" data-testid={`insp-${comp}-${k}-missing`}>Missing asset — browse to repair</span>}
                                     <span className="abtn">
                                       <button type="button" data-testid={`insp-${comp}-${k}-browse`} title={`browse ${scalarType}`} onClick={() => setPicker({ comp, field: k, assetType: scalarType, currentGuid: curGuid })}>
                                         <ForgeaxIcon name="folder" size={12} />
@@ -1302,7 +1597,7 @@ export function InspectorPanel() {
                             ) : (
                               <input className="box-i txt" data-testid={`insp-${comp}-${k}`} value={strVal} onChange={(e) => setField(e.target.value)} />
                             )}
-                            {type !== 'asset' && reset}
+                            {renderer !== 'asset-ref' && reset}
                           </span>
                         </div>,
                       );

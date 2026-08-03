@@ -150,6 +150,17 @@ const studioLayerAlias: Record<string, string> = {};
 if (existsSync(HOST_SDK)) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
 if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 
+// Keep the standalone host's optimizer boundary limited to dependencies that
+// are installed from this checkout's root. Interface dependencies are owned by
+// the vendored interface submodule and resolve from their importing source
+// files; listing them here makes Vite resolve from standalone/ and fails on a
+// fresh clone before the host can bind its port.
+const STANDALONE_OPTIMIZE_DEPS = [
+  'react',
+  'react-dom',
+  'react-dom/client',
+] as const;
+
 export default defineConfig({
   root: resolve(PACKAGE_DIR, 'standalone'),
   base: '/',
@@ -222,7 +233,11 @@ export default defineConfig({
     // not from the root). Vite auto-discovers and optimizes them on first
     // crawl from the actual import sites, so listing them here only produced a
     // spurious "Failed to resolve dependency" warning.
-    include: ['react', 'react-dom', 'react-dom/client'],
+    include: STANDALONE_OPTIMIZE_DEPS,
+    // Never mutate the optimizer manifest in response to a late lazy import.
+    // The include list above is the host's dependency boundary; native ESM
+    // modules outside it stay on Vite's normal transform path.
+    noDiscovery: true,
   },
   server: {
     port: STANDALONE_PORT,

@@ -1,4 +1,5 @@
 import type { AssetWorkspaceSnapshot, AssetPreflightResult } from '@forgeax/editor-core';
+import type { SceneReadModel } from '@forgeax/editor-core';
 
 /**
  * Delete-guard impact analysis (C3) — before destroying assets we ask the
@@ -20,6 +21,34 @@ export interface DeletePreflightSummary {
   readonly currentRevision: string;
   readonly recoveryActions: readonly string[];
   readonly blocked: boolean;
+}
+
+export interface SceneDeleteGuard {
+  readonly reasons: readonly ('current' | 'default' | 'referenced')[];
+  readonly referencers: readonly string[];
+}
+
+/** Project the authoritative scene read model and workspace refs into the
+ * human confirmation surface. The Gateway remains the final guard; this is the
+ * preflight projection that lets a human see why confirmation is unavailable. */
+export function computeSceneDeleteGuards(
+  targets: readonly { guid: string; kind: string }[],
+  sceneModel: SceneReadModel,
+  workspace: AssetWorkspaceSnapshot,
+): Map<string, SceneDeleteGuard> {
+  const sceneTargets = targets.filter((target) => target.kind === 'scene');
+  const impact = computeDeleteImpact(sceneTargets.map((target) => target.guid), workspace);
+  const guards = new Map<string, SceneDeleteGuard>();
+  for (const target of sceneTargets) {
+    const scene = sceneModel.scenes.find((entry) => entry.guid === target.guid);
+    const referencers = impact.externalReferencers.get(target.guid) ?? [];
+    const reasons: SceneDeleteGuard['reasons'][number][] = [];
+    if (scene?.isCurrent) reasons.push('current');
+    if (scene?.isDefault) reasons.push('default');
+    if (referencers.length > 0) reasons.push('referenced');
+    if (reasons.length > 0) guards.set(target.guid, { reasons, referencers });
+  }
+  return guards;
 }
 
 export function summarizeDeletePreflight(

@@ -148,6 +148,33 @@ describe('scenePath — reads ctx via deps, no network (AC-02)', () => {
 });
 
 describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)', () => {
+  it('refuses imported preview save before serialization or write', async () => {
+    const net = makeNetSpies();
+    const { deps, ctx } = makeDeps({
+      fetch: net.fetch,
+      fetchWithTimeout: net.fetchWithTimeout,
+      serializeForSave: () => { throw new Error('preview must not serialize'); },
+    });
+    ctx.currentSceneId = 'shoot';
+    ctx.authoringSession = {
+      mode: 'imported-preview',
+      canMutate: false,
+      saveTarget: null,
+      reason: 'Imported previews are derived and read-only.',
+    };
+    ctx.isDirty = true;
+    const io = createDiskIo(deps);
+
+    expect(io.scenePath()).toBeNull();
+    expect(await io.doSaveDocToDisk()).toMatchObject({
+      ok: false,
+      error: { code: 'save-rejected-in-imported-preview' },
+    });
+    io.flushPendingSaveBeacon();
+    expect(net.fetchCalls).toHaveLength(0);
+    expect(ctx.isDirty).toBe(true);
+  });
+
   it('returns false and NEVER calls fetch when the world is headless (serialize fails)', async () => {
     const net = makeNetSpies();
     const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
@@ -329,7 +356,7 @@ describe('M2-T1 structured save failures preserve bytes and dirty state', () => 
   });
 });
 
-describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, resets guid (AC-02)', () => {
+describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes guid only after load (AC-02)', () => {
   it('returns false for the default slug without touching the injected net', async () => {
     const net = makeNetSpies();
     const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
@@ -339,10 +366,10 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, resets guid 
     expect(net.fetchTimeoutCalls.length).toBe(0);
   });
 
-  it('reads THIS scene path through the injected fetchWithTimeout and captures the pack guid', async () => {
+  it('reads THIS scene path through the injected fetchWithTimeout without publishing a failed load guid', async () => {
     // A valid pack with a scene asset GUID; the load then reaches loadSceneByGuid
-    // which returns false headlessly (null world) — so the doc does not change,
-    // but we prove the read went through the injected seam + guid was captured.
+    // which returns false headlessly (null world) — so the doc and current GUID
+    // must not change, even though the read went through the injected seam.
     const guid = '11111111-2222-5333-8444-555555555555';
     const packJson = JSON.stringify({
       schemaVersion: '1.0.0',
@@ -359,8 +386,8 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, resets guid 
     expect(ok).toBe(false); // loadSceneByGuid fails on the headless (null) world
     expect(net.fetchTimeoutCalls.length).toBe(1);
     expect(net.fetchTimeoutCalls[0]).toContain(encodeURIComponent('/games/g1/scene.pack.json'));
-    // The guid was captured off the pack before the (failed) engine load.
-    expect(ctx.currentSceneGuid).toBe(guid);
+    // A failed engine load must not publish a GUID for a scene that is not live.
+    expect(ctx.currentSceneGuid).toBeNull();
   });
 });
 

@@ -16,6 +16,12 @@ export type {
   OpHandle,
 } from '../io/gateway';
 export type { CollectSceneAssetResult } from '../io/scene-asset-collect';
+export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from '../io/scene-read-model';
+export type {
+  SceneAuthoringMode,
+  SceneAuthoringSaveTarget,
+  SceneAuthoringSessionReadModel,
+} from '../io/scene-authoring-session';
 export { createEngineFacade } from '../io/engine-facade';
 export type { EngineFacade } from '../io/engine-facade';
 export { registerSessionApplier } from '../io/appliers';

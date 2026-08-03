@@ -60,12 +60,13 @@ describe('w8 buildSpawnEntityFromDragRef mesh branch (RED before w10)', () => {
     expect(mf.assetHandle).not.toBe(1);
   });
 
-  it('(d) material branch: keeps HANDLE_CUBE (proxy geometry) + no pending marker', () => {
+  it('(d) material branch: keeps HANDLE_CUBE and carries its material GUID for binding', () => {
     const ent = buildSpawnEntityFromDragRef(materialRef());
     expect(ent).not.toBeNull();
     const mf = ent!.components.MeshFilter as { assetHandle: number };
     expect(mf.assetHandle).toBe(1); // HANDLE_CUBE
     expect(ent!.components.EditorPendingMeshAsset).toBeUndefined();
+    expect(ent!.components.EditorPendingMeshMaterials).toEqual({ guids: ['mat-guid-99'] });
   });
 
   it('(d2) texture branch: keeps HANDLE_CUBE (proxy geometry) + no pending marker', () => {

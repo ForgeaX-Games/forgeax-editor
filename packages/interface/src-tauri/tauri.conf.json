@@ -5,7 +5,7 @@
   "identifier": "com.forgeax.studio",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:18920",
+    "devUrl": "http://127.0.0.1:0",
     "beforeBuildCommand": "",
     "frontendDist": "../../studio/dist"
   },

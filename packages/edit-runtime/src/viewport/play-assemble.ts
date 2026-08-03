@@ -73,7 +73,7 @@ import {
 } from '@forgeax/engine-ecs';
 import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
 import { animationPlugin } from '@forgeax/engine-animation';
-import { Camera, perspective } from '@forgeax/engine-render';
+import { Camera, CAMERA_PROJECTION_PERSPECTIVE, perspective } from '@forgeax/engine-render';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
 import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener } from '@forgeax/engine-audio';
@@ -83,6 +83,7 @@ import {
   WebAudioEngine,
   syncListenerFromWorldMatrix,
 } from '@forgeax/engine-audio-webaudio';
+import { createFramePhaseObserver } from './frame-phase-observer';
 
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
@@ -196,6 +197,15 @@ export interface AssemblePlayWorldDeps {
    * absent and games fall back to `document.body`.
    */
   readonly viewportContainer?: HTMLElement;
+  /**
+   * The viewport's one host-owned canvas. ▶ Play registers the
+   * `play-camera-aspect-sync` system that mirrors the canvas-form
+   * `app-sync-camera-aspect` sidecar's ASPECT half (the buffer half stays
+   * host-owned: ViewportComponent's ResizeObserver keeps canvas.width/height
+   * fresh during play). Optional: headless tests omit it → no system is
+   * registered and camera aspects hold their spawn values.
+   */
+  readonly canvas?: HTMLCanvasElement;
   /**
    * Optional host bridge for a game-owned action/read projection. The factory
    * creates one registry for this fresh Play world; bootstrap receives only its
@@ -423,6 +433,7 @@ export async function assemblePlayWorld(
       world: playWorld as never,
       plugins: plugins as never,
       ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
+      framePhaseObserver: createFramePhaseObserver(),
     });
   } catch (error) {
     detachHostResources();
@@ -469,6 +480,60 @@ export async function assemblePlayWorld(
             if (listener === undefined) break;
             syncListenerFromWorldMatrix(listener, tf.value.world);
             break;
+          }
+        });
+      },
+    }).unwrap();
+  }
+
+  // Camera aspect-sync (same canvas-vs-assemble divergence class as the audio
+  // wiring above): the canvas form auto-registers `app-sync-camera-aspect`
+  // (create-app.ts — syncCanvasDrawingBuffer + syncCameraAspect per frame); the
+  // assemble form deliberately does NOT (create-app.ts host-engine contract:
+  // "Only the createApp(canvas) path auto-wires the aspect-sync sidecar").
+  // While the editor App is paused for ▶ Play its sidecar is frozen too, so
+  // without this mirror a viewport/dock resize updates canvas.width/height (the
+  // host ResizeObserver keeps running) but every play-world Camera.aspect stays
+  // frozen at its spawn value — the play·game view stretches instead of
+  // re-fitting. Only the ASPECT half is mirrored here: the drawing-buffer half
+  // stays host-owned (ViewportComponent's ResizeObserver writes
+  // canvas.width/height with its own DPR clamp, play included).
+  //
+  // REMOVAL ANCHOR: this closure replicates the engine's syncCameraAspect
+  // (create-app.ts) because @forgeax/engine-app does not barrel-export it —
+  // engine-harness feedback
+  // 2026-08-03-assemble-form-host-cannot-wire-aspect-buffer-sync-not-barrel-exported.
+  // When the barrel export lands, delete this closure and call the engine
+  // function directly (AGENTS.md anti-pattern #1: no parallel re-implementation).
+  // The guards below are load-bearing, copied 1:1: 0-size canvas → skip (aspect
+  // must never become NaN/0); autoAspect !== true and orthographic cameras are
+  // left untouched; autoAspect is read via world.get (readRow narrows the bool
+  // column — the query-bundle 0/1 `!== 0` always-true trap).
+  if (deps.canvas) {
+    const canvas = deps.canvas;
+    (playWorld as World).addSystem(Update, {
+      name: 'play-camera-aspect-sync',
+      queries: [],
+      fn: () => {
+        const canvasW = canvas.width;
+        const canvasH = canvas.height;
+        if (canvasW <= 0 || canvasH <= 0) return;
+        const aspect = canvasW / canvasH;
+        const query = createQueryState({ with: [Camera, Entity] });
+        queryRun(query, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
+          const entitySelf = bundle.Entity.self;
+          for (let i = 0; i < entitySelf.length; i++) {
+            const entity = (entitySelf[i] ?? 0) as EntityHandle;
+            const r = (playWorld as World).get(entity, Camera);
+            if (!r.ok) continue;
+            if (r.value.autoAspect !== true) continue;
+            if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+            // Structural cast (same discipline as the fallback spawn below):
+            // Gate A (lint-unique-mutator) owns EDIT-world writes through the
+            // EngineFacade; the play world is the game runtime's world (north
+            // star §0 GameRuntimePort / D-8), outside that facade by design.
+            (playWorld as { set(e: EntityHandle, c: unknown, patch: unknown): { ok: boolean } })
+              .set(entity, Camera, { aspect });
           }
         });
       },
@@ -565,10 +630,16 @@ export async function assemblePlayWorld(
     gameProjection.registrar.registerRead({
       id: 'rendererStats',
       title: 'Renderer Statistics',
-      description: 'EngineMetrics snapshot from the shared renderer',
+      description: 'EngineMetrics and frustum-culling snapshot from the shared renderer',
       read: () => {
-        const r = deps.renderer as { metrics?: { snapshot(): Record<string, number> } };
-        return r.metrics?.snapshot() ?? {};
+        const r = deps.renderer as {
+          metrics?: { snapshot(): Record<string, number> };
+          frustumStats?: { readonly culled: number; readonly total: number };
+        };
+        return {
+          ...(r.metrics?.snapshot() ?? {}),
+          frustumStats: r.frustumStats ?? { culled: 0, total: 0 },
+        };
       },
     });
   }

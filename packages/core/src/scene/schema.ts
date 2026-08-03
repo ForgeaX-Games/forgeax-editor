@@ -12,11 +12,13 @@
 // Field type mapping (engine → editor):
 //   f32 / u32 / i32 → number   |  array<f32, N> → vec (arity=N)
 //   bool             → bool    |  shared<T>      → asset
-//   string           → string  |  enum            → number (labels in tooltip)
-//   entity refs      → excluded (internal handles)
+//   string           → string  |  enum            → enum (labels + values)
+//   optional entity  → number (shape=optional; live EntityHandle, null unset)
+//   other entity refs → excluded (internal handles)
 
 import type {
   Component,
+  FieldShapeKind,
   FieldReflection,
   SchemaFieldType,
 } from '@forgeax/engine-ecs';
@@ -27,15 +29,31 @@ import { applyEditorComponentMeta, editorMetaOf } from './editor-component-meta'
 // Public types (unchanged API surface)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum' | 'vec';
+export type FieldType = 'number' | 'string' | 'color' | 'asset' | 'bool' | 'enum' | 'vec' | 'array' | 'nested';
+
+export interface ArrayFieldMeta {
+  readonly elementType: string;
+  /** Fixed-capacity arrays expose their capacity; variable arrays omit it. */
+  readonly length?: number;
+}
 
 export interface FieldSchema {
   key: string;
   type: FieldType;
+  /** Producer-owned semantic shape; storage `type` remains authoritative. */
+  shape?: FieldShapeKind;
+  /** Engine-reflected array element/capacity facts for generic editors. */
+  arrayMeta?: ArrayFieldMeta;
+  /** Producer-independent editor grouping for parallel array columns. */
+  arrayGroup?: string;
+  /** Default inserted when a grouped array slot is added. */
+  arrayElementDefault?: unknown;
   min?: number;
   max?: number;
   step?: number;
   options?: string[];
+  /** Engine-owned enum label/value pairs; the Inspector must dispatch values. */
+  enumOptions?: ReadonlyArray<{ label: string; value: number }>;
   tooltip?: string;
   default?: unknown;
   showWhen?: { key: string; in: string[] };
@@ -102,6 +120,17 @@ const EDITOR_FIELD_OVERRIDES: Record<string, Partial<FieldSchema>> = {
   'SpotLight.pcfKernelSize':  { showWhen: { key: 'castShadow', in: ['true'] } },
   // SpriteRegionOverride — custom axis labels + editor default (engine has none)
   'SpriteRegionOverride.region': { labels: ['uMin', 'vMin', 'uW', 'vH'], default: [0, 0, 1, 1] },
+
+  // AnimationPlayer owns two producer-declared parallel-array groups. A slot
+  // edit must carry every member of its group in one setComponent patch or the
+  // engine's SoA columns become temporarily length-desynchronised.
+  'AnimationPlayer.clips': { arrayGroup: 'slots', arrayElementDefault: 0 },
+  'AnimationPlayer.times': { arrayGroup: 'slots', arrayElementDefault: 0 },
+  'AnimationPlayer.weights': { arrayGroup: 'slots', arrayElementDefault: 1 },
+  'AnimationPlayer.speeds': { arrayGroup: 'slots', arrayElementDefault: 1 },
+  'AnimationPlayer.nodeWeights': { arrayGroup: 'nodes', arrayElementDefault: 1 },
+  'AnimationPlayer.nodeTimes': { arrayGroup: 'nodes', arrayElementDefault: 0 },
+  'AnimationPlayer.nodeSpeeds': { arrayGroup: 'nodes', arrayElementDefault: 1 },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -127,13 +156,25 @@ const EXCLUDED_COMPONENTS = new Set([
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let _cache: Map<string, ComponentSchema> | null = null;
+let _cacheRegistrySignature: string | null = null;
 
 function ensurePopulated(): Map<string, ComponentSchema> {
-  if (_cache !== null) return _cache;
+  let registry: ReadonlyMap<string, Component>;
+  try {
+    registry = getRegisteredComponents();
+  } catch {
+    return _cache ?? new Map();
+  }
+  // Engine packages such as physics can register components after the editor
+  // panels module has first imported core. A cache keyed only by "initialized"
+  // permanently loses those producer-owned schemas, so refresh on registry
+  // membership changes while keeping the hot path stable between registrations.
+  const signature = [...registry.keys()].join('\u0000');
+  if (_cache !== null && _cacheRegistrySignature === signature) return _cache;
   _cache = new Map();
+  _cacheRegistrySignature = signature;
   try {
     applyEditorComponentMeta();
-    const registry = getRegisteredComponents();
     for (const [name, comp] of registry) {
       if (shouldExclude(name, comp)) continue;
       const schema = reflectComponent(comp);
@@ -149,6 +190,7 @@ function ensurePopulated(): Map<string, ComponentSchema> {
 /** Reset the cache (test-only). Not on the public barrel. */
 export function _resetSchemaCache(): void {
   _cache = null;
+  _cacheRegistrySignature = null;
 }
 
 function shouldExclude(name: string, comp: Component): boolean {
@@ -206,21 +248,30 @@ function isInternalFieldType(engineType: SchemaFieldType): boolean {
   return false;
 }
 
-function mapFieldType(engineType: SchemaFieldType): FieldType | null {
+function mapFieldType(engineType: SchemaFieldType, reflection?: FieldReflection): FieldType | null {
   // shared<T> → asset
   if (engineType.startsWith('shared<')) return 'asset';
   if (engineType.startsWith('array<shared<')) return 'asset';
   // array<f32, N> → vec
   if (engineType.startsWith('array<f32,')) return 'vec';
+  // Variable and non-f32 fixed arrays are generic container fields. Keep the
+  // engine's element/capacity facts in arrayMeta below rather than reducing
+  // them to an opaque/unsupported value.
+  if (reflection?.arrayMeta !== undefined) return 'array';
+  // A producer-declared unique<T> nested payload is a distinct semantic shape.
+  // The live engine value remains an opaque unique handle until a producer adds
+  // a payload resolver; schema discovery must still preserve the declaration.
+  if (engineType.startsWith('unique<') && reflection?.shape === 'nested') return 'nested';
   // Basic scalars
   if (engineType === 'f32' || engineType === 'u32' || engineType === 'i32') return 'number';
   if (engineType === 'bool') return 'bool';
   if (engineType === 'string') return 'string';
-  // enum → number (engine stores u32; labels documented in tooltip)
-  if (engineType === 'enum') return 'number';
+  // Keep enum semantics: the engine stores u32, but labels and values are part
+  // of the reflected field contract and must not be reduced to a scrubber.
+  if (engineType === 'enum') return 'enum';
   // Internal types
   if (isInternalFieldType(engineType)) return null;
-  // Unknown / variable-length array → skip
+  // Unknown field vocab remains closed and invisible.
   return null;
 }
 
@@ -242,7 +293,11 @@ function reflectComponent(comp: Component): ComponentSchema | null {
     // Skip field-level transient fields (engine-derived, e.g. Transform.world)
     if (reflection.transient) continue;
 
-    const editorType = mapFieldType(reflection.type);
+    // An optional entity is an authored handle field, not an internal
+    // relationship. Keep the live EntityHandle representation (number/null)
+    // while preserving its producer-owned optional shape for the Inspector.
+    const optionalEntity = reflection.type === 'entity' && reflection.shape === 'optional';
+    const editorType = optionalEntity ? 'number' : mapFieldType(reflection.type, reflection);
     if (editorType === null) continue;
 
     // Compute arity for vec fields BEFORE building the default (needed for
@@ -252,10 +307,21 @@ function reflectComponent(comp: Component): ComponentSchema | null {
     const field: FieldSchema = {
       key: fieldKey,
       type: editorType,
+      ...(reflection.shape !== undefined
+        ? { shape: reflection.shape }
+        : editorType === 'array'
+          ? { shape: 'array' as const }
+          : {}),
       tooltip: buildTooltip(fieldKey, editorType, reflection),
       default: deriveDefault(editorType, arity, reflection, defaults?.[fieldKey]),
       ...(arity !== undefined ? { arity } : {}),
       ...deriveConstraints(editorType, fieldKey, reflection),
+      ...(reflection.type === 'enum' && reflection.labels !== undefined
+        ? { enumOptions: Object.entries(reflection.labels).map(([label, value]) => ({ label, value })) }
+        : {}),
+      ...(reflection.arrayMeta !== undefined
+        ? { arrayMeta: { elementType: reflection.arrayMeta.elementType, ...(reflection.arrayMeta.length === undefined ? {} : { length: reflection.arrayMeta.length }) } }
+        : {}),
     };
 
     // Apply editor-level overrides (showWhen, labels, tooltips, defaults, etc.)
@@ -297,14 +363,37 @@ function deriveDefault(
   reflection: FieldReflection,
   compDefault?: unknown,
 ): unknown {
+  const coerce = (value: unknown): unknown => {
+    const coerced = coerceDefault(editorType, value);
+    if (editorType === 'vec') {
+      const vector = Array.isArray(coerced)
+        ? coerced
+        : ArrayBuffer.isView(coerced)
+          ? Array.from(coerced as unknown as ArrayLike<number>)
+          : undefined;
+      if (vector === undefined || vector.length !== (arity ?? 3)) {
+        return new Array(arity ?? 3).fill(0);
+      }
+      return vector;
+    }
+    return coerced;
+  };
+  // Entity optionals use null as their explicit unset sentinel. Do not turn
+  // the absence of a component-level default into numeric handle 0.
+  if (reflection.type === 'entity' && reflection.shape === 'optional') {
+    if (compDefault !== undefined) return compDefault;
+    if (reflection.default !== undefined) return reflection.default;
+    return null;
+  }
   // Component-level default takes priority
-  if (compDefault !== undefined) return coerceDefault(editorType, compDefault);
+  if (compDefault !== undefined) return coerce(compDefault);
   // Field-level default
-  if (reflection.default !== undefined) return coerceDefault(editorType, reflection.default);
-  // array<shared<T>> fields default to empty array (not 0)
-  if (reflection.arrayMeta) return [];
+  if (reflection.default !== undefined) return coerce(reflection.default);
   // vec fields without explicit default: zero-fill to arity
   if (editorType === 'vec') return new Array(arity ?? 3).fill(0);
+  // Variable array fields default to empty array (not 0). Fixed vectors were
+  // handled above because their storage also carries arrayMeta.
+  if (reflection.arrayMeta) return [];
   // Type-derived fallback
   return defaultFieldValueInternal(editorType);
 }
@@ -325,6 +414,7 @@ function defaultFieldValueInternal(type: FieldType): unknown {
     case 'bool':   return false;
     case 'string': return '';
     case 'asset':  return 0;
+    case 'nested': return undefined;
     default:       return 0;
   }
 }

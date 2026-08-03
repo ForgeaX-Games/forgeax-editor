@@ -31,6 +31,7 @@ import { createSceneList, type SceneListDeps } from '../store/persistence/scene-
 import { createPlayConfig, type PlayConfigDeps } from '../store/persistence/play-config';
 import { createStorage, type StorageDeps } from '../store/persistence/storage';
 import type { PersistenceGateway } from '../store/persistence/disk-io';
+import { assetIO } from '../io/asset-io-facade';
 import { createScenePersistenceContext, type ScenePersistenceContext } from '../store/scene-persistence';
 import type { EditSession } from '../types';
 
@@ -134,8 +135,11 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
       ctx,
       gateway: fakeGateway(),
       fetchWithTimeout: () => Promise.reject(new Error('fetchWithTimeout must not be called here')),
+      fetch: () => Promise.reject(new Error('fetch must not be called here')),
       resolveGamePath: (rel) => `/games/g1/${rel}`,
-      flushPendingSaveBeacon: () => {},
+      assetIO,
+      savePendingScene: () => Promise.resolve(false),
+      clearPendingScene: () => ctx.setDirty(false),
       loadDocFromDisk: () => Promise.resolve(false),
       loadDocFromStorage: () => false,
       replaceDoc: (_d) => {},
@@ -144,16 +148,166 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
     return { sl: createSceneList(deps), ctx };
   }
 
-  it('getSceneId / getSceneFile / getSceneList / getLoadedSceneEntities read ctx', () => {
+  it('getters and the public read model read the same ctx', () => {
     const { sl, ctx } = make();
     ctx.currentSceneId = 'shoot';
     ctx.currentSceneFile = 'lvl1';
-    ctx.sceneList = [{ id: 'lvl1', name: 'Level 1', pack: 'p' }];
+    ctx.currentSceneGuid = 'guid-lvl1';
+    ctx.defaultSceneGuid = 'guid-lvl2';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ];
     ctx.currentSceneEntities = [7, 9] as never;
     expect(sl.getSceneId()).toBe('shoot');
     expect(sl.getSceneFile()).toBe('lvl1');
-    expect(sl.getSceneList()).toEqual([{ id: 'lvl1', name: 'Level 1', pack: 'p' }]);
+    expect(sl.getSceneList()).toEqual([
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ]);
     expect(sl.getLoadedSceneEntities()).toEqual([7, 9]);
+    expect(sl.getSceneReadModel()).toEqual({
+      gameId: 'shoot',
+      currentScene: { id: 'lvl1', guid: 'guid-lvl1' },
+      defaultScene: { id: 'lvl2', guid: 'guid-lvl2' },
+      scenes: [
+        { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1', isCurrent: true, isDefault: false },
+        { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2', isCurrent: false, isDefault: true },
+      ],
+    });
+  });
+
+  it('setDefaultScene writes and verifies forge.json before publishing the projection', async () => {
+    const raw = { id: 'shoot', name: 'Shoot', schemaVersion: '1.0.0', entry: 'main.ts', defaultScene: 'guid-lvl1' };
+    const verified = { ...raw, defaultScene: 'guid-lvl2' };
+    const reads = [raw, verified];
+    const writes: RequestInit[] = [];
+    const { sl, ctx } = make({
+      fetchWithTimeout: async () => new Response(JSON.stringify({ content: JSON.stringify(reads.shift()) })),
+      fetch: async (_path, init) => { writes.push(init ?? {}); return new Response('{}', { status: 200 }); },
+    });
+    ctx.currentSceneId = 'shoot';
+    ctx.defaultSceneGuid = 'guid-lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ];
+    const observed: number[] = [];
+    const off = sl.onSceneListChange(() => observed.push(ctx.defaultSceneGuid === 'guid-lvl2' ? 1 : 0));
+
+    const result = await sl.setDefaultScene('guid-lvl2', 'default-scene-1');
+    off();
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        requestId: 'default-scene-1',
+        sceneGuid: 'guid-lvl2',
+        sceneId: 'lvl2',
+        previousSceneGuid: 'guid-lvl1',
+        changed: true,
+      },
+    });
+    expect(observed).toEqual([1]);
+    expect(ctx.defaultSceneGuid).toBe('guid-lvl2');
+    expect(writes).toHaveLength(1);
+    const body = JSON.parse(String(writes[0]?.body)) as { path: string; content: string };
+    expect(body.path).toBe('/games/g1/forge.json');
+    expect(JSON.parse(body.content)).toEqual(verified);
+  });
+
+  it('setDefaultScene rejects an unknown GUID without network or projection changes', async () => {
+    let writes = 0;
+    const { sl, ctx } = make({ fetch: async () => { writes++; return new Response('{}'); } });
+    ctx.currentSceneId = 'shoot';
+    ctx.defaultSceneGuid = 'guid-lvl1';
+    ctx.sceneList = [{ id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' }];
+    const result = await sl.setDefaultScene('not-a-scene', 'default-scene-invalid');
+    expect(result).toMatchObject({ ok: false, error: { code: 'scene-default-invalid' } });
+    expect(ctx.defaultSceneGuid).toBe('guid-lvl1');
+    expect(writes).toBe(0);
+  });
+
+  it('deleteScene guards the current/default scene before touching assetIO', async () => {
+    let reads = 0;
+    const { sl, ctx } = make({
+      assetIO: {
+        readPack: async () => { reads++; return null; },
+        deleteSourceFile: async () => ({ ok: true }),
+        verifySourceFileAbsent: async () => ({ ok: true, absent: true }),
+      },
+    });
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.currentSceneGuid = 'guid-lvl1';
+    ctx.defaultSceneGuid = 'guid-lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ];
+
+    const result = await sl.deleteScene('guid-lvl1', 'delete-current-1');
+    expect(result).toMatchObject({ ok: false, error: { code: 'scene-delete-guarded' } });
+    if (!result.ok) expect(result.error.current).toMatchObject({ impact: { isCurrent: true, isDefault: true, referencedBy: [] } });
+    expect(reads).toBe(0);
+    expect(ctx.sceneList).toHaveLength(2);
+  });
+
+  it('deleteScene reports scene referrers before deleting a referenced scene', async () => {
+    const packs = new Map([
+      ['/games/g1/p', { schemaVersion: '1', kind: 'internal-text-package', assets: [{ guid: 'guid-lvl1', kind: 'scene', payload: {}, refs: ['guid-lvl2'] }] }],
+      ['/games/g1/q', { schemaVersion: '1', kind: 'internal-text-package', assets: [{ guid: 'guid-lvl2', kind: 'scene', payload: {}, refs: [] }] }],
+    ]);
+    let deletes = 0;
+    const { sl, ctx } = make({
+      assetIO: {
+        readPack: async (path) => packs.get(path) as never ?? null,
+        deleteSourceFile: async () => { deletes++; return { ok: true }; },
+        verifySourceFileAbsent: async () => ({ ok: true, absent: true }),
+      },
+    });
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.currentSceneGuid = 'guid-lvl1';
+    ctx.defaultSceneGuid = 'guid-lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ];
+
+    const result = await sl.deleteScene('guid-lvl2', 'delete-referenced-1');
+    expect(result).toMatchObject({ ok: false, error: { code: 'scene-delete-guarded' } });
+    if (!result.ok) expect(result.error.current).toMatchObject({ impact: { sceneGuid: 'guid-lvl2', referencedBy: [{ sceneId: 'lvl1', assetGuid: 'guid-lvl1' }] } });
+    expect(deletes).toBe(0);
+    expect(ctx.sceneList).toHaveLength(2);
+  });
+
+  it('deleteScene verifies the file before publishing a consistent list/default/current projection', async () => {
+    const packs = new Map([
+      ['/games/g1/p', { schemaVersion: '1', kind: 'internal-text-package', assets: [{ guid: 'guid-lvl1', kind: 'scene', payload: {}, refs: [] }] }],
+      ['/games/g1/q', { schemaVersion: '1', kind: 'internal-text-package', assets: [{ guid: 'guid-lvl2', kind: 'scene', payload: {}, refs: [] }] }],
+    ]);
+    const deletedPaths: string[] = [];
+    const { sl, ctx } = make({
+      assetIO: {
+        readPack: async (path) => packs.get(path) as never ?? null,
+        deleteSourceFile: async (path) => { deletedPaths.push(path); return { ok: true }; },
+        verifySourceFileAbsent: async () => ({ ok: true, absent: true }),
+      },
+    });
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.currentSceneGuid = 'guid-lvl1';
+    ctx.defaultSceneGuid = 'guid-lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ];
+
+    const result = await sl.deleteScene('guid-lvl2', 'delete-success-1');
+    expect(result).toMatchObject({ ok: true, result: { sceneId: 'lvl2', sceneGuid: 'guid-lvl2', pack: 'q', currentScene: { id: 'lvl1', guid: 'guid-lvl1' }, defaultScene: { id: 'lvl1', guid: 'guid-lvl1' } } });
+    expect(deletedPaths).toEqual(['/games/g1/q']);
+    expect(ctx.sceneList).toEqual([{ id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' }]);
+    expect(sl.getSceneReadModel()).toMatchObject({ currentScene: { id: 'lvl1', guid: 'guid-lvl1' }, defaultScene: { id: 'lvl1', guid: 'guid-lvl1' }, scenes: [{ id: 'lvl1', isCurrent: true, isDefault: true }] });
   });
 
   it('initSceneList on the default slug clears the list + file without any network', async () => {
@@ -181,22 +335,67 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
   });
 
   it('doSwitchSceneFile is a no-op returning true when the id is already current', async () => {
-    let beaconCalls = 0;
-    const { sl, ctx } = make({ flushPendingSaveBeacon: () => { beaconCalls++; } });
+    let saveCalls = 0;
+    const { sl, ctx } = make({ savePendingScene: () => { saveCalls++; return Promise.resolve(true); } });
     ctx.currentSceneId = 'shoot';
     ctx.currentSceneFile = 'lvl1';
     ctx.sceneList = [{ id: 'lvl1', name: 'Level 1', pack: 'p' }];
     expect(await sl.doSwitchSceneFile('lvl1')).toBe(true);
-    expect(beaconCalls).toBe(0); // early return before flushing
+    expect(saveCalls).toBe(0); // early return before applying a dirty policy
   });
 
   it('doSwitchSceneFile rejects an unknown scene id without side effects', async () => {
-    let beaconCalls = 0;
-    const { sl, ctx } = make({ flushPendingSaveBeacon: () => { beaconCalls++; } });
+    let saveCalls = 0;
+    const { sl, ctx } = make({ savePendingScene: () => { saveCalls++; return Promise.resolve(true); } });
     ctx.currentSceneId = 'shoot';
     ctx.currentSceneFile = 'lvl1';
     ctx.sceneList = [{ id: 'lvl1', name: 'Level 1', pack: 'p' }];
     expect(await sl.doSwitchSceneFile('nope')).toBe(false);
-    expect(beaconCalls).toBe(0);
+    expect(saveCalls).toBe(0);
+  });
+
+  it('dirty switch requires an explicit policy and never flushes implicitly', async () => {
+    let saveCalls = 0;
+    const { sl, ctx } = make({ savePendingScene: () => { saveCalls++; return Promise.resolve(true); } });
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q' },
+    ];
+    ctx.isDirty = true;
+    expect(await sl.doSwitchSceneFile('lvl2')).toBe(false);
+    expect(ctx.currentSceneFile).toBe('lvl1');
+    expect(ctx.isDirty).toBe(true);
+    expect(saveCalls).toBe(0);
+  });
+
+  it('discard clears dirty before switching', async () => {
+    const { sl, ctx } = make();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q' },
+    ];
+    ctx.isDirty = true;
+    expect(await sl.doSwitchSceneFile('lvl2', 'discard')).toBe(true);
+    expect(ctx.currentSceneFile).toBe('lvl2');
+    expect(ctx.isDirty).toBe(false);
+  });
+
+  it('save policy persists before switching and preserves origin', async () => {
+    const origins: string[] = [];
+    const { sl, ctx } = make({ savePendingScene: (origin) => { origins.push(origin); return Promise.resolve(true); } });
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q' },
+    ];
+    ctx.isDirty = true;
+    expect(await sl.doSwitchSceneFile('lvl2', 'save', 'ai')).toBe(true);
+    expect(ctx.currentSceneFile).toBe('lvl2');
+    expect(origins).toEqual(['ai']);
   });
 });

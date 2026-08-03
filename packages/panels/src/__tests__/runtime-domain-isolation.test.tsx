@@ -13,6 +13,6 @@ describe('non-World panel invalidation', () => {
   it('keeps producer-owned signals visible at each panel boundary', () => {
     expect(source('AssetInspector.tsx')).toContain('useSelectedAssetIdentity');
     expect(source('Capabilities.tsx')).toContain('listComponentSchemas');
-    expect(source('Launcher.tsx')).toContain('useSceneList');
+    expect(source('Launcher.tsx')).toContain('useSceneReadModel');
   });
 });

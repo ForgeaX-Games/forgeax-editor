@@ -467,9 +467,24 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
     })
       .then(async (result) => {
         if (result.status === 'done') {
-          const catalogGuid = result.subAssets?.[0]?.guid ?? result.guid;
+          // A GLB/FBX completion is only usable when every produced sub-asset is
+          // visible and loadable. Waiting on the first mesh alone lets the
+          // OperationRun claim success while a scene/material sibling still
+          // fails at the next public J1 leg (mount/bind). Keep the terminal
+          // barrier at the importer owner and preserve one deduplicated set of
+          // producer-owned GUIDs; consumers must not invent readiness polling.
+          const producedGuids = result.subAssets?.map((subAsset) => subAsset.guid) ?? [];
+          const catalogGuids = Array.from(new Set(
+            producedGuids.length > 0
+              ? producedGuids
+              : result.guid !== undefined
+                ? [result.guid]
+                : [],
+          ));
           try {
-            if (catalogGuid !== undefined) await awaitPostAssetWriteCatalogSync(catalogGuid);
+            for (const catalogGuid of catalogGuids) {
+              await awaitPostAssetWriteCatalogSync(catalogGuid);
+            }
           } catch (err) {
             const hint = err instanceof Error ? err.message : String(err);
             return {

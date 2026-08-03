@@ -12,6 +12,7 @@ import { t as tr } from '@forgeax/editor-core/i18n';
 // it always routes through the host's reliable cb-dialog delete guards
 // (onDelete / onDeleteFolder), which paint correctly in the standalone host.
 import { prompt as promptDialog } from '@forgeax/editor-ui';
+import { isAssetPlacementAvailable } from './content-browser-format';
 import type { SubjectActionRequest } from './workspace/subject-actions';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
@@ -118,6 +119,7 @@ export function buildAssetContextMenu(
 ): ContextMenuItem[] {
   const selectedAssets = getAssetsInSelection(selection);
   const targets = selectedAssets.length > 1 ? selectedAssets : [asset];
+  const placementAvailable = isAssetPlacementAvailable(asset);
 
   return [
     // ── Common ──
@@ -178,8 +180,16 @@ export function buildAssetContextMenu(
     { id: 'sep-2', label: '', separator: true, action: () => {} },
 
     // ── Scene ──
-    { id: 'add-to-scene', label: tr('editor.contentBrowser.contextMenu.addToScene'), action: () => {
+    { id: 'add-to-scene', label: tr('editor.contentBrowser.contextMenu.addToScene'), disabled: !placementAvailable, action: () => {
+      if (!placementAvailable) return;
       const ref: AssetChatRef = { type: 'asset', guid: asset.guid, kind: asset.kind, name: asset.name, path: asset.packPath, payload: asset.payload, authoring: asset.authoring };
+      console.info(`[placement-diag] context-menu.request ${JSON.stringify({
+        guid: ref.guid,
+        kind: ref.kind,
+        name: ref.name,
+        path: ref.path,
+        operation: asset.authoring?.placement.operation ?? 'legacy-fallback',
+      })}`);
       console.info('[CB:import] Add to Scene', { kind: ref.kind, guid: ref.guid, name: ref.name, path: ref.path });
       requestAddAssetToScene(ref);
     }},

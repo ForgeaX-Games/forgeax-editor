@@ -99,13 +99,23 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
   const resolvedMat = new Map<string, number>();
 
   const patchMesh = (entity: number, assetHandle: number): void => {
-    bus.dispatch({ kind: 'setComponent', entity, component: 'MeshFilter', patch: { assetHandle } }, 'ai');
+    const result = bus.dispatch({ kind: 'setComponent', entity, component: 'MeshFilter', patch: { assetHandle } }, 'ai');
+    console.info(`[placement-diag] resolver.mesh.patch ${JSON.stringify({
+      entity,
+      assetHandle,
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+    })}`);
   };
 
   // ── MESH branch (feat-20260705 M3, behaviour unchanged) ──────────────────────
   const resolveMesh = (entity: number, guid: string): void => {
+    console.info(`[placement-diag] resolver.mesh.begin ${JSON.stringify({ entity, guid })}`);
     // Retry-storm guard: a GUID that already failed is never re-attempted.
-    if (failed.has(guid)) return;
+    if (failed.has(guid)) {
+      console.info(`[placement-diag] resolver.mesh.skipped ${JSON.stringify({ entity, guid, reason: 'previous-failure' })}`);
+      return;
+    }
     // Cache hit (redo replay / second entity sharing the mesh): re-patch, no reload.
     const cached = resolved.get(guid);
     if (cached !== undefined) { patchMesh(entity, cached); return; }
@@ -119,12 +129,19 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
 
     void (async () => {
       const res = await renderer.assets.loadByGuid(parsed.value);
+      console.info(`[placement-diag] resolver.mesh.load ${JSON.stringify({
+        entity,
+        guid,
+        ok: res.ok,
+        errorCode: res.error?.code,
+      })}`);
       if (!res.ok || res.value === undefined) {
         failed.add(guid);
         console.error('[drag-spawn-resolve]', { guid, code: 'load-miss', hint: res.error?.code ?? 'loadByGuid returned no value' });
         return;
       }
       const handle = engine.allocSharedRef('MeshAsset', res.value) as number;
+      console.info(`[placement-diag] resolver.mesh.allocated ${JSON.stringify({ entity, guid, handle })}`);
       resolved.set(guid, handle);
       patchMesh(entity, handle);
     })();
@@ -133,9 +150,16 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
   // Resolve ONE material GUID to a handle (cache + failed-guard + structured error),
   // or undefined if unresolvable. Mirrors the mesh branch's discipline (D-5).
   const resolveOneMaterial = async (guid: string): Promise<number | undefined> => {
+    console.info(`[placement-diag] resolver.material.begin ${JSON.stringify({ guid })}`);
     const cached = resolvedMat.get(guid);
-    if (cached !== undefined) return cached;
-    if (failedMat.has(guid)) return undefined; // already failed: no retry, no dup error
+    if (cached !== undefined) {
+      console.info(`[placement-diag] resolver.material.cached ${JSON.stringify({ guid, handle: cached })}`);
+      return cached;
+    }
+    if (failedMat.has(guid)) {
+      console.info(`[placement-diag] resolver.material.skipped ${JSON.stringify({ guid, reason: 'previous-failure' })}`);
+      return undefined; // already failed: no retry, no dup error
+    }
     const parsed = AssetGuid.parse(guid);
     if (!parsed.ok) {
       failedMat.add(guid);
@@ -143,18 +167,25 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       return undefined;
     }
     const res = await renderer.assets.loadByGuid(parsed.value);
+    console.info(`[placement-diag] resolver.material.load ${JSON.stringify({
+      guid,
+      ok: res.ok,
+      errorCode: res.error?.code,
+    })}`);
     if (!res.ok || res.value === undefined) {
       failedMat.add(guid);
       console.error('[drag-spawn-resolve:material]', { guid, code: 'load-miss', hint: res.error?.code ?? 'loadByGuid returned no value' });
       return undefined;
     }
     const handle = engine.allocSharedRef('MaterialAsset', res.value) as number;
+    console.info(`[placement-diag] resolver.material.allocated ${JSON.stringify({ guid, handle })}`);
     resolvedMat.set(guid, handle);
     return handle;
   };
 
   // ── MATERIAL branch (feat-20260708 M1, plan-strategy D-2/D-3/D-5) ─────────────
   const resolveMaterials = async (entity: number, guids: string[]): Promise<void> => {
+    console.info(`[placement-diag] resolver.materials.begin ${JSON.stringify({ entity, guids })}`);
     // Resolve each non-empty GUID in submesh order; the first that resolves is the
     // firstMatHandle used to fill '' slots (and load misses) so the emitted
     // materials[].length always equals guids.length — the same count-alignment the
@@ -172,10 +203,20 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     // Nothing resolved (all '' or all failed): keep the engine's default-material
     // MeshRenderer (graceful degradation, R-3) — a length-0 patch would be a no-op
     // and a partial one cannot satisfy count alignment.
-    if (firstMatHandle === undefined) return;
+    if (firstMatHandle === undefined) {
+      console.warn(`[placement-diag] resolver.materials.no-handle ${JSON.stringify({ entity, guids })}`);
+      return;
+    }
 
     const materials = guids.map((g) => (g !== '' ? (handleByGuid.get(g) ?? firstMatHandle) : firstMatHandle));
-    bus.dispatch({ kind: 'setComponent', entity, component: 'MeshRenderer', patch: { materials } }, 'ai');
+    const result = bus.dispatch({ kind: 'setComponent', entity, component: 'MeshRenderer', patch: { materials } }, 'ai');
+    console.info(`[placement-diag] resolver.materials.patch ${JSON.stringify({
+      entity,
+      guids,
+      handles: materials,
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+    })}`);
   };
 
   bus.subscribe((_doc, lastCommand) => {
@@ -187,13 +228,20 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     if (typeof entity !== 'number') return;
 
     const meshGuid = pendingMeshGuid(lastCommand);
-    if (meshGuid !== null) resolveMesh(entity, meshGuid);
-
     const matGuids = pendingMaterialGuids(lastCommand);
+    const texGuid = pendingTextureGuid(lastCommand);
+    if (meshGuid !== null || matGuids !== null || texGuid !== null) {
+      console.info(`[placement-diag] resolver.command ${JSON.stringify({
+        entity,
+        meshGuid,
+        materialGuids: matGuids,
+        textureGuid: texGuid,
+      })}`);
+    }
+    if (meshGuid !== null) resolveMesh(entity, meshGuid);
     if (matGuids !== null) void resolveMaterials(entity, matGuids);
 
     // ── TEXTURE branch: createMaterial + bindAssetRef (reuses engine refs chain) ──
-    const texGuid = pendingTextureGuid(lastCommand);
     if (texGuid !== null) void resolveTexture(bus, entity, texGuid);
   });
 }

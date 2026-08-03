@@ -51,6 +51,14 @@ export type {
   CreateAssetBrowserReadModelDeps,
 } from '../assets/asset-browser-read-model';
 export { assetWorkspaceSnapshotToBrowserSnapshot } from '../assets/asset-browser-read-model';
+export { describeSceneActivation } from '../assets/scene-activation';
+export type {
+  AuthoredSceneFact,
+  SceneActivationAssetFacts,
+  SceneActivationDescriptor,
+  SceneActivationMode,
+  SceneActivationUnavailable,
+} from '../assets/scene-activation';
 export type {
   AssetWorkspaceSnapshot,
   AssetWorkspaceInput,
@@ -61,10 +69,17 @@ export {
   compareAssetWorkspaceSnapshots,
   createAssetWorkspace,
 } from '@forgeax/editor-product';
-export { assetIO, AssetIOFacade } from '../io/asset-io-facade';
+export {
+  assetIO,
+  AssetIOFacade,
+  AssetResourceConflictError,
+  SOURCE_SIDECAR_REVISION_DOMAIN,
+} from '../io/asset-io-facade';
 export type {
   AssetIoError,
   AssetIoResult,
+  AssetResourceRef,
+  AssetResourceSnapshot,
   AssetResourceTransactionPort,
   SourceFileDeleteResult,
 } from '../io/asset-io-facade';

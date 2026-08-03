@@ -54,6 +54,11 @@ import {
   step,
   warn,
 } from './lib/dev-stack.ts';
+import {
+  DEFAULT_PNPM_NETWORK_CONCURRENCY,
+  engineInstallEnv,
+  runSupervisedCommand,
+} from './lib/setup-process.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
@@ -83,18 +88,25 @@ const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // `bun -F @forgeax/editor-play-runtime dev` path still defaults to 15173
 // (play-runtime/vite.config.ts default — unchanged, so studio keeps working);
 // only fx orchestration pins 15273 (fed via the base `env` FORGEAX_ENGINE_PORT).
-const PLAY_RUNTIME_PORT = 15273;
+function envPort(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const STANDALONE_PORT = envPort('FORGEAX_STANDALONE_PORT', 15290);
+const EDIT_RUNTIME_PORT = envPort('FORGEAX_EDIT_RUNTIME_PORT', 15280);
+const PLAY_RUNTIME_PORT = envPort('FORGEAX_PLAY_RUNTIME_PORT', 15273);
 // The RHI reviewer is a separate dev-only engine app. It receives capture
 // artifacts by URL from the editor host, so opening a frame needs no file picker.
-const RHI_REVIEWER_PORT = 15274;
+const RHI_REVIEWER_PORT = envPort('FORGEAX_RHI_REVIEWER_PORT', 15274);
 // 15296 = editor standalone's DEV-only live gateway bridge relay. Studio's
 // superrepo stack owns :15295; do not reuse it here.
 const EDITOR_BRIDGE_PORT = 15296;
 // These are editor-owned service ports. The bridge port is appended dynamically
 // below so FORGEAX_BRIDGE_PORT overrides are cleaned up without sweeping a
 // hard-coded Studio port.
-const PORTS = [15290, 15280, 15281, PLAY_RUNTIME_PORT, RHI_REVIEWER_PORT];
-const GAME_API_PORT = 15281;
+const GAME_API_PORT = envPort('FORGEAX_GAME_API_PORT', 15281);
+const PORTS = [STANDALONE_PORT, EDIT_RUNTIME_PORT, GAME_API_PORT, PLAY_RUNTIME_PORT, RHI_REVIEWER_PORT];
 // The gateway scripts live under the forgeax-editor-gateway skill (AI-first:
 // the AI tools and their harness ship together). ROOT-relative because
 // spawnService runs with cwd=ROOT. `ws` still resolves — bun walks up to the
@@ -103,7 +115,7 @@ const GATEWAY_RELAY_SCRIPT = 'skills/forgeax-editor-gateway/scripts/gateway-brid
 
 const IS_WIN = process.platform === 'win32';
 
-type ShOptions = { cwd?: string; env?: NodeJS.ProcessEnv };
+type ShOptions = { cwd?: string; env?: NodeJS.ProcessEnv; failureMessage?: string };
 
 /** Run a command synchronously with inherited stdio; die on non-zero exit. */
 function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
@@ -113,7 +125,7 @@ function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
     cwd: opts.cwd ?? ROOT,
     env: opts.env ?? process.env,
   });
-  if (r.status !== 0) die(`command failed: ${cmd} ${args.join(' ')}`);
+  if (r.status !== 0) die(opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`);
 }
 
 /** Run a command synchronously with inherited stdio; return false on failure. */
@@ -146,16 +158,16 @@ function writeEngineDistSha(): void {
 }
 
 /** Refuse to start/CI against dist emitted for a different Engine revision. */
-function requireFreshEngineDist(): void {
+function requireFreshEngineDist(failurePrefix?: string): void {
   const current = engineHead();
   const builtFor = existsSync(ENGINE_DIST_SHA_FILE)
     ? readFileSync(ENGINE_DIST_SHA_FILE, 'utf8').trim()
     : '';
   if (builtFor !== current) {
-    die(
+    const message =
       'engine dist is stale for the current submodule pin. Run: bun fx setup ' +
-        `(built ${builtFor || 'unknown'}, current ${current}).`,
-    );
+      `(built ${builtFor || 'unknown'}, current ${current}).`;
+    die(failurePrefix ? `${failurePrefix} — ${message}` : message);
   }
 }
 
@@ -314,7 +326,14 @@ function update(argv: string[]): void {
 //     so no re-install is needed. --deep/-x wipes those too (re-run setup after).
 //   • SUBMODULES are always deep-scrubbed (-ffdx) — a submodule reports "modified"
 //     to the superproject on ANY untracked content, and the only leftovers are
-//     regenerable gitignored runtime products (engine build/, dist, wasm pkg).
+//     regenerable gitignored runtime products (engine build/, dist, node_modules).
+//     EXCEPTION: the toolchain-gated wasm pkg/ dirs (engine packages/fbx/pkg,
+//     packages/wgpu-wasm/pkg) are preserved — they are gitignored (so they never
+//     dirty the superproject's submodule status) but NOT freely regenerable:
+//     fbx needs the prebuilt GitHub release (network + auth) or a local
+//     Emscripten toolchain, wgpu needs Rust/wasm-pack. Wiping them made every
+//     `clean` → `setup` fail offline (feedback: clean-scrub-wipes-fbx-wasm).
+//     Gated by scripts/lint-clean-preserves-wasm.mjs (bun run lint).
 // .forgeax-harness (floating loop-state clone, own .git) is ALWAYS preserved.
 // --dry-run/-n previews. WARNING: discards ALL uncommitted work — commit first.
 function clean(argv: string[]): void {
@@ -322,14 +341,17 @@ function clean(argv: string[]): void {
   const dryRun = argv.includes('--dry-run') || argv.includes('-n');
   const deepRoot = argv.includes('--deep') || argv.includes('-x');
   const rootFlags = deepRoot ? '-fdx' : '-fd';
-  const subScrub = dryRun ? 'git reset --hard -q && git clean -ffndx' : 'git reset --hard -q && git clean -ffdx';
+  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/'";
+  const subScrub = dryRun
+    ? `git reset --hard -q && git clean -ffndx ${keepWasm}`
+    : `git reset --hard -q && git clean -ffdx ${keepWasm}`;
   const rows: ReportRow[] = [];
   const push = (s: string, result: StepResult, detail?: string): void => {
     rows.push({ step: s, result, detail });
   };
 
   step(
-    `clean: root=${deepRoot ? 'deep (wipes gitignored artefacts — re-run setup after)' : 'standard (keeps node_modules/dist/wasm)'} · submodules=deep${dryRun ? ' · DRY RUN' : ''}`,
+    `clean: root=${deepRoot ? 'deep (wipes gitignored artefacts — re-run setup after)' : 'standard (keeps node_modules/dist/wasm)'} · submodules=deep (keeps toolchain-gated wasm pkg)${dryRun ? ' · DRY RUN' : ''}`,
   );
 
   const run = (s: string, args: string[], okDetail: string): void => {
@@ -452,7 +474,7 @@ function resetEngineNodeModulesIfBunLinked(): void {
   rmSync(nodeModules, { force: true, recursive: true });
 }
 
-function install(): void {
+async function install(): Promise<void> {
   requireCmd('git', 'install git first.');
   requireCmd('bun', 'install bun: https://bun.sh');
   requireCmd('pnpm', 'install pnpm: https://pnpm.io (engine is a pnpm workspace)');
@@ -465,9 +487,26 @@ function install(): void {
   sh('bun', ['install']);
   ok('bun deps ready');
 
-  step('3/6 installing engine deps (pnpm) ...');
+  step(
+    `3/6 installing engine deps (pnpm, network concurrency ${process.env.PNPM_CONFIG_NETWORK_CONCURRENCY ?? DEFAULT_PNPM_NETWORK_CONCURRENCY}) ...`,
+  );
   resetEngineNodeModulesIfBunLinked();
-  sh('pnpm', ['install'], { cwd: ENGINE_DIR });
+  let installResult;
+  try {
+    installResult = await runSupervisedCommand('pnpm', ['install'], {
+      cwd: ENGINE_DIR,
+      env: engineInstallEnv(process.env),
+      stdio: 'inherit',
+    });
+  } catch (error) {
+    die(`could not start pnpm install: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (installResult.interrupted) {
+    die('pnpm install interrupted; its child process tree was cleaned up.');
+  }
+  if (installResult.status !== 0) {
+    die(`command failed: pnpm install (exit ${installResult.status})`);
+  }
   ok('engine deps ready');
 
   // wasm MUST precede the engine dist build: the engine `app` package's tsup
@@ -606,8 +645,8 @@ async function run(argv: string[]): Promise<void> {
   if (!killed) ok('nothing to stop');
 
   // bridgeEnv already folded into `env`; edit-runtime just adds the HMR port.
-  const editRuntimeEnv: NodeJS.ProcessEnv = { ...env, FORGEAX_INTERFACE_PORT: '15290' };
-  const editRuntimeArgs = ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', '15280', '--strictPort'];
+  const editRuntimeEnv: NodeJS.ProcessEnv = { ...env, FORGEAX_INTERFACE_PORT: String(STANDALONE_PORT) };
+  const editRuntimeArgs = ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', String(EDIT_RUNTIME_PORT), '--strictPort'];
 
   if (bg) {
     // Background mode: detached + unref'd so children outlive this process on
@@ -630,7 +669,7 @@ async function run(argv: string[]): Promise<void> {
     });
     spawnService('bun', ['run', 'dev'], { cwd: ROOT, env, detach: true, logFd: log('host') });
     if (rhiDebug)
-      spawnService('pnpm', ['-F', '@forgeax/rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
+      spawnService('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
         cwd: ENGINE_DIR,
         env,
         detach: true,
@@ -653,7 +692,7 @@ async function run(argv: string[]): Promise<void> {
         detach: true,
         logFd: log('play'),
       });
-    ok('stack starting in background → http://localhost:15290');
+    ok(`stack starting in background → http://localhost:${STANDALONE_PORT}`);
     ok('stop with: bun fx stop');
     return;
   }
@@ -667,16 +706,16 @@ async function run(argv: string[]): Promise<void> {
     children.push(spawnService('bun', [join(ROOT, 'standalone', 'game-backend.ts')], { cwd: ROOT, env }));
   }
 
-  step('starting edit-runtime :15280 (HMR→15290) ...');
+  step(`starting edit-runtime :${EDIT_RUNTIME_PORT} (HMR→${STANDALONE_PORT}) ...`);
   children.push(spawnService('bun', editRuntimeArgs, { cwd: ROOT, env: editRuntimeEnv }));
 
-  step('starting standalone host :15290 ...');
+  step(`starting standalone host :${STANDALONE_PORT} ...`);
   children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env }));
 
   if (rhiDebug) {
     step(`starting RHI reviewer :${RHI_REVIEWER_PORT} ...`);
     children.push(
-      spawnService('pnpm', ['-F', '@forgeax/rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
+      spawnService('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
         cwd: ENGINE_DIR,
         env,
       }),
@@ -705,7 +744,7 @@ async function run(argv: string[]): Promise<void> {
     );
   }
 
-  ok('open → http://localhost:15290   (Ctrl-C to stop)');
+  ok(`open → http://localhost:${STANDALONE_PORT}   (Ctrl-C to stop)`);
   // Keep the process alive until a child exits or the user hits Ctrl-C.
   await new Promise<void>((resolvePromise) => {
     for (const ch of children) ch.on('exit', () => resolvePromise());
@@ -718,65 +757,104 @@ async function run(argv: string[]): Promise<void> {
 // smoke-play jobs. The workflow still owns runner provisioning and artifact
 // caching; a local checkout must have already completed `bun fx setup` so its
 // engine dist + wasm artefacts exist.
-function verifyFreshFrozenInstall(): void {
+type CiProfile = 'fast' | 'full';
+type CiStep = readonly [name: string, command: string, args: string[], journey: string, gate: string];
+
+const CI_CONTEXT = 'epic=R0-08 work package=R0-08E gates=C1,C2,C3,C4,C5,C6,C7';
+
+const CI_FAST_STEPS: readonly CiStep[] = [
+  ['platform-io unit tests', 'bun', ['-F', '@forgeax/platform-io', 'test'], 'J0/J1', 'C4/C6/C7'],
+  ['material pack shape', 'bun', ['scripts/validate-material-pack-shape.mjs'], 'J0', 'C4/C5/C6'],
+  ['standalone B2 self-boot', 'bun', ['scripts/selfcheck-standalone-b2.mjs'], 'J0', 'C4/C5/C6'],
+  ['editor lint', 'bun', ['run', 'lint'], 'J0/J1', 'C2/C3'],
+  ['dependency-cycle lint', 'bun', ['run', 'lint:dep'], 'J0/J1', 'C7'],
+  ['editor typecheck', 'bun', ['run', 'typecheck'], 'J0/J1', 'C2/C3/C7'],
+  ['editor-core unit tests', 'bun', ['-F', '@forgeax/editor-core', 'test'], 'J0/J1', 'C2/C4/C6'],
+  ['editor-product unit tests', 'bun', ['-F', '@forgeax/editor-product', 'test'], 'J0', 'C1/C3/C6'],
+  ['editor-panels unit tests', 'bun', ['-F', '@forgeax/editor-panels', 'test'], 'J0/J1', 'C3'],
+  ['edit-runtime unit tests', 'bun', ['-F', '@forgeax/editor-edit-runtime', 'test'], 'J0/J1', 'C5/C6'],
+  ['content-browser unit tests', 'bun', ['-F', '@forgeax/editor-content-browser', 'test'], 'J1', 'C1/C3/C4'],
+];
+
+const CI_COMPLETE_STEPS: readonly CiStep[] = [
+  ...CI_FAST_STEPS,
+  ['browser smoke + viewport Play + save terminal roundtrip', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts', 'e2e/smoke-content-browser.spec.ts', 'e2e/save-operation-run.spec.ts', 'e2e/play-real-game-safety-net.spec.ts'], 'J0/J1', 'C4/C5/C6/C7'],
+];
+
+function ciRoute(profile: CiProfile, journey: string, gate: string): string {
+  return `profile=${profile} ${CI_CONTEXT} journey=${journey} gate=${gate}`;
+}
+
+function parseCiProfile(argv: string[]): CiProfile {
+  if (argv.length === 0 || argv[0] === '--full') return 'full';
+  if (argv[0] === '--fast') return 'fast';
+  die(`unknown ci flag(s): ${argv.join(' ')}`);
+}
+
+function verifyFreshFrozenInstall(profile: CiProfile): void {
+  const route = ciRoute(profile, 'J0/J1', 'C7');
   const branch = gitOut(['branch', '--show-current']);
   const head = gitOut(['rev-parse', 'HEAD']);
-  if (!head) die('local CI could not resolve the editor commit to verify.');
+  if (!head) die(`CI failure: ${route} stage=commit — could not resolve the editor commit to verify.`);
   if (gitOut(['status', '--porcelain']) !== '') {
-    die('local CI requires a clean editor worktree so the fresh clone verifies the exact PR commit. Commit changes first.');
+    die(`CI failure: ${route} stage=clean-worktree — commit changes first so the fresh clone verifies the exact PR commit.`);
   }
   const origin = gitOut(['remote', 'get-url', 'origin']);
-  if (!origin) die('local CI requires an origin remote to reproduce the PR checkout.');
+  if (!origin) die(`CI failure: ${route} stage=origin — an origin remote is required to reproduce the PR checkout.`);
   const tempRoot = mkdtempSync(join(tmpdir(), 'forgeax-editor-ci-'));
   const cloneDir = join(tempRoot, 'repo');
   try {
     // Match actions/checkout's clean recursive checkout. A same-worktree Bun
     // install can reuse parent workspace links and pass even when the committed
     // lock fails on GitHub, as happened with the engine-ui upgrade.
-    sh('git', ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), origin, cloneDir]);
+    sh('git', ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), origin, cloneDir], {
+      failureMessage: `CI failure: ${route} stage=fresh-clone`,
+    });
     if (!branch) {
       // Studio consumes editor as a detached gitlink. Re-check out that exact
       // commit in the clean clone, then realign nested pins before frozen Bun
       // validates the same source tree Studio will ship.
-      sh('git', ['checkout', '--detach', head], { cwd: cloneDir });
-      sh('git', ['submodule', 'update', '--init', '--recursive'], { cwd: cloneDir });
+      sh('git', ['checkout', '--detach', head], {
+        cwd: cloneDir,
+        failureMessage: `CI failure: ${route} stage=exact-checkout`,
+      });
+      sh('git', ['submodule', 'update', '--init', '--recursive'], {
+        cwd: cloneDir,
+        failureMessage: `CI failure: ${route} stage=submodule-checkout`,
+      });
     }
-    sh('npx', ['--yes', 'bun@1.3.14', 'install', '--frozen-lockfile', '--ignore-scripts'], { cwd: cloneDir });
+    sh('npx', ['--yes', 'bun@1.3.14', 'install', '--frozen-lockfile', '--ignore-scripts'], {
+      cwd: cloneDir,
+      failureMessage: `CI failure: ${route} stage=frozen-install`,
+    });
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
 function ci(argv: string[]): void {
-  if (argv.length > 0) die(`unknown ci flag(s): ${argv.join(' ')}`);
+  const profile = parseCiProfile(argv);
+  const route = ciRoute(profile, 'J0/J1', 'C1-C7');
   const requiredArtifacts = [
     join(ENGINE_DIR, 'packages', 'vite-plugin-shader', 'dist', 'index.mjs'),
     join(ENGINE_DIR, 'packages', 'wgpu-wasm', 'pkg', 'wgpu_wasm_bg.wasm'),
   ];
   if (requiredArtifacts.some((path) => !existsSync(path))) {
-    die('engine dist/wasm artefacts missing. Run `bun fx setup` before `bun fx ci`.');
+    die(`CI failure: ${route} stage=setup — engine dist/wasm artefacts missing. Run \`bun fx setup\`.`);
   }
-  requireFreshEngineDist();
+  requireFreshEngineDist(`CI failure: ${route} stage=engine-dist`);
 
-  const steps: readonly [string, string, string[]][] = [
-    ['platform-io unit tests', 'bun', ['-F', '@forgeax/platform-io', 'test']],
-    ['standalone B2 self-boot', 'bun', ['scripts/selfcheck-standalone-b2.mjs']],
-    ['editor lint', 'bun', ['run', 'lint']],
-    ['dependency-cycle lint', 'bun', ['run', 'lint:dep']],
-    ['editor typecheck', 'bun', ['run', 'typecheck']],
-    ['editor-core unit tests', 'bun', ['-F', '@forgeax/editor-core', 'test']],
-    ['editor-product unit tests', 'bun', ['-F', '@forgeax/editor-product', 'test']],
-    ['editor-panels unit tests', 'bun', ['-F', '@forgeax/editor-panels', 'test']],
-    ['edit-runtime unit tests', 'bun', ['-F', '@forgeax/editor-edit-runtime', 'test']],
-    ['browser smoke + save terminal roundtrip', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts', 'e2e/smoke-content-browser.spec.ts', 'e2e/save-operation-run.spec.ts']],
-  ];
-  step('CI: fresh recursive checkout frozen Bun 1.3.14 install ...');
-  verifyFreshFrozenInstall();
-  for (const [name, command, args] of steps) {
-    step(`CI: ${name} ...`);
-    sh(command, [...args]);
+  const steps = profile === 'fast' ? CI_FAST_STEPS : CI_COMPLETE_STEPS;
+  step(`CI: ${route} stage=fresh-clone ...`);
+  verifyFreshFrozenInstall(profile);
+  for (const [name, command, args, journey, gate] of steps) {
+    const stepRoute = ciRoute(profile, journey, gate);
+    step(`CI: ${stepRoute} stage=${name} ...`);
+    sh(command, [...args], {
+      failureMessage: `CI failure: ${stepRoute} stage=${name} command=${command} ${args.join(' ')}`,
+    });
   }
-  ok('local PR CI passed');
+  ok(`local CI passed: ${route}`);
 }
 
 function usage(): void {
@@ -804,10 +882,16 @@ Repo maintenance:
                                 fast-forward .forgeax-harness (auto-stash local edits)
   clean [--deep|-x] [--dry-run|-n]
                                 restore a fully-clean git status across root + all
-                                submodules (scrubs regenerable artefacts). --deep also
+                                submodules (scrubs regenerable artefacts; keeps the
+                                toolchain-gated engine wasm pkg dirs). --deep also
                                 wipes root node_modules/dist/wasm. Keeps .forgeax-harness.
-  ci                            run the required PR CI surface locally; requires
-                                bun fx setup and installed Playwright Chromium.
+  ci [--fast|--full]            run the local CI surface with stable
+                                epic/work-package/journey/C1-C7 routing labels.
+                                --fast is the build/unit subset (no browser smoke);
+                                --full adds browser smoke and remains the default.
+  ci:fast / ci:full             package-script aliases for the two profiles;
+                                both require bun fx setup; --full also needs
+                                installed Playwright Chromium.
 
   help | -h | --help            show this message
 
@@ -820,7 +904,7 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'install':
     case 'setup':
-      install();
+      await install();
       break;
     case 'run':
     case 'start':

@@ -7,6 +7,7 @@ import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, resolve
 import { recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { planAssetPlacement } from '../assets/asset-placement-plan';
 import { sessionAppliers } from '../io/appliers';
+import { broadcastAssetsError } from '../store/assets-error-bus';
 import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
 import type { CommandError } from '../types';
@@ -29,6 +30,13 @@ function toDragRef(ref: AssetChatRef): DragAssetRef {
 
 async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
   const kind = ref.kind ?? '';
+  console.info(`[placement-diag] reference.begin ${JSON.stringify({
+    guid: ref.guid,
+    kind,
+    name: ref.name,
+    path: ref.path,
+    gatewayRev: gateway.rev,
+  })}`);
 
   // feat-20260708 M1 path 1 (plan-strategy D-4, AC-02/AC-04): for a mesh ref,
   // recover the source glTF per-submesh material GUIDs BEFORE building the spawn
@@ -39,11 +47,35 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
   // recovered materials never reached the world and vanished on reopen/Play
   // (AGENTS.md #2 / AC-04). Best-effort: any recovery miss leaves it single-material.
   const materialGuids = kind === 'mesh' ? await recoverMeshOriginalMaterialGuids(ref) : undefined;
+  console.info(`[placement-diag] reference.dependencies ${JSON.stringify({
+    guid: ref.guid,
+    kind,
+    materialGuids: materialGuids ?? [],
+  })}`);
 
   const plan = planAssetPlacement(ref, materialGuids ? { materialGuids } : undefined);
+  console.info(`[placement-diag] reference.plan ${JSON.stringify(plan.ok
+    ? {
+        ok: true,
+        operation: plan.plan.operation,
+        componentKeys: plan.plan.operation === 'spawnEntity' ? Object.keys(plan.plan.args.components) : [],
+      }
+    : { ok: false, code: plan.error.code, hint: plan.error.hint })}`);
   if (!plan.ok || plan.plan.operation !== 'spawnEntity') return false;
 
-  gateway.dispatch(plan.plan.args);
+  const dispatchResult = gateway.dispatch(plan.plan.args);
+  console.info(`[placement-diag] reference.dispatch ${JSON.stringify(dispatchResult.ok
+    ? {
+        ok: true,
+        created: dispatchResult.result?.created ?? [],
+        gatewayRev: gateway.rev,
+      }
+    : {
+        ok: false,
+        code: dispatchResult.error.code,
+        hint: dispatchResult.error.hint,
+        gatewayRev: gateway.rev,
+      })}`);
   broadcastAssetsChanged();
   console.info('[CB:import] spawn.reference', { kind, guid: ref.guid, name: plan.plan.args.name });
   return true;
@@ -288,8 +320,8 @@ sessionAppliers.set('addSceneAssetToScene', (op) => {
 //
 // Request-correlated async (R0-05C): the applier returns the completion promise to
 // the Gateway, which owns the accepted/running/terminal OperationRun. Writes onto
-// an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine
-// mount-override round-trip (P6 ENGINE-FINDING), not this op.
+// an owned entity or mount member; engine collection folds supported member field
+// patches into the parent pack's mounts[].overrides[].
 type BindAssetRefRunResult = {
   requestId: string;
   entity: number;
@@ -495,15 +527,23 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
       const plan = planAssetPlacement({ ...drag, guid: sceneGuid, name: label }, { requestId, sceneGuid });
       if (!plan.ok) {
         console.warn('[spawn-asset] placement plan rejected:', plan.error.code, plan.error.hint);
+        broadcastAssetsError({ op: 'placeAsset', ...(drag.path ? { path: drag.path } : {}), hint: plan.error.hint });
         return;
       }
       if (plan.plan.operation !== 'addSceneAssetToScene') {
-        console.warn('[spawn-asset] placement plan selected a non-scene operation for a scene ref');
+        const hint = 'placement plan selected a non-scene operation for a scene ref';
+        console.warn('[spawn-asset]', hint);
+        broadcastAssetsError({ op: 'placeAsset', ...(drag.path ? { path: drag.path } : {}), hint });
         return;
       }
       const r = gateway.dispatch(plan.plan.args);
       if (r.ok) return;
       console.warn('[spawn-asset] addSceneAssetToScene dispatch rejected:', r.error?.code, r.error?.hint);
+      broadcastAssetsError({
+        op: 'addSceneAssetToScene',
+        ...(drag.path ? { path: drag.path } : {}),
+        hint: r.error?.hint ?? 'addSceneAssetToScene dispatch rejected',
+      });
       return;
     }
 
@@ -526,14 +566,20 @@ export async function spawnAssetRefToScene(ref: AssetChatRef | DragAssetRef): Pr
       }
     }
 
-    console.warn(
-      '[spawn-asset] no spawnable scene/mesh sub-asset in package:',
-      { importer: drag.payload?.importer, meshCount: meshRefs.length, metaPath: drag.path },
-    );
+    const hint = 'No spawnable scene or mesh sub-asset is available in this package.';
+    console.warn('[spawn-asset] no spawnable scene/mesh sub-asset in package:', {
+      importer: drag.payload?.importer, meshCount: meshRefs.length, metaPath: drag.path,
+    });
+    broadcastAssetsError({ op: 'placeAsset', ...(drag.path ? { path: drag.path } : {}), hint });
     return;
   }
 
+  const refusal = planAssetPlacement(drag);
+  const hint = refusal.ok
+    ? `Asset kind '${kind}' did not produce a supported scene placement operation.`
+    : refusal.error.hint;
   console.warn('[spawn-asset] unsupported asset kind for Add to Scene:', kind, drag.guid);
+  broadcastAssetsError({ op: 'placeAsset', ...(drag.path ? { path: drag.path } : {}), hint });
 }
 
 /** Add an asset to the active Scene viewport (context-menu equivalent of dragging

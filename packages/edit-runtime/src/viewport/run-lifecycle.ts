@@ -286,7 +286,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     } catch (error) {
       starting = false;
       if (disposed || token !== generation) return;
-      console.warn('[editor] ▶ Play assemble threw:', error);
+      console.error('[editor] ▶ Play assemble threw:', error);
       resumeEditorIfLive();
       reportPlayFailure(error);
       return;
@@ -297,7 +297,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       return;
     }
     if (!res.ok) {
-      console.warn('[editor] ▶ Play assemble failed:', res.error);
+      console.error('[editor] ▶ Play assemble failed:', res.error);
       resumeEditorIfLive();
       // solo round-8 #3: surface the failure through the front door so playPhase
       // reads 'failed' + lastPlayError carries why — instead of silently degrading
@@ -313,7 +313,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // play world (D-2). The shared renderer draws the play world per-frame (D-1).
     const startR = active.playApp.start();
     if (!startR.ok) {
-      console.warn('[editor] ▶ Play playApp.start() failed:', startR.error);
+      console.error('[editor] ▶ Play playApp.start() failed:', startR.error);
       const failedAssembly = active;
       active = null;
       stopAssembly(failedAssembly, '▶ Play start failure');

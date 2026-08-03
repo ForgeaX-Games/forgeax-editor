@@ -19,13 +19,14 @@ function deps() {
       setDisplay: (display: 'scene' | 'game') => { calls.push(`display:${display}`); },
       grantGameControl: () => { calls.push('grant'); },
       releaseGameControl: () => { calls.push('release'); },
+      captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' }; },
       world,
     },
   };
 }
 
 describe('viewport session applier registrar (M3)', () => {
-  it('registers all seven operations and routes calls to runtime deps', () => {
+  it('registers all eight operations and routes calls to runtime deps', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));
     expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toEqual({ ok: true });
@@ -37,6 +38,100 @@ describe('viewport session applier registrar (M3)', () => {
     expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });
     expect(d.calls).toEqual(['play:last-saved', 'stop', 'display:game', 'grant', 'release', 'removeSystem']);
+  });
+
+  it('captures through the gateway and exposes the recorder result via OperationRun', async () => {
+    const d = deps();
+    registered.push(registerViewportSessionAppliers(d.value));
+    const requestId = 'capture-session-test';
+    const accepted = gateway.dispatch({ kind: 'captureFrame', frames: 1, requestId }, 'ai');
+    expect(accepted).toMatchObject({ ok: true, result: { operationRun: { requestId, operationId: 'captureFrame', status: 'running' } } });
+    expect(await gateway.waitOperationRun(requestId)).toMatchObject({
+      ok: true,
+      value: {
+        status: 'succeeded',
+        result: { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' },
+      },
+    });
+    expect(d.calls).toContain('capture:1');
+  });
+
+  it('reports missing RHI debug as a structured gateway error', () => {
+    const d = deps();
+    registered.push(registerViewportSessionAppliers({ ...d.value, captureFrame: undefined }));
+    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-no-debug' })).toMatchObject({
+      ok: false,
+      error: { code: 'rhi-debug-unavailable', retryable: true },
+    });
+  });
+
+  it('retries a failed capture with a new request identity', async () => {
+    const d = deps();
+    let attempts = 0;
+    registered.push(registerViewportSessionAppliers({
+      ...d.value,
+      captureFrame: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('debug upload failed');
+        return { runId: 'capture-retry', tapePath: 'retry.tape.bin', reportPath: 'retry.report.json' };
+      },
+    }));
+    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-retry-source' }, 'ai')).toMatchObject({ ok: true });
+    expect(await gateway.waitOperationRun('capture-retry-source')).toMatchObject({
+      ok: true,
+      value: { status: 'failed', retryable: true, error: { code: 'rhi-capture-failed' } },
+    });
+    expect(gateway.retryOperationRun('capture-retry-source', 'capture-retry-attempt-2', 'ai')).toMatchObject({
+      ok: true,
+      result: { operationRun: { requestId: 'capture-retry-attempt-2', parentRunId: expect.any(String), attempt: 2 } },
+    });
+    expect(await gateway.waitOperationRun('capture-retry-attempt-2')).toMatchObject({
+      ok: true,
+      value: { status: 'succeeded', result: { runId: 'capture-retry' } },
+    });
+  });
+
+  it('preserves structured RHI timeout evidence in the Gateway cause', async () => {
+    const d = deps();
+    registered.push(registerViewportSessionAppliers({
+      ...d.value,
+      captureFrame: async () => {
+        throw {
+          code: 'snapshot-timeout',
+          expected: 'frame-header resource snapshot completes within 30000 ms',
+          hint: 'GPU readback did not complete',
+          detail: {
+            timeoutMs: 30000,
+            stage: 'resource-readback',
+            totalResources: 42,
+            completedResources: 17,
+            skippedResources: 3,
+            currentHandleId: 'texture:99',
+            currentKind: 'texture',
+            elapsedMs: 30001,
+          },
+        };
+      },
+    }));
+    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-structured-error' }, 'ai')).toMatchObject({ ok: true });
+    expect(await gateway.waitOperationRun('capture-structured-error')).toMatchObject({
+      ok: true,
+      value: {
+        status: 'failed',
+        error: {
+          code: 'rhi-capture-failed',
+          owner: 'engine',
+          cause: {
+            code: 'snapshot-timeout',
+            owner: 'engine',
+            details: {
+              expected: 'frame-header resource snapshot completes within 30000 ms',
+              detail: { completedResources: 17, currentKind: 'texture' },
+            },
+          },
+        },
+      },
+    });
   });
 
   it('validates display/name, rejects duplicate registration, and disposes idempotently', () => {

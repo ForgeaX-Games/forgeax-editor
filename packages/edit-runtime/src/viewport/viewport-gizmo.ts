@@ -100,6 +100,34 @@ function invQuat(q: [number, number, number, number]): [number, number, number, 
 
 const IDENTITY_QUAT: [number, number, number, number] = [0, 0, 0, 1];
 
+/**
+ * Build an editor overlay material using the engine MaterialAsset contract.
+ * Queue and depth state are pass render-state fields; keeping this constructor
+ * shared prevents auxiliary gizmos from silently falling back to scene depth.
+ */
+export function createOverlayMaterial(
+  editorEngine: EngineFacade,
+  color: [number, number, number],
+  queue: number,
+): Handle<'MaterialAsset', 'shared'> {
+  const base = Materials.unlit([color[0], color[1], color[2], 1], { castShadow: false }) as {
+    passes?: { renderState?: Record<string, unknown> }[];
+  };
+  const mat = {
+    ...base,
+    passes: (base.passes ?? []).map((p) => ({
+      ...p,
+      renderState: {
+        ...(p.renderState ?? {}),
+        queue,
+        depthCompare: 'always',
+        depthWriteEnabled: false,
+      },
+    })),
+  };
+  return editorEngine.allocSharedRef('MaterialAsset', mat);
+}
+
 export function createGizmoPool({
   editorEngine, getSelection, getGizmoMode, getSelectionWorldTransform,
   getSelectionWorldQuat, getGizmoSpace,
@@ -133,28 +161,13 @@ export function createGizmoPool({
     return coneMesh;
   }
 
-  function buildOverlayMat(color: [number, number, number], queue: number): Handle<'MaterialAsset', 'shared'> {
-    const base = Materials.unlit([color[0], color[1], color[2], 1], { castShadow: false }) as {
-      passes?: { queue?: number; renderState?: Record<string, unknown> }[];
-    };
-    const mat = {
-      ...base,
-      passes: (base.passes ?? []).map((p) => ({
-        ...p,
-        queue,
-        renderState: { ...(p.renderState ?? {}), depthCompare: 'always', depthWriteEnabled: false },
-      })),
-    };
-    return editorEngine.allocSharedRef('MaterialAsset', mat);
-  }
-
   function ensureMats(): Handle<'MaterialAsset', 'shared'>[] {
-    if (!gizmoMats) gizmoMats = AXES.map((a) => buildOverlayMat(a.color, 4000));
+    if (!gizmoMats) gizmoMats = AXES.map((a) => createOverlayMaterial(editorEngine, a.color, 4000));
     return gizmoMats;
   }
 
   function ensureTipMats(): Handle<'MaterialAsset', 'shared'>[] {
-    if (!tipMats) tipMats = AXES.map((a) => buildOverlayMat(a.color, 4001));
+    if (!tipMats) tipMats = AXES.map((a) => createOverlayMaterial(editorEngine, a.color, 4001));
     return tipMats;
   }
 

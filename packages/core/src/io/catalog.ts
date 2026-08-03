@@ -487,6 +487,26 @@ const builtinOps: ReadonlyArray<{
     title: 'Set Gizmo Mode',
   },
   { id: 'requestFrame', domain: 'session', argsSchema: null, title: 'Request Frame' },
+  { id: 'captureFrame', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        frames: { type: 'number', minimum: 1, maximum: 8, description: 'Number of consecutive frames to record. Defaults to 1.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to read the captured tape result.' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed capture run being retried; the new requestId remains the public identity of the new attempt.' },
+      },
+      required: ['requestId'],
+    },
+    title: 'Capture RHI Frame',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
   { id: 'requestRename', domain: 'session',
     argsSchema: { type: 'object', properties: { entity: { type: 'number' } }, required: ['entity'] },
     title: 'Request Rename',
@@ -499,12 +519,154 @@ const builtinOps: ReadonlyArray<{
     title: 'Set Scene Id',
   },
   { id: 'switchSceneFile', domain: 'session',
-    argsSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        dirtyPolicy: {
+          type: 'string',
+          enum: ['save', 'discard', 'cancel'],
+          description: 'When the outgoing scene has unsaved edits: save before switching, discard the in-memory edits, or cancel without switching. Omit only when the scene is clean; dirty omission returns scene-switch-dirty.',
+        },
+      },
+      required: ['id'],
+    },
     title: 'Switch Scene',
   },
+  { id: 'previewImportedScene', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', minLength: 1, description: 'Imported scene output GUID resolved through loadByGuid.' },
+        sourceKey: { type: 'string', minLength: 1, description: 'Catalog/workspace source identity; never inferred from a file suffix.' },
+        sourcePath: { type: 'string' },
+        revision: { type: 'string' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted OperationRun identity for preview load completion.' },
+      },
+      required: ['guid', 'sourceKey', 'revision', 'requestId'],
+    },
+    title: 'Preview Imported Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
+  { id: 'editImportedSource', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', minLength: 1, description: 'Imported scene output GUID. The current Engine lacks the source-authoring producer contract, so this operation fails closed.' },
+        sourceKey: { type: 'string', minLength: 1, description: 'Producer-issued output sourceKey; never inferred from a filename or output index.' },
+        metaPath: { type: 'string', minLength: 1, description: 'Workspace-observed metadata path; retained for API compatibility and never written while source authoring is unavailable.' },
+        revision: { type: 'string', minLength: 1, description: 'Effective DDC revision retained for API compatibility.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      },
+      required: ['guid', 'sourceKey', 'metaPath', 'revision', 'requestId'],
+    },
+    title: 'Edit Imported Source (Unavailable)',
+  },
+  { id: 'saveImportedSource', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      },
+      required: ['requestId'],
+    },
+    title: 'Save Imported Source Overrides (Unavailable)',
+  },
+  { id: 'promoteImportedScene', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        importedGuid: { type: 'string', minLength: 1, description: 'Imported scene GUID currently active in the authoring session.' },
+        sourceKey: { type: 'string', minLength: 1, description: 'Producer-issued imported output identity. Must match the active session.' },
+        revision: { type: 'string', minLength: 1, description: 'Effective imported revision. Must match the active session.' },
+        targetPackPath: { type: 'string', minLength: 1, description: 'Explicit game-relative authored .pack.json target. Never inferred from the source path.' },
+        targetName: { type: 'string', minLength: 1, description: 'Explicit authored scene name stored on the new pack entry.' },
+        contentPolicy: { type: 'string', enum: ['effective-base', 'current-session'], description: 'effective-base promotes the immutable preview; current-session fails closed until Engine source authoring is available.' },
+        discardSourceChanges: { type: 'boolean', description: 'Reserved compatibility field; no source-edit session exists with the current Engine.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      },
+      required: ['importedGuid', 'sourceKey', 'revision', 'targetPackPath', 'targetName', 'contentPolicy', 'requestId'],
+    },
+    title: 'Promote Imported Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
   { id: 'createSceneFile', domain: 'session',
-    argsSchema: { type: 'object', properties: { id: { type: 'string' }, duplicateCurrent: { type: 'boolean' } }, required: ['id'] },
-    title: 'Create Scene',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', minLength: 1, description: 'New scene slug. The persisted file is assets/scenes/<slug>.pack.json.' },
+        duplicateCurrent: { type: 'boolean', description: 'When true, serialize the currently loaded scene into the new pack with a new scene GUID; when false, create a canonical empty scene.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed create/duplicate run being retried; the new requestId remains the public identity of the new attempt.' },
+      },
+      required: ['id', 'duplicateCurrent', 'requestId'],
+    },
+    title: 'Create or Duplicate Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
+  {
+    id: 'setDefaultScene', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        sceneGuid: { type: 'string', minLength: 1, description: 'Stable GUID of a scene asset in the active scene manifest. This writes forge.json.defaultScene; it is not a scene id or pack path.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed default-scene run being retried; the new requestId remains the public identity of the new attempt.' },
+      },
+      required: ['sceneGuid', 'requestId'],
+    },
+    title: 'Set Default Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
+  {
+    id: 'deleteScene', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        sceneGuid: { type: 'string', minLength: 1, description: 'Stable GUID of a scene asset in the active scene manifest. Current, default, and referenced scenes return a terminal scene-delete-guarded error with impact details.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed delete-scene run being retried; the new requestId remains the public identity of the new attempt.' },
+      },
+      required: ['sceneGuid', 'requestId'],
+    },
+    title: 'Delete Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
   {
     id: 'saveDocToDisk', domain: 'session',
@@ -801,9 +963,8 @@ const builtinOps: ReadonlyArray<{
   },
   // bindAssetRef (R0-05C): session-domain, ledger-only, request-correlated async.
   // Cataloged so AI self-discovers the same human binder via listOps().
-  // The missing front-door binder for shared<T> component fields: addComponent/
-  // setComponent pass value RAW (no GUID->handle resolution), so a GUID in a
-  // shared<T> field silently becomes handle 0. This op resolves each GUID
+  // The async front-door binder for shared<T> component fields. Component ops
+  // also resolve already-catalogued GUIDs synchronously; this op can load first.
   // (loadByGuid -> allocSharedRef) and writes the live handle(s) into the field via
   // a document setComponent (undoable, round-trips). One op for the whole class:
   // materials / equirect / animation-clips.
@@ -811,7 +972,7 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        entity: { type: 'number', description: 'Target entity handle (an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine mount-override round-trip, not this op).' },
+        entity: { type: 'number', description: 'Target entity handle. Owned entities and mount members are supported; mount-member shared refs fold into mounts[].overrides[] on save.' },
         component: { type: 'string', description: 'Component carrying the shared<T> field, e.g. "MeshRenderer", "Skylight", "AnimationPlayer". Must already be present on the entity (this patches it).' },
         field: { type: 'string', description: 'The shared<T> field to bind, e.g. "materials", "equirect", "clips". Discover its type via gateway.describeComponent(component).' },
         assetType: { type: 'string', description: 'Engine asset-union tag for allocSharedRef, e.g. "MaterialAsset", "EquirectAsset", "AnimationClip". Must match the field\'s shared<T> target type.' },

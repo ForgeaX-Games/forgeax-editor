@@ -30,12 +30,20 @@ export interface CBAsset extends CBItem {
   packPath: string;
   /** Game-relative author source path, when the catalog provides one. */
   sourcePath?: string;
+  /** Producer-issued output identity; never inferred from a path or index. */
+  sourceKey?: string;
+  /** Effective imported output revision. */
+  revision?: string;
+  /** Workspace-observed sidecar path used by explicit source editing. */
+  metaPath?: string;
   /** Zero-based index within the pack's `assets[]` array. */
   packIndex: number;
   /** GUID cross-references from pack `assets[].refs`. */
   refs: string[];
   /** Producer-owned placement/binding facts; never inferred from `kind`. */
   authoring?: import('@forgeax/engine-types').AssetAuthoringCapability;
+  /** Catalog/workspace-derived activation policy; UI must not re-infer it. */
+  activation?: import('@forgeax/editor-core').SceneActivationDescriptor;
   /** Cached thumbnail data URL or endpoint URL. */
   thumbnailUrl?: string;
   /** Pack file mtime (all assets in the same pack share this value). */

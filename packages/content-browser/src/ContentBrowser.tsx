@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useHost } from '@forgeax/interface/core/app-shell';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { generateAssetGuid, gateway, getSceneId, onSceneListChange, requestAddAssetsToChat, resolveGamePath, showContextMenu,
-  ResizeHandle, useLocalSize, getSceneList, validateAssetBasename } from '@forgeax/editor-core';
+import { describeSceneActivation, generateAssetGuid, gateway, requestAddAssetsToChat, resolveGamePath, showContextMenu,
+  ResizeHandle, useLocalSize, useSceneReadModel, validateAssetBasename } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
 // (standalone main.tsx / studio editorRenderers.tsx). Both are async.
@@ -23,7 +23,7 @@ import { useFavorites, type CBFavoriteRef } from './hooks/useFavorites';
 import { useCBData } from './hooks/useCBData';
 import { useCBDerivedView } from './hooks/useCBDerivedView';
 import { useContentBrowserCommands } from './hooks/useContentBrowserCommands';
-import { computeDeleteImpact } from './delete-guard';
+import { computeDeleteImpact, computeSceneDeleteGuards } from './delete-guard';
 import { authorizeSubjectAction, preflightSubjectAction, type SubjectActionRequest } from './workspace/subject-actions';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, dispatchReimportAsset, type CRUDCallbacks } from './CBContextMenu';
@@ -39,6 +39,8 @@ import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asse
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { resolveFileActivateAction } from './folder-view';
 import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
+import { SceneEntryBar } from './SceneEntryBar';
+import { sceneActivationToOp, scenePromoteToOp, sceneSourceEditToOp } from './scene-activation-route';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
 import {
   viewItemKey,
@@ -88,14 +90,27 @@ export function ContentBrowser() {
   // Host boot configures the game session asynchronously after the shell mounts.
   // Subscribe to the existing scene-list signal so the read model is rebuilt
   // from the real slug instead of remaining on the initial `default` guard.
-  const sessionGameSlug = useSyncExternalStore(onSceneListChange, getSceneId, getSceneId);
+  const sceneModel = useSceneReadModel();
   // The standalone host already has the authoritative slug at compile time;
   // use it during the async host-session gap, then let the scene-list signal
   // take over for scene switches and embedded hosts.
-  const gameSlug = sessionGameSlug === 'default' && typeof __FORGEAX_GAME_SLUG__ === 'string'
+  const gameSlug = sceneModel.gameId === null && typeof __FORGEAX_GAME_SLUG__ === 'string'
     ? __FORGEAX_GAME_SLUG__
-    : sessionGameSlug;
-  const { allAssets, loading, reload, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
+    : (sceneModel.gameId ?? 'default');
+  const { allAssets: catalogAssets, loading, reload, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
+  const allAssets = useMemo(() => catalogAssets.map((asset) => {
+    const activation = describeSceneActivation({
+      guid: asset.guid,
+      kind: asset.kind,
+      packageUrl: asset.packPath,
+      sourcePath: asset.sourcePath,
+      sourceKey: asset.sourceKey,
+      metaPath: asset.metaPath,
+      revision: asset.revision,
+      authoring: asset.authoring,
+    }, sceneModel.scenes, workspaceSnapshot.revision);
+    return activation === null ? asset : { ...asset, activation };
+  }), [catalogAssets, sceneModel.scenes, workspaceSnapshot.revision]);
   const [thumbnailSize, setThumbnailSize] = useState(80);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const currentImportRun = importProgress?.currentRun;
@@ -262,28 +277,66 @@ export function ContentBrowser() {
   );
 
   const [deleteTargets, setDeleteTargets] = useState<CBAsset[] | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const sceneDeleteGuards = useMemo(
+    () => computeSceneDeleteGuards(deleteTargets ?? [], sceneModel, workspaceSnapshot),
+    [deleteTargets, sceneModel, workspaceSnapshot],
+  );
+  const [pendingSceneSwitch, setPendingSceneSwitch] = useState<string | null>(null);
   const requestDelete = useCallback((targets: CBAsset[]) => {
     if (targets.length === 0) return;
+    setDeleteError(null);
     setDeleteTargets(targets);
   }, []);
   const performDelete = useCallback(() => {
-    setDeleteTargets(current => {
-      if (current) {
-        const gates = current.map((asset) => preflightSubjectAction({
-          operation: 'delete',
-          asset,
-          snapshot: workspaceSnapshot,
-        }));
-        if (gates.some((gate) => !gate.preflight.ok)) return null;
-        for (const a of current) {
-          const gate = gates.find((entry) => entry.request.subjectId === a.guid);
-          if (!gate || !authorizeSubjectAction(gate).ok) return null;
-          gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid }, 'human');
+    const current = deleteTargets;
+    if (!current) return;
+    void (async () => {
+      const gates = current.map((asset) => preflightSubjectAction({
+        operation: 'delete',
+        asset,
+        snapshot: workspaceSnapshot,
+      }));
+      const rejected = gates.find((gate) => !gate.preflight.ok);
+      if (rejected) {
+        setDeleteError(rejected.preflight.error?.hint ?? 'Delete preflight was rejected; refresh the asset browser and try again.');
+        return;
+      }
+      if (gates.some((gate) => !authorizeSubjectAction(gate).ok)) {
+        setDeleteError('Delete confirmation is no longer valid; refresh the asset browser and try again.');
+        return;
+      }
+
+      for (const asset of current) {
+        if (asset.kind !== 'scene') {
+          const result = gateway.dispatch({ kind: 'destroyAsset', packPath: asset.packPath, guid: asset.guid }, 'human');
+          if (!result.ok) {
+            setDeleteError(result.error.hint);
+            return;
+          }
+          continue;
+        }
+
+        const requestId = crypto.randomUUID();
+        const accepted = gateway.dispatch({ kind: 'deleteScene', sceneGuid: asset.guid, requestId }, 'human');
+        if (!accepted.ok) {
+          setDeleteError(accepted.error.hint);
+          return;
+        }
+        const terminal = await gateway.waitOperationRun(requestId);
+        if (!terminal.ok) {
+          setDeleteError(terminal.error.hint);
+          return;
+        }
+        if (terminal.value.status !== 'succeeded') {
+          setDeleteError(terminal.value.error?.hint ?? 'Scene deletion was refused; inspect the reported impact and retry.');
+          return;
         }
       }
-      return null;
-    });
-  }, [workspaceSnapshot]);
+      setDeleteError(null);
+      setDeleteTargets(null);
+    })();
+  }, [deleteTargets, workspaceSnapshot]);
 
   // Path-domain delete confirm (folders / source files) — mirrors the asset
   // DeleteGuardDialog but for filesystem paths, using the same reliable cb-dialog
@@ -306,6 +359,23 @@ export function ContentBrowser() {
   // M3 (AC-03): asset-selection is a transient op — it goes through the one
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
   // (gateway-only door, M3), which is no longer exported from the barrel.
+  const requestSceneSwitch = useCallback((id: string) => {
+    const result = gateway.dispatch({ kind: 'switchSceneFile', id }, 'human');
+    if (!result.ok && result.error.code === 'scene-switch-dirty') {
+      setPendingSceneSwitch(id);
+    }
+  }, []);
+
+  const resolveSceneSwitch = useCallback((dirtyPolicy: 'save' | 'discard' | 'cancel') => {
+    const id = pendingSceneSwitch;
+    setPendingSceneSwitch(null);
+    if (id !== null && dirtyPolicy !== 'cancel') {
+      gateway.dispatch({ kind: 'switchSceneFile', id, dirtyPolicy }, 'human');
+    }
+  }, [pendingSceneSwitch]);
+
+  // M3 (AC-03): asset-selection is a transient op dispatched through the one
+  // gateway door, and scene switches use the same Gateway policy path as AI.
   const openAsset = useCallback((asset: CBAsset) => {
     // M1 (AC-B2): single-asset select uses the `setAssetSelectionOne` sugar op
     // (forwards to the multi-base setAssetSelection applier). The bare
@@ -319,24 +389,14 @@ export function ContentBrowser() {
       payload: asset.payload,
       packPath: asset.packPath,
     } });
-    if (asset.kind === 'scene') {
-      const rel = catalogPathToRoot(asset.packPath, gameSlug, catalogAssetRoots);
-      if (!rel) {
-        console.warn('[content-browser][diag] openAsset: scene packPath is outside the declared asset roots — scene switch skipped', {
-          packPath: asset.packPath, gameSlug, roots: catalogAssetRoots,
-        });
-        return;
+    if (asset.activation) {
+      if (asset.activation.mode === 'open-authored') {
+        requestSceneSwitch(asset.activation.authoredSceneId ?? '');
+      } else {
+        gateway.dispatch(sceneActivationToOp(asset.activation, asset.sourcePath), 'human');
       }
-      const entry = getSceneList().find(s => s.pack === rel);
-      if (!entry) {
-        console.warn('[content-browser][diag] openAsset: scene not found in sceneList (stale boot-time scan or path mismatch) — scene switch skipped', {
-          rel, sceneListPacks: getSceneList().map(s => s.pack),
-        });
-        return;
-      }
-      gateway.dispatch({ kind: 'switchSceneFile', id: entry.id });
     }
-  }, [gameSlug, catalogAssetRoots]);
+  }, [requestSceneSwitch]);
 
   // Double-click: drill into a folder, or open an asset. The file-branch
   // routing (scene switch beats pack expansion) lives in the pure
@@ -431,7 +491,6 @@ export function ContentBrowser() {
 
   const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
     void (async () => {
-      const basePath = resolveGamePath(nav.currentPath || 'assets');
       const name = (await promptDialog({
         title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
         label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
@@ -440,6 +499,13 @@ export function ContentBrowser() {
         cancelText: t('editor.contentBrowser.dialogs.cancel'),
       }))?.trim();
       if (!name) return;
+      if (spec.kind === 'scene') {
+        const requestId = crypto.randomUUID();
+        const result = gateway.dispatch({ kind: 'createSceneFile', id: name, duplicateCurrent: false, requestId }, 'human');
+        if (!result.ok) console.warn('[content-browser] create scene dispatch rejected', result.error);
+        return;
+      }
+      const basePath = resolveGamePath(nav.currentPath || 'assets');
       if (spec.kind === 'material') {
         gateway.dispatch({
           kind: 'createMaterial',
@@ -514,6 +580,7 @@ export function ContentBrowser() {
       ];
     }
     if (item.type === 'file') {
+      const sceneAsset = item.family === 'scene' ? item.assets.find(asset => asset.kind === 'scene') : undefined;
       return [
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
         { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
@@ -549,14 +616,57 @@ export function ContentBrowser() {
           }).catch(() => {});
         } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          setPathDeleteTarget({ path: item.path, name: item.name, kind: 'file' });
+          if (sceneAsset) requestDelete([sceneAsset]);
+          else setPathDeleteTarget({ path: item.path, name: item.name, kind: 'file' });
         } },
       ];
     }
     const favRef = favoriteRef(item);
     const relPath = relByAssetGuid.get(item.guid) ?? catalogPathToRoot(item.packPath, gameSlug, catalogAssetRoots) ?? item.packPath;
     const fullPath = resolveCopyPath(relPath);
+    const importedActions = item.activation?.provenance === 'imported-output'
+      ? [{
+          label: 'Edit Imported Source',
+          icon: 'pencil',
+          disabled: !item.activation.canEditSource,
+          onClick: item.activation.canEditSource
+            ? () => gateway.dispatch(sceneSourceEditToOp(item.activation!))
+            : undefined,
+        }, {
+          label: 'Promote to Editable Scene',
+          icon: 'copy-plus',
+          disabled: !item.activation.canPromote,
+          onClick: item.activation.canPromote
+            ? () => {
+                void (async () => {
+                  const targetName = await promptDialog({
+                    title: 'Promote Imported Scene',
+                    label: 'Authored scene name',
+                    defaultValue: item.name,
+                    confirmText: 'Promote',
+                    cancelText: t('editor.contentBrowser.dialogs.cancel'),
+                    validate: (value) => {
+                      const result = validateAssetBasename(value);
+                      return result.ok ? null : result.hint;
+                    },
+                  });
+                  if (!targetName) return;
+                  const slug = targetName.trim().toLowerCase()
+                    .replace(/[^a-z0-9-]+/g, '-')
+                    .replace(/^-+|-+$/g, '');
+                  if (!slug) return;
+                  gateway.dispatch(scenePromoteToOp(item.activation!, {
+                    targetPackPath: `assets/scenes/${slug}.pack.json`,
+                    targetName,
+                    contentPolicy: 'effective-base',
+                  }), 'human');
+                })();
+              }
+            : undefined,
+        }]
+      : [];
     return [
+      ...importedActions,
       { label: favorites.isFavorite(favRef) ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favRef) },
       { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => crudCallbacks.onRename?.(item) },
       { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
@@ -616,9 +726,13 @@ export function ContentBrowser() {
 
   const openFileContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, file: CBFile) => {
     const firstAsset = file.assets[0];
+    const sceneAsset = file.assets.find(asset => asset.kind === 'scene');
     const items: CBContextMenuEntry[] = [
       { title: file.name, icon: iconNameForFileFamily(file.family) },
-      ...fileSpecificMenuItems(t, file, firstAsset).map(item => ({
+      ...fileSpecificMenuItems(t, file, firstAsset, {
+        sceneGuid: sceneAsset?.guid,
+        defaultSceneGuid: sceneModel.defaultScene?.guid ?? null,
+      }).map(item => ({
         ...item,
         onClick: item.id === 'expand-sub-assets'
           ? () => togglePackExpansion(file.path)
@@ -626,6 +740,15 @@ export function ContentBrowser() {
           ? () => setPreviewItem(file)
           : item.id === 'reimport' && firstAsset
             ? () => dispatchReimportAsset(firstAsset)
+          : item.id === 'set-default-scene' && sceneAsset
+            ? () => {
+              const result = gateway.dispatch({
+                kind: 'setDefaultScene',
+                sceneGuid: sceneAsset.guid,
+                requestId: crypto.randomUUID(),
+              }, 'human');
+              if (!result.ok) console.warn('[content-browser] set default scene dispatch rejected', result.error);
+            }
           : item.id === 'copy-guid' && firstAsset
             ? () => { void navigator.clipboard.writeText(file.assets.map(asset => asset.guid).join('\n')); }
             : undefined,
@@ -635,32 +758,17 @@ export function ContentBrowser() {
       ...commonItemMenu(file),
       { sep: true },
     ];
-    if (firstAsset) {
-      const assetItems = buildAssetContextMenu(firstAsset, multiSelect.selection, allAssets, crudCallbacks)
-        .filter(item => !['rename', 'duplicate', 'delete', 'add-to-chat'].includes(item.id))
-        .map((item): CBContextMenuEntry => item.separator
-          ? { sep: true }
-          : {
-              label: item.label,
-              icon: menuIconForId(item.id),
-              shortcut: item.shortcut,
-              forge: item.forge,
-              danger: item.danger,
-              onClick: item.action,
-              disabled: item.disabled,
-            });
-      items.push(...assetItems);
-      items.push({ sep: true });
-    }
     // Gate on the actual scene asset (kind === 'scene'), matching openAsset's
     // switch condition — not on family alone or assets[0], which may be a
     // non-scene entry in a multi-asset pack.
-    const sceneAsset = file.assets.find(asset => asset.kind === 'scene');
     if (sceneAsset) {
-      items.splice(1, 0, { label: t('editor.contentBrowser.contextMenu.setCurrentScene'), icon: 'flag', onClick: () => openAsset(sceneAsset) });
+      const activationLabel = sceneAsset.activation?.mode === 'preview-imported'
+        ? 'Imported Preview · Read-only'
+        : t('editor.contentBrowser.contextMenu.setCurrentScene');
+      items.splice(1, 0, { label: activationLabel, icon: 'flag', onClick: () => openAsset(sceneAsset) });
     }
     setTimeout(() => showContextMenu(pos, orderContextMenuEntries(items)), 0);
-  }, [allAssets, commonItemMenu, crudCallbacks, multiSelect.selection, openAsset, togglePackExpansion, t]);
+  }, [commonItemMenu, openAsset, sceneModel.defaultScene?.guid, togglePackExpansion, t]);
 
   const handleFileSelected = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -883,6 +991,7 @@ export function ContentBrowser() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
+      <SceneEntryBar />
       <input
         ref={fileInputRef}
         data-cb-file-input="1"
@@ -1036,12 +1145,14 @@ export function ContentBrowser() {
         <DeleteGuardDialog
           targets={deleteTargets}
           impact={computeDeleteImpact(deleteTargets.map(t => t.guid), workspaceSnapshot)}
+          sceneGuards={sceneDeleteGuards}
           preflight={preflightSubjectAction({
             operation: 'delete',
             asset: deleteTargets[0]!,
             snapshot: workspaceSnapshot,
           }).preflight}
           nameByGuid={nameByGuid}
+          error={deleteError}
           onConfirm={performDelete}
           onCancel={() => setDeleteTargets(null)}
         />,
@@ -1097,6 +1208,63 @@ export function ContentBrowser() {
                 onClick={performPathDelete}
               >
                 {t('editor.contentBrowser.deleteGuard.confirm')}
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {pendingSceneSwitch !== null && createPortal(
+        <div
+          className="cb-dialog-overlay"
+          data-testid="scene-switch-policy-dialog"
+          onClick={() => resolveSceneSwitch('cancel')}
+        >
+          <div
+            className="cb-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scene-switch-policy-title"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); resolveSceneSwitch('cancel'); }
+            }}
+            tabIndex={-1}
+          >
+            <div className="cb-dialog-title" id="scene-switch-policy-title">
+              {t('editor.contentBrowser.dialogs.sceneSwitch.title')}
+            </div>
+            <div className="cb-dialog-body">
+              {t('editor.contentBrowser.dialogs.sceneSwitch.body', { name: pendingSceneSwitch })}
+            </div>
+            <div className="cb-dialog-actions">
+              <Button
+                className="cb-dialog-btn"
+                data-testid="scene-switch-policy-cancel"
+                size="sm"
+                variant="subtle"
+                onClick={() => resolveSceneSwitch('cancel')}
+              >
+                {t('editor.contentBrowser.dialogs.sceneSwitch.cancel')}
+              </Button>
+              <Button
+                className="cb-dialog-btn"
+                data-testid="scene-switch-policy-discard"
+                size="sm"
+                variant="subtle"
+                onClick={() => resolveSceneSwitch('discard')}
+              >
+                {t('editor.contentBrowser.dialogs.sceneSwitch.discard')}
+              </Button>
+              <Button
+                className="cb-dialog-btn"
+                data-testid="scene-switch-policy-save"
+                size="sm"
+                variant="default"
+                onClick={() => resolveSceneSwitch('save')}
+              >
+                {t('editor.contentBrowser.dialogs.sceneSwitch.save')}
               </Button>
             </div>
           </div>

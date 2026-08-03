@@ -16,5 +16,5 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["fx.ts", "dev-standalone.ts", "lib/dev-stack.ts"]
+  "include": ["fx.ts", "dev-standalone.ts", "lib/*.ts"]
 }

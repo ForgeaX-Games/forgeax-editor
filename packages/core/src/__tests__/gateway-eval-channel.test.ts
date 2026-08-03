@@ -142,6 +142,16 @@ describe('t33c — eval error structured (RED before t31, GREEN after t31)', () 
     }
   });
 
+  it('explains the gateway/query scope boundary for common misuse', () => {
+    const gatewayQuery = channel.eval('gateway.query({ with: ["Name"] })');
+    expect(gatewayQuery).toMatchObject({ ok: false, error: { code: 'SCRIPT_RUNTIME_ERROR' } });
+    if (!gatewayQuery.ok) expect(gatewayQuery.error.hint).toContain('query is a separate scope binding');
+
+    const wrongDescriptor = channel.eval('query({ components: ["Name"] })');
+    expect(wrongDescriptor).toMatchObject({ ok: false, error: { code: 'SCRIPT_RUNTIME_ERROR' } });
+    if (!wrongDescriptor.ok) expect(wrongDescriptor.error.hint).toContain('use `with`, not `components`');
+  });
+
   it('should have error.code as string for property-access consumption (charter P3)', () => {
     const result: EvaluateResult = channel.eval('throw "ugh"');
     expect(result.ok).toBe(false);

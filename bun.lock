@@ -45,7 +45,6 @@
         "@forgeax/editor-ui": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
-        "@webgpu/types": "^0.1.71",
         "@forgeax/interface": "workspace:*",
         "@tanstack/react-virtual": "^3.14.3",
         "@tanstack/virtual-core": "^3.17.1",
@@ -257,6 +256,7 @@
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-ui": "workspace:*",
+        "@webgpu/types": "^0.1.71",
       },
       "devDependencies": {
         "@forgeax/engine-skinning": "workspace:*",
@@ -296,6 +296,16 @@
       "devDependencies": {
         "@types/node": "^20.19.40",
         "@webgpu/types": "^0.1.71",
+      },
+    },
+    "packages/engine/packages/ddc": {
+      "name": "@forgeax/engine-ddc",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/node": "^20.14.0",
+        "tsup": "^8.3.5",
+        "typescript": "^5.8.3",
+        "vitest": "4.1.5",
       },
     },
     "packages/engine/packages/debug-draw": {
@@ -820,11 +830,32 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-vfx": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
+      },
+    },
+    "packages/engine/packages/vfx-render": {
+      "name": "@forgeax/engine-vfx-render",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-vfx": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-rhi-null": "workspace:*",
       },
     },
     "packages/engine/packages/vite-plugin-pack": {
@@ -832,6 +863,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-codec": "workspace:*",
+        "@forgeax/engine-ddc": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-import": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
@@ -1330,6 +1362,8 @@
 
     "@forgeax/engine-codec": ["@forgeax/engine-codec@workspace:packages/engine/packages/codec"],
 
+    "@forgeax/engine-ddc": ["@forgeax/engine-ddc@workspace:packages/engine/packages/ddc"],
+
     "@forgeax/engine-debug-draw": ["@forgeax/engine-debug-draw@workspace:packages/engine/packages/debug-draw"],
 
     "@forgeax/engine-ecs": ["@forgeax/engine-ecs@workspace:packages/engine/packages/ecs"],
@@ -1409,6 +1443,8 @@
     "@forgeax/engine-vfx": ["@forgeax/engine-vfx@workspace:packages/engine/packages/vfx"],
 
     "@forgeax/engine-vfx-compiler": ["@forgeax/engine-vfx-compiler@workspace:packages/engine/packages/vfx-compiler"],
+
+    "@forgeax/engine-vfx-render": ["@forgeax/engine-vfx-render@workspace:packages/engine/packages/vfx-render"],
 
     "@forgeax/engine-vite-plugin-pack": ["@forgeax/engine-vite-plugin-pack@workspace:packages/engine/packages/vite-plugin-pack"],
 
@@ -2765,6 +2801,8 @@
     "@forgeax/editor-play-runtime/@types/node": ["@types/node@20.19.42", "https://registry.npmmirror.com/@types/node/-/node-20.19.42.tgz", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-5L7SUaFC1RyDraj2yRhyBzHTobyXHmohD100CChNtyPyleoq37Mqab5Gn8XEKI04dfN/oqPdpHk38MgcQWHbZg=="],
 
     "@forgeax/engine-codec/@types/node": ["@types/node@20.19.42", "https://registry.npmmirror.com/@types/node/-/node-20.19.42.tgz", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-5L7SUaFC1RyDraj2yRhyBzHTobyXHmohD100CChNtyPyleoq37Mqab5Gn8XEKI04dfN/oqPdpHk38MgcQWHbZg=="],
+
+    "@forgeax/engine-ddc/@types/node": ["@types/node@20.19.42", "https://registry.npmmirror.com/@types/node/-/node-20.19.42.tgz", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-5L7SUaFC1RyDraj2yRhyBzHTobyXHmohD100CChNtyPyleoq37Mqab5Gn8XEKI04dfN/oqPdpHk38MgcQWHbZg=="],
 
     "@forgeax/engine-ecs/@types/node": ["@types/node@20.19.42", "https://registry.npmmirror.com/@types/node/-/node-20.19.42.tgz", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-5L7SUaFC1RyDraj2yRhyBzHTobyXHmohD100CChNtyPyleoq37Mqab5Gn8XEKI04dfN/oqPdpHk38MgcQWHbZg=="],
 

@@ -48,6 +48,7 @@ import {
   type RunMode,
 } from '@forgeax/editor-edit-runtime/viewport/quadrant';
 import { getFps, onFpsChange } from '@forgeax/editor-edit-runtime/fps';
+import { createHumanSaveRequest } from '@forgeax/editor-edit-runtime/save-operation-projection';
 import './viewport-panel.css';
 
 type ContextKeyValue = string | number | boolean;
@@ -300,7 +301,7 @@ function registerViewportCommands(host: AppHost): Array<() => void> {
     host.commands.register({
       id: 'viewport.save',
       title: 'Viewport: Save scene',
-      execute: () => { gateway.dispatch({ kind: 'saveDocToDisk' }); return commandResult(); },
+      execute: () => { gateway.dispatch(createHumanSaveRequest(), 'human'); return commandResult(); },
     }),
     host.commands.register({
       id: 'viewport.rhi.capture',
@@ -559,15 +560,23 @@ function StatusReadout({
   value,
   title,
   testId,
+  numeric,
 }: {
   icon?: ReactNode;
   label?: string;
   value?: ReactNode;
   title?: string;
   testId?: string;
+  /** Reserve a stable, tabular width for a short numeric value (e.g. FPS) so a
+   *  changing digit count neither jitters the toolbar nor drifts from the label. */
+  numeric?: boolean;
 }): ReactNode {
   return (
-    <span className="fx-vp-status" data-testid={testId} title={title}>
+    <span
+      className={numeric ? 'fx-vp-status fx-vp-status--numeric' : 'fx-vp-status'}
+      data-testid={testId}
+      title={title}
+    >
       {icon && <span className="fx-vp-status-icon">{icon}</span>}
       {label && <span className="fx-vp-status-label">{label}</span>}
       {value !== undefined && value !== null && value !== '' && (
@@ -605,7 +614,7 @@ function FpsStatusControl(): ReactNode {
 
   return (
     <div className="fx-viewport-panel-toolbar" data-zone="right">
-      <StatusReadout label="FPS" value={fps} testId="vp-fps" />
+      <StatusReadout label="FPS" value={fps} testId="vp-fps" numeric />
     </div>
   );
 }
@@ -800,6 +809,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             testId: 'vp-play',
             location: 'header/left',
             order: 20,
+            overflowPriority: 1000,
             when: 'panel.viewport.isEdit',
             enablement: 'panel.viewport.mounted',
           },
@@ -812,6 +822,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             testId: 'vp-stop',
             location: 'header/left',
             order: 20,
+            overflowPriority: 1000,
             when: 'panel.viewport.isPlay',
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.isPlay',
@@ -824,6 +835,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             icon: 'LogOut',
             location: 'header/left',
             order: 30,
+            overflowPriority: 900,
             when: 'panel.viewport.isPlay && panel.viewport.isGame',
             enablement: 'panel.viewport.mounted',
           },
@@ -835,6 +847,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             icon: 'Gamepad2',
             location: 'header/left',
             order: 30,
+            overflowPriority: 900,
             when: 'panel.viewport.isPlay && panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
           },
@@ -846,6 +859,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             icon: 'Move',
             location: 'header/center',
             order: 10,
+            overflowPriority: 900,
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.gizmo == translate',
           },
@@ -857,6 +871,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             icon: 'RotateCcw',
             location: 'header/center',
             order: 20,
+            overflowPriority: 900,
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.gizmo == rotate',
           },
@@ -868,6 +883,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             icon: 'Maximize2',
             location: 'header/center',
             order: 30,
+            overflowPriority: 900,
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.gizmo == scale',
           },
@@ -961,6 +977,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             testId: 'vp-undo',
             location: 'header/right',
             order: 60,
+            overflowPriority: 1000,
             enablement: 'panel.viewport.canUndo',
           },
           {
@@ -972,6 +989,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             testId: 'vp-redo',
             location: 'header/right',
             order: 70,
+            overflowPriority: 1000,
             enablement: 'panel.viewport.canRedo',
           },
           {
@@ -983,6 +1001,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             testId: 'vp-save',
             location: 'header/right',
             order: 80,
+            overflowPriority: 1000,
             enablement: 'panel.viewport.mounted',
             highlightWhen: 'panel.viewport.dirty',
           },

@@ -94,10 +94,30 @@ export type BuiltinEditorOp =
   | { kind: 'setAssetSelection'; assets: SelectedAsset[]; primary: SelectedAsset | null }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
   | { kind: 'requestFrame' }
+  // captureFrame is a request-correlated session operation. The actual RHI
+  // recorder lives in edit-runtime/engine; the gateway owns the invocation
+  // door and the OperationRun result channel.
+  | { kind: 'captureFrame'; frames?: number; requestId: string; retryOfRequestId?: string }
   | { kind: 'requestRename'; entity: EntityId }
   | { kind: 'setSceneId'; id: string | null | undefined }
-  | { kind: 'switchSceneFile'; id: string }
-  | { kind: 'createSceneFile'; id: string; duplicateCurrent: boolean }
+  | { kind: 'switchSceneFile'; id: string; dirtyPolicy?: SceneSwitchDirtyPolicy }
+  | { kind: 'previewImportedScene'; guid: string; sourceKey: string; sourcePath?: string; revision: string; requestId: string }
+  | { kind: 'editImportedSource'; guid: string; sourceKey: string; metaPath: string; revision: string; requestId: string }
+  | { kind: 'saveImportedSource'; requestId: string; retryOfRequestId?: string }
+  | {
+    kind: 'promoteImportedScene';
+    importedGuid: string;
+    sourceKey: string;
+    revision: string;
+    targetPackPath: string;
+    targetName: string;
+    contentPolicy: 'effective-base' | 'current-session';
+    discardSourceChanges?: boolean;
+    requestId: string;
+  }
+  | { kind: 'createSceneFile'; id: string; duplicateCurrent: boolean; requestId: string; retryOfRequestId?: string }
+  | { kind: 'setDefaultScene'; sceneGuid: string; requestId: string; retryOfRequestId?: string }
+  | { kind: 'deleteScene'; sceneGuid: string; requestId: string; retryOfRequestId?: string }
   | { kind: 'saveDocToDisk'; requestId?: string; retryOfRequestId?: string }
   | { kind: 'loadDocFromDisk' }
   | { kind: 'createDirectory'; parentPath: string; name: string }
@@ -184,9 +204,14 @@ export type EditorOpLifecycle = EditorOp;
 /** What Play does when the authored scene has unsaved in-memory edits. */
 export type PlayDirtyPolicy = 'last-saved' | 'save-then-play' | 'cancel';
 
+/** What a scene switch does when the outgoing authored scene is dirty. */
+export type SceneSwitchDirtyPolicy = 'save' | 'discard' | 'cancel';
+
 // ── Error codes (plan-strategy §2 D-7) ──────────────────────────────────────
 
 export interface CommandError extends CommandErrorContext {
+  /** Operation-specific structured validation details (for example fieldPath). */
+  readonly details?: unknown;
   code:
     // ── Existing document-domain codes (NO CHANGE) ──
     | 'NO_SUCH_ENTITY'
@@ -226,6 +251,7 @@ export interface CommandError extends CommandErrorContext {
     | 'ASSET_NOT_FOUND'
     // Accepted async source-file deletion failed at the filesystem boundary.
     | 'SOURCE_FILE_DELETE_FAILED'
+    | 'SOURCE_FILE_VERIFY_FAILED'
     // ── M5 eval channel codes (plan-strategy §2 D-4) ──
     | 'SCOPE_LOCKED'
     | 'SCRIPT_SYNTAX_ERROR'
@@ -236,6 +262,21 @@ export interface CommandError extends CommandErrorContext {
     // must not write the (frozen) edit world nor the play world (Edit != Play).
     // kebab-case to match the M1 error-shape convention (stale-entity-handle).
     | 'edit-rejected-in-play'
+    | 'edit-rejected-in-imported-preview'
+    | 'save-rejected-in-imported-preview'
+    | 'preview-rejected-dirty'
+    | 'mount-member-operation-unsupported'
+    | 'engine-source-authoring-unavailable'
+    | 'promote-capability-unavailable'
+    | 'promote-session-mismatch'
+    | 'promote-current-session-unavailable'
+    | 'promote-dirty-confirmation-required'
+    | 'promote-target-invalid'
+    | 'promote-target-collision'
+    | 'promote-guid-allocation-failed'
+    | 'promote-serialization-failed'
+    | 'promote-write-failed'
+    | 'promote-activation-failed'
     // ── Scan infrastructure codes (startup scan lock) ──
     | 'scan-in-progress'
     // ── solo round-8 #3: ▶ Play async-assembly failure ──
@@ -249,11 +290,33 @@ export interface CommandError extends CommandErrorContext {
     | 'play-save-failed'
     // Play was explicitly cancelled because the authored scene was dirty.
     | 'play-cancelled-dirty'
+    // Scene switching must not silently flush authored edits. Callers either
+    // choose save/discard explicitly or branch on this structured refusal.
+    | 'scene-switch-dirty'
+    | 'scene-switch-cancelled'
+    // R0-02C: create/duplicate is one request-correlated run spanning file
+    // write, scene-list publication, and in-place navigation.
+    | 'scene-create-invalid'
+    | 'scene-create-serialize-failed'
+    | 'scene-create-write-failed'
+    | 'scene-create-navigate-failed'
+    | 'scene-create-rollback-failed'
+    // R0-02D: forge.json.defaultScene write and read-back verification.
+    | 'scene-default-invalid'
+    | 'scene-default-read-failed'
+    | 'scene-default-write-failed'
+    | 'scene-default-verify-failed'
+    | 'scene-delete-invalid'
+    | 'scene-delete-guarded'
+    | 'scene-delete-read-failed'
+    | 'scene-delete-write-failed'
+    | 'scene-delete-verify-failed'
     // ── solo round-28: async scene-mount failure ──
     // addSceneAssetToScene loads + instantiates a catalogued SceneAsset in a
     // detached session continuation. Its accepted dispatch must still expose the
     // terminal outcome through the same gateway read surface — never console-only.
     | 'scene-mount-failed'
+    | 'scene-preview-failed'
     // ── Async shared-ref binding failure (R0-05C) ──
     | 'asset-bind-failed'
     // Asset import executor failures (stable terminal taxonomy).
@@ -283,6 +346,11 @@ export interface CommandError extends CommandErrorContext {
     | 'run-not-found'
     | 'run-expired'
     | 'operation-failed'
+    // RHI debug capture is an optional edit-runtime capability. These errors
+    // keep a missing recorder / failed upload visible through the gateway
+    // instead of leaking a raw promise rejection to the caller.
+    | 'rhi-debug-unavailable'
+    | 'rhi-capture-failed'
     // Save persistence effect failures (M2): stable codes for data-protecting
     // refusal and canonical commit outcomes. Callers branch on these fields,
     // never on console/message text.

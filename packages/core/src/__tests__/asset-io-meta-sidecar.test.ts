@@ -14,7 +14,11 @@
 // async round-trips deterministic without a server.
 
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
-import { AssetIOFacade } from '../io/asset-io-facade';
+import {
+  AssetIOFacade,
+  AssetResourceConflictError,
+  SOURCE_SIDECAR_REVISION_DOMAIN,
+} from '../io/asset-io-facade';
 
 const META_PATH = '/games/demo/assets/arrow_bow.fbx.meta.json';
 
@@ -114,5 +118,106 @@ describe('assetIO facade — external-asset .meta.json sidecar CRUD', () => {
 
   it('deletePackEntry throws for a guid absent from the sidecar (fail-fast, not silent)', async () => {
     await expect(io.deletePackEntry(META_PATH, 'nope')).rejects.toThrow(/not found/);
+  });
+});
+
+describe('assetIO facade — source sidecar file CAS', () => {
+  afterEach(() => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('reads exact contents and revision from one revision-aware HTTP response', async () => {
+    const calls: string[] = [];
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+      calls.push(String(url));
+      return new Response('exact-sidecar\n', {
+        status: 200,
+        headers: { ETag: '"sha256:exact"' },
+      });
+    }) as typeof fetch;
+
+    const result = await new AssetIOFacade().readMetaSidecar(META_PATH);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { contents: 'exact-sidecar\n', revision: '"sha256:exact"' },
+    });
+    expect(calls).toEqual([`/api/files/raw?path=${encodeURIComponent(META_PATH)}&revision=1`]);
+  });
+
+  it('built-in prepare performs no write and commit posts the file CAS', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ revision: '"sha256:new"' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    const io = new AssetIOFacade();
+    const prepared = await io.prepareRevisionAwareResourceTransaction({
+      resource: { kind: 'source-sidecar', path: META_PATH },
+      expectedRevision: '"sha256:old"',
+      content: 'next',
+      changes: [{ kind: 'put', path: META_PATH, content: 'next' }],
+    });
+
+    expect(prepared).not.toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(await prepared!.commit()).toMatchObject({ revision: '"sha256:new"' });
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({
+      path: META_PATH,
+      content: 'next',
+      expectedRevision: '"sha256:old"',
+    });
+  });
+
+  it('maps HTTP 409 to a structured resource conflict', async () => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async () =>
+      new Response(JSON.stringify({ currentRevision: '"sha256:current"' }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
+    const prepared = await new AssetIOFacade().prepareRevisionAwareResourceTransaction({
+      resource: { kind: 'source-sidecar', path: META_PATH },
+      expectedRevision: '"sha256:old"',
+      content: 'next',
+    });
+
+    try {
+      await prepared!.commit();
+      throw new Error('expected conflict');
+    } catch (error) {
+      expect(error).toBeInstanceOf(AssetResourceConflictError);
+      expect(error).toMatchObject({
+        code: 'asset-resource-conflict',
+        expectedRevision: '"sha256:old"',
+        currentRevision: '"sha256:current"',
+      });
+    }
+  });
+
+  it('uses an injected snapshot and transaction only when their revision domain matches', async () => {
+    const commits: unknown[] = [];
+    const io = new AssetIOFacade();
+    io.setResourceTransactionPort({
+      supportsExpectedRevision: true,
+      revisionDomain: SOURCE_SIDECAR_REVISION_DOMAIN,
+      readResource: async () => ({ contents: 'port bytes', revision: 'port:r1' }),
+      prepare: async (input) => ({
+        commit: async () => {
+          commits.push(input);
+          return { revision: 'port:r2' };
+        },
+      }),
+    });
+
+    expect(await io.readMetaSidecar(META_PATH)).toEqual({
+      ok: true,
+      value: { contents: 'port bytes', revision: 'port:r1' },
+    });
+    const prepared = await io.prepareRevisionAwareResourceTransaction({ expectedRevision: 'port:r1' });
+    expect(await prepared!.commit()).toEqual({ revision: 'port:r2' });
+    expect(commits).toEqual([{ expectedRevision: 'port:r1' }]);
   });
 });

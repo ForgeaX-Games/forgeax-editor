@@ -92,6 +92,7 @@ import { extensionManifestPathHint, listExtensions, pickLang, type ExtensionInfo
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
 import { useShellStore } from '../../store';
 import { emitDeepLink, useDeepLink } from '../../lib/deep-link-bus';
+import { CapabilityOverview } from './CapabilityOverview';
 import './BusAdminPanel.css';
 
 // P4.14 — health roll-up for the cli-provider KindSection header LED.
@@ -1154,6 +1155,7 @@ export function BusAdminPanel() {
           </div>
         </div>
       )}
+      <CapabilityOverview refreshKey={refreshTs} />
       {!loading && items.length > 0 && (
         <div className="ba-filterbar">
           <div

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeDeleteImpact } from './delete-guard';
+import { computeDeleteImpact, computeSceneDeleteGuards } from './delete-guard';
 
 // tex ← mat ← mesh ; standalone has no referencers.
 const graph = {
@@ -48,5 +48,35 @@ describe('computeDeleteImpact', () => {
     const impact = computeDeleteImpact(['x', 'y'], g);
     // Both x and y are referenced by the same consumer → distinct count is 1.
     expect(impact.externalReferencerCount).toBe(1);
+  });
+});
+
+describe('computeSceneDeleteGuards', () => {
+  const sceneModel = {
+    gameId: 'shoot',
+    currentScene: { id: 'main', guid: 'main' },
+    defaultScene: { id: 'main', guid: 'main' },
+    scenes: [
+      { id: 'main', name: 'Main', pack: 'main.pack.json', guid: 'main', isCurrent: true, isDefault: true },
+      { id: 'target', name: 'Target', pack: 'target.pack.json', guid: 'target', isCurrent: false, isDefault: false },
+    ],
+  } as const;
+
+  it('projects current/default protection and external scene refs into one human guard', () => {
+    const workspace = {
+      ...graph,
+      relations: [{ kind: 'depends-on' as const, from: 'consumer', to: 'target' }],
+    };
+    const guards = computeSceneDeleteGuards([
+      { guid: 'main', kind: 'scene' },
+      { guid: 'target', kind: 'scene' },
+    ], sceneModel, workspace);
+    expect(guards.get('main')).toEqual({ reasons: ['current', 'default'], referencers: [] });
+    expect(guards.get('target')).toEqual({ reasons: ['referenced'], referencers: ['consumer'] });
+  });
+
+  it('does not guard an unreferenced non-current scene', () => {
+    const guards = computeSceneDeleteGuards([{ guid: 'target', kind: 'scene' }], sceneModel, graph);
+    expect(guards.size).toBe(0);
   });
 });

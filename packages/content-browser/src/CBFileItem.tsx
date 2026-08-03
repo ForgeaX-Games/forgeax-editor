@@ -1,5 +1,4 @@
 import { memo, useCallback, type MouseEvent } from 'react';
-import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForFileFamily, ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
 import type { CBFile } from './types';
@@ -20,6 +19,24 @@ interface Props {
   onToggleFavorite: (item: CBFile) => void;
   onToggleExpand: (path: string) => void;
   onClickIndex: (index: number, e: MouseEvent) => void;
+}
+
+interface FileDragDataTransfer {
+  setData(type: string, data: string): void;
+  effectAllowed: string;
+}
+
+/** File cards stay file subjects: callers must expand catalogued sub-assets
+ * before starting an asset placement drag. */
+export function writeFileDragData(
+  file: Pick<CBFile, 'path' | 'diskPath' | 'name' | 'family'>,
+  dataTransfer: FileDragDataTransfer,
+): void {
+  dataTransfer.setData('text/plain', `@${file.name}`);
+  dataTransfer.setData('application/x-forgeax-file', JSON.stringify({
+    path: file.path, diskPath: file.diskPath, name: file.name, family: file.family,
+  }));
+  dataTransfer.effectAllowed = 'copy';
 }
 
 function CBFileItemImpl({
@@ -48,31 +65,8 @@ function CBFileItemImpl({
   }, [onSelect, onClickIndex, file, index]);
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
-    e.dataTransfer.setData('text/plain', `@${file.name}`);
-    e.dataTransfer.setData('application/x-forgeax-file', JSON.stringify({
-      path: file.path, diskPath: file.diskPath, name: file.name, family: file.family,
-    }));
-    if (hasAssets) {
-      const asset = file.assets[0]!;
-      e.dataTransfer.setData('application/x-forgeax-asset', JSON.stringify({
-        guid: asset.guid, kind: asset.kind, name: asset.name, packPath: asset.packPath,
-      }));
-      panelBridge.emit('dragAssetStart', {
-        type: 'asset' as const,
-        guid: asset.guid,
-        kind: asset.kind,
-        name: asset.name,
-        path: asset.packPath,
-        payload: asset.payload,
-        authoring: asset.authoring,
-      });
-    }
-    e.dataTransfer.effectAllowed = 'copy';
-  }, [file, hasAssets]);
-
-  const handleDragEnd = useCallback(() => {
-    if (hasAssets) panelBridge.emit('dragAssetEnd');
-  }, [hasAssets]);
+    writeFileDragData(file, e.dataTransfer);
+  }, [file]);
 
   return (
     <div
@@ -81,7 +75,6 @@ function CBFileItemImpl({
       data-file-path={file.path}
       draggable
       onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
       onClick={handleClick}
       onDoubleClick={() => onActivate(file)}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e, file); }}

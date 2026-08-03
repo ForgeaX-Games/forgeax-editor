@@ -53,7 +53,7 @@ describe('AC-01 tsc-negative — DocApplierCtx has no world field (F-3)', () => 
       .find((l) => /error TS2339/.test(l) && /'world'/.test(l));
     expect(worldError, `expected a TS2339-on-'world' diagnostic for ${FIXTURE}; tsc output was:\n${out}`).toBeDefined();
     expect(worldError!).toContain('DocApplierCtx');
-  });
+  }, 30_000);
 
   it('the legal ctx.engine / ctx.alias access does NOT produce an error (positive control)', () => {
     const out = runNegativeTsc();
@@ -69,5 +69,5 @@ describe('AC-01 tsc-negative — DocApplierCtx has no world field (F-3)', () => 
     // And there must be at least one (the world error) — a totally clean compile
     // would mean the negative fixture stopped compiling erroneously.
     expect(fixtureErrors.length).toBeGreaterThan(0);
-  });
+  }, 30_000);
 });

@@ -38,6 +38,18 @@
   margin: 0 4px;
 }
 
+/* When folded into the vertical overflow flyout, rotate the group divider to a
+   horizontal rule so it reads as a separator instead of a stray vertical tick. */
+.fx-panel-overflow-flyout .fx-panel-control:has(.fx-vp-separator) {
+  width: 100%;
+}
+
+.fx-panel-overflow-flyout .fx-vp-separator {
+  width: 100%;
+  height: 1px;
+  margin: 2px 0;
+}
+
 .fx-panel-action[data-panel-id="viewport"],
 .fx-vp-menu-trigger {
   flex: 0 0 auto;
@@ -106,9 +118,24 @@
   line-height: 30px;
 }
 
-.fx-vp-status[data-testid="vp-fps"] .fx-vp-status-value {
+/* Numeric readout (FPS): keep it out of flex compression so the label never
+ * clips, and give the value a stable tabular width so a changing digit count
+ * neither jitters the toolbar nor drifts away from the label. Keyed on a class
+ * (not data-testid) so the off-screen measure-row clone — whose data-testid is
+ * stripped by the shell — inherits the exact same width. */
+.fx-vp-status--numeric {
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.fx-vp-status--numeric .fx-vp-status-value {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 3ch;
+  text-align: left;
+  overflow: visible;
 }
 
 .fx-panel-action[data-panel-id="viewport"],

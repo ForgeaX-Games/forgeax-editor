@@ -4,6 +4,21 @@
       "mainScene": "主场景",
       "title": "本窗口编辑的关卡/资产 — 在 Assets 面板双击其它条目可切换"
     },
+    "sceneEntry": {
+      "title": "场景",
+      "selectLabel": "切换场景",
+      "targetLabel": "管理场景",
+      "noScene": "无场景",
+      "ready": "就绪",
+      "create": "创建场景",
+      "duplicate": "复制场景",
+      "setDefault": "设为默认",
+      "delete": "删除场景",
+      "createTitle": "创建场景",
+      "duplicateTitle": "复制场景",
+      "nameLabel": "场景名称",
+      "guidUnavailable": "此场景没有稳定 GUID，无法修改。"
+    },
     "viewportHints": {
       "toggleTitle": "显示操作说明",
       "closeTitle": "关闭（点右下角 ? 可重新打开）",
@@ -297,7 +312,14 @@
         "ok": "确定",
         "cancel": "取消",
         "deleteFolderConfirm": "删除文件夹「{{name}}」及其所有内容？",
-        "deleteFileConfirm": "删除文件「{{name}}」？"
+        "deleteFileConfirm": "删除文件「{{name}}」？",
+        "sceneSwitch": {
+          "title": "场景有未保存的改动",
+          "body": "切换到「{{name}}」会替换当前编辑中的场景。请选择如何处理未保存的改动。",
+          "cancel": "取消",
+          "discard": "放弃改动",
+          "save": "保存并切换"
+        }
       },
       "preview": {
         "folderMeta": "文件夹 · {{path}}",
@@ -348,7 +370,10 @@
         "note": "此操作无法撤销。",
         "cancel": "取消",
         "confirm": "删除",
-        "confirmAnyway": "仍然删除"
+        "confirmAnyway": "仍然删除",
+        "sceneCurrent": "这是当前场景，切换离开后才能删除。",
+        "sceneDefault": "这是默认场景，重新指定默认场景后才能删除。",
+        "sceneProtectedWarn": "该场景受到保护。请先处理上方影响，再执行删除。"
       }
     }
   }

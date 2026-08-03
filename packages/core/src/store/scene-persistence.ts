@@ -67,19 +67,36 @@ import { gateway } from './gateway';
 import { domainOf, sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
-import { registerActiveScenePackResolver } from '../session/pack-ops';
-import { stableGuid } from '../scene/scene-pack';
+import { awaitPostAssetWriteCatalogSync, registerActiveScenePackResolver } from '../session/pack-ops';
+import { normalizePackForRuntime, stableGuid, validatePackShell } from '../scene/scene-pack';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
+import { assetIO } from '../io/asset-io-facade';
 import { createDiskIo } from './persistence/disk-io';
+import { generateAssetGuid } from '../io/asset-io-primitives';
 import { createSceneList } from './persistence/scene-list';
 import { createPlayConfig } from './persistence/play-config';
 import { createStorage } from './persistence/storage';
 import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
+import type { CommandOrigin } from '../io/gateway-history';
+import type { SceneSwitchDirtyPolicy } from '../types';
+import {
+  AUTHORED_SCENE_AUTHORING_SESSION,
+  importedPreviewSession,
+  type ImportedPreviewSessionState,
+  type SceneAuthoringSessionReadModel,
+} from '../io/scene-authoring-session';
+import { checkPathNotJailbreak, validateAssetBasename } from '../session/asset-basename';
+import type { SceneAsset } from '@forgeax/engine-types';
+import { rootsToSceneAsset, serializeSceneAssetToPack } from '@forgeax/engine-runtime';
+import { useSyncExternalStore } from 'react';
+import { broadcastAssetsChanged } from './assets-changed';
+import { createCommandError } from '@forgeax/editor-product';
+import { EngineFacade } from '../io/engine-facade';
 
 // ── ScenePersistenceContext: the one mutable persistence-state handle (D-2) ────
-// The 7 formerly module-level `let` singletons collapse into ONE object with
+// The formerly module-level persistence `let` singletons collapse into ONE object with
 // cohesive read/write methods for the cross-module (disk-watch) write points.
 // A single `const ctx = createScenePersistenceContext()` is the module's whole
 // mutable persistence surface — every unit reads/writes `ctx.<field>` via deps.ctx.
@@ -95,6 +112,8 @@ export interface ScenePersistenceContext {
   currentSceneFile: string | null;
   /** Discovered scene manifest for the active game (multi-scene / level list). */
   sceneList: SceneFileEntry[];
+  /** Canonical forge.json defaultScene GUID for the active game. */
+  defaultSceneGuid: string | null;
   /** The active scene asset's STABLE GUID, captured from disk on load. A scene's
    *  GUID is its identity (forge.json defaultScene / sibling level packs reference
    *  it, Play's catalog resolves it) and must survive edits — moving an entity
@@ -109,8 +128,13 @@ export interface ScenePersistenceContext {
    *  before re-instantiating (avoids a double-spawn). Empty when no scene is
    *  loaded (seed / fresh workspace). */
   currentSceneEntities: EntityHandle[];
-  /** Module-scoped slot carrying an async session-op's in-flight promise from the
-   *  applier back to the public setter within one synchronous dispatch (M2 D-1). */
+  /** Persistence-owned authoring boundary for the active edit world. */
+  authoringSession: SceneAuthoringSessionReadModel;
+  /** Immutable effective imported snapshot retained independently of the live preview. */
+  previewState: ImportedPreviewSessionState | null;
+  /** Module-scoped slot carrying a legacy async session-op's in-flight promise
+   *  from the applier back to the public setter within one synchronous dispatch
+   *  (M2 D-1). Request-correlated operations use Gateway OperationRun instead. */
   asyncOpResult: Promise<boolean> | null;
   /** True while the in-memory scene has unsaved edits (dirty indicator + the
    *  disk-watch "don't clobber my edits" guard). @internal-store — disk-watch
@@ -181,8 +205,11 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
     currentSceneId: 'default',
     currentSceneFile: null,
     sceneList: [],
+    defaultSceneGuid: null,
     currentSceneGuid: null,
     currentSceneEntities: [],
+    authoringSession: AUTHORED_SCENE_AUTHORING_SESSION,
+    previewState: null,
     asyncOpResult: null,
     isDirty: false,
     loadedInlineAssetFloor: null,
@@ -198,6 +225,48 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
 /** @internal-store — the module-single persistence context. Exported so disk-watch
  *  reaches the SAME live handle; NOT re-exported through the store.ts facade/barrel. */
 export const ctx = createScenePersistenceContext();
+const authoringSessionListeners = new Set<() => void>();
+
+function setAuthoringSession(session: SceneAuthoringSessionReadModel): void {
+  ctx.authoringSession = session;
+  for (const listener of authoringSessionListeners) listener();
+}
+
+export function getSceneAuthoringSession(): SceneAuthoringSessionReadModel {
+  return ctx.authoringSession;
+}
+
+export function onSceneAuthoringSessionChange(listener: () => void): () => void {
+  authoringSessionListeners.add(listener);
+  return () => authoringSessionListeners.delete(listener);
+}
+
+export function useSceneAuthoringSession(): SceneAuthoringSessionReadModel {
+  return useSyncExternalStore(
+    onSceneAuthoringSessionChange,
+    getSceneAuthoringSession,
+    getSceneAuthoringSession,
+  );
+}
+
+/** Injectable imported-preview effect used by the Gateway applier and CI. */
+export async function loadImportedScenePreview(
+  facts: {
+    readonly guid: string;
+    readonly sourceKey: string;
+    readonly sourcePath?: string;
+    readonly revision?: string;
+  },
+  deps: {
+    readonly loadByGuid: (guid: string) => Promise<boolean>;
+    readonly activate: (session: SceneAuthoringSessionReadModel) => void;
+  },
+): Promise<boolean> {
+  const loaded = await deps.loadByGuid(facts.guid);
+  if (!loaded) return false;
+  deps.activate(importedPreviewSession());
+  return true;
+}
 
 /** A game's scene-manifest entry (one scene pack plus its stable asset identity). */
 export interface SceneFileEntry { id: string; name?: string; pack: string; guid?: string }
@@ -226,12 +295,17 @@ const sceneList = createSceneList({
   ctx,
   gateway,
   fetchWithTimeout,
+  fetch: (path, init) => fetch(path, init),
   resolveGamePath,
-  flushPendingSaveBeacon: () => diskIo.flushPendingSaveBeacon(),
+  assetIO,
+  savePendingScene: (origin) => saveDocToDisk(origin),
+  clearPendingScene: cancelPendingDiskSave,
   loadDocFromDisk: () => diskIo.doLoadDocFromDisk(),
   loadDocFromStorage: () => storage.loadDocFromStorage(),
   replaceDoc: (doc) => diskIo.replaceDoc(doc),
 });
+gateway.registerSceneReadProvider(sceneList.getSceneReadModel);
+gateway.registerSceneAuthoringSessionProvider(getSceneAuthoringSession);
 
 // ── Session applier: setSceneId (M2 D-1) ──────────────────────────────────────
 // setSceneId body, registered into the session table. M3 t22 (S10 / AC-21/22):
@@ -244,6 +318,30 @@ function applySetSceneId(op: EditorOp): { ok: true } {
 }
 sessionAppliers.set('setSceneId', applySetSceneId);
 
+// R0-02D: scene-list owns the project-config effect; this composition root
+// exposes it as one request-correlated Gateway operation for both UI and AI.
+sessionAppliers.set('setDefaultScene', (op) => {
+  const o = op as { sceneGuid: string; requestId: string };
+  if (typeof o.requestId !== 'string' || o.requestId.trim() === '') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'setDefaultScene.requestId must be a non-empty caller-minted id for OperationRun correlation' } };
+  }
+  const completion = sceneList.setDefaultScene(o.sceneGuid, o.requestId);
+  completion.catch(() => {});
+  return { ok: true, completion };
+});
+
+// R0-02E: scene-list owns the reference/current/default guard and the
+// post-delete read-model publication; the Gateway owns the OperationRun.
+sessionAppliers.set('deleteScene', (op) => {
+  const o = op as { sceneGuid: string; requestId: string };
+  if (typeof o.requestId !== 'string' || o.requestId.trim() === '') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'deleteScene.requestId must be a non-empty caller-minted id for OperationRun correlation' } };
+  }
+  const completion = sceneList.deleteScene(o.sceneGuid, o.requestId);
+  completion.catch(() => {});
+  return { ok: true, completion };
+});
+
 // ── scene-list / switch cluster surface (createSceneList) ──────────────────────
 export const getSceneId = sceneList.getSceneId;
 export const getLoadedSceneEntities = sceneList.getLoadedSceneEntities;
@@ -252,16 +350,376 @@ export const getSceneList = sceneList.getSceneList;
 export const onSceneListChange = sceneList.onSceneListChange;
 export const useSceneList = sceneList.useSceneList;
 export const useSceneFile = sceneList.useSceneFile;
+export const useSceneReadModel = sceneList.useSceneReadModel;
 export const initSceneList = sceneList.initSceneList;
 
 // Session op (M2 D-1): switchSceneFile carries an id payload, so its applier
 // reads the id off the op before running the async impl (capture-promise seam).
-sessionAppliers.set('switchSceneFile', (op) => {
-  runAsyncOp(() => sceneList.doSwitchSceneFile((op as { id: string }).id));
+sessionAppliers.set('switchSceneFile', (op, applierCtx) => {
+  const sceneOp = op as { id: string; dirtyPolicy?: SceneSwitchDirtyPolicy };
+  if (sceneOp.id === sceneList.getSceneFile()) return { ok: true };
+  if (sceneOp.dirtyPolicy === 'cancel') {
+    return {
+      ok: false,
+      error: {
+        code: 'scene-switch-cancelled',
+        hint: `Scene switch to "${sceneOp.id}" was cancelled; the current scene remains open.`,
+        current: { sceneId: sceneList.getSceneFile(), dirty: ctx.isDirty },
+        expected: { targetSceneId: sceneOp.id },
+        recoveryActions: ['scene.switch.save', 'scene.switch.discard'],
+      },
+    };
+  }
+  if (ctx.isDirty && sceneOp.dirtyPolicy === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'scene-switch-dirty',
+        hint: `Scene has unsaved edits; choose dirtyPolicy "save", "discard", or "cancel" before switching to "${sceneOp.id}".`,
+        current: { sceneId: sceneList.getSceneFile(), dirty: true },
+        expected: { targetSceneId: sceneOp.id, dirtyPolicies: ['save', 'discard', 'cancel'] },
+        recoveryActions: ['scene.switch.save', 'scene.switch.discard', 'scene.switch.cancel'],
+      },
+    };
+  }
+  runAsyncOp(async () => {
+    const previousSession = getSceneAuthoringSession();
+    const previousPreviewState = ctx.previewState;
+    // The authored loader needs its pack target visible; preview mode deliberately
+    // makes scenePath() null. Change the boundary before loading, and restore it
+    // if the switch cannot complete.
+    setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION);
+    ctx.previewState = null;
+    const ok = await sceneList.doSwitchSceneFile(
+      sceneOp.id,
+      sceneOp.dirtyPolicy,
+      applierCtx?.origin ?? 'human',
+    );
+    if (!ok) {
+      ctx.previewState = previousPreviewState;
+      setAuthoringSession(previousSession);
+    }
+    return ok;
+  });
   return { ok: true };
 });
-export function switchSceneFile(id: string): Promise<boolean> {
-  return dispatchAsyncSessionOp({ kind: 'switchSceneFile', id });
+export function switchSceneFile(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy): Promise<boolean> {
+  return dispatchAsyncSessionOp({ kind: 'switchSceneFile', id, dirtyPolicy });
+}
+
+sessionAppliers.set('previewImportedScene', (op) => {
+  const preview = op as {
+    guid: string;
+    sourceKey: string;
+    sourcePath?: string;
+    revision: string;
+    requestId: string;
+  };
+  if (ctx.isDirty && ctx.authoringSession.mode === 'authored') {
+    return {
+      ok: false,
+      error: {
+        code: 'preview-rejected-dirty',
+        hint: 'Save or discard the current authored scene before opening an imported preview.',
+        recoveryActions: ['saveDocToDisk', 'cancel'],
+        current: getSceneAuthoringSession(),
+      },
+    };
+  }
+  // Close the document/save gates before the asynchronous catalog load starts.
+  // Otherwise a document op could make the outgoing authored world dirty between
+  // acceptance and loadByGuid's teardown, losing that edit.
+  const previousSession = getSceneAuthoringSession();
+  const previousPreviewState = ctx.previewState;
+  setAuthoringSession(importedPreviewSession({
+    guid: preview.guid,
+    sourceKey: preview.sourceKey,
+    revision: preview.revision,
+  }));
+  const completion = (async () => {
+    let state: ImportedPreviewSessionState | null = null;
+    try {
+      state = await diskIo.loadImportedScenePreviewState({
+        guid: preview.guid,
+        sourceKey: preview.sourceKey,
+        revision: preview.revision,
+      });
+    } catch {
+      state = null;
+    }
+    if (state !== null) {
+      ctx.previewState = state;
+      setAuthoringSession(importedPreviewSession(state));
+      ctx.currentSceneFile = null;
+      ctx.currentSceneGuid = null;
+      ctx.isDirty = false;
+      notifyDocChanged();
+      return {
+        ok: true as const,
+        result: {
+          requestId: preview.requestId,
+          guid: preview.guid,
+          mode: 'imported-preview',
+          sourceKey: preview.sourceKey,
+        },
+      };
+    }
+    ctx.previewState = null;
+    setAuthoringSession(previousSession);
+    ctx.previewState = previousPreviewState;
+    return {
+      ok: false as const,
+      error: {
+        code: 'scene-preview-failed' as const,
+        hint: `Could not load or instantiate imported scene ${preview.guid}.`,
+        current: { requestId: preview.requestId, guid: preview.guid, sourceKey: preview.sourceKey },
+        retryable: true,
+        recoveryActions: ['retry', 'addSceneAssetToScene', 'promoteImportedScene'],
+      },
+    };
+  })();
+  completion.catch(() => {});
+  return { ok: true, completion };
+});
+
+sessionAppliers.set('editImportedSource', (op) => {
+  return {
+    ok: false,
+    error: {
+      code: 'engine-source-authoring-unavailable',
+      hint: 'The current Engine does not publish the stable node identity and apply/fold contract required for imported source authoring.',
+      current: { operation: op.kind, canEditSource: false },
+      retryable: false,
+      recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+    },
+  };
+});
+
+sessionAppliers.set('saveImportedSource', (op) => {
+  return {
+    ok: false,
+    error: {
+      code: 'engine-source-authoring-unavailable',
+      hint: 'The current Engine does not publish the stable node identity and apply/fold contract required for imported source authoring.',
+      current: { operation: op.kind, canEditSource: false },
+      retryable: false,
+      recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+    },
+  };
+});
+
+type PromoteImportedSceneOp = {
+  readonly importedGuid: string;
+  readonly sourceKey: string;
+  readonly revision: string;
+  readonly targetPackPath: string;
+  readonly targetName: string;
+  readonly contentPolicy: 'effective-base' | 'current-session';
+  readonly discardSourceChanges?: boolean;
+  readonly requestId: string;
+};
+
+function promoteFailure(
+  code: import('../types').CommandError['code'],
+  hint: string,
+  current?: unknown,
+) {
+  return {
+    ok: false as const,
+    error: createCommandError({
+      code,
+      hint,
+      ...(current === undefined ? {} : { current }),
+      owner: 'editor-core',
+      category: code === 'promote-write-failed' ? 'runtime' : 'state',
+      retryable: code === 'promote-write-failed',
+      recoveryActions: ['promoteImportedScene'],
+    }) as import('../types').CommandError,
+  };
+}
+
+function validatePromotionTarget(op: PromoteImportedSceneOp): { ok: true; path: string; id: string; name: string } | ReturnType<typeof promoteFailure> {
+  const path = op.targetPackPath.trim();
+  const pathCheck = checkPathNotJailbreak(path);
+  if (!pathCheck.ok
+    || path.startsWith('/')
+    || /^[A-Za-z]:/.test(path)
+    || !path.startsWith('assets/')
+    || !path.endsWith('.pack.json')) {
+    return promoteFailure(
+      'promote-target-invalid',
+      pathCheck.ok
+        ? 'targetPackPath must be a game-relative assets/**/*.pack.json path.'
+        : pathCheck.hint,
+      { targetPackPath: op.targetPackPath },
+    );
+  }
+  const name = validateAssetBasename(op.targetName);
+  if (!name.ok) return promoteFailure('promote-target-invalid', name.hint, { targetName: op.targetName });
+  const id = (path.split('/').pop() ?? '').replace(/\.pack\.json$/, '');
+  if (id.length === 0) return promoteFailure('promote-target-invalid', 'The target pack must have a non-empty filename.');
+  const collision = ctx.sceneList.find((entry) => entry.id === id || entry.pack === path);
+  if (collision !== undefined) {
+    return promoteFailure('promote-target-collision', 'The target scene id or pack path already exists.', collision);
+  }
+  return { ok: true, path, id, name: name.name };
+}
+
+function allocatePromotionGuid(importedGuid: string): string | null {
+  const used = new Set([
+    importedGuid.toLowerCase(),
+    ...ctx.sceneList.flatMap((entry) => entry.guid ? [entry.guid.toLowerCase()] : []),
+    ...gateway.assetCatalog().map((entry) => entry.guid.toLowerCase()),
+  ]);
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const candidate = generateAssetGuid();
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return null;
+}
+
+function promotionSourceState(op: PromoteImportedSceneOp): ImportedPreviewSessionState | null {
+  const state = ctx.previewState;
+  if (state === null) return null;
+  return state.guid.toLowerCase() === op.importedGuid.toLowerCase()
+    && state.sourceKey === op.sourceKey
+    && state.revision === op.revision
+    ? state
+    : null;
+}
+
+sessionAppliers.set('promoteImportedScene', (rawOp) => {
+  const op = rawOp as PromoteImportedSceneOp;
+  const target = validatePromotionTarget(op);
+  if (!target.ok) return target;
+  const sourceState = promotionSourceState(op);
+  if (sourceState === null) {
+    return promoteFailure('promote-session-mismatch', 'The active imported session no longer matches this Promote request.');
+  }
+  if (op.contentPolicy === 'current-session') {
+    return promoteFailure(
+      'promote-current-session-unavailable',
+      'current-session promotion requires Engine source-authoring support; use effective-base with the read-only imported preview.',
+      ctx.authoringSession,
+    );
+  }
+  const newGuid = allocatePromotionGuid(op.importedGuid);
+  if (newGuid === null) {
+    return promoteFailure('promote-guid-allocation-failed', 'Could not allocate a unique authored scene GUID.');
+  }
+
+  const completion = (async () => {
+    let pack: Record<string, unknown>;
+    let promotedScene: SceneAsset;
+    try {
+      // Engine owns both serialization boundaries: collection resolves live
+      // shared handles back to catalog GUIDs, then pack serialization writes
+      // those GUIDs through the canonical refs[] representation.
+      const collected = rootsToSceneAsset(
+        sourceState.registry,
+        sourceState.world,
+        [...ctx.currentSceneEntities],
+      );
+      if (!collected.ok) {
+        return promoteFailure('promote-serialization-failed', 'Engine collection could not serialize the imported preview.', collected.error);
+      }
+      promotedScene = collected.value;
+      const serialized = serializeSceneAssetToPack(promotedScene, newGuid);
+      if (!serialized.ok) {
+        return promoteFailure('promote-serialization-failed', 'Engine serialization rejected the effective imported snapshot.', serialized.error);
+      }
+      pack = normalizePackForRuntime(serialized.value);
+      const sceneEntry = (pack.assets as Array<Record<string, unknown>>).find((asset) => asset.kind === 'scene');
+      if (sceneEntry === undefined) {
+        return promoteFailure('promote-serialization-failed', 'Promoted pack did not contain a scene entry.');
+      }
+      sceneEntry.name = target.name;
+      if (!validatePackShell(pack).ok) {
+        return promoteFailure('promote-serialization-failed', 'Promoted authored pack failed shell validation.');
+      }
+
+      // Instantiate into a detached fresh world before writing or replacing the
+      // active document. Any failure leaves the imported world/session untouched.
+      const fresh = createEditSession();
+      fresh.registry = sourceState.registry;
+      const instantiated = new EngineFacade(fresh.world, sourceState.registry)
+        .instantiateSceneAssetFlat(promotedScene);
+      if (!instantiated.ok) {
+        return promoteFailure('promote-activation-failed', 'Promoted SceneAsset could not be instantiated in a fresh authored world.', instantiated.error);
+      }
+      const content = JSON.stringify(pack, null, 2) + '\n';
+      const resolvedPath = resolveGamePath(target.path);
+      const write = await assetIO.createAuthoredPackIfAbsent(resolvedPath, content);
+      if (!write.ok) {
+        return promoteFailure(
+          write.reason === 'collision' ? 'promote-target-collision' : 'promote-write-failed',
+          write.hint,
+          { targetPackPath: target.path },
+        );
+      }
+
+      // The candidate is durable; publish all session/list facts together.
+      try {
+        sceneList.activateNewScene({ id: target.id, name: target.name, pack: target.path, guid: newGuid });
+      } catch { /* observer failure cannot turn a durable commit into failure */ }
+      ctx.currentSceneGuid = newGuid;
+      ctx.currentSceneEntities = [...instantiated.value];
+      ctx.loadedEntityFloor = promotedScene.entities.length;
+      ctx.loadedInlineAssetFloor = ((pack.assets as Array<{ kind?: string }>).filter((asset) => asset.kind !== 'scene')).length;
+      ctx.loadedInlineAssets = null;
+      ctx.previewState = null;
+      ctx.isDirty = false;
+      try { setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION); } catch { ctx.authoringSession = AUTHORED_SCENE_AUTHORING_SESSION; }
+      try { gateway.replaceDoc(fresh); } catch { gateway.doc = fresh; }
+      try { notifyDocChanged(); } catch { /* observer only */ }
+      void awaitPostAssetWriteCatalogSync(newGuid).then(() => broadcastAssetsChanged()).catch(() => broadcastAssetsChanged());
+      return {
+        ok: true as const,
+        result: {
+          requestId: op.requestId,
+          importedGuid: op.importedGuid,
+          guid: newGuid,
+          packPath: target.path,
+          name: target.name,
+          contentPolicy: op.contentPolicy,
+          mode: 'authored',
+        },
+      };
+    } catch (cause) {
+      return promoteFailure(
+        'promote-serialization-failed',
+        `Promote failed before publication: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+  })();
+  completion.catch(() => {});
+  return { ok: true, completion };
+});
+
+export function previewImportedScene(facts: {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly sourcePath?: string;
+  readonly revision: string;
+}): Promise<boolean> {
+  const requestId = globalThis.crypto.randomUUID();
+  const accepted = gateway.dispatch({ kind: 'previewImportedScene', ...facts, requestId }, 'human');
+  if (!accepted.ok) return Promise.resolve(false);
+  return gateway.waitOperationRun(requestId).then((terminal) => (
+    terminal.ok && terminal.value.status === 'succeeded'
+  ));
+}
+
+export function editImportedSource(facts: {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly metaPath: string;
+  readonly revision: string;
+}): Promise<boolean> {
+  const requestId = globalThis.crypto.randomUUID();
+  const accepted = gateway.dispatch({ kind: 'editImportedSource', ...facts, requestId }, 'human');
+  if (!accepted.ok) return Promise.resolve(false);
+  return gateway.waitOperationRun(requestId).then((terminal) => terminal.ok && terminal.value.status === 'succeeded');
 }
 
 // ── play-config cluster surface (createPlayConfig) ────────────────────────────
@@ -269,49 +727,185 @@ export type { PlayConfig } from './persistence/play-config';
 export const readPlayConfig = playConfig.readPlayConfig;
 export const writePlayConfig = playConfig.writePlayConfig;
 
-// ── createSceneFile: a new level pack + navigate (root glue) ───────────────────
-// Not a pure state-cluster op (it writes a new pack via fetch then navigates),
-// so it stays wired at the root next to the async-op seam it dispatches through.
-/** Create a new level under assets/scenes/<slug>.pack.json (empty, or duplicated
- *  from the current doc) and switch to it. NOTHING is written to forge.json. The
- *  display name is the file stem (`slug`), so the game's LEVELS[].id can match it
- *  1:1. */
-async function doCreateSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
-  if (ctx.currentSceneId === 'default') return false;
-  const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
-  if (!slug || ctx.sceneList.some((s) => s.id === slug)) return false;
-  const sourceDoc = duplicateCurrent ? gateway.doc : createEditSession();
-  void sourceDoc; // reserved for a future duplicate-content path (historical signature parity)
-  const newPath = resolveGamePath(`assets/scenes/${slug}.pack.json`);
-  // A NEW level gets its own stable, path-derived GUID — never the source scene's
-  // GUID and never an order-derived one (which would drift on the first edit).
-  const newSceneGuid = stableGuid('scene|' + newPath);
-  const newPack = { schemaVersion: '1.0.0', kind: 'internal-text-package', assets: [{ guid: newSceneGuid, kind: 'scene', payload: { entities: [] }, refs: [] }] };
-  const packContent = JSON.stringify(newPack, null, 2) + '\n';
+// ── createSceneFile: write + list + navigate as one OperationRun ──────────────
+// This owner deliberately does not use the legacy asyncOpResult/deferred ledger
+// seam. The Gateway accepts the caller request, marks it running, and binds this
+// completion so an AI can wait for the canonical terminal fact. A failed
+// navigation removes both the in-memory list entry and the newly-created file;
+// the terminal error retains the cleanup facts when that rollback is partial.
+type SceneCreateRunResult = {
+  requestId: string;
+  sceneId: string;
+  sceneGuid: string;
+  pack: string;
+  duplicateCurrent: boolean;
+};
+
+type SceneCreateEffect =
+  | { ok: true; result: SceneCreateRunResult }
+  | {
+      ok: false;
+      error: {
+        code: 'scene-create-invalid' | 'scene-create-serialize-failed' | 'scene-create-write-failed' | 'scene-create-navigate-failed' | 'scene-create-rollback-failed';
+        hint: string;
+        current?: unknown;
+        retryable?: boolean;
+        recoveryActions?: readonly string[];
+      };
+    };
+
+async function deleteCreatedSceneFile(path: string): Promise<{ attempted: true; ok: boolean; path: string }> {
   try {
-    const w1 = await fetch('/api/files', {
+    const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+    return { attempted: true, ok: response.ok, path };
+  } catch {
+    return { attempted: true, ok: false, path };
+  }
+}
+
+/** Create a canonical empty scene or serialize the live scene with a fresh GUID.
+ * The returned effect is the only thing the Gateway binds to the OperationRun. */
+async function doCreateSceneFile(
+  requestId: string,
+  id: string,
+  duplicateCurrent: boolean,
+): Promise<SceneCreateEffect> {
+  if (ctx.currentSceneId === 'default') {
+    return { ok: false, error: { code: 'scene-create-invalid', hint: 'createSceneFile requires an active game scene id, not the default legacy slot.', retryable: false, recoveryActions: ['editor.discover'] } };
+  }
+  const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug) {
+    return { ok: false, error: { code: 'scene-create-invalid', hint: 'createSceneFile.id must contain at least one ASCII letter, digit, or hyphen after slug normalization.', retryable: false, recoveryActions: ['editor.discover'] } };
+  }
+  if (ctx.sceneList.some((s) => s.id === slug)) {
+    return { ok: false, error: { code: 'scene-create-invalid', hint: `scene "${slug}" already exists in the active scene list.`, current: { sceneId: slug }, retryable: false, recoveryActions: ['editor.discover'] } };
+  }
+
+  const newPackPath = `assets/scenes/${slug}.pack.json`;
+  const newPath = resolveGamePath(newPackPath);
+  const newSceneGuid = stableGuid('scene|' + newPath);
+  let packContent: string;
+  if (duplicateCurrent) {
+    const serialized = diskIo.worldToPack(gateway.doc, newSceneGuid);
+    if (serialized === null) {
+      return { ok: false, error: { code: 'scene-create-serialize-failed', hint: 'Could not serialize the loaded scene for duplication; the new file was not written.', current: { requestId, sceneId: slug, duplicateCurrent: true }, retryable: true, recoveryActions: ['operation.retry'] } };
+    }
+    try {
+      const sourcePack = JSON.parse(serialized) as { assets?: Array<{ kind?: string }> };
+      // A duplicate scene shares the producer-owned inline assets referenced
+      // by its scene payload. Copying those asset definitions into the new pack
+      // would mint GUID collisions across the game and make the pack-index
+      // reject the entire new scene. Keep only the scene envelope; refs[] still
+      // points at the original asset owners.
+      const sceneAssets = sourcePack.assets?.filter((asset) => asset.kind === 'scene') ?? [];
+      if (sceneAssets.length !== 1) throw new Error('serialized scene pack did not contain exactly one scene asset');
+      sourcePack.assets = sceneAssets;
+      packContent = JSON.stringify(sourcePack, null, 2) + '\n';
+    } catch (error) {
+      return { ok: false, error: { code: 'scene-create-serialize-failed', hint: `Could not isolate the duplicated scene envelope: ${error instanceof Error ? error.message : String(error)}`, current: { requestId, sceneId: slug, duplicateCurrent: true }, retryable: true, recoveryActions: ['operation.retry'] } };
+    }
+  } else {
+    const emptyPack = serializeSceneAssetToPack({ kind: 'scene', entities: [] }, newSceneGuid);
+    if (!emptyPack.ok) {
+      return { ok: false, error: { code: 'scene-create-serialize-failed', hint: 'Could not serialize the canonical empty scene pack; the new file was not written.', current: { requestId, sceneId: slug, duplicateCurrent: false }, retryable: false, recoveryActions: ['editor.discover'] } };
+    }
+    packContent = JSON.stringify(emptyPack.value, null, 2) + '\n';
+  }
+
+  try {
+    const write = await fetch('/api/files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: newPath, content: packContent }),
     });
-    if (!w1.ok) return false;
-  } catch { return false; }
-  // Persist + navigate this window into the new scene in-place — no full
-  // page reload. Add the new pack to the sceneList so doSwitchSceneFile sees it.
-  const newPackPath = `assets/scenes/${slug}.pack.json`;
+    if (!write.ok) {
+      return { ok: false, error: { code: 'scene-create-write-failed', hint: `Could not write ${newPackPath} (HTTP ${write.status}).`, current: { requestId, sceneId: slug, path: newPath, phase: 'file-write' }, retryable: true, recoveryActions: ['operation.retry'] } };
+    }
+  } catch (error) {
+    return { ok: false, error: { code: 'scene-create-write-failed', hint: `Could not write ${newPackPath}: ${error instanceof Error ? error.message : String(error)}`, current: { requestId, sceneId: slug, path: newPath, phase: 'file-write' }, retryable: true, recoveryActions: ['operation.retry'] } };
+  }
+
+  try {
+    // The engine registry cannot load a newly-written GUID until the host's
+    // pack-index watcher has published it. This is the same owner seam used by
+    // createMaterial/import; navigation must wait for it or it would report a
+    // successful scene switch while leaving the previous world visible.
+    await awaitPostAssetWriteCatalogSync(newSceneGuid);
+  } catch (error) {
+    const cleanup = await deleteCreatedSceneFile(newPath);
+    return {
+      ok: false,
+      error: {
+        code: cleanup.ok ? 'scene-create-write-failed' : 'scene-create-rollback-failed',
+        hint: cleanup.ok
+          ? `Scene ${slug} was written but its catalog entry did not become visible; the file was rolled back.`
+          : `Scene ${slug} was written but its catalog entry did not become visible, and cleanup failed.`,
+        current: { requestId, sceneId: slug, sceneGuid: newSceneGuid, path: newPath, phase: 'catalog-sync', cleanup, cause: error instanceof Error ? error.message : String(error) },
+        retryable: cleanup.ok,
+        recoveryActions: cleanup.ok ? ['operation.retry'] : ['scene.create.inspect', 'scene.create.cleanup'],
+      },
+    };
+  }
+
+  const previousSceneFile = ctx.currentSceneFile;
+  const previousSceneGuid = ctx.currentSceneGuid;
+  const previousSceneEntities = ctx.currentSceneEntities.slice();
+  const previousAuthoringSession = getSceneAuthoringSession();
+  const previousPreviewState = ctx.previewState;
+  const listIndex = ctx.sceneList.length;
   ctx.sceneList.push({ id: slug, name: slug, pack: newPackPath, guid: newSceneGuid });
-  try { localStorage.setItem(`forgeax:editor:sceneFile:${ctx.currentSceneId}`, slug); } catch { /* unavailable */ }
-  await sceneList.doSwitchSceneFile(slug);
-  return true;
+  setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION);
+  ctx.previewState = null;
+  let navigated = false;
+  try {
+    navigated = await sceneList.doSwitchSceneFile(slug);
+  } catch {
+    navigated = false;
+  }
+  const loadedTarget = navigated && ctx.currentSceneGuid === newSceneGuid;
+  if (loadedTarget) {
+    return { ok: true, result: { requestId, sceneId: slug, sceneGuid: newSceneGuid, pack: newPackPath, duplicateCurrent } };
+  }
+
+  const cleanup = await deleteCreatedSceneFile(newPath);
+  ctx.sceneList.splice(listIndex, 1);
+  ctx.currentSceneFile = previousSceneFile;
+  ctx.currentSceneGuid = previousSceneGuid;
+  ctx.currentSceneEntities = previousSceneEntities;
+  ctx.previewState = previousPreviewState;
+  setAuthoringSession(previousAuthoringSession);
+  // doSwitchSceneFile emitted the transient target entry before navigation
+  // failed. Invalidate the scene-list read model after restoring the previous
+  // pointers so observers never retain a phantom scene.
+  sceneList.notifySceneListChanged();
+  try {
+    const key = `forgeax:editor:sceneFile:${ctx.currentSceneId}`;
+    if (previousSceneFile === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, previousSceneFile);
+  } catch { /* unavailable */ }
+  const current = { requestId, sceneId: slug, sceneGuid: newSceneGuid, path: newPath, phase: 'navigate', navigated, loadedTarget, cleanup };
+  if (!cleanup.ok) {
+    return { ok: false, error: { code: 'scene-create-rollback-failed', hint: `Scene ${slug} was written but could not be opened, and cleanup of ${newPackPath} failed.`, current, retryable: false, recoveryActions: ['scene.create.inspect', 'scene.create.cleanup'] } };
+  }
+  return { ok: false, error: { code: 'scene-create-navigate-failed', hint: `Scene ${slug} was written but could not be opened; the file and scene-list entry were rolled back.`, current, retryable: true, recoveryActions: ['operation.retry'] } };
 }
-// Session op (M2 D-1): createSceneFile carries id + duplicateCurrent payload.
+
+// Session op (M2 D-1): createSceneFile is request-correlated and returns its
+// canonical effect to Gateway rather than stashing a detached boolean.
 sessionAppliers.set('createSceneFile', (op) => {
-  const o = op as { id: string; duplicateCurrent: boolean };
-  runAsyncOp(() => doCreateSceneFile(o.id, o.duplicateCurrent));
-  return { ok: true };
+  const o = op as { id: string; duplicateCurrent: boolean; requestId: string };
+  if (typeof o.requestId !== 'string' || o.requestId.trim() === '') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createSceneFile.requestId must be a non-empty caller-minted id for OperationRun correlation' } };
+  }
+  const completion = doCreateSceneFile(o.requestId, o.id, o.duplicateCurrent);
+  completion.catch(() => {});
+  return { ok: true, completion };
 });
 export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<boolean> {
-  return dispatchAsyncSessionOp({ kind: 'createSceneFile', id, duplicateCurrent });
+  const requestId = globalThis.crypto.randomUUID();
+  const accepted = gateway.dispatch({ kind: 'createSceneFile', id, duplicateCurrent, requestId });
+  if (!accepted.ok) return Promise.resolve(false);
+  return gateway.waitOperationRun(requestId).then((terminal) => terminal.ok && terminal.value.status === 'succeeded');
 }
 
 // ── storage cluster surface (createStorage) ───────────────────────────────────
@@ -361,15 +955,15 @@ export function loadDocFromDisk(): Promise<boolean> {
 // authored revision at acceptance, starts the structured persistence effect, and
 // returns that completion to Gateway. The Gateway owns accepted/running/terminal
 // state and publishes the session ledger entry only after succeeded. The legacy
-// asyncOpResult slot below remains exclusively for load/switch/create paths.
+// asyncOpResult slot below remains exclusively for load/switch paths.
 sessionAppliers.set('saveDocToDisk', (op) => {
   const completion = diskIo.doSaveDocToDisk({ acceptedRevision: gateway.rev });
   completion.catch(() => {});
   return { ok: true, completion };
 });
-export function saveDocToDisk(): Promise<boolean> {
+export function saveDocToDisk(origin: CommandOrigin = 'human'): Promise<boolean> {
   const requestId = globalThis.crypto.randomUUID();
-  const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId }, 'human');
+  const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId }, origin);
   if (!accepted.ok) return Promise.resolve(false);
   return gateway.waitOperationRun(requestId).then((terminal) => (
     terminal.ok && terminal.value.status === 'succeeded'
@@ -377,7 +971,7 @@ export function saveDocToDisk(): Promise<boolean> {
 }
 
 // ── Async session-op collection seam (M2 D-1, m2-w8) ──────────────────────────
-// dispatch() is sync but load/switch/create are async. The applier runs the
+// dispatch() is sync but load/switch are async. The applier runs the
 // impl and stashes the in-flight promise; the public setter dispatches (ledger +
 // AI trigger) then returns the stashed promise. The slot is ctx.asyncOpResult
 // (ScenePersistenceContext) — one handle, no scattered `let`. This seam stays in

@@ -204,10 +204,18 @@ Package-level contracts, error unions, RHI form rules, metric registry, smoke ga
 > Requires **Node ≥ 22.13.0**, **pnpm ≥ 11.1.3**, **Bun ≥ 1.2.0** (SSOT: `.nvmrc` / `.pnpm-version` / `.bun-version`). First-time clone: `git clone --recurse-submodules <url>`.
 
 ```bash
-pnpm install && pnpm build            # tsup (.mjs) + tsc -b (.d.ts)
+pnpm install && pnpm build            # complete incremental package + app fleet + tsc build
+pnpm build:engine                     # package + shared shader inputs + incremental tsc
+pnpm build:app hello/triangle         # one app; package/shared receipts are reused
+pnpm build:clean                      # declared output roots removed, then full build
 pnpm test
 pnpm dev                              # → http://localhost:5173
 ```
+
+`pnpm build` is the complete deployable-fleet path. `pnpm build:engine` is the
+normal feedback loop for engine/package changes; use `pnpm build:app <path>` for
+an app-only iteration. A fast path does not replace the browser, Dawn, smoke, or
+full-fleet gates required by the change.
 
 Commands, smoke gate, Bun pipeline, Rust toolchain — see [AGENTS.md §Commands](./AGENTS.md#commands).
 

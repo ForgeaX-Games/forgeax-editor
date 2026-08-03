@@ -256,7 +256,12 @@ describe('AC-01 export-surface snapshot', () => {
     // as intended.
     // getActiveScenePackPath is the read-only host projection of the
     // persistence-owned active scene path, bringing the barrel surface to 62.
-    expect(entries.length).toBe(62);
+    // R0-02A adds the single React projection hook shared by human scene UI and
+    // the Gateway's public sceneReadModel, bringing the surface to 63.
+    // Imported preview/source authoring adds the persistence-owned Human/AI read
+    // model plus explicit activation wrappers → 67. Save and Promote remain
+    // public through Gateway listOps/dispatch, not second store wrappers.
+    expect(entries.length).toBe(67);
 
     // Every entry must be non-empty.
     for (const e of entries) {
@@ -565,6 +570,7 @@ describe('AC-03 listOps() self-introspection output freeze (M3-w9)', () => {
         source: o.source,
         argsSchema: o.argsSchema ?? null,
         ...(o.title !== undefined ? { title: o.title } : {}),
+        ...(o.operationRun !== undefined ? { operationRun: o.operationRun } : {}),
       }))
       .sort((a, b) => a.id.localeCompare(b.id));
 

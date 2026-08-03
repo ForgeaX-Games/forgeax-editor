@@ -13,13 +13,63 @@
               "Entity": {
                 "self": 0
               },
-              "MeshFilter": {
-                "assetHandle": 0
+              "Name": {
+                "value": "E2E unsaved save failure mutation"
               },
-              "MeshRenderer": {
-                "materials": [
+              "Transform": {
+                "pos": [
+                  0,
+                  0.75,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
                   1
                 ]
+              }
+            }
+          },
+          {
+            "localId": 1,
+            "components": {
+              "Entity": {
+                "self": 1
+              },
+              "Name": {
+                "value": "Fox"
+              },
+              "Transform": {
+                "pos": [
+                  0,
+                  0,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  0.009999999776482582,
+                  0.009999999776482582,
+                  0.009999999776482582
+                ]
+              }
+            }
+          },
+          {
+            "localId": 2,
+            "components": {
+              "Entity": {
+                "self": 2
               },
               "Name": {
                 "value": "Ground"
@@ -41,22 +91,22 @@
                   0.20000000298023224,
                   20
                 ]
-              }
-            }
-          },
-          {
-            "localId": 1,
-            "components": {
-              "Entity": {
-                "self": 1
               },
               "MeshFilter": {
                 "assetHandle": 0
               },
               "MeshRenderer": {
                 "materials": [
-                  2
+                  1
                 ]
+              }
+            }
+          },
+          {
+            "localId": 3,
+            "components": {
+              "Entity": {
+                "self": 3
               },
               "Name": {
                 "value": "RedBox"
@@ -78,33 +128,25 @@
                   1,
                   1
                 ]
+              },
+              "MeshFilter": {
+                "assetHandle": 0
+              },
+              "MeshRenderer": {
+                "materials": [
+                  2
+                ]
               }
             }
           },
           {
-            "localId": 2,
+            "localId": 4,
             "components": {
               "Entity": {
-                "self": 2
-              },
-              "MeshFilter": {
-                "assetHandle": 3
-              },
-              "MeshRenderer": {
-                "materials": [
-                  4
-                ]
+                "self": 4
               },
               "Name": {
                 "value": "BlueBall"
-              },
-              "Rotator": {
-                "axis": [
-                  0,
-                  1,
-                  0
-                ],
-                "speed": 3
               },
               "Transform": {
                 "pos": [
@@ -123,14 +165,51 @@
                   1.2000000476837158,
                   1.2000000476837158
                 ]
+              },
+              "MeshFilter": {
+                "assetHandle": 3
+              },
+              "MeshRenderer": {
+                "materials": [
+                  4
+                ]
+              },
+              "Rotator": {
+                "axis": [
+                  0,
+                  1,
+                  0
+                ],
+                "speed": 3
               }
             }
           },
           {
-            "localId": 3,
+            "localId": 5,
             "components": {
               "Entity": {
-                "self": 3
+                "self": 5
+              },
+              "Name": {
+                "value": "Sun"
+              },
+              "Transform": {
+                "pos": [
+                  0,
+                  6,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
               },
               "DirectionalLight": {
                 "direction": [
@@ -154,90 +233,17 @@
                 "shadowDistance": 60,
                 "pcfKernelSize": 3
               },
-              "Name": {
-                "value": "Sun"
-              },
               "Skylight": {
                 "color": [
                   0.699999988079071,
                   0.800000011920929,
                   1
                 ],
-                "intensity": 1
-              },
-              "Transform": {
-                "pos": [
-                  0,
-                  6,
-                  0
-                ],
-                "quat": [
+                "intensity": 1,
+                "rotation": [
                   0,
                   0,
                   0,
-                  1
-                ],
-                "scale": [
-                  1,
-                  1,
-                  1
-                ]
-              }
-            }
-          },
-          {
-            "localId": 4,
-            "components": {
-              "Entity": {
-                "self": 4
-              },
-              "Name": {
-                "value": "Player"
-              },
-              "Transform": {
-                "pos": [
-                  0,
-                  0.75,
-                  0
-                ],
-                "quat": [
-                  0,
-                  0,
-                  0,
-                  1
-                ],
-                "scale": [
-                  1,
-                  1,
-                  1
-                ]
-              }
-            }
-          },
-          {
-            "localId": 5,
-            "components": {
-              "Entity": {
-                "self": 5
-              },
-              "Name": {
-                "value": "Fox"
-              },
-              "Transform": {
-                "pos": [
-                  0,
-                  0,
-                  0
-                ],
-                "quat": [
-                  0,
-                  0,
-                  0,
-                  1
-                ],
-                "scale": [
-                  1,
-                  1,
                   1
                 ]
               }
@@ -250,11 +256,265 @@
             "memberFirst": 7,
             "memberCount": 26,
             "source": 5,
-            "parent": 5
+            "parent": 1,
+            "overrides": [
+              {
+                "localId": 9,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  -0.7071080803871155,
+                  0,
+                  0,
+                  0.7071054577827454
+                ]
+              },
+              {
+                "localId": 10,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0.12769094109535217,
+                  -0.6954820156097412,
+                  -0.12769022583961487,
+                  0.6954818367958069
+                ]
+              },
+              {
+                "localId": 11,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  -0.5904157757759094,
+                  0.8070992827415466
+                ]
+              },
+              {
+                "localId": 12,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.01741195283830166,
+                  0.9998484253883362
+                ]
+              },
+              {
+                "localId": 13,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.3033791482448578,
+                  0.9528699517250061
+                ]
+              },
+              {
+                "localId": 14,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  -0.40028542280197144,
+                  0.9163905382156372
+                ]
+              },
+              {
+                "localId": 15,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0.000467327336082235,
+                  -0.00044614847865886986,
+                  -0.7121793031692505,
+                  0.7019973397254944
+                ]
+              },
+              {
+                "localId": 16,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.03712590038776398,
+                  0.9993106126785278
+                ]
+              },
+              {
+                "localId": 17,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  -0.012037406675517559,
+                  -0.007822209969162941,
+                  0.4605623185634613,
+                  0.8875112533569336
+                ]
+              },
+              {
+                "localId": 18,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0.0004972619353793561,
+                  -0.0008821923402138054,
+                  -0.7120875120162964,
+                  0.7020900249481201
+                ]
+              },
+              {
+                "localId": 19,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.03712590038776398,
+                  0.9993106126785278
+                ]
+              },
+              {
+                "localId": 20,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0.016517914831638336,
+                  0.014013740234076977,
+                  0.46007558703422546,
+                  0.8876155018806458
+                ]
+              },
+              {
+                "localId": 21,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.9818928837776184,
+                  0.1894369125366211
+                ]
+              },
+              {
+                "localId": 22,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  -0.06961716711521149,
+                  0.9975737929344177
+                ]
+              },
+              {
+                "localId": 23,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  -0.05383274331688881,
+                  0.9985499382019043
+                ]
+              },
+              {
+                "localId": 24,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  -0.00017175225366372615,
+                  0.9700158834457397,
+                  -0.24304147064685822
+                ]
+              },
+              {
+                "localId": 25,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  -0.36804378032684326,
+                  0.9298084378242493
+                ]
+              },
+              {
+                "localId": 26,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0.0002484105934854597,
+                  0,
+                  0.45848411321640015,
+                  0.8887025713920593
+                ]
+              },
+              {
+                "localId": 27,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.5472882986068726,
+                  0.8369441628456116
+                ]
+              },
+              {
+                "localId": 28,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.9699586033821106,
+                  -0.24327006936073303
+                ]
+              },
+              {
+                "localId": 29,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  -0.36804381012916565,
+                  0.9298084378242493
+                ]
+              },
+              {
+                "localId": 30,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  -0.00015345455904025584,
+                  0,
+                  0.45790937542915344,
+                  0.8889988660812378
+                ]
+              },
+              {
+                "localId": 31,
+                "comp": "Transform",
+                "field": "quat",
+                "value": [
+                  0,
+                  0,
+                  0.5472882986068726,
+                  0.8369441628456116
+                ]
+              }
+            ]
           }
         ]
       },
-      "artifacts": {},
       "refs": [
         "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
         "3a000001-0000-5000-8000-000000000001",
@@ -262,28 +522,38 @@
         "95730fd2-9846-5f84-8658-0b3c971eb263",
         "3a000003-0000-5000-8000-000000000003",
         "019f56f2-0ac0-776a-9d28-50eb5a9edeb8"
-      ]
+      ],
+      "artifacts": {}
     },
     {
       "guid": "3a000001-0000-5000-8000-000000000001",
       "kind": "material",
       "payload": {
+        "kind": "material",
         "passes": [
           {
             "name": "Forward",
-            "program": { "module": "forgeax::default-standard-pbr" },
-            "tags": {
-              "LightMode": "Forward"
+            "program": {
+              "module": "forgeax::default-standard-pbr"
             },
-            "queue": 2000
+            "renderState": {
+              "tags": {
+                "LightMode": "Forward"
+              },
+              "queue": 2000
+            }
           },
           {
             "name": "ShadowCaster",
-            "program": { "module": "forgeax::default-shadow-caster" },
-            "tags": {
-              "LightMode": "ShadowCaster"
+            "program": {
+              "module": "forgeax::default-shadow-caster"
             },
-            "passKind": "shadow-caster"
+            "renderState": {
+              "tags": {
+                "LightMode": "ShadowCaster"
+              },
+              "passKind": "shadow-caster"
+            }
           }
         ],
         "values": {
@@ -297,29 +567,38 @@
           "roughness": 0.95
         }
       },
-      "artifacts": {},
-      "refs": []
+      "refs": [],
+      "artifacts": {}
     },
     {
       "guid": "3a000002-0000-5000-8000-000000000002",
       "kind": "material",
       "payload": {
+        "kind": "material",
         "passes": [
           {
             "name": "Forward",
-            "program": { "module": "forgeax::default-standard-pbr" },
-            "tags": {
-              "LightMode": "Forward"
+            "program": {
+              "module": "forgeax::default-standard-pbr"
             },
-            "queue": 2000
+            "renderState": {
+              "tags": {
+                "LightMode": "Forward"
+              },
+              "queue": 2000
+            }
           },
           {
             "name": "ShadowCaster",
-            "program": { "module": "forgeax::default-shadow-caster" },
-            "tags": {
-              "LightMode": "ShadowCaster"
+            "program": {
+              "module": "forgeax::default-shadow-caster"
             },
-            "passKind": "shadow-caster"
+            "renderState": {
+              "tags": {
+                "LightMode": "ShadowCaster"
+              },
+              "passKind": "shadow-caster"
+            }
           }
         ],
         "values": {
@@ -333,29 +612,38 @@
           "roughness": 0.6
         }
       },
-      "artifacts": {},
-      "refs": []
+      "refs": [],
+      "artifacts": {}
     },
     {
       "guid": "3a000003-0000-5000-8000-000000000003",
       "kind": "material",
       "payload": {
+        "kind": "material",
         "passes": [
           {
             "name": "Forward",
-            "program": { "module": "forgeax::default-standard-pbr" },
-            "tags": {
-              "LightMode": "Forward"
+            "program": {
+              "module": "forgeax::default-standard-pbr"
             },
-            "queue": 2000
+            "renderState": {
+              "tags": {
+                "LightMode": "Forward"
+              },
+              "queue": 2000
+            }
           },
           {
             "name": "ShadowCaster",
-            "program": { "module": "forgeax::default-shadow-caster" },
-            "tags": {
-              "LightMode": "ShadowCaster"
+            "program": {
+              "module": "forgeax::default-shadow-caster"
             },
-            "passKind": "shadow-caster"
+            "renderState": {
+              "tags": {
+                "LightMode": "ShadowCaster"
+              },
+              "passKind": "shadow-caster"
+            }
           }
         ],
         "values": {
@@ -369,8 +657,8 @@
           "roughness": 0.5
         }
       },
-      "artifacts": {},
-      "refs": []
+      "refs": [],
+      "artifacts": {}
     }
   ]
 }

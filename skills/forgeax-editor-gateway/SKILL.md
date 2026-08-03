@@ -13,14 +13,13 @@ description: >-
 
 # forgeax-editor-gateway
 
-> **All editor operations go through a single EditGateway — `dispatch` / `begin…commit` / `listOps` / `defineOp` / `eval`.**
->
-> Editor state mutation has exactly one door. Human UI handlers and AI code use the same gateway,
-> same op payload, same applier, same ledger — human-machine isomorphism. See one op walk through
-> and you know how every editor state mutation walks.
->
-> **Why it's shaped this way:** `DESIGN.md` (design decisions) · `AGENTS.md` §Design principles
-> (the single-door axioms) · `docs/skills/forgeax-editor-gateway.md` (play/stop world-fork).
+> **Operational contract:** use `gateway.dispatch` / `gateway.begin…commit` for editor operations,
+> `gateway.listOps()` before invoking capabilities, and `query({ with: [...] })` for ECS reads.
+> The same operation payload is used by human UI and AI callers.
+
+> [!IMPORTANT]
+> This file is the call surface. The gateway-specific rationale lives in `DESIGN.md`; play/stop
+> world-fork semantics live in `docs/skills/forgeax-editor-gateway.md`.
 >
 > [!CAUTION]
 > **Reading/writing entities across a play/stop (`▶`/`■`) boundary?** First read
@@ -36,7 +35,7 @@ applier (structural, not a hand-pasted label):
 | Domain | Applier table | Ledger behavior | Representative ops |
 |:--|:--|:--|:--|
 | `document` | `documentAppliers` | undo + ledger (reversible) | spawnEntity / setComponent / transaction |
-| `session` | `sessionAppliers` | ledger only (irreversible, auditable) | setSelection / saveDocToDisk / requestFrame / play / stop / cameraOrbit |
+| `session` | `sessionAppliers` | ledger only (irreversible, auditable) | setSelection / saveDocToDisk / requestFrame / captureFrame / play / stop / cameraOrbit |
 | `transient` | `transientAppliers` | neither (ephemeral, no trace) | setHoverEntity / setFieldPreview |
 
 **Immediate op** = `dispatch` with implicit begin=commit collapse.
@@ -49,6 +48,41 @@ a second begin or scene switch/undo triggers implicit cancel of the prior op; st
 eval channel. AI CLI accesses it via `playwright page.evaluate` — zero new network surface (OOS-9).
 scope① = `{gateway, query, _import}` (no world/renderer/assets). scope② = raw engine access,
 gated behind explicit `unlockRawScope()` (dev-only; production always returns `SCOPE_LOCKED`).
+
+> [!IMPORTANT]
+> **Scope① has two separate surfaces.** `gateway` is the operation/read-model object;
+> `query` is an independent read-only function. Use `gateway.dispatch(...)` / `gateway.listOps()`
+> for operations and `query({ with: ['Name', 'Transform'] })` for ECS snapshots. Do not call
+> `gateway.query(...)` or pass `query({ components: [...] })`.
+
+| Need | Correct entry | Common wrong entry |
+|:--|:--|:--|
+| Discover or invoke an editor operation | `gateway.listOps()` / `gateway.dispatch(op, origin)` | `query(...)` |
+| Read live ECS component rows | `query({ with: ['Name', 'MeshRenderer'] })` | `gateway.query(...)` / `{ components: [...] }` |
+| Read asset meaning from an opaque handle | `gateway.describeAsset(raw)` / `gateway.resolveAsset(raw)` | Guessing the numeric handle |
+
+## First-call protocol
+
+Run these calls in order. Each later call depends on the previous one succeeding.
+
+| Step | Call | Stop condition |
+|:--|:--|:--|
+| 1. Transport | `gateway-live.mjs --health` | `pageConnected: true` |
+| 2. Capability | `gateway.listOps()` | Required operation id is present |
+| 3. Read state | `query({ with: ['Name', 'Transform'] })` | Result is `{ ok: true, rows }` |
+| 4. Mutate / act | `gateway.dispatch(op, 'ai')` | Result is `{ ok: true }`; for async ops, await `gateway.waitOperationRun(requestId)` |
+| 5. Diagnose | `error.code`, `error.hint`, `gateway.trace.last()` | Retry only after reading the structured error |
+
+For standalone editor use relay `:15296`; Studio owns `:15295`. If a custom
+`FORGEAX_BRIDGE_PORT` is set, use the same value for the dev stack and CLI.
+The health response also reports `evalTimeoutMs`; this is the relay wait budget,
+not an operation completion signal.
+
+> [!CAUTION]
+> `gateway-live.mjs` receives one shell argument. If the snippet contains string literals,
+> shell quoting can remove those quotes before eval (for example `requestId='capture-x'` can
+> arrive as `requestId=capture-x`). Use `--file <path>` for async or multi-line snippets; for
+> a one-liner, pass JSON-style double quotes through the shell and keep the snippet itself valid JS.
 
 **Trace**: every dispatch/undo/redo produces a span tree. Read them via
 `gateway.trace.last()` / `gateway.trace.recent(n)` — plain-object trees with OTel-aligned fields
@@ -74,7 +108,7 @@ headless driver is only for CI / fresh-page-loads.
 ### Quick start — live bridge
 
 ```bash
-# 1) Start the editor (relay on :15295 + bridge enabled by default):
+# 1) Start the editor (relay on :15296 + bridge enabled by default):
 bun run dev:standalone
 #   or: bun fx start --game games/sample --bg
 
@@ -84,6 +118,8 @@ node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --health
 # 3) Drive the open window:
 node skills/forgeax-editor-gateway/scripts/gateway-live.mjs "gateway.listOps().length"
 node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file snippet.js
+# Long async evals (captureFrame, import, save) can use an explicit relay budget:
+node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --file capture.js --timeout 120000
 ```
 
 ### Quick start — headless (CI / fresh page)
@@ -98,7 +134,8 @@ node skills/forgeax-editor-gateway/scripts/gateway-eval.mjs --file snippet.js --
 > Live bridge evals run at frame start (`app.registerUpdate`), not the instant they arrive —
 > the page enqueues each eval and drains the queue before `world.update()`. This means
 > writes are deterministic through the frame's systems. If the window is backgrounded
-> (rAF paused), the queue stalls and evals time out after 30s. Details in §Scripts below.
+> (rAF paused), the queue stalls and the relay eventually returns `EVAL_TIMEOUT`; keep the
+> editor window in the foreground. Details in §Scripts below.
 
 ## Core API Quick Reference
 
@@ -135,9 +172,12 @@ and `run.cancel`. Generic non-save runs continue to use their existing transport
 | `gateway.resolveAsset(handle)` | `(number) => {ok:true, asset} \| {ok:false, error}` | Resolve a shared<T> handle (query's opaque-handle.raw) to its live asset payload; covers builtin + catalog, O(1) |
 | `gateway.describeAsset(handle)` | `(number) => {ok:true, kind, guid?, name?, builtin?} \| {ok:false, error}` | Human-readable identity of an asset handle: kind + (catalog assets) guid+name, or builtin:true |
 | `gateway.assetCatalog()` | `() => readonly {guid, kind, name?, relativeUrl}[]` | List the asset catalog (projects registry.listCatalog); [] if no registry |
+| `gateway.sceneReadModel()` | `() => {gameId, currentScene, defaultScene, scenes}` | Read the persistence-owned scene list with stable GUIDs and derived current/default markers; []/null fields mean no game or no declared scene |
+| `gateway.hasPendingDiskSave()` | `() => boolean` | Read the persistence-owned authored-vs-disk dirty fact shared by AI and the human dirty indicator |
+| `dispatch({kind:'switchSceneFile', id, dirtyPolicy?})` | `dirtyPolicy: 'save' \| 'discard' \| 'cancel'` when dirty | Switch through the scene-list owner; omitting policy on dirty state returns `scene-switch-dirty`, and `cancel` returns `scene-switch-cancelled` without switching |
 | `gateway.lookupAsset(guid)` | `(AssetGuid\|string) => Asset \| undefined` | Look up a catalogued asset payload by GUID (catalog only, no fetch) |
 | `gateway.listComponents()` | `() => readonly string[]` | Self-introspect all registered component names (sorted). The "what components exist?" leg, parallel to listOps (ops) / assetCatalog (assets). Same source as the UNKNOWN_COMPONENT hint |
-| `gateway.describeComponent(name)` | `(string) => {ok:true, name, schema, defaults?} \| {ok:false, error}` | Field schema of one component (field→type-keyword map + JSON-safe defaults) — the answer to "what fields does Transform take?" BEFORE building a spawn/setComponent payload. Unknown name → UNKNOWN_COMPONENT listing registered names |
+| `gateway.describeComponent(name)` | `(string) => {ok:true, name, schema, defaults?, enums?, shapes?, transient?} \| {ok:false, error}` | Field schema of one component (field→type-keyword map + JSON-safe defaults; producer-owned enum labels, semantic shapes, and derived-field markers when declared) — the answer to "what fields does Transform take?" BEFORE building a spawn/setComponent payload. Unknown name → UNKNOWN_COMPONENT listing registered names |
 | `gateway.defineOp(def)` | `(OpDefinition) => DefineResult` | Compose new document/session op (id + argsSchema + plan -> transaction or session-plan) |
 | `gateway.trace.last()` | `() => SpanNode \| null` | Read most recent root span tree (plain-object, AC-10) |
 | `gateway.trace.recent(n)` | `(n: number) => SpanNode[]` | Read last N root span trees |
@@ -146,7 +186,7 @@ and `run.cancel`. Generic non-save runs continue to use their existing transport
 | `gateway.canUndo()` / `gateway.canRedo()` | `() => boolean` | Whether the undo/redo stack is non-empty — the guard for undo/redo UI buttons and for a docs-following AI's loop condition |
 | `gateway.appliedCount()` | `() => number` | Number of currently-applied document steps (the timeline head position); pairs with `gotoStep(n)` |
 | `gateway.historySteps()` | `() => HistoryStep[]` | undoStack-derived timeline (applied oldest→newest, then redoable future), each with origin; **document ops only** (no session ops — use `auditLog()` for those) |
-| `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit/requestFrame appliers |
+| `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit/requestFrame/captureFrame appliers |
 | `createEvalChannel(gw, opts?)` | `(EditGateway, {rawScope?}) => EvalChannel` | Create dev-only eval channel; `globalThis.__forgeaxEval` in DEV builds |
 | `channel.eval(code)` | `(string) => EvaluateResult` | Evaluate JS code with scope①={gateway, query, _import} |
 | `channel.unlockRawScope()` | `() => RawScopeResult` | Attempt scope② unlock; returns SCOPE_LOCKED in production |
@@ -376,9 +416,11 @@ wrapper entity, or a host log.
 | Op | Args | Does |
 |:--|:--|:--|
 | `importAsset` | `{ destPath, sourceName?, skipUpload?, requestId }` | Cook a source file already on disk (game-relative path OK) into catalog sub-assets. A GLB/FBX yields *many* sub-assets (mesh/material/texture/**scene**, and for a rigged model **skeleton/skin/animation-clip**). Read its terminal OperationRun with the same `requestId`. |
+| `previewImportedScene` | `{ guid, sourceKey, revision, sourcePath?, requestId }` | Open the exact effective imported SceneAsset as a read-only preview and retain its immutable effective snapshot. Ordinary double-click uses this operation; it never creates an authored write target. |
+| `promoteImportedScene` | `{ importedGuid, sourceKey, revision, targetPackPath, targetName, contentPolicy, discardSourceChanges?, requestId }` | Create a new authored scene pack with a new GUID. `contentPolicy` is mandatory: `effective-base` uses the retained immutable effective snapshot; `current-session` is accepted only in a supported imported-source-edit session and uses Engine world collection. A dirty `effective-base` request must explicitly set `discardSourceChanges:true`. The target must be an unused game-relative `assets/**/*.pack.json`; Promote never writes source/meta/DDC. |
 | `addSceneAssetToScene` | `{ sceneGuid, name?, requestId }` | Instantiate a catalogued **`kind:'scene'`** sub-asset (by GUID) into the live scene as a nested SceneInstance mount — real geometry + hierarchy (incl. `Skin` + `Skeleton` joints for a rigged asset), round-trips through save→reopen→Play. **This is the last leg**: `importAsset` gets a file INTO the catalog; this gets it INTO the scene. **It does NOT create an `AnimationPlayer`** — see "Animate a skinned asset" below. `requestId` is the independent OperationRun identity for this mount. If async load/instantiate fails, the provisional wrapper is rolled back through `destroyEntity`; inspect terminal `error.current.cleanup` for `{ attempted, ok, wrapper }` facts (or a structured cleanup error) before retrying. |
 | `createMaterial` | `{ guid, name, baseColor:[r,g,b,a], metallic?, roughness?, packPath?, refs? }` | **AUTHOR a NEW PBR material from params** — the create-a-look counterpart to `bindAssetRef`'s bind-an-existing-look. Mints a `MaterialAsset` (POD built by the engine's canonical `Materials.standard()` — 3-pass GBuffer+Forward+ShadowCaster) into the pack; document-domain (undoable, inverse `destroyAsset`). **You mint `guid` yourself** (`crypto.randomUUID()`) — the op returns no minted value (the dispatch result carries only entity handles), so reuse the SAME guid for the follow-up `bindAssetRef`. **Omit `packPath`** — it defaults to the active scene's real pack (the same one the scene saves to, so it round-trips Edit=Play); only pass it (game-relative, e.g. `"sample/assets/scene.pack.json"`) to target another pack. Author-then-bind: `createMaterial{guid,name,baseColor,metallic,roughness}` → `bindAssetRef{entity, component:'MeshRenderer', field:'materials', assetType:'MaterialAsset', guids:[guid], slot}`. |
-| `bindAssetRef` | `{ entity, component, field, assetType, guids, slot?, requestId }` | **Bind catalogued asset GUIDs into a `shared<T>` component field** — the front-door GUID→handle binder. `addComponent`/`setComponent` pass values RAW (no resolution), so a GUID in a `shared<T>` field silently becomes handle `0`; this op resolves each GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle via an undoable `setComponent`. Its terminal OperationRun result identifies the request, target, input GUIDs, resolved handles, and scalar/array/slot shape; a miss or set rejection is a structured error. Closes the whole class: `MeshRenderer.materials` (`assetType:'MaterialAsset'`), `Skylight`/`SkyboxBackground.equirect` (`'EquirectAsset'`), `AnimationPlayer.clips` (`'AnimationClip'`). `slot` writes one array element; omit to write the whole field. **Owned entities only** — a `shared<T>` field on a mount MEMBER still needs the engine mount-override round-trip (P6, escalated). |
+| `bindAssetRef` | `{ entity, component, field, assetType, guids, slot?, requestId }` | **Bind catalogued asset GUIDs into a `shared<T>` component field** — the async GUID→handle binder (`loadByGuid`→`allocSharedRef`) followed by an undoable `setComponent`. Its terminal OperationRun reports target, GUIDs, resolved handles, and scalar/array/slot shape. Owned entities and mount members are supported; mount-member shared refs fold into `mounts[].overrides[]` on save. `addComponent`/`setComponent` also resolve already-catalogued GUID strings synchronously. |
 | `requestReimport` | `{ paths: string[] }` | Re-cook already-imported sources (e.g. after the file changed on disk). |
 | `duplicateAsset` / `renameAsset` / `destroyAsset` / `restoreAsset` | (see each `argsSchema`) | Catalog-management ops, mirrors of the Content Browser context menu. |
 
@@ -453,7 +495,7 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > already the reopen (that is exactly how you verify a save→reopen round-trip).
 
 > [!CAUTION]
-> **Animate a skinned asset — the honest mental model + two current gaps (P6 not yet end-to-end).**
+> **Animate a skinned asset — mount override support and limits.**
 > The mount gives you the `Skin` + skeleton joints, **not a playing animation**. That is correct by
 > design: the gltf cook emits the clips as separate `kind:'animation-clip'` catalog sub-assets and
 > deliberately does **not** bake an `AnimationPlayer` — *which* clip plays is authoring intent, so YOU
@@ -461,7 +503,7 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > `dispatch({ kind:'addComponent', entity, component:'AnimationPlayer', value:{ clips:[<clip>], weights:[1], looping:true } })`
 > (`addComponent`, **not** `setComponent` — `setComponent` only patches a component that already exists).
 > `describeComponent('AnimationPlayer')` gives the field schema (`clips/times/weights/speeds/paused/looping`).
-> **Clip-binding leg (gap 1) — now solved by `bindAssetRef`; mount-member round-trip (gap 2) still open:**
+> **Clip binding and mount-member round-trip:**
 > 1. **Bind the clip GUID with `bindAssetRef`, NOT raw `addComponent`.** `clips` is
 >    `array<shared<AnimationClip>,4>`; passing a clip **GUID** to `addComponent`/`setComponent` is silently
 >    coerced to handle `0` (they pass component data raw). Use the front-door binder instead:
@@ -470,13 +512,10 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 >    an `AnimationPlayer` with the scalar params — `weights/speeds/paused/looping` — then `bindAssetRef` the
 >    `clips`; wait on the same requestId for terminal success/error.) This closes the old "no clip-binding leg"
 >    gap for **owned** entities (solo round-11).
-> 2. **Mount-member overrides still don't round-trip.** A component authored on a *mounted* child (the fox
->    from `addSceneAssetToScene` is a SceneInstance mount member) is dropped on `saveDocToDisk` — the engine's
->    `collect-scene-asset` OOS-1 does not fold `mount.overrides[]` back on collect, and Play reloads from disk,
->    so the authored `AnimationPlayer` never reaches Play (Edit≠Play). This is the remaining P6 blocker,
->    tracked for `forgeax-closed-loop` (solo round-10 ENGINE-FINDING). **Workaround today:** author animation
->    on an **owned** skinned entity (e.g. one flat-instantiated, not a nested mount) — `bindAssetRef` +
->    owned-entity round-trip both work. A mounted rig's playback waits on the engine mount-override fix.
+> 2. **Mount-member component add, field patch, and shared refs round-trip.** The engine collector folds
+>    these edits into the parent authored pack's `mounts[].overrides[]`. Component removal, member deletion,
+>    structural reparent, and entity-reference patches are not representable in v1 and are rejected by the
+>    editor before mutating the World.
 
 ### Discover component names + field schemas (before you spawn / setComponent)
 
@@ -495,7 +534,10 @@ gateway.listComponents();
 const d = gateway.describeComponent('Transform');
 // → { ok:true, name:'Transform',
 //     schema:   { pos:'array<f32, 3>', quat:'array<f32, 4>', scale:'array<f32, 3>', world:'array<f32, 16>' },
-//     defaults: { pos:[0,0,0], quat:[0,0,0,1], scale:[1,1,1], … } }   // JSON-safe (TypedArrays snap-copied)
+//     defaults: { pos:[0,0,0], quat:[0,0,0,1], scale:[1,1,1], … },
+//     shapes?: { pos:'vector', quat:'quaternion' }, enums?: {...}, transient?: {...} }
+//   // JSON-safe (TypedArrays snap-copied); optional producer fields are omitted
+//   // from these maps when their producer has no corresponding annotation.
 
 // Now the spawn payload writes itself — no posX/posY/posZ guesswork:
 if (d.ok) gateway.dispatch({ kind:'spawnEntity', name:'Cube', components:{ Transform:{ pos:[0,1,0] } } }, 'ai');
@@ -526,7 +568,7 @@ const miss = gateway.describeComponent('Postion');   // typo
 
 
 > [!NOTE]
-> **`play` / `stop` / `cameraOrbit` / `requestFrame`** are only available after edit-runtime boots and registers
+> **`play` / `stop` / `cameraOrbit` / `requestFrame` / `captureFrame`** are only available after edit-runtime boots and registers
 > the seam (`registerSessionApplier`). In headless (no edit-runtime, e.g. pure core scripts / tests / CI),
 > they are **unregistered** — `dispatch({ kind: 'play' })` returns `UNKNOWN_OP`. Probe with `listOps()`
 > before sending: if `play`/`stop` are absent, the environment does not support them. Do not blindly fire.
@@ -842,31 +884,37 @@ __forgeaxEval.eval('world.spawn(...)')  // -> world / renderer / assets now in s
 > (`skills/forgeax-editor-gateway/scripts/gateway-eval.mjs` waits `--settle` ms, default 1500). Scene-independent calls
 > (`listOps`, `defineOp`) need no settle — pass `--settle 0`.
 
-## Debug rendering -- capture an RHI frame (engine capability, OUTSIDE the gateway)
+## Debug rendering -- capture an RHI frame through the gateway
 
 > [!IMPORTANT]
-> **RHI frame capture is an ENGINE debug capability, not an editor op — it is NOT in `listOps()`
-> and never will be.** Black-screen / wrong-texture / wrong-binding symptoms are a rendering
-> concern, not an authored edit, so capture does not enter the ledger / undo / trace. Don't hunt
-> for a `captureFrame` op or add one — that would hand-roll an engine capability into the editor
-> door (AGENTS.md anti-pattern #1). The "one door" is for **authored editor state**; render-debug
-> is reached separately, documented here so a docs-only AI stops looking in the wrong place.
+> **RHI frame capture is a session-domain gateway operation.** It is intentionally not an
+> authored document edit, so it enters the session ledger but not the undo stack. The engine's
+> `globalThis.__forgeax.captureFrame` is an implementation seam owned by edit-runtime; callers
+> must discover and invoke the gateway operation instead of reaching that global directly.
 
-**How to reach it.** When `FORGEAX_ENGINE_RHI_DEBUG=1`, the engine mounts `globalThis.__forgeax.captureFrame(n)`
-on the page. The eval channel's scope① can see `window`, so you drive it from the same
-`gateway-eval.mjs` door — no new transport:
+**How to reach it.** When `FORGEAX_ENGINE_RHI_DEBUG=1`, edit-runtime registers `captureFrame`
+into the live gateway. Discover it with `gateway.listOps()`, dispatch a request-correlated
+operation, then await its terminal result:
 
 ```ts
-// via gateway-eval.mjs (an async snippet — the driver awaits the Promise for you):
+// via gateway-live.mjs or gateway-eval.mjs:
 (async () => {
-  if (typeof globalThis.__forgeax?.captureFrame !== 'function') {
-    return { ok: false, why: 'FORGEAX_ENGINE_RHI_DEBUG!=1 or wrong server' };
+  const op = gateway.listOps().find((item) => item.id === 'captureFrame');
+  if (op === undefined) {
+    return { ok: false, why: 'edit-runtime is not booted or --rhi-debug is unavailable' };
   }
-  gateway.dispatch({ kind: 'requestFrame' }, 'ai');       // ensure there IS a frame to record
-  const res = await globalThis.__forgeax.captureFrame(1); // records 1 frame to a tape on disk
-  return res;   // { runId, tapePath, reportPath }
+  const requestId = `capture-${crypto.randomUUID()}`;
+  const accepted = gateway.dispatch({ kind: 'captureFrame', frames: 1, requestId }, 'ai');
+  if (!accepted.ok) return accepted;
+  const terminal = await gateway.waitOperationRun(requestId);
+  if (!terminal.ok) return terminal;
+  return terminal.value; // { status:'succeeded', result:{ runId, tapePath, reportPath } }
 })()
 ```
+
+`captureFrame` waits for the runtime-owned recorder completion; `requestFrame` is not needed as
+a second raw trigger. If the editor was not started with `--rhi-debug`, the operation returns the
+structured `rhi-debug-unavailable` error through the gateway.
 
 Then inspect the tape **offline** (no live device) — the frame-model / per-draw inspect / dockview
 viewer all live in the engine skill, which is the SSOT (do not re-derive here):
@@ -915,13 +963,14 @@ in-memory world.
 > to pass through that frame's systems (deterministic, reproducible across runs).
 > The reply is deferred to that drain (sub-millisecond; imperceptible). Consequence:
 > if the window is not rendering (backgrounded tab → rAF paused), the queue does
-> not drain and evals time out after 30s — keep the editor window in the foreground.
+> not drain and evals eventually time out — keep the editor window in the foreground. The relay
+> default is 120s and can be changed per request with `--timeout`.
 > This applies ONLY to the bridge; in-window UI dispatch runs synchronously.
 
 ```bash
 # Starts the relay and enables the page connection by default.
 bun run dev:standalone
-# `bun fx start [--game DIR]` enables the bridge by default too (same relay :15295).
+# `bun fx start [--game DIR]` enables the bridge by default too (same relay :15296).
 
 # In another terminal, after the editor page finishes booting:
 node skills/forgeax-editor-gateway/scripts/gateway-live.mjs --health
@@ -937,9 +986,14 @@ FORGEAX_BRIDGE_PORT=15305 node skills/forgeax-editor-gateway/scripts/gateway-liv
 ```
 
 `--health` exits nonzero until both the relay and page are connected. `--file <path>` reads the
-snippet from a file. `FORGEAX_BRIDGE=0` is the explicit opt-out; ordinary bare Vite hosts keep the
-bridge disabled. `VITE_FORGEAX_BRIDGE` and `VITE_FORGEAX_BRIDGE_PORT` are Vite build-time variables,
-so restart the edit-runtime dev server after changing them.
+snippet from a file. `--timeout <ms>` changes the relay's HTTP wait budget for that request;
+the default is 120000 ms and the accepted range is 1000–300000 ms. This only prevents the
+transport from returning `EVAL_TIMEOUT`; an accepted Gateway operation is complete only after
+its own `waitOperationRun(requestId)` reaches the required terminal status. `FORGEAX_BRIDGE=0`
+is the explicit opt-out; ordinary bare Vite hosts keep the bridge disabled.
+`FORGEAX_BRIDGE_EVAL_TIMEOUT_MS` sets the relay default. `VITE_FORGEAX_BRIDGE` and
+`VITE_FORGEAX_BRIDGE_PORT` are Vite build-time variables, so restart the edit-runtime dev
+server after changing them.
 
 > [!CAUTION]
 > The relay accepts arbitrary JavaScript for the connected editor page. It is **DEV-only**, binds
@@ -956,7 +1010,7 @@ instead of re-deriving the boot dance. Exit 1 on eval-level failure (syntax/runt
 
 > [!NOTE]
 > `gateway-eval.mjs` takes `--file/--raw/--url/--timeout/--settle`; `gateway-live.mjs` takes
-> `--file/--health` (no `--settle`/`--raw`/`--url` — the live page is already booted).
+> `--file/--timeout/--health` (no `--settle`/`--raw`/`--url` — the live page is already booted).
 
 ```bash
 # prereq: a running editor with a scene open, and playwright available:
@@ -1056,7 +1110,9 @@ AI branches on `error.code` by property access; hint carries actionable recovery
 | `OP_INTERRUPTED` | stale handle on lifecycle method (implicitly cancelled) | `operation was interrupted; begin a new one` |
 | `SCOPE_LOCKED` | unlockRawScope() in production | `scope② is dev-only — run in DEV mode or request rawScope injection` |
 | `SCRIPT_SYNTAX_ERROR` | eval code parse failure | `syntax error near: <msg>; fix and resubmit` |
-| `SCRIPT_RUNTIME_ERROR` | eval code throws at runtime | `runtime error: <msg>; inspect error and retry` |
+| `SCRIPT_RUNTIME_ERROR` | eval code throws at runtime | For `gateway.query(...)`, use `query({ with: [...] })`; for `query({ components: [...] })`, use `with`; otherwise inspect the message and retry |
+| `rhi-debug-unavailable` | `captureFrame` dispatched without the RHI debug runtime | Start the editor with `--rhi-debug`, then rediscover `captureFrame` with `listOps()` |
+| `rhi-capture-failed` | Runtime recorder rejected or failed a capture | Read the terminal `OperationRun` error, correct the runtime condition, then dispatch a new `requestId` |
 
 ## Gate B Constraint
 
@@ -1077,7 +1133,7 @@ the host. Before running a loop, first `query` to bound iteration count; keep ba
 Host browser refresh is the only recovery.
 
 **Session ops are irreversible**: session-domain ops write to the ledger but NEVER to the undo
-stack (`setSelection`, `cameraOrbit`, `requestFrame`, `saveDocToDisk`, etc.). There is no Ctrl+Z for them.
+stack (`setSelection`, `cameraOrbit`, `requestFrame`, `captureFrame`, `saveDocToDisk`, etc.). There is no Ctrl+Z for them.
 Plan accordingly.
 
 **Async disk continuations are outside span intervals**: the 4 async session ops

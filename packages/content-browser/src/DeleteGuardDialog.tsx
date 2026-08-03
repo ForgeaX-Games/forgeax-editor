@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@forgeax/editor-ui';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import type { CBAsset } from './types';
-import type { DeleteImpact } from './delete-guard';
+import type { DeleteImpact, SceneDeleteGuard } from './delete-guard';
 import type { AssetPreflightResult } from '@forgeax/editor-core';
 
 export interface DeleteGuardDialogProps {
@@ -10,9 +10,13 @@ export interface DeleteGuardDialogProps {
   targets: readonly CBAsset[];
   /** Reference impact from {@link computeDeleteImpact}. */
   impact: DeleteImpact;
+  /** Scene-specific current/default/reference guard projection. */
+  sceneGuards?: ReadonlyMap<string, SceneDeleteGuard>;
   preflight?: AssetPreflightResult;
   /** Resolve a guid to a human-readable label for the referencer list. */
   nameByGuid: (guid: string) => string;
+  /** Latest Gateway refusal, if a race changed the authoritative guard. */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -27,8 +31,10 @@ export interface DeleteGuardDialogProps {
 export function DeleteGuardDialog({
   targets,
   impact,
+  sceneGuards,
   preflight,
   nameByGuid,
+  error,
   onConfirm,
   onCancel,
 }: DeleteGuardDialogProps) {
@@ -40,7 +46,8 @@ export function DeleteGuardDialog({
   }, [onConfirm, onCancel]);
 
   const count = targets.length;
-  const danger = impact.hasExternalReferencers;
+  const hasSceneGuards = sceneGuards !== undefined && sceneGuards.size > 0;
+  const danger = impact.hasExternalReferencers || hasSceneGuards;
 
   return (
     <div className="cb-dialog-overlay" data-testid="cb-delete-guard-overlay" onClick={onCancel}>
@@ -66,9 +73,23 @@ export function DeleteGuardDialog({
             {targets.map((target) => {
               const external = impact.externalReferencers.get(target.guid) ?? [];
               return (
-                <li key={target.guid} className="cb-dialog-item">
-                  <span className="cb-dialog-item-name">{target.name}</span>
-                  {external.length > 0 && (
+              <li key={target.guid} className="cb-dialog-item">
+                <span className="cb-dialog-item-name">{target.name}</span>
+                {sceneGuards?.get(target.guid)?.reasons.includes('current') && (
+                  <span className="cb-dialog-item-refs">{t('editor.contentBrowser.deleteGuard.sceneCurrent')}</span>
+                )}
+                {sceneGuards?.get(target.guid)?.reasons.includes('default') && (
+                  <span className="cb-dialog-item-refs">{t('editor.contentBrowser.deleteGuard.sceneDefault')}</span>
+                )}
+                {sceneGuards?.get(target.guid)?.reasons.includes('referenced') && (
+                  <span className="cb-dialog-item-refs">
+                    {t('editor.contentBrowser.deleteGuard.referencedBy', {
+                      count: sceneGuards.get(target.guid)?.referencers.length ?? 0,
+                      names: (sceneGuards.get(target.guid)?.referencers ?? []).map(nameByGuid).join(', '),
+                    })}
+                  </span>
+                )}
+                {external.length > 0 && (
                     <span className="cb-dialog-item-refs">
                       {t('editor.contentBrowser.deleteGuard.referencedBy', {
                         count: external.length,
@@ -82,7 +103,7 @@ export function DeleteGuardDialog({
           </ul>
           {danger ? (
             <p className="cb-dialog-warn">
-              {t('editor.contentBrowser.deleteGuard.warn')}
+              {hasSceneGuards ? t('editor.contentBrowser.deleteGuard.sceneProtectedWarn') : t('editor.contentBrowser.deleteGuard.warn')}
             </p>
           ) : (
             <p className="cb-dialog-note">{t('editor.contentBrowser.deleteGuard.note')}</p>
@@ -92,6 +113,7 @@ export function DeleteGuardDialog({
               Revision {preflight.currentRevision}; recovery: {preflight.recoveryActions.join(', ')}
             </p>
           )}
+          {error && <p className="cb-dialog-warn" data-testid="cb-delete-guard-error">{error}</p>}
         </div>
 
         <div className="cb-dialog-actions">
@@ -104,16 +126,18 @@ export function DeleteGuardDialog({
           >
             {t('editor.contentBrowser.deleteGuard.cancel')}
           </Button>
-          <Button
-            ref={confirmRef}
-            className="cb-dialog-btn"
-            data-testid="cb-delete-guard-confirm"
-            size="sm"
-            variant={danger ? 'destructive' : 'default'}
-            onClick={onConfirm}
-          >
-            {danger ? t('editor.contentBrowser.deleteGuard.confirmAnyway') : t('editor.contentBrowser.deleteGuard.confirm')}
-          </Button>
+          {!hasSceneGuards && (
+            <Button
+              ref={confirmRef}
+              className="cb-dialog-btn"
+              data-testid="cb-delete-guard-confirm"
+              size="sm"
+              variant={danger ? 'destructive' : 'default'}
+              onClick={onConfirm}
+            >
+              {danger ? t('editor.contentBrowser.deleteGuard.confirmAnyway') : t('editor.contentBrowser.deleteGuard.confirm')}
+            </Button>
+          )}
         </div>
       </div>
     </div>

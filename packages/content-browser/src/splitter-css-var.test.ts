@@ -24,6 +24,18 @@ describe('splitter: CSS-variable isolation contract', () => {
     expect(css).toContain('var(--cb-src-w');
   });
 
+  it('nested content-browser flex regions may shrink inside a short dock panel', () => {
+    // The scene-entry bar can wrap to several rows. Without an explicit zero
+    // minimum, flex items retain their content height and the grid spills into
+    // the next Dockview panel, making visible cards impossible to click.
+    for (const selector of ['.cb-root', '.cb-split', '.cb-asset-view', '.cb-grid-view']) {
+      const start = css.indexOf(selector);
+      const end = css.indexOf('}', start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(css.slice(start, end + 1)).toContain('min-height: 0');
+    }
+  });
+
   it('CSS does NOT have a fixed flex-basis that would override the variable', () => {
     // The legacy `flex: 0 0 170px` in theme.css was the root cause;
     // content-browser.css must not reintroduce a fixed basis.

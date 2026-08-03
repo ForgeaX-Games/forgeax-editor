@@ -88,6 +88,7 @@ describe('listOps builtin full coverage (m4-w1, RED)', () => {
     'setGizmoMode', 'requestFrame', 'requestRename',
     'setSceneId', 'switchSceneFile', 'createSceneFile',
     'saveDocToDisk', 'loadDocFromDisk',
+    'previewImportedScene', 'editImportedSource', 'saveImportedSource', 'promoteImportedScene',
     // keyboard-router convergence (M1/M4): setAssetSelection migrated transient→session;
     // setAssetSelectionOne is its sugar alias; setDisplay is the scene⇄game toggle.
     'setAssetSelection', 'setAssetSelectionOne', 'setDisplay',
@@ -263,7 +264,7 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
   it('does not add run metadata or change the domain of unrelated operations', () => {
     const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
     for (const op of gw.listOps()) {
-      if (op.id === 'saveDocToDisk' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'addSceneAssetToScene' || op.id === 'bindAssetRef') continue;
+      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame') continue;
       expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
       expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
     }
@@ -275,6 +276,21 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
     expect(deleteSourceFile?.domain).toBe('session');
     expect(deleteSourceFile?.argsSchema).toMatchObject({ required: ['path', 'requestId'] });
     expect(deleteSourceFile?.operationRun).toEqual({
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    });
+  });
+
+  it('exposes the deleteScene guard contract and terminal read policy', () => {
+    const deleteScene = gw.listOps().find((op) => op.id === 'deleteScene');
+    expect(deleteScene?.domain).toBe('session');
+    expect(deleteScene?.argsSchema).toMatchObject({ required: ['sceneGuid', 'requestId'] });
+    expect(deleteScene?.argsSchema?.properties?.sceneGuid?.description).toContain('Current, default, and referenced');
+    expect(deleteScene?.operationRun).toEqual({
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
       read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },

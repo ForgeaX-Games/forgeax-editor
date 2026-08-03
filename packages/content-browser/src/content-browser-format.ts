@@ -4,7 +4,10 @@
 // import them directly here.
 
 import type { TFunction } from '@forgeax/editor-core/i18n';
-import type { AssetAuthoringCapability } from '@forgeax/engine-types';
+import {
+  authoringCapabilityForAssetKind,
+  type AssetAuthoringCapability,
+} from '@forgeax/engine-types';
 import { resolveGamePath } from '@forgeax/editor-core';
 import type { CBAsset, CBFileFamily, CBViewItem } from './types';
 
@@ -46,6 +49,9 @@ export interface RegistryCatalogEntry {
   packageUrl: string;
   refs?: readonly string[];
   sourcePath?: string;
+  sourceKey?: string;
+  revision?: string;
+  metaPath?: string;
   authoring?: AssetAuthoringCapability;
 }
 
@@ -90,6 +96,15 @@ export function viewItemPath(item: CBViewItem | null): string | null {
 export function viewItemKey(item: CBViewItem): string {
   if (item.type === 'asset') return item.guid;
   return item.path;
+}
+
+/** Project the producer-owned placement capability with the engine's legacy-row
+ * fallback. UI surfaces share this helper instead of maintaining kind switches. */
+export function isAssetPlacementAvailable(
+  asset: Pick<CBAsset, 'kind' | 'authoring'>,
+): boolean {
+  return (asset.authoring ?? authoringCapabilityForAssetKind(asset.kind))
+    .placement.operation !== 'unavailable';
 }
 
 export function copyText(text: string): void {
@@ -241,6 +256,7 @@ export function fileSpecificMenuItems(
   t: TFunction,
   file: { family: CBFileFamily },
   firstAsset?: Pick<CBAsset, 'sourcePath'>,
+  sceneProjection?: { sceneGuid?: string; defaultSceneGuid: string | null },
 ): { id: string; label: string; icon: string; disabled?: boolean }[] {
   switch (file.family) {
     case 'doc':
@@ -252,7 +268,12 @@ export function fileSpecificMenuItems(
     case 'scene':
       return [
         { id: 'play', label: t('editor.contentBrowser.contextMenu.play'), icon: 'play', disabled: true },
-        { id: 'set-default-scene', label: t('editor.contentBrowser.contextMenu.setDefaultScene'), icon: 'flag', disabled: true },
+        {
+          id: 'set-default-scene',
+          label: t('editor.contentBrowser.contextMenu.setDefaultScene'),
+          icon: 'flag',
+          disabled: sceneProjection?.sceneGuid === undefined || sceneProjection.sceneGuid === sceneProjection.defaultSceneGuid,
+        },
         { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
@@ -326,6 +347,9 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
     payload: {},
     packPath,
     ...(e.sourcePath ? { sourcePath: e.sourcePath } : {}),
+    ...(e.sourceKey ? { sourceKey: e.sourceKey } : {}),
+    ...(e.revision ? { revision: e.revision } : {}),
+    ...(e.metaPath ? { metaPath: e.metaPath } : {}),
     packIndex: index,
     refs: e.refs ? [...e.refs] : [],
     ...(e.authoring !== undefined ? { authoring: e.authoring } : {}),

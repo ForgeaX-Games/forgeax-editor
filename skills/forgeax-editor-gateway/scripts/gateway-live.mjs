@@ -7,18 +7,19 @@
 // bridge → __forgeaxEval.eval in YOUR open window. Same in-memory world; a
 // spawnEntity shows up in the Hierarchy immediately, no save+refresh.
 //
-// Prereqs: dev stack running (relay on :15295 + editor page open at :15290 with
+// Prereqs: editor standalone dev stack running (relay on :15296 + editor page open at :15290 with
 // the bridge connected). Prints the {ok, value|error} envelope as JSON.
 // Exit 1 when the relay/page is unreachable or eval failed at channel level.
 //
 //   node scripts/gateway-live.mjs "gateway.listOps().length"
 //   node scripts/gateway-live.mjs --file snippet.js
+//   node scripts/gateway-live.mjs --file capture.js --timeout 120000
 //   node scripts/gateway-live.mjs --health
-//   FORGEAX_BRIDGE_PORT=15295 node scripts/gateway-live.mjs "<code>"
+//   FORGEAX_BRIDGE_PORT=15296 node scripts/gateway-live.mjs "<code>"
 
 import { parseArgs, readSnippet, printResult } from './gateway-cli-common.mjs';
 
-const PORT = Number(process.env.FORGEAX_BRIDGE_PORT ?? 15295);
+const PORT = Number(process.env.FORGEAX_BRIDGE_PORT ?? 15296);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 // --health is a distinct MODE (not a snippet run) — handle it before parseArgs so
@@ -35,11 +36,14 @@ if (process.argv.slice(2).includes('--health')) {
   }
 }
 
-// Strict spec-driven parse (shared SSOT). Live accepts ONLY --file (and the
+// Strict spec-driven parse (shared SSOT). Live accepts --file and --timeout (and the
 // special-cased --health above) — so eval-only flags like --settle/--raw now fail
 // loudly instead of leaking their bare value into the code string (the regression
 // that motivated gateway-cli-common.mjs).
-const { code: posCode, flags } = parseArgs(process.argv, { value: ['file'] });
+const { code: posCode, flags } = parseArgs(process.argv, {
+  value: ['file', 'timeout'],
+  number: ['timeout'],
+});
 const code = readSnippet(
   { code: posCode, file: flags.file },
   'usage: gateway-live.mjs "<js code>" | --file <path> | --health',
@@ -50,7 +54,7 @@ try {
   const r = await fetch(`${BASE}/eval`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, ...(flags.timeout !== undefined ? { timeoutMs: flags.timeout } : {}) }),
   });
   out = await r.json();
 } catch (e) {

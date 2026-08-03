@@ -45,10 +45,13 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
           type: 'branch',
           size: 620,
           data: [
-            { type: 'leaf', size: 612, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
+            { type: 'leaf', size: 500, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
             {
               type: 'leaf',
-              size: 200,
+              // Content Browser owns a wrapped scene-entry bar plus its
+              // navigation row. Keep enough default height for the first
+              // asset card to remain inside this Dockview group.
+              size: 300,
               data: {
                 views: ['ep:assets', 'info'],
                 activeView: 'ep:assets',
@@ -57,7 +60,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
             },
             {
               type: 'leaf',
-              size: 200,
+              size: 100,
               data: { views: ['ep:history'], activeView: 'ep:history', id: 'g-operation-center' },
             },
           ],

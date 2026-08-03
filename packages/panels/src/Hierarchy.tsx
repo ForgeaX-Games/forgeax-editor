@@ -27,7 +27,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useIsHoverEntity, useIsSelected, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -771,6 +771,11 @@ const SceneFolderRow = memo(function SceneFolderRow({
 
 export function HierarchyPanel() {
   const { t } = useTranslation();
+  // The runtime graph is created by the viewport host during boot. A panel can
+  // render before that happens, so subscribe to the authored boot/load signal
+  // as well; otherwise the first `graph === null` snapshot is never replaced
+  // and the hierarchy remains an empty folder until another unrelated render.
+  useDocVersion();
   const projection = useHierarchyStructureProjection();
   const view = useSyncExternalStore(
     subscribeHierarchyPanelState,
@@ -802,6 +807,16 @@ export function HierarchyPanel() {
     ? projection.rows.filter((row) => !projection.rows.some((candidate) => candidate.childIds.includes(row.id))).map((row) => row.id)
     : worldReady ? childrenOf(activeWorld, null) : EMPTY_IDS;
   const roots = useStableIds(worldReady ? stableDisplayOrder(projectedRoots) : EMPTY_IDS);
+  useEffect(() => {
+    console.info(`[placement-diag] hierarchy.snapshot ${JSON.stringify({
+      gatewayRev: gateway.rev,
+      mode: gateway.mode,
+      worldReady,
+      projectionRows: projection?.rows.length ?? null,
+      visibleRoots: roots,
+      worldEntityCount: worldReady ? worldEntityHandles(activeWorld).length : 0,
+    })}`);
+  }, [activeWorld, projection?.rows.length, roots, worldReady]);
   const toggleCollapse = useCallback((id: EntityHandle) => toggleHierarchyCollapsed(id), []);
   const spawnEntity = () => {
     if (readOnly) return;

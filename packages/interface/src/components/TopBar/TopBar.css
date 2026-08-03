@@ -8,8 +8,10 @@
   height: 52px;
   flex-shrink: 0;
   position: relative;
+  min-width: 0;
 }
-.tb-left { display: flex; align-items: center; gap: 0; min-width: 0; overflow: hidden; }
+.tb-left { display: flex; align-items: center; gap: 0; min-width: 0; max-width: 100%; overflow: hidden; }
+.tb-session-switcher { flex: 0 1 140px; min-width: 0; max-width: 100%; overflow: hidden; }
 .tb-dots-cluster { display: flex; align-items: center; gap: 12px; padding: 0 24px; height: 100%; flex-shrink: 0; }
 .tb-left .title {
   display: inline-flex; align-items: baseline; flex-wrap: nowrap; min-width: 0;
@@ -80,6 +82,8 @@
   /* Raise above tb-left / tb-right grid children so their buttons don't
      intercept pointer events on the workspace tabs. */
   z-index: 1;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
 }
 /* Sliding pill indicator — absolutely positioned inside .tb-center,
    sits behind the tab buttons (z-index 0) and slides via translateX. */
@@ -443,6 +447,12 @@
   .tb-right { gap: 12px; }
 }
 
+@media (max-width: 640px) {
+  .tb-session-switcher { flex-basis: clamp(64px, 20vw, 140px); }
+  .tb-game-btn { width: 100%; }
+  .tb-game-label { display: none; }
+}
+
 /* ── New menu (Plus dropdown in TopBar left) ────────────────────────────── */
 .tb-new-menu { position: relative; padding: 0 4px; display: flex; align-items: center; height: 100%; flex-shrink: 0; }
 .tb-new-btn {
@@ -557,7 +567,7 @@
 .tb-session-switcher:has(.tb-game-dropdown) { z-index: 100; }
 .tb-game-btn {
   display: inline-flex; align-items: center; gap: 8px;
-  width: 140px; height: 28px; padding: 0 8px;
+  width: 140px; max-width: 100%; min-width: 0; height: 28px; padding: 0 8px;
   background: transparent;
   border: none;
   border-radius: 4px;

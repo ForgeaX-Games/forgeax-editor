@@ -5,10 +5,10 @@ import { describe, expect, it } from 'bun:test';
 const source = readFileSync(resolve(import.meta.dir, '..', 'Inspector.tsx'), 'utf8');
 
 describe('Inspector field subscription red paths', () => {
-  it('mounts field selectors instead of using the global runtime document signal', () => {
+  it('mounts field selectors and refreshes authored component snapshots', () => {
     expect(source).toContain('createInspectorFieldSelector');
     expect(source).toContain('useSyncExternalStore');
-    expect(source).not.toContain('useDocVersion();');
+    expect(source).toContain('useDocVersion();');
   });
 
   it('keeps the existing form and mutation responsibilities in panels', () => {

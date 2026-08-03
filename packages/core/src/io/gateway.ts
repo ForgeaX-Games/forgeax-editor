@@ -8,7 +8,7 @@ import {
   type ErrorObjectRefs,
   type RunProgress,
 } from '@forgeax/editor-product';
-import type { World } from '@forgeax/engine-ecs';
+import type { FieldShapeKind, World } from '@forgeax/engine-ecs';
 import { clearSelection } from '../store/selection';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
 import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
@@ -22,6 +22,12 @@ import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
 import { assetsErrorRevision, recentAssetsErrors } from '../store/assets-error-bus';
 import { createDiagnosticsReadModel, type DiagnosticsReadModel } from './diagnostics';
+import { EMPTY_SCENE_READ_MODEL, type SceneReadModel } from './scene-read-model';
+import {
+  AUTHORED_SCENE_AUTHORING_SESSION,
+  type SceneAuthoringSessionReadModel,
+} from './scene-authoring-session';
+import { describeSceneActivation } from '../assets/scene-activation';
 // gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
 // reader binding). None of them route a command or decide a domain.
@@ -39,7 +45,7 @@ import {
   collectSceneAsset as collectLiveSceneAsset,
   type CollectSceneAssetResult,
 } from './scene-asset-collect';
-import { entName, entParent } from '../store/entity-state';
+import { entName, entParent, worldEntityHandles } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
 // Asset read surface: resolveAssetHandle turns a shared<T> handle (query
 // returns it as opaque-handle.raw) into its live payload — covering both
@@ -51,6 +57,7 @@ import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
 // field schemas BEFORE a spawn/setComponent (instead of learning them only by
 // triggering a SPAWN_FAILED). Derive, don't duplicate.
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { getComponentSchema } from '../scene/schema';
 import {
   projectSourceFileDeleteStatus,
   sourceFileDeletePath,
@@ -361,6 +368,10 @@ export class EditGateway {
   // this read-only provider so AI and UI inspect the same fact through Gateway
   // without importing or duplicating persistence state.
   private _dirtyReadProvider: (() => boolean) | null = null;
+  // Scene identity/current/default facts remain owned by scene-persistence. The
+  // Gateway only projects that single provider so AI and UI have one read door.
+  private _sceneReadProvider: (() => SceneReadModel) | null = null;
+  private _sceneAuthoringSessionProvider: (() => SceneAuthoringSessionReadModel) | null = null;
 
 
   // ── Play-attempt observability (solo round-8, friction #3) ────────────────
@@ -604,6 +615,31 @@ export class EditGateway {
     };
   }
 
+  /** Read the persistence-owned scene list and identity markers. */
+  sceneReadModel(): SceneReadModel {
+    return this._sceneReadProvider?.() ?? EMPTY_SCENE_READ_MODEL;
+  }
+
+  /** Bind the persistence-owned scene read model; returns an idempotent detach. */
+  registerSceneReadProvider(provider: () => SceneReadModel): () => void {
+    this._sceneReadProvider = provider;
+    return () => {
+      if (this._sceneReadProvider === provider) this._sceneReadProvider = null;
+    };
+  }
+
+  /** Read the persistence-owned scene authoring boundary (Human and AI share it). */
+  sceneAuthoringSession(): SceneAuthoringSessionReadModel {
+    return this._sceneAuthoringSessionProvider?.() ?? AUTHORED_SCENE_AUTHORING_SESSION;
+  }
+
+  registerSceneAuthoringSessionProvider(provider: () => SceneAuthoringSessionReadModel): () => void {
+    this._sceneAuthoringSessionProvider = provider;
+    return () => {
+      if (this._sceneAuthoringSessionProvider === provider) this._sceneAuthoringSessionProvider = null;
+    };
+  }
+
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
   }
@@ -783,6 +819,56 @@ export class EditGateway {
     return { ok: true };
   }
 
+  /** Edit-time capability collar for derived SceneInstance members. */
+  private _validateMountMemberEdit(cmd: EditorOp): { ok: true } | { ok: false; error: CommandError } {
+    if (cmd.kind === 'transaction') {
+      for (const sub of (cmd as Extract<EditorOp, { kind: 'transaction' }>).commands) {
+        const result = this._validateMountMemberEdit(sub);
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    }
+    const entity = (cmd as { entity?: unknown }).entity;
+    if (typeof entity !== 'number' || !this._isMountMember(entity as EntityHandle)) return { ok: true };
+    let reason: string | null = null;
+    if (cmd.kind === 'removeComponent') reason = 'Removing a component from a mount member cannot round-trip in mount overrides.';
+    else if (cmd.kind === 'destroyEntity') reason = 'Destroying an imported mount member cannot round-trip in mount overrides.';
+    else if (cmd.kind === 'reparent') reason = 'Reparenting an imported mount member cannot round-trip in mount overrides.';
+    else if (cmd.kind === 'setComponent') {
+      const set = cmd as Extract<EditorOp, { kind: 'setComponent' }>;
+      const token = resolveComponent(set.component);
+      const schema = token?.schema as Record<string, string> | undefined;
+      if (Object.keys(set.patch).some((field) => schema?.[field]?.includes('entity'))) {
+        reason = 'Entity-reference patches on mount members cannot round-trip in mount overrides.';
+      }
+    }
+    if (reason === null) return { ok: true };
+    return {
+      ok: false,
+      error: {
+        code: 'mount-member-operation-unsupported',
+        hint: reason,
+        current: { entity, operation: cmd.kind, policy: 'component-add-and-field-patch-only' },
+        recoveryActions: ['promoteImportedScene'],
+      },
+    };
+  }
+
+  private _isMountMember(entity: EntityHandle): boolean {
+    const world = this.doc.world as unknown as {
+      getSceneInstanceState(root: EntityHandle): {
+        ok: boolean;
+        value?: { entityToLocalId: Map<EntityHandle, unknown> };
+      };
+    };
+    if (!world || typeof world.getSceneInstanceState !== 'function') return false;
+    for (const candidate of worldEntityHandles(this.doc.world)) {
+      const state = world.getSceneInstanceState(candidate);
+      if (state.ok && state.value?.entityToLocalId.has(entity)) return true;
+    }
+    return false;
+  }
+
   /** Execute a document applier through the executor: prepare → build DocApplierCtx
    *  → pushSpan → call applier(ctx, cmd) → popSpan. Used by dispatch (and, via
    *  ctx.dispatchSub, by transaction sub-ops). The applier receives a DocApplierCtx
@@ -843,6 +929,17 @@ export class EditGateway {
     }
 
     if (domain === 'document') {
+      if (this.sceneAuthoringSession().mode === 'imported-preview') {
+        return {
+          ok: false,
+          error: {
+            code: 'edit-rejected-in-imported-preview',
+            hint: 'Imported scene previews are read-only.',
+            recoveryActions: ['addSceneAssetToScene', 'promoteImportedScene'],
+            current: this.sceneAuthoringSession(),
+          },
+        };
+      }
       // ── Play-mode write gate (plan-strategy D-5, M2) ──────────────────────
       // While in play mode the active data is a read-only simulation view. A
       // document-domain op WRITES the world; applying it would either mutate the
@@ -915,6 +1012,8 @@ export class EditGateway {
       // transaction duplicates pass through the same helper in dispatchSub above.
       const prepared = this._prepareDocumentCommand(cmd);
       if (!prepared.ok) return prepared;
+      const mountPolicy = this._validateMountMemberEdit(cmd);
+      if (!mountPolicy.ok) return mountPolicy;
       const r = this._execDocumentApplier(cmd);
       if (!r.ok) return r;
       // transientMode (play·scene): still apply + emit for immediate feedback,
@@ -953,6 +1052,84 @@ export class EditGateway {
       }
     }
 
+    if (kind === 'editImportedSource' || kind === 'saveImportedSource') {
+      return {
+        ok: false,
+        error: {
+          code: 'engine-source-authoring-unavailable',
+          hint: 'The current Engine does not publish the stable node identity and apply/fold contract required for imported source authoring.',
+          current: { operation: kind, canEditSource: false },
+          retryable: false,
+          recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+        },
+      };
+    }
+
+    if (kind === 'promoteImportedScene') {
+      const promote = cmd as {
+        importedGuid: string;
+        sourceKey: string;
+        revision: string;
+      };
+      const catalogAsset = this.assetCatalog().find((asset) =>
+        asset.guid.toLowerCase() === promote.importedGuid.toLowerCase()
+      );
+      const activation = catalogAsset === undefined
+        ? null
+        : describeSceneActivation(
+            {
+              guid: catalogAsset.guid,
+              kind: catalogAsset.kind,
+              packageUrl: catalogAsset.packageUrl,
+              ...(catalogAsset.sourcePath === undefined ? {} : { sourcePath: catalogAsset.sourcePath }),
+              ...(catalogAsset.sourceKey === undefined ? {} : { sourceKey: catalogAsset.sourceKey }),
+              revision: promote.revision,
+              ...(catalogAsset.authoring === undefined ? {} : { authoring: catalogAsset.authoring }),
+            },
+            this.sceneReadModel().scenes.map((scene) => ({ id: scene.id, guid: scene.guid })),
+            promote.revision,
+          );
+      if (activation?.canPromote !== true || activation.provenance !== 'imported-output') {
+        return {
+          ok: false,
+          error: {
+            code: 'promote-capability-unavailable',
+            hint: 'The current catalog descriptor does not publish canPromote for this imported scene.',
+            current: activation,
+            recoveryActions: ['previewImportedScene'],
+          },
+        };
+      }
+      const sessionIdentity = this.sceneAuthoringSession().imported;
+      if (sessionIdentity === undefined
+        || sessionIdentity.guid.toLowerCase() !== promote.importedGuid.toLowerCase()
+        || sessionIdentity.sourceKey !== promote.sourceKey
+        || sessionIdentity.revision !== promote.revision) {
+        return {
+          ok: false,
+          error: {
+            code: 'promote-session-mismatch',
+            hint: 'Promote requires the same imported GUID, sourceKey, and revision as the active imported session.',
+            expected: promote,
+            current: sessionIdentity ?? this.sceneAuthoringSession(),
+            recoveryActions: ['previewImportedScene'],
+          },
+        };
+      }
+    }
+
+    if (kind === 'saveDocToDisk' && this.sceneAuthoringSession().mode !== 'authored') {
+      return {
+        ok: false,
+        error: {
+          code: 'save-rejected-in-imported-preview',
+          hint: 'Imported scene previews have no authored save target; source editing is unavailable with the current Engine.',
+          recoveryActions: ['addSceneAssetToScene', 'promoteImportedScene'],
+          current: this.sceneAuthoringSession(),
+        },
+      };
+    }
+
     // Session / transient ops: executor builds ctx → pushes span → calls applier.
     // M3 t20d (D-12): the ctx is passed as the SECOND arg (applier(op, ctx)) so a
     // session applier can move the engine world through ctx.engine — cameraOrbit's
@@ -963,14 +1140,18 @@ export class EditGateway {
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
-    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'bindAssetRef'
+    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame'
       ? (cmd as { readonly requestId?: unknown }).requestId
       : undefined;
     const isRequestCorrelatedSave = kind === 'saveDocToDisk' && typeof requestId === 'string';
     const isRequestCorrelatedDelete = kind === 'deleteSourceFile' && typeof requestId === 'string';
     const isRequestCorrelatedImport = (kind === 'importAsset' || kind === 'reimportAsset') && typeof requestId === 'string';
-    const isRequestCorrelatedSceneMount = kind === 'addSceneAssetToScene' && typeof requestId === 'string';
+    const isRequestCorrelatedSceneActivation = (kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene') && typeof requestId === 'string';
     const isRequestCorrelatedBind = kind === 'bindAssetRef' && typeof requestId === 'string';
+    const isRequestCorrelatedSceneCreate = kind === 'createSceneFile' && typeof requestId === 'string';
+    const isRequestCorrelatedDefaultScene = kind === 'setDefaultScene' && typeof requestId === 'string';
+    const isRequestCorrelatedSceneDelete = kind === 'deleteScene' && typeof requestId === 'string';
+    const isRequestCorrelatedCapture = kind === 'captureFrame' && typeof requestId === 'string';
     let acceptedRun: OperationRunReadResult | null = null;
     if (isRequestCorrelatedSave) {
       const saveRequestId = requestId as string;
@@ -994,12 +1175,11 @@ export class EditGateway {
           },
         };
       }
-      const accepted = retrySource !== null
-        ? this.operationRuns.acceptSave(saveRequestId, { ...cmd }, actor, {
-          parentRunId: retrySource.value.runId,
-          attempt: retrySource.value.attempt + 1,
-        })
-        : this.operationRuns.acceptSave(saveRequestId, { ...cmd }, actor);
+      const retryOptions = retrySource === null ? {} : {
+        parentRunId: retrySource.value.runId,
+        attempt: retrySource.value.attempt + 1,
+      };
+      const accepted = this.operationRuns.acceptSave(saveRequestId, { ...cmd }, actor, retryOptions);
       if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
       if (accepted.reused) {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
@@ -1054,7 +1234,7 @@ export class EditGateway {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
       }
       acceptedRun = { ok: true, value: accepted.run };
-    } else if (isRequestCorrelatedSceneMount) {
+    } else if (isRequestCorrelatedSceneActivation) {
       const actor = origin === 'ai'
         ? { id: 'ai', kind: 'ai' as const }
         : { id: 'human', kind: 'human' as const };
@@ -1076,6 +1256,76 @@ export class EditGateway {
         operationId: kind,
         cancellable: false,
         retryable: false,
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedSceneCreate || isRequestCorrelatedDefaultScene || isRequestCorrelatedSceneDelete) {
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const retrySource = typeof retryOfRequestId === 'string'
+        ? this.operationRuns.getRunResult(retryOfRequestId)
+        : null;
+      if (retrySource !== null && !retrySource.ok) {
+        return { ok: false, error: retrySource.error as unknown as CommandError };
+      }
+      if (retrySource !== null && (retrySource.value.status !== 'failed' || !retrySource.value.retryable)) {
+        return {
+          ok: false,
+          error: {
+            code: 'operation-not-retryable',
+            hint: `Only a failed retryable ${kind} run can be retried.`,
+            current: retrySource.value,
+          },
+        };
+      }
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+        operationId: kind,
+        cancellable: false,
+        retryable: true,
+        ...(retrySource === null ? {} : {
+          parentRunId: retrySource.value.runId,
+          attempt: retrySource.value.attempt + 1,
+        }),
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) {
+        return { ok: true, result: { created: [], operationRun: accepted.run } };
+      }
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedCapture) {
+      const actor = origin === 'ai'
+        ? { id: 'ai', kind: 'ai' as const }
+        : { id: 'human', kind: 'human' as const };
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const retrySource = typeof retryOfRequestId === 'string'
+        ? this.operationRuns.getRunResult(retryOfRequestId)
+        : null;
+      if (retrySource !== null && !retrySource.ok) {
+        return { ok: false, error: retrySource.error as unknown as CommandError };
+      }
+      if (retrySource !== null && (retrySource.value.status !== 'failed' || !retrySource.value.retryable)) {
+        return {
+          ok: false,
+          error: {
+            code: 'operation-not-retryable',
+            hint: 'Only a failed retryable capture run can be retried.',
+            current: retrySource.value,
+          },
+        };
+      }
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+        operationId: kind,
+        cancellable: false,
+        retryable: true,
+        ...(retrySource === null ? {} : {
+          parentRunId: retrySource.value.runId,
+          attempt: retrySource.value.attempt + 1,
+        }),
       });
       if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
       if (accepted.reused) {
@@ -1168,6 +1418,18 @@ export class EditGateway {
   // trace. Slot released.
 
   begin(cmd: EditorOp, origin: CommandOrigin = 'human'): { ok: true; handle: OpHandle } | { ok: false; error: CommandError } {
+    if (this.sceneAuthoringSession().mode === 'imported-preview') {
+      return {
+        ok: false,
+        error: normalizeGatewayError({
+          code: 'edit-rejected-in-imported-preview',
+          hint: 'Imported scene previews are read-only.',
+          recoveryActions: ['addSceneAssetToScene', 'promoteImportedScene'],
+        }, cmd),
+      };
+    }
+    const mountPolicy = this._validateMountMemberEdit(cmd);
+    if (!mountPolicy.ok) return { ok: false, error: normalizeGatewayError(mountPolicy.error, cmd) };
     // Step 1: pre-validate — applyCommand confirms entity exists, fields valid.
     const validateR = applyCommand(this.doc, cmd);
     if (!validateR.ok) return validateR;
@@ -1198,13 +1460,13 @@ export class EditGateway {
     if (active === null || active.handle.id !== handle.id) {
       return { ok: false, error: { code: 'OP_INTERRUPTED', hint: 'operation was interrupted; begin a new one' } };
     }
+    // Build the accumulated command from beginCmd + patch
+    const updatedCmd = { ...active.beginCmd, ...patch } as EditorOp;
     // Discharge current state: revert to pre-begin, then re-apply with accumulated patch.
     const revertR = applyCommand(this.doc, active.beginInverse);
     if (!revertR.ok) {
       return { ok: false, error: { code: 'SET_FAILED', hint: 'failed to revert during update' } };
     }
-    // Build the accumulated command from beginCmd + patch
-    const updatedCmd = { ...active.beginCmd, ...patch } as EditorOp;
     const applyR = applyCommand(this.doc, updatedCmd);
     if (!applyR.ok) return applyR;
     // Update beginInverse to track the new inverse from the current (final) state
@@ -1631,6 +1893,8 @@ export class EditGateway {
         schema: Record<string, string>;
         defaults?: Record<string, unknown>;
         enums?: Record<string, Record<string, number>>;
+        shapes?: Record<string, FieldShapeKind>;
+        arrays?: Record<string, { elementType: string; length?: number; group?: string }>;
         transient?: Record<string, true>;
       }
     | { ok: false; error: CommandError } {
@@ -1657,6 +1921,8 @@ export class EditGateway {
       schema: Record<string, string>;
       defaults?: Record<string, unknown>;
       enums?: Record<string, Record<string, number>>;
+      shapes?: Record<string, FieldShapeKind>;
+      arrays?: Record<string, { elementType: string; length?: number; group?: string }>;
       transient?: Record<string, true>;
     } = {
       ok: true,
@@ -1692,6 +1958,34 @@ export class EditGateway {
       if (labels !== undefined) enums[field] = { ...labels };
     }
     if (Object.keys(enums).length > 0) result.enums = enums;
+    // Producer-declared semantic field shapes (R0-03A). The storage keyword
+    // remains in `schema`; this projection carries only the semantic facts
+    // that a flat ECS keyword cannot recover (optional / nested) plus the
+    // representative vocabulary used by schema-driven consumers.
+    const shapes: Record<string, FieldShapeKind> = {};
+    const shapeFields = token.fields as Record<string, { shape?: FieldShapeKind } | undefined>;
+    for (const field of Object.keys(schema)) {
+      const shape = shapeFields[field]?.shape;
+      if (shape !== undefined) shapes[field] = shape;
+    }
+    // Generic container facts are derived from the core schema projection. This
+    // keeps the public contract useful for variable arrays whose storage keyword
+    // is not itself an Inspector renderer, without maintaining a second field map
+    // in the Gateway.
+    const arrays: Record<string, { elementType: string; length?: number; group?: string }> = {};
+    for (const field of getComponentSchema(name)?.fields ?? []) {
+      if (field.arrayMeta === undefined) continue;
+      arrays[field.key] = {
+        elementType: field.arrayMeta.elementType,
+        ...(field.arrayMeta.length === undefined ? {} : { length: field.arrayMeta.length }),
+        ...(field.arrayGroup === undefined ? {} : { group: field.arrayGroup }),
+      };
+      if (shapeFields[field.key]?.shape === undefined && field.shape === 'array') {
+        shapes[field.key] = 'array';
+      }
+    }
+    if (Object.keys(arrays).length > 0) result.arrays = arrays;
+    if (Object.keys(shapes).length > 0) result.shapes = shapes;
     // Transient (derived, non-authored) fields (solo round-25): the engine field
     // descriptor's `transient` flag (D-5) is reflected on `token.fields[field]`;
     // project the fields where it's true so a docs-only AI can tell an authored

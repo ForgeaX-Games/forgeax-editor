@@ -49,7 +49,30 @@
         "requestId"
       ]
     },
-    "title": "Add Scene Asset to Scene"
+    "title": "Add Scene Asset to Scene",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "assetCatalogRefreshed",
@@ -162,7 +185,7 @@
       "properties": {
         "entity": {
           "type": "number",
-          "description": "Target entity handle (an OWNED entity; a shared<T> field on a mount MEMBER needs the escalated engine mount-override round-trip, not this op)."
+          "description": "Target entity handle. Owned entities and mount members are supported; mount-member shared refs fold into mounts[].overrides[] on save."
         },
         "component": {
           "type": "string",
@@ -204,7 +227,30 @@
         "requestId"
       ]
     },
-    "title": "Bind Asset Ref (resolve GUID -> shared<T> handle)"
+    "title": "Bind Asset Ref (resolve GUID -> shared<T> handle)",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "cameraFly",
@@ -328,6 +374,63 @@
     "title": "Teleport camera to position"
   },
   {
+    "id": "captureFrame",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Number of consecutive frames to record. Defaults to 1."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id used to read the captured tape result."
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Optional failed capture run being retried; the new requestId remains the public identity of the new attempt."
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "title": "Capture RHI Frame",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
     "id": "cbGoBack",
     "domain": "session",
     "source": "builtin",
@@ -429,17 +532,59 @@
       "type": "object",
       "properties": {
         "id": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "description": "New scene slug. The persisted file is assets/scenes/<slug>.pack.json."
         },
         "duplicateCurrent": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "When true, serialize the currently loaded scene into the new pack with a new scene GUID; when false, create a canonical empty scene."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id."
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Optional failed create/duplicate run being retried; the new requestId remains the public identity of the new attempt."
         }
       },
       "required": [
-        "id"
+        "id",
+        "duplicateCurrent",
+        "requestId"
       ]
     },
-    "title": "Create Scene"
+    "title": "Create or Duplicate Scene",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "deleteDirectory",
@@ -459,6 +604,63 @@
       ]
     },
     "title": "Delete Directory"
+  },
+  {
+    "id": "deleteScene",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "sceneGuid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable GUID of a scene asset in the active scene manifest. Current, default, and referenced scenes return a terminal scene-delete-guarded error with impact details."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id."
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Optional failed delete-scene run being retried; the new requestId remains the public identity of the new attempt."
+        }
+      },
+      "required": [
+        "sceneGuid",
+        "requestId"
+      ]
+    },
+    "title": "Delete Scene",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "deleteSourceFile",
@@ -481,7 +683,30 @@
         "requestId"
       ]
     },
-    "title": "Delete Source File"
+    "title": "Delete Source File",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "destroyAsset",
@@ -583,6 +808,50 @@
     "title": "Duplicate Entity"
   },
   {
+    "id": "editImportedSource",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Imported scene output GUID. The current Engine lacks the source-authoring producer contract, so this operation fails closed."
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Producer-issued output sourceKey; never inferred from a filename or output index."
+        },
+        "metaPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-observed metadata path; retained for API compatibility and never written while source authoring is unavailable."
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Effective DDC revision retained for API compatibility."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "guid",
+        "sourceKey",
+        "metaPath",
+        "revision",
+        "requestId"
+      ]
+    },
+    "title": "Edit Imported Source (Unavailable)"
+  },
+  {
     "id": "importAsset",
     "domain": "session",
     "source": "builtin",
@@ -594,13 +863,6 @@
           "minLength": 1,
           "description": "On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller."
         },
-        "requestId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-          "description": "Caller-minted correlation id for the accepted/running/terminal OperationRun."
-        },
         "sourceName": {
           "type": "string",
           "description": "Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source."
@@ -608,6 +870,13 @@
         "skipUpload": {
           "type": "boolean",
           "description": "Bytes already on disk — do not re-upload (default true for dispatched ops; the UI path uploads via the assetIO gate before dispatch)."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for the accepted/running/terminal OperationRun."
         }
       },
       "required": [
@@ -615,7 +884,31 @@
         "requestId"
       ]
     },
-    "title": "Import Asset"
+    "title": "Import Asset",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": true
+    }
   },
   {
     "id": "instantiateSceneAsset",
@@ -682,6 +975,155 @@
     "title": "Play"
   },
   {
+    "id": "previewImportedScene",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Imported scene output GUID resolved through loadByGuid."
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Catalog/workspace source identity; never inferred from a file suffix."
+        },
+        "sourcePath": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted OperationRun identity for preview load completion."
+        }
+      },
+      "required": [
+        "guid",
+        "sourceKey",
+        "revision",
+        "requestId"
+      ]
+    },
+    "title": "Preview Imported Scene",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
+    "id": "promoteImportedScene",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "importedGuid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Imported scene GUID currently active in the authoring session."
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Producer-issued imported output identity. Must match the active session."
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Effective imported revision. Must match the active session."
+        },
+        "targetPackPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Explicit game-relative authored .pack.json target. Never inferred from the source path."
+        },
+        "targetName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Explicit authored scene name stored on the new pack entry."
+        },
+        "contentPolicy": {
+          "type": "string",
+          "enum": [
+            "effective-base",
+            "current-session"
+          ],
+          "description": "effective-base promotes the immutable preview; current-session fails closed until Engine source authoring is available."
+        },
+        "discardSourceChanges": {
+          "type": "boolean",
+          "description": "Reserved compatibility field; no source-edit session exists with the current Engine."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "importedGuid",
+        "sourceKey",
+        "revision",
+        "targetPackPath",
+        "targetName",
+        "contentPolicy",
+        "requestId"
+      ]
+    },
+    "title": "Promote Imported Scene",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
     "id": "reimportAsset",
     "domain": "session",
     "source": "builtin",
@@ -693,16 +1135,16 @@
           "minLength": 1,
           "description": "Existing game-relative source path whose metadata sidecar supplies stable output GUIDs and import settings."
         },
+        "sourceName": {
+          "type": "string",
+          "description": "Optional basename override; defaults to the last path segment."
+        },
         "requestId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
           "description": "Caller-minted correlation id for the accepted/running/terminal OperationRun."
-        },
-        "sourceName": {
-          "type": "string",
-          "description": "Optional basename override; defaults to the last path segment."
         }
       },
       "required": [
@@ -710,7 +1152,31 @@
         "requestId"
       ]
     },
-    "title": "Reimport Asset"
+    "title": "Reimport Asset",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": true
+    }
   },
   {
     "id": "removeComponent",
@@ -975,7 +1441,56 @@
         "requestId"
       ]
     },
-    "title": "Save to Disk"
+    "title": "Save to Disk",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
+    "id": "saveImportedSource",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "title": "Save Imported Source Overrides (Unavailable)"
   },
   {
     "id": "setAssetSelection",
@@ -1061,6 +1576,63 @@
       ]
     },
     "title": "Set Component"
+  },
+  {
+    "id": "setDefaultScene",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "sceneGuid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable GUID of a scene asset in the active scene manifest. This writes forge.json.defaultScene; it is not a scene id or pack path."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id."
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Optional failed default-scene run being retried; the new requestId remains the public identity of the new attempt."
+        }
+      },
+      "required": [
+        "sceneGuid",
+        "requestId"
+      ]
+    },
+    "title": "Set Default Scene",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "setDisplay",
@@ -1265,6 +1837,15 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "dirtyPolicy": {
+          "type": "string",
+          "enum": [
+            "save",
+            "discard",
+            "cancel"
+          ],
+          "description": "When the outgoing scene has unsaved edits: save before switching, discard the in-memory edits, or cancel without switching. Omit only when the scene is clean; dirty omission returns scene-switch-dirty."
         }
       },
       "required": [

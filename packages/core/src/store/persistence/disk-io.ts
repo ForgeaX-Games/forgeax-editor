@@ -50,6 +50,7 @@ import type { EntityHandle, WorldType } from '../../scene/scene-types';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-facade';
+import type { ImportedPreviewSessionState } from '../../io/scene-authoring-session';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -129,6 +130,11 @@ export interface DiskIo {
   stripEditorHiddenMarker(asset: unknown): unknown;
   inlineAssetCount(pack: unknown): number;
   loadSceneByGuid(sceneGuid: string): Promise<boolean>;
+  loadImportedScenePreviewState(facts: {
+    readonly guid: string;
+    readonly sourceKey: string;
+    readonly revision: string;
+  }): Promise<ImportedPreviewSessionState | null>;
   instantiateSceneRefUnderWorld(sceneGuid: string, parentHandle: number): Promise<number | null>;
   resolveAssetRefToHandle(guid: string, assetType: string): Promise<number | null>;
   doLoadDocFromDisk(): Promise<boolean>;
@@ -317,6 +323,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   /** @internal-store — disk-watch READS this to filter ws events to THIS game's
    *  scene file (D-6 seam). */
   function scenePath(): string | null {
+    if (ctx.authoringSession.mode !== 'authored') return null;
     if (ctx.currentSceneId === 'default') return null;
     if (ctx.currentSceneFile) {
       const entry = ctx.sceneList.find((s) => s.id === ctx.currentSceneFile);
@@ -469,6 +476,41 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   }
 
   /**
+   * Resolve and instantiate the exact effective imported SceneAsset once, while
+   * retaining an immutable clone for effective-base Promote. This avoids trying
+   * to reconstruct a pristine base from a later edited live world.
+   */
+  async function loadImportedScenePreviewState(facts: {
+    readonly guid: string;
+    readonly sourceKey: string;
+    readonly revision: string;
+  }): Promise<ImportedPreviewSessionState | null> {
+    const w = gateway.doc.world;
+    const reg = gateway.doc.registry;
+    if (!w || !reg) return null;
+    try {
+      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+      const parsed = AssetGuid.parse(facts.guid);
+      if (!parsed.ok) return null;
+      const loaded = await reg.loadByGuid<SceneAsset>(parsed.value);
+      if (!loaded.ok || loaded.value.kind !== 'scene') return null;
+      const sceneHandle = w.allocSharedRef('SceneAsset', loaded.value);
+      teardownCurrentScene();
+      const instantiated = reg.instantiateFlat(sceneHandle, w);
+      if (!instantiated.ok) return null;
+      ctx.currentSceneEntities = [...instantiated.value];
+      return {
+        ...facts,
+        effectiveScene: structuredClone(loaded.value),
+        world: w,
+        registry: reg,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Instantiate a scene sub-asset (e.g. an imported GLB's whole-hierarchy scene)
    * into the CURRENTLY-LOADED editor world as a NESTED SceneInstance under
    * `parentHandle`, via the engine's canonical loadByGuid -> allocSharedRef ->
@@ -596,16 +638,20 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
               loadedInline.map((a, i) => `  [${i}] ${a.guid} (${a.kind})`).join('\n'),
             );
             const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
-            if (sceneAssetEntry?.guid) ctx.currentSceneGuid = sceneAssetEntry.guid;
             // Load via the engine's canonical loadByGuid -> instantiate path.
             if (sceneAssetEntry?.guid) {
               const ok = await loadSceneByGuid(sceneAssetEntry.guid);
               if (ok) {
+                // Publish the identity only after the engine has actually
+                // materialised the target scene. A failed load must not leave
+                // a new GUID behind and impersonate successful navigation.
+                ctx.currentSceneGuid = sceneAssetEntry.guid;
                 ctx.isDirty = false;
                 deps.notifyDocChanged();
                 return true;
               }
             }
+            ctx.currentSceneGuid = null;
             // GUID missing or engine load failed → fall through to seed.
           }
         }
@@ -692,6 +738,14 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  is still current. Serialize FIRST and bail on failure — never POST an empty
    *  body over a good scene (0-byte data loss). */
   async function doSaveDocToDisk(options: SaveDocToDiskOptions = {}): Promise<SaveDocToDiskResult> {
+    if (ctx.authoringSession.mode !== 'authored') {
+      return saveFailure(
+        'save-rejected-in-imported-preview',
+        'Imported scene previews are read-only and have no authored pack target.',
+        { kind: 'scene-asset', id: 'imported-preview' },
+        { recoveryActions: ['addSceneAssetToScene', 'promoteImportedScene'] },
+      );
+    }
     const p = scenePath();
     const subjectRef = saveSubject(p);
     if (!p) {
@@ -840,6 +894,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  guarantees on unload/pagehide. Serialize BEFORE clearing dirty / sending —
    *  a null serialize skips the beacon (protects the on-disk scene). */
   function flushPendingSaveBeacon(): void {
+    if (ctx.authoringSession.mode !== 'authored') return;
     if (!ctx.isDirty) return; // nothing dirty
     const p = scenePath();
     if (!p) return;
@@ -913,6 +968,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     stripEditorHiddenMarker,
     inlineAssetCount,
     loadSceneByGuid,
+    loadImportedScenePreviewState,
     instantiateSceneRefUnderWorld,
     resolveAssetRefToHandle,
     doLoadDocFromDisk,

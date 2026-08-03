@@ -37,7 +37,7 @@ import type { EditorOp, EditSession } from '../types';
 import { createEditSession } from '../session/document';
 import { gateway } from '../store/gateway';
 import { onRenameRequest } from '../store/rename-request';
-import { getSceneId } from '../store/scene-persistence';
+import { ctx, getSceneId } from '../store/scene-persistence';
 
 function createSession(): EditSession {
   const session = createEditSession();
@@ -153,8 +153,10 @@ describe('session routing — async persistence op-kinds reach the ledger (m2-w2
   const wellFormed: Record<string, EditorOp> = {
     saveDocToDisk: { kind: 'saveDocToDisk', requestId: 'routing-save-1' },
     loadDocFromDisk: { kind: 'loadDocFromDisk' },
-    switchSceneFile: { kind: 'switchSceneFile', id: 'level-2' },
-    createSceneFile: { kind: 'createSceneFile', id: 'level-2', duplicateCurrent: false },
+    // Dirty state is global persistence context; discard makes this routing
+    // test deterministic while exercising the new explicit policy contract.
+    switchSceneFile: { kind: 'switchSceneFile', id: 'level-2', dirtyPolicy: 'discard' },
+    createSceneFile: { kind: 'createSceneFile', id: 'level-2', duplicateCurrent: false, requestId: 'routing-create-1' },
   };
   for (const kind of ['saveDocToDisk', 'loadDocFromDisk', 'switchSceneFile', 'createSceneFile'] as const) {
     it(`${kind} dispatch reaches the session ledger without an error path`, () => {
@@ -166,9 +168,70 @@ describe('session routing — async persistence op-kinds reach the ledger (m2-w2
       expect(r.ok).toBe(true);
       // Request-correlated saves enter the ledger only after their asynchronous
       // terminal success; the other session ops record immediately.
-      const expectedLedgerDelta = kind === 'saveDocToDisk' ? 0 : 1;
+      const expectedLedgerDelta = kind === 'saveDocToDisk' || kind === 'createSceneFile' ? 0 : 1;
       expect(gw.ledger.length).toBe(ledgerBefore + expectedLedgerDelta);
       expect(gw.appliedCount()).toBe(undoBefore);
     });
   }
+});
+
+describe('session routing — dirty scene switch policy (R0-02B)', () => {
+  it('returns a structured branchable refusal when dirtyPolicy is omitted', () => {
+    const gw = new EditGateway(createSession());
+    const previous = {
+      currentSceneFile: ctx.currentSceneFile,
+      sceneList: ctx.sceneList,
+      isDirty: ctx.isDirty,
+    };
+    ctx.currentSceneFile = 'level-1';
+    ctx.sceneList = [
+      { id: 'level-1', name: 'Level 1', pack: 'level-1.pack.json' },
+      { id: 'level-2', name: 'Level 2', pack: 'level-2.pack.json' },
+    ];
+    ctx.isDirty = true;
+    try {
+      const refused = gw.dispatch({ kind: 'switchSceneFile', id: 'level-2' }, 'ai');
+      expect(refused).toMatchObject({
+        ok: false,
+        error: {
+          code: 'scene-switch-dirty',
+          current: { sceneId: 'level-1', dirty: true },
+          expected: { targetSceneId: 'level-2', dirtyPolicies: ['save', 'discard', 'cancel'] },
+        },
+      });
+      expect(ctx.currentSceneFile).toBe('level-1');
+      expect(ctx.isDirty).toBe(true);
+    } finally {
+      ctx.currentSceneFile = previous.currentSceneFile;
+      ctx.sceneList = previous.sceneList;
+      ctx.isDirty = previous.isDirty;
+    }
+  });
+
+  it('cancel is a structured no-switch result even when requested explicitly', () => {
+    const gw = new EditGateway(createSession());
+    const previous = {
+      currentSceneFile: ctx.currentSceneFile,
+      sceneList: ctx.sceneList,
+      isDirty: ctx.isDirty,
+    };
+    ctx.currentSceneFile = 'level-1';
+    ctx.sceneList = [
+      { id: 'level-1', name: 'Level 1', pack: 'level-1.pack.json' },
+      { id: 'level-2', name: 'Level 2', pack: 'level-2.pack.json' },
+    ];
+    ctx.isDirty = true;
+    try {
+      const cancelled = gw.dispatch({ kind: 'switchSceneFile', id: 'level-2', dirtyPolicy: 'cancel' }, 'ai');
+      expect(cancelled).toMatchObject({
+        ok: false,
+        error: { code: 'scene-switch-cancelled', current: { sceneId: 'level-1', dirty: true } },
+      });
+      expect(ctx.currentSceneFile).toBe('level-1');
+    } finally {
+      ctx.currentSceneFile = previous.currentSceneFile;
+      ctx.sceneList = previous.sceneList;
+      ctx.isDirty = previous.isDirty;
+    }
+  });
 });

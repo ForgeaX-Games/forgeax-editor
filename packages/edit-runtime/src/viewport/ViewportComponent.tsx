@@ -73,6 +73,7 @@ import {
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
+import { createFramePhaseObserver, createRenderPhaseObserver } from './frame-phase-observer';
 // M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
 // bridges moved to viewport-runtime-bridges.ts (decoupled from the createApp
 // hotspot, AC-10). bootViewport keeps only the call sites.
@@ -447,6 +448,9 @@ async function bootViewport(
   // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
 
+  const framePhaseObserver = createFramePhaseObserver();
+  const renderPhaseObserver = createRenderPhaseObserver();
+
   // ── createApp with GPU-failure auto-fallback ────────────────────────────
   // When no WebGPU adapter is available (headless browser, GPU-less CI), the
   // first createApp(canvas) call fails with a GPU-related error. Before giving
@@ -459,6 +463,8 @@ async function bootViewport(
     input: canvasInput.editor,
     pointerLockAllowed: () => false,
     drawSource: worldManager.createDrawSource(),
+    framePhaseObserver,
+    renderPhaseObserver,
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
     importTransport: {
@@ -493,6 +499,8 @@ async function bootViewport(
         input: canvasInput.editor,
         pointerLockAllowed: () => false,
         drawSource: worldManager.createDrawSource(),
+        framePhaseObserver,
+        renderPhaseObserver,
         rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
       }, {
         shaderManifestUrl: `${BASE}/shaders/manifest.json`,
@@ -702,7 +710,7 @@ async function bootViewport(
     // this on explicitly alongside launching the relay.
     const bridgeEnabled = import.meta.env.VITE_FORGEAX_BRIDGE === '1';
     if (bridgeEnabled) {
-      const bridgePort = import.meta.env.VITE_FORGEAX_BRIDGE_PORT ?? '15295';
+      const bridgePort = import.meta.env.VITE_FORGEAX_BRIDGE_PORT ?? '15296';
       let bridgeWs: WebSocket | null = null;
       let bridgeBackoff = 1000;
       let bridgeStopped = false;
@@ -849,6 +857,7 @@ async function bootViewport(
       cameraEntity: cameraEntity as unknown as number,
       viewport,
       viewportContainer: container,
+      canvas,
       emitBoot,
       setBootStage: (s: string) => emitBoot(`boot ▸ ${s}`),
       discoverGameCameraFromWorld,
@@ -990,6 +999,15 @@ async function bootViewport(
     },
     grantGameControl,
     releaseGameControl: revokeGameControl,
+    captureFrame: (frames) => {
+      const capture = (globalThis as typeof globalThis & {
+        __forgeax?: { captureFrame?: (count: number) => Promise<unknown> };
+      }).__forgeax?.captureFrame;
+      if (typeof capture !== 'function') {
+        return Promise.reject(new Error('RHI debug capture is unavailable; start the editor with --rhi-debug'));
+      }
+      return capture(frames);
+    },
     world,
   }));
 

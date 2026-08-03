@@ -55,6 +55,16 @@ export type RawScopeResult =
 // eval scripts to dynamically import ESM modules.
 const _import = (specifier: string): Promise<unknown> => import(/* @vite-ignore */ specifier);
 
+function runtimeErrorHint(code: string, message: string): string {
+  if (/\bgateway\.query\s*\(/.test(code) || (message.includes('gateway.query') && (message.includes('not a function') || message.includes('is undefined')))) {
+    return 'gateway exposes operations; query is a separate scope binding. Use query({ with: [\'Name\'] }), not gateway.query(...).';
+  }
+  if (/\bquery\s*\(\s*\{\s*components\s*:/.test(code) || (/\bquery\s*\(/.test(code) && message.includes('includes'))) {
+    return 'query expects a descriptor with a component list: query({ with: [\'Name\', \'Transform\'] }); use `with`, not `components`.';
+  }
+  return `runtime error: ${message}; inspect error and retry`;
+}
+
 // ── createEvalChannel ──────────────────────────────────────────────────────
 
 export function createEvalChannel(
@@ -121,7 +131,7 @@ export function createEvalChannel(
         ok: false,
         error: {
           code: 'SCRIPT_RUNTIME_ERROR',
-          hint: `runtime error: ${rawMessage}; inspect error and retry`,
+          hint: runtimeErrorHint(code, rawMessage),
         },
       };
     }

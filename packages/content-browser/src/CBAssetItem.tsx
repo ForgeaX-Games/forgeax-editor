@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForAssetKind, ContentBrowserIcon, iconNameForAssetKind } from './content-browser-icons';
+import { isAssetPlacementAvailable } from './content-browser-format';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 
@@ -49,6 +50,7 @@ function CBAssetItemImpl({
   const [tipXY, setTipXY] = useState<{ left: number; top: number } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const thumb = getThumbnailData(asset);
+  const placementAvailable = isAssetPlacementAvailable(asset);
 
   // Prefetch the material into the registry catalog once its card is on screen,
   // so the thumbnail resolves to the real colour and a following edit finds
@@ -96,12 +98,12 @@ function CBAssetItemImpl({
       guid: asset.guid, kind: asset.kind, name: asset.name, packPath: asset.packPath,
     }));
     e.dataTransfer.effectAllowed = 'copy';
-    panelBridge.emit('dragAssetStart', ref);
-  }, [asset]);
+    if (placementAvailable) panelBridge.emit('dragAssetStart', ref);
+  }, [asset, placementAvailable]);
 
   const handleDragEnd = useCallback(() => {
-    panelBridge.emit('dragAssetEnd');
-  }, []);
+    if (placementAvailable) panelBridge.emit('dragAssetEnd');
+  }, [placementAvailable]);
 
   return (
     <div
@@ -163,6 +165,9 @@ function CBAssetItemImpl({
       </div>
       <div className="cb-grid-label cb-fe-name" title={asset.name}>{asset.name}</div>
       <div className="cb-card-meta cb-card-kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
+      {asset.activation?.mode === 'preview-imported' && (
+        <div className="cb-card-meta" data-testid="cb-imported-preview-badge">Imported Preview · Read-only</div>
+      )}
 
       {hovered && tipXY && createPortal(
         <div className="cb-rich-tooltip" style={{ position: 'fixed', left: tipXY.left, top: tipXY.top }}>

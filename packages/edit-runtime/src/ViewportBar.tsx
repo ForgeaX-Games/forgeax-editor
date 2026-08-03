@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 // M3 (AC-03): gizmo-mode (session op) and save (session op) go through the one
 // gateway door — gateway.dispatch({ kind, … }) — not the direct setGizmoMode /
 // saveDocToDisk setters. (onPlay/onStop are wired to the gateway in m3-w9.)
-import { gateway, useDocVersion, useGizmoMode } from '@forgeax/editor-core';
+import { gateway, useDocVersion, useGizmoMode, useSceneAuthoringSession } from '@forgeax/editor-core';
 import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';
@@ -36,6 +36,10 @@ interface RhiCaptureResult {
   readonly reportPath: string;
 }
 
+function createCaptureRequestId(): string {
+  return `capture-${crypto.randomUUID()}`;
+}
+
 function isRhiCaptureResult(value: unknown): value is RhiCaptureResult {
   if (typeof value !== 'object' || value === null) return false;
   const result = value as Record<string, unknown>;
@@ -47,6 +51,7 @@ function isRhiCaptureResult(value: unknown): value is RhiCaptureResult {
 export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: ViewportBarProps) {
   useDocVersion(); // re-render on every command so canUndo/canRedo is live
   const gizmoMode = useGizmoMode();
+  const authoringSession = useSceneAuthoringSession();
   const [fps, setFpsState] = useState<number>(() => getFps());
   const [isPlay, setIsPlay] = useState<boolean>(() => getViewportQuadrant().run === 'play');
   const [isGame, setIsGame] = useState<boolean>(() => getViewportQuadrant().display === 'game');
@@ -62,16 +67,17 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
   }, []);
 
   async function captureRhiFrame(): Promise<void> {
-    const capture = (globalThis as { __forgeax?: { captureFrame?: (frames: number) => Promise<unknown> } })
-      .__forgeax?.captureFrame;
-    if (!capture) {
-      setCaptureState('error');
-      return;
-    }
-
     setCaptureState('capturing');
     try {
-      const result = await capture(1);
+      const requestId = createCaptureRequestId();
+      const accepted = gateway.dispatch({ kind: 'captureFrame', frames: 1, requestId }, 'human');
+      if (!accepted.ok) throw new Error(accepted.error.hint);
+      const terminal = await gateway.waitOperationRun(requestId);
+      if (!terminal.ok) throw new Error(terminal.error.hint);
+      if (terminal.value.status !== 'succeeded') {
+        throw new Error(terminal.value.error?.hint ?? 'RHI frame capture failed');
+      }
+      const result = terminal.value.result;
       if (!isRhiCaptureResult(result)) throw new Error('Capture did not return its artifact paths');
 
       const artifact = (file: 'frame-0.tape.bin' | 'frame-0.report.json') => {
@@ -93,6 +99,9 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
   return (
     <div className="vp-bar" data-testid="viewport-bar">
       <SceneBadge />
+      {authoringSession.mode === 'imported-preview' && (
+        <span data-testid="imported-preview-readonly">Imported Preview · Read-only</span>
+      )}
       <span className="vp-sep" />
       {/* ── Run controls (w25): ▶ Play / ■ Stop ── */}
       {isPlay ? (
@@ -129,7 +138,11 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
       <DirtyIndicator />
       <span className="vp-sep" />
       <button type="button" className="vp-btn" data-testid="vp-save"
-        onClick={() => gateway.dispatch(createHumanSaveRequest(), 'human')} title="Save scene (⌘S)">
+        disabled={authoringSession.saveTarget === null}
+        onClick={() => gateway.dispatch(createHumanSaveRequest(), 'human')}
+        title={authoringSession.mode === 'imported-preview'
+          ? 'Imported previews are read-only; source editing awaits Engine support.'
+          : 'Save scene (⌘S)'}>
         ⤓
       </button>
       <span className="vp-sep" />

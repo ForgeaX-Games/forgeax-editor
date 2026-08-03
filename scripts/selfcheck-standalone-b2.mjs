@@ -29,7 +29,9 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EDITOR_DIR = resolve(HERE, '..');
-const GAME_API_PORT = 15281;
+// Keep the default stable for CI, but allow a local run to coexist with an
+// already-running `bun fx start --game` stack.
+const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
 
 let pass = 0;
 let fail = 0;

@@ -1,6 +1,7 @@
 .studio-shell {
   position: relative;
   width: 100%; height: 100%;
+  min-width: 0;
   display: flex; flex-direction: column;
   background: var(--bg-0);
   overflow: hidden;
@@ -27,6 +28,7 @@
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -35,6 +37,7 @@
    (inline style from useChatWidth), so flex is fixed-basis:auto. */
 .studio-chat-col {
   flex: 0 0 auto;
+  max-width: 100%;
   min-width: 0;
   height: 100%;
   position: relative;
@@ -42,6 +45,15 @@
   flex-direction: column;
   overflow: hidden;
   border-left: 1px solid var(--color-border-default);
+}
+
+/* Keep the persisted desktop width, but leave room for the activity rail and
+   a usable editor when the shell becomes phone-sized. The inline width from
+   useChatWidth still wins everywhere above this breakpoint. */
+@media (max-width: 640px) {
+  .studio-chat-col {
+    max-width: min(360px, calc(100% - 160px));
+  }
 }
 .studio-chat-col > .fx-panel {
   flex: 1 1 0;

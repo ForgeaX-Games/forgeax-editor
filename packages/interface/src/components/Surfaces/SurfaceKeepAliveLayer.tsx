@@ -83,7 +83,8 @@ export function SurfaceKeepAliveLayer(): ReactNode {
         // to an OS window). DO NOT use display:none — on WKWebView (the desktop
         // Studio app) display:none on a WebGPU <canvas> DROPS the GPU device, so
         // flipping back finds a dead context and the re-create wedges WKWebView's
-        // GPU process (the "来回切换就死掉" Play↔Edit freeze). Instead park the
+        // GPU process (the "switching back and forth freezes" Play↔Edit bug).
+        // Instead park the
         // surface OFF-SCREEN + visibility:hidden: the GPU context stays alive, the
         // surface is invisible + click-through, and being outside the viewport still
         // trips the surface's IntersectionObserver so its render loop pauses (no
@@ -125,6 +126,8 @@ export function SurfaceKeepAliveLayer(): ReactNode {
     const onWin = () => scheduleSync();
     window.addEventListener('resize', onWin);
     window.addEventListener('scroll', onWin, true);
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener('resize', onWin);
 
     let ro: ResizeObserver | null = null;
     const observeCurrentAnchors = () => {
@@ -160,6 +163,7 @@ export function SurfaceKeepAliveLayer(): ReactNode {
     return () => {
       window.removeEventListener('resize', onWin);
       window.removeEventListener('scroll', onWin, true);
+      visualViewport?.removeEventListener('resize', onWin);
       offAnchors();
       offRelayout();
       ro?.disconnect();

@@ -24,6 +24,10 @@ export interface PanelCommandActionContribution {
   readonly order?: number;
   readonly location?: PanelActionLocation;
   readonly group?: string;
+  /** Lower value folds into the overflow flyout first. Defaults to `order`. */
+  readonly overflowPriority?: number;
+  /** When true, never folds into the overflow flyout. */
+  readonly pinned?: boolean;
   readonly when?: string;
   readonly enablement?: string;
   readonly activeWhen?: string;
@@ -49,6 +53,10 @@ export interface PanelMenuActionContribution {
   readonly highlightWhen?: string;
   readonly items: readonly PanelMenuItemContribution[];
   readonly itemsContextKey?: string;
+  /** Lower value folds into the overflow flyout first. Defaults to `order`. */
+  readonly overflowPriority?: number;
+  /** When true, never folds into the overflow flyout. */
+  readonly pinned?: boolean;
 }
 
 export interface PanelControlActionContribution {
@@ -61,6 +69,10 @@ export interface PanelControlActionContribution {
   readonly group?: string;
   readonly when?: string;
   readonly enablement?: string;
+  /** Lower value folds into the overflow flyout first. Defaults to `order`. */
+  readonly overflowPriority?: number;
+  /** When true, never folds into the overflow flyout. */
+  readonly pinned?: boolean;
 }
 
 export type PanelMenuItemContribution =

@@ -389,6 +389,41 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     }
   });
 
+  it('waits for every produced sub-asset before import terminal success', async () => {
+    const subAssets = [
+      { guid: '019f0000-0000-7000-8000-000000000011', kind: 'texture', sourceIndex: 0 },
+      { guid: '019f0000-0000-7000-8000-000000000012', kind: 'sampler', sourceIndex: 0 },
+      { guid: '019f0000-0000-7000-8000-000000000013', kind: 'font', sourceIndex: 0 },
+    ];
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
+      if (url.includes('/api/files/raw')) {
+        return Promise.resolve(new Response(JSON.stringify({ importer: 'font', subAssets }), { status: 200 }));
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+    const seen: string[] = [];
+    registerPostAssetWriteCatalogSync(async (guid) => { seen.push(guid); });
+    try {
+      const dispatched = gw.dispatch({
+        kind: 'reimportAsset',
+        destPath: 'assets/Font.ttf',
+        sourceName: 'Font.ttf',
+        requestId: 'reimport-all-sub-assets',
+      });
+      expect(dispatched).toMatchObject({ ok: true });
+      expect(await gw.waitOperationRun('reimport-all-sub-assets')).toMatchObject({
+        ok: true,
+        value: {
+          status: 'succeeded',
+          result: { subAssets: subAssets.map(({ guid, kind }) => ({ guid, kind })) },
+        },
+      });
+      expect(seen).toEqual(subAssets.map((asset) => asset.guid));
+    } finally {
+      registerPostAssetWriteCatalogSync(null);
+    }
+  });
+
   it('fails the run and suppresses the broadcast when catalog sync fails', async () => {
     const broadcasts: string[] = [];
     registerPostAssetWriteCatalogSync(async () => {
