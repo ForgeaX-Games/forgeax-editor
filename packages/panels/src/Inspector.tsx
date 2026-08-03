@@ -582,16 +582,83 @@ function commonComponents(ids: EntityHandle[]): string[] {
   return [...sets[0]!].filter((c) => sets.every((s) => s.has(c)));
 }
 
+function sameFieldValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  const av = ArrayBuffer.isView(a) ? Array.from(a as unknown as ArrayLike<unknown>) : a;
+  const bv = ArrayBuffer.isView(b) ? Array.from(b as unknown as ArrayLike<unknown>) : b;
+  if (Array.isArray(av) && Array.isArray(bv)) {
+    return av.length === bv.length && av.every((value, index) => sameFieldValue(value, bv[index]));
+  }
+  if (typeof av === 'object' && av !== null && typeof bv === 'object' && bv !== null) {
+    const ak = Object.keys(av as Record<string, unknown>);
+    const bk = Object.keys(bv as Record<string, unknown>);
+    return ak.length === bk.length && ak.every((key) => sameFieldValue(
+      (av as Record<string, unknown>)[key],
+      (bv as Record<string, unknown>)[key],
+    ));
+  }
+  return false;
+}
+
+function componentPresence(ids: EntityHandle[]): Map<string, number> {
+  const presence = new Map<string, number>();
+  for (const id of ids) {
+    for (const component of Object.keys(entComponents(gateway.activeWorld, id))) {
+      presence.set(component, (presence.get(component) ?? 0) + 1);
+    }
+  }
+  return presence;
+}
+
+function batchFieldValues(ids: EntityHandle[], component: string, field: string): unknown[] {
+  return ids.map((id) => {
+    const result = entComponent(gateway.activeWorld, id, component);
+    return result.ok ? (result.value as Record<string, unknown>)[field] : undefined;
+  });
+}
+
+function isMixed(values: unknown[]): boolean {
+  return values.length > 1 && values.slice(1).some((value) => !sameFieldValue(value, values[0]));
+}
+
 // Multi-select batch editor: one edit fans out to all selected as a single
 // transaction → one undo. The primary entity supplies the field layout.
 function BatchPanel({ ids }: { ids: EntityHandle[] }) {
   const { t } = useTranslation();
   const primary = ids[ids.length - 1]!;
   const common = commonComponents(ids);
+  const presence = componentPresence(ids);
+  const partial = [...presence.entries()]
+    .filter(([, count]) => count > 0 && count < ids.length)
+    .map(([component]) => component)
+    .sort();
+  const addable = listComponentSchemas()
+    .map((schema) => schema.name)
+    .filter((component) => !presence.has(component))
+    .sort();
+
+  function dispatchBatch(label: string, commands: EditorOp[]): void {
+    if (commands.length === 0) return;
+    gateway.dispatch({ kind: 'transaction', label, commands });
+  }
 
   function setAll(component: string, key: string, value: unknown) {
     const commands: EditorOp[] = ids.map((id) => ({ kind: 'setComponent', entity: id, component, patch: { [key]: value } }));
-    gateway.dispatch({ kind: 'transaction', label: `batch ${component}.${key} ×${ids.length}`, commands });
+    dispatchBatch(`batch ${component}.${key} ×${ids.length}`, commands);
+  }
+
+  function addComponentToMissing(component: string): void {
+    const commands: EditorOp[] = ids
+      .filter((id) => !entComponent(gateway.activeWorld, id, component).ok)
+      .map((id) => ({ kind: 'addComponent', entity: id, component, value: defaultComponentData(component) }));
+    dispatchBatch(`add ${component} ×${commands.length}`, commands);
+  }
+
+  function removeComponentFromAll(component: string): void {
+    const commands: EditorOp[] = ids
+      .filter((id) => entComponent(gateway.activeWorld, id, component).ok)
+      .map((id) => ({ kind: 'removeComponent', entity: id, component }));
+    dispatchBatch(`remove ${component} ×${commands.length}`, commands);
   }
 
   function alignAxis(axis: 'x' | 'y' | 'z') {
@@ -606,7 +673,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
       p[axisIdx] = target;
       return { kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: p } };
     });
-    gateway.dispatch({ kind: 'transaction', label: `align ${axis} ×${ids.length}`, commands });
+    dispatchBatch(`align ${axis} ×${ids.length}`, commands);
   }
 
   const hasTransform = common.includes('Transform');
@@ -650,6 +717,52 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
           </button>
         ))}
       </div>
+      <div className="dp-comp" data-testid="batch-component-actions">
+        <div className="ch">
+          <span className="lbl">{t('editor.inspector.components')}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" className="add" data-testid="batch-add-component" disabled={addable.length === 0}>
+                <ForgeaxIcon name="plus" size={12} />{t('editor.inspector.addComponent')}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={6} className="fx-insp-menu">
+              <DropdownMenuLabel className="fx-insp-menu-title">{t('editor.inspector.addComponent')}</DropdownMenuLabel>
+              {addable.map((component) => (
+                <DropdownMenuItem
+                  key={component}
+                  className="fx-insp-menu-item"
+                  data-testid={`batch-add-${component}`}
+                  onSelect={() => addComponentToMissing(component)}
+                >
+                  <span className="mi"><ForgeaxIcon name={compIcon(component)} size={14} /></span>
+                  {componentTypeLabel(component, t)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        {partial.length > 0 && (
+          <div className="batch-component-list" data-testid="batch-partial-components">
+            {partial.map((component) => {
+              const count = presence.get(component) ?? 0;
+              return (
+                <div className="batch-component-row" key={component} data-testid={`batch-partial-${component}`}>
+                  <span className="ci"><ForgeaxIcon name={compIcon(component)} size={13} /></span>
+                  <span className="comp-name">{componentTypeLabel(component, t)}</span>
+                  <span className="batch-component-count">{count}/{ids.length}</span>
+                  <button type="button" className="fbtn" data-testid={`batch-add-missing-${component}`} onClick={() => addComponentToMissing(component)}>
+                    {t('editor.inspector.addMissing')}
+                  </button>
+                  <button type="button" className="fbtn" data-testid={`batch-remove-${component}`} onClick={() => removeComponentFromAll(component)}>
+                    {t('editor.inspector.removeAll')}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       {hasTransform && (
         <div className="dp-comp">
           <div className="ch"><span className="lbl">{t('editor.inspector.alignToPrimary')}</span></div>
@@ -672,6 +785,15 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
               <div className="cat-head">
                 <span className="car"><ForgeaxIcon name={compIcon(comp)} size={13} /></span>
                 <span className="ct">{componentTypeLabel(comp, t)}</span>
+                <button
+                  type="button"
+                  className="comp-del"
+                  data-testid={`batch-remove-common-${comp}`}
+                  title={t('editor.inspector.removeAll')}
+                  onClick={() => removeComponentFromAll(comp)}
+                >
+                  <ForgeaxIcon name="trash" size={12} />
+                </button>
               </div>
               <div className="cat-fields">
                 {(() => {
@@ -681,12 +803,18 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                   const rows: ReactNode[] = [];
                   for (const f of vecFields) {
                     const vec = readVec(f, data[f.key]);
+                    const vecValues = ids.map((id) => {
+                      const result = entComponent(gateway.activeWorld, id, comp);
+                      return result.ok ? readVec(f, (result.value as Record<string, unknown>)[f.key]) : readVec(f, undefined);
+                    });
+                    const mixedAxes = vec.map((value, index) => vecValues.some((other) => !sameFieldValue(value, other[index])));
                     if (f.widget === 'color') {
                       const hex = linearToSrgbHex(vec);
                       rows.push(
                         <div className="f-row" data-testid={`batch-field-${comp}-${f.key}`} key={`__vec_${f.key}`}>
                           <span className="f-name" title={f.tooltip}>{f.key}</span>
                           <span className="f-val">
+                            {mixedAxes.some(Boolean) && <span className="batch-mixed" data-testid={`batch-${comp}-${f.key}-mixed`}>mixed</span>}
                             <input
                               type="color"
                               className="swatch"
@@ -711,6 +839,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                         <span className="f-val vec">
                           {vec.map((axVal, i) => (
                             <span className={`vcell ${labels[i] ?? i}`} key={i}>
+                              {mixedAxes[i] && <span className="batch-mixed" data-testid={`batch-${comp}-${f.key}-${i}-mixed`}>mixed</span>}
                               <ScrubInput
                                 key={`${primary}:${comp}:${f.key}:${i}`}
                                 value={axVal}
@@ -746,6 +875,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                       .map(([k, v]) => {
                         const fs = fieldSchema(comp, k);
                         const renderer = inspectorFieldRendererKind(fs ?? { type: typeof v === 'number' ? 'number' : 'string' });
+                        const mixed = isMixed(batchFieldValues(ids, comp, k));
                         if (isUnsupportedRendererKind(renderer) || renderer === 'array' || renderer === 'asset-ref') {
                           return <UnsupportedField component={comp} field={k} kind={fs?.shape ?? renderer} key={k} />;
                         }
@@ -753,6 +883,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                           <div className="f-row" key={k}>
                             <span className="f-name" title={fs?.tooltip}>{k}</span>
                             <span className="f-val">
+                              {mixed && <span className="batch-mixed" data-testid={`batch-${comp}-${k}-mixed`}>mixed</span>}
                               {renderer === 'boolean' ? (
                                 <BoolCheckbox checked={v === true} testid={`batch-${comp}-${k}`} onToggle={(c) => setAll(comp, k, c)} />
                               ) : renderer === 'enum' ? (

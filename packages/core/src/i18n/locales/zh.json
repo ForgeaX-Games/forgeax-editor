@@ -148,6 +148,8 @@
       "batchNote": "编辑下列共有属性将一次性应用到全部选中（单步撤销）。",
       "alignToPrimary": "对齐到 primary",
       "noCommonComponents": "选中项无共有组件。",
+      "addMissing": "补齐缺失",
+      "removeAll": "全部移除",
       "editSource": "编辑源",
       "refToChat": "引用到 Chat",
       "copyJson": "复制 JSON",

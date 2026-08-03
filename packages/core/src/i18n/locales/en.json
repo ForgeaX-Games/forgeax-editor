@@ -148,6 +148,8 @@
       "batchNote": "Editing the shared properties below applies to all selected at once (single undo step).",
       "alignToPrimary": "Align to primary",
       "noCommonComponents": "Selected entities have no components in common.",
+      "addMissing": "Add missing",
+      "removeAll": "Remove all",
       "editSource": "Edit source",
       "refToChat": "Reference in Chat",
       "copyJson": "Copy JSON",

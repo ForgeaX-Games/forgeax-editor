@@ -21,8 +21,10 @@
 
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
+import type { EntityHandle } from '../scene/scene-types';
 import type { EditorOp, EditSession } from '../types';
 // Session/transient appliers register as a store-module eval side effect; pull
 // them in so the dispatch path routes to a real applier (not UNKNOWN_OP).
@@ -161,6 +163,28 @@ describe('solo round-14 — builtin document op args validation', () => {
   it('setComponent with a real patch still round-trips → ok (no false positive)', () => {
     const r = gw.dispatch({ kind: 'setComponent', entity: ent, component: 'Transform', patch: { pos: [4, 5, 6] } }, 'ai');
     expect(r.ok).toBe(true);
+  });
+
+  it('setComponent rejects a scalar type mismatch with a field path and no mutation', () => {
+    const before = gw.doc.world.get(ent as EntityHandle, Transform);
+    if (!before.ok) throw new Error('test setup Transform missing');
+    const ledgerBefore = gw.ledger.length;
+    const r = gw.dispatch({
+      kind: 'setComponent',
+      entity: ent,
+      component: 'Transform',
+      patch: { pos: ['not-a-number', 0, 0] },
+    } as unknown as EditorOp, 'ai');
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('SET_FAILED');
+      expect(r.error.details).toMatchObject({ fieldPath: 'Transform.pos', reason: 'type-mismatch', index: 0 });
+    }
+    expect(gw.ledger.length).toBe(ledgerBefore);
+    const after = gw.doc.world.get(ent as EntityHandle, Transform);
+    if (!after.ok) throw new Error('test Transform disappeared');
+    expect([...after.value.pos]).toEqual([...before.value.pos]);
   });
 
   it('spawnEntity{parent:null} still succeeds (nullable regression guard)', () => {

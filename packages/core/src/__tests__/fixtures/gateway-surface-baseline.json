@@ -252,6 +252,10 @@
     "signature": "() => SceneReadModel"
   },
   {
+    "name": "selectionReadModel",
+    "signature": "() => SelectionReadModel"
+  },
+  {
     "name": "sourceFileDeleteStatus",
     "signature": "(requestId: string) => SourceFileDeleteStatus | null"
   },

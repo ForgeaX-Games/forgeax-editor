@@ -9,7 +9,7 @@ import {
   type RunProgress,
 } from '@forgeax/editor-product';
 import type { FieldShapeKind, World } from '@forgeax/engine-ecs';
-import { clearSelection } from '../store/selection';
+import { clearSelection, getSelection, getSelectionList } from '../store/selection';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
 import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
 import type { OpDescriptor, PlanFn, ArgsSchema } from './catalog';
@@ -23,6 +23,7 @@ import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCoun
 import { assetsErrorRevision, recentAssetsErrors } from '../store/assets-error-bus';
 import { createDiagnosticsReadModel, type DiagnosticsReadModel } from './diagnostics';
 import { EMPTY_SCENE_READ_MODEL, type SceneReadModel } from './scene-read-model';
+import type { SelectionReadModel } from './selection-read-model';
 import {
   AUTHORED_SCENE_AUTHORING_SESSION,
   type SceneAuthoringSessionReadModel,
@@ -618,6 +619,20 @@ export class EditGateway {
   /** Read the persistence-owned scene list and identity markers. */
   sceneReadModel(): SceneReadModel {
     return this._sceneReadProvider?.() ?? EMPTY_SCENE_READ_MODEL;
+  }
+
+  /** Read the transient selection projection from the selection store.
+   *
+   * The Gateway is the public read door for eval callers as well as panels. The
+   * selection store remains the only owner; this method derives a fresh plain
+   * JSON shape so callers cannot mutate its cached Set or infer a second
+   * identity namespace.
+   */
+  selectionReadModel(): SelectionReadModel {
+    return {
+      primary: getSelection(),
+      ids: [...getSelectionList()],
+    };
   }
 
   /** Bind the persistence-owned scene read model; returns an idempotent detach. */

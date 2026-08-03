@@ -95,6 +95,7 @@ export type {
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
 export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from './io/scene-read-model';
+export type { SelectionReadModel } from './io/selection-read-model';
 export type {
   ImportedSceneSessionIdentity,
   SceneAuthoringMode,

@@ -15,6 +15,7 @@ export type {
   HistoryStep,
   OpHandle,
 } from '../io/gateway';
+export type { SelectionReadModel } from '../io/selection-read-model';
 export type { CollectSceneAssetResult } from '../io/scene-asset-collect';
 export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from '../io/scene-read-model';
 export type {

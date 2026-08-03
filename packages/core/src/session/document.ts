@@ -154,6 +154,65 @@ function fixedArrayLength(rawType: string): number | undefined {
   return match === null ? undefined : Number(match[1]);
 }
 
+function arrayElementType(rawType: string): string | undefined {
+  if (!rawType.startsWith('array<') || !rawType.endsWith('>')) return undefined;
+  const inner = rawType.slice('array<'.length, -1);
+  const capacity = /^(.*),\s*\d+$/.exec(inner);
+  return (capacity?.[1] ?? inner).trim();
+}
+
+function invalidScalarValue(rawType: string, value: unknown): { expected: string; reason: string } | null {
+  if (rawType === 'f32' || rawType === 'i32' || rawType === 'u32') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return { expected: rawType, reason: 'number-required' };
+    }
+    if ((rawType === 'i32' || rawType === 'u32') && !Number.isInteger(value)) {
+      return { expected: rawType, reason: 'integer-required' };
+    }
+    if (rawType === 'u32' && (value < 0 || value > 0xffffffff)) {
+      return { expected: rawType, reason: 'range' };
+    }
+    if (rawType === 'i32' && (value < -0x80000000 || value > 0x7fffffff)) {
+      return { expected: rawType, reason: 'range' };
+    }
+    return null;
+  }
+  if (rawType === 'bool' && typeof value !== 'boolean') {
+    return { expected: rawType, reason: 'boolean-required' };
+  }
+  if (rawType === 'string' && typeof value !== 'string') {
+    return { expected: rawType, reason: 'string-required' };
+  }
+  if (rawType === 'enum' && (typeof value !== 'number' || !Number.isInteger(value) || !Number.isFinite(value))) {
+    return { expected: rawType, reason: 'enum-number-required' };
+  }
+  // Shared refs accept a live numeric handle or a catalog GUID string; the
+  // latter is resolved by resolveSharedFields after this validation boundary.
+  if (/^shared<[^<>]+>$/.test(rawType)) {
+    if (typeof value === 'string') return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return null;
+    return { expected: rawType, reason: 'shared-handle-or-guid-required' };
+  }
+  if (rawType === 'entity') {
+    if (value === null) return null;
+    if (typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value)) return null;
+    return { expected: rawType, reason: 'entity-handle-required' };
+  }
+  return null;
+}
+
+function invalidFieldValue(rawType: string, value: unknown): { expected: string; reason: string; index?: number } | null {
+  const elementType = arrayElementType(rawType);
+  if (elementType === undefined) return invalidScalarValue(rawType, value);
+  if (!isArrayLikeValue(value)) return { expected: rawType, reason: 'array-required' };
+  const values = Array.from(value);
+  for (const [index, element] of values.entries()) {
+    const invalid = invalidScalarValue(elementType, element);
+    if (invalid !== null) return { ...invalid, index };
+  }
+  return null;
+}
+
 function defaultArrayElement(field: FieldSchema): unknown {
   if (field.arrayElementDefault !== undefined) return clone(field.arrayElementDefault);
   const elementType = field.arrayMeta?.elementType ?? '';
@@ -257,8 +316,22 @@ function validateComponentWrite(
       };
     }
     const arrayInfo = arrayFieldInfo(component, field);
-    if (arrayInfo === undefined) continue;
     const fieldPath = `${component}.${field}`;
+    const invalid = invalidFieldValue(schema[field]!, value);
+    if (invalid !== null) {
+      return {
+        ok: false,
+        hint: `${fieldPath} requires ${invalid.expected} (${invalid.reason})`,
+        details: {
+          fieldPath,
+          reason: 'type-mismatch',
+          expected: invalid.expected,
+          actual: Array.isArray(value) || ArrayBuffer.isView(value) ? 'array' : typeof value,
+          ...(invalid.index === undefined ? {} : { index: invalid.index }),
+        },
+      };
+    }
+    if (arrayInfo === undefined) continue;
     const length = arrayLength(value);
     if (length === null) {
       return {

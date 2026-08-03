@@ -210,6 +210,16 @@ export default defineConfig({
       // directory so vite resolves any subpath, .ts/.tsx/.css alike.
       '@forgeax/interface/styles/global.css': resolve(INTERFACE_DIR, 'src/styles/global.css'),
       '@forgeax/interface/components': resolve(INTERFACE_DIR, 'src/components'),
+      // Keep every editor package on the same source URL in the standalone
+      // host. Workspace symlinks are realpath-deduped, but a package self-import
+      // can still resolve through a second Vite module key; that splits the
+      // Gateway/selection singleton and makes AI selection invisible to panels.
+      // Alias the editor family at the host boundary so panels, runtime, and
+      // the eval channel all import one module graph.
+      '@forgeax/editor-core': resolve(PACKAGE_DIR, 'packages/core/src'),
+      '@forgeax/editor-content-browser': resolve(PACKAGE_DIR, 'packages/content-browser/src'),
+      '@forgeax/editor-panels': resolve(PACKAGE_DIR, 'packages/panels/src'),
+      '@forgeax/editor-product': resolve(PACKAGE_DIR, 'packages/product/src'),
       '@forgeax/design/preset': resolve(DESIGN_DIR, 'preset.ts'),
       '@forgeax/design/theme': resolve(DESIGN_DIR, 'theme.ts'),
       '@forgeax/design/tokens.css': resolve(DESIGN_DIR, 'tokens.css'),

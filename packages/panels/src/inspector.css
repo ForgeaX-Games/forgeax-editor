@@ -182,6 +182,12 @@
 .fx-inspector .chip { font-size: 11px; padding: 2px 8px; border-radius: var(--prim-radius-full); border: 1px solid var(--color-border-subtle); background: var(--color-background-elevated); color: var(--color-text-secondary); cursor: pointer; }
 .fx-inspector .chip:hover { border-color: var(--color-border-default); color: var(--color-text-primary); }
 .fx-inspector .chip.primary { border-color: var(--color-brand-line); background: var(--color-brand-soft); color: var(--color-text-primary); }
+.fx-inspector .batch-component-list { display: flex; flex-direction: column; gap: 4px; padding: 4px 12px 8px; }
+.fx-inspector .batch-component-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.fx-inspector .batch-component-row .comp-name { flex: 1; min-width: 0; }
+.fx-inspector .batch-component-count { color: var(--color-text-tertiary); font: 10px var(--prim-font-mono, ui-monospace, monospace); }
+.fx-inspector .batch-component-row .fbtn { padding: 2px 6px; font-size: 10px; }
+.fx-inspector .batch-mixed { color: var(--color-text-tertiary); font: 10px var(--prim-font-mono, ui-monospace, monospace); letter-spacing: .04em; text-transform: uppercase; }
 
 /* AssetPicker modal (reskin to tokens) */
 .fx-asset-picker-backdrop { position: fixed; inset: 0; z-index: var(--prim-z-level-3, 300); background: var(--color-overlay-modal, rgba(0,0,0,0.5)); display: flex; align-items: center; justify-content: center; }
