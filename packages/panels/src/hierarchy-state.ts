@@ -60,7 +60,15 @@ export interface HierarchyStructureSelector {
 
 type StructureReader = (world: unknown) => HierarchyStructureProjection;
 
-function hierarchyMobility(components: Record<string, unknown>): HierarchyEntitySummary['mobility'] {
+/**
+ * Derive the hierarchy mobility label from the component schema facts.
+ *
+ * `RigidBody.type` is the physics producer's numeric enum: static bodies are
+ * fixed/stationary, while dynamic and kinematic bodies are user/game driven.
+ * The previous presence-only fallback labelled every RigidBody as movable,
+ * which made a static physics ground misleading in the human hierarchy.
+ */
+export function hierarchyMobility(components: Record<string, unknown>): HierarchyEntitySummary['mobility'] {
   const explicit = Object.values(components)
     .map((component) => {
       if (typeof component !== 'object' || component === null) return undefined;
@@ -70,6 +78,12 @@ function hierarchyMobility(components: Record<string, unknown>): HierarchyEntity
     })
     .find(Boolean);
   if (explicit === 'static' || explicit === 'movable' || explicit === 'stationary') return explicit;
+  const rigidBody = components.RigidBody ?? components.Rigidbody;
+  if (typeof rigidBody === 'object' && rigidBody !== null && !Array.isArray(rigidBody)) {
+    const type = (rigidBody as { type?: unknown }).type;
+    if (type === 0) return 'stationary';
+    if (type === 1 || type === 2) return 'movable';
+  }
   if ('RigidBody' in components || 'Rigidbody' in components) return 'movable';
   if ('Transform' in components) return 'static';
   return '';
@@ -324,6 +338,20 @@ export function toggleHierarchyCollapsed(id: EntityHandle): void {
 
 export function expandHierarchyAll(): void {
   const collapsed = new Set<EntityHandle>();
+  saveCollapsed(collapsed);
+  nextSnapshot({ ...snapshot, collapsed });
+}
+
+/** Expand the virtual "Scene" root folder. Called when a scene is (re)loaded or
+ *  switched so the freshly loaded contents are never hidden behind a persisted
+ *  collapse of the root — the root's collapse is a per-session convenience, not a
+ *  reason to open onto an empty-looking tree after a load. No-op (no emit / no
+ *  localStorage write) when the root is already expanded, so it is safe to call
+ *  on every scene-identity change. */
+export function expandHierarchySceneFolder(): void {
+  if (!snapshot.collapsed.has(HIERARCHY_SCENE_FOLDER_ID)) return;
+  const collapsed = new Set(snapshot.collapsed);
+  collapsed.delete(HIERARCHY_SCENE_FOLDER_ID);
   saveCollapsed(collapsed);
   nextSnapshot({ ...snapshot, collapsed });
 }

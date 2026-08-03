@@ -175,13 +175,14 @@ Record → replay → inspect, driven first by an AI subagent (exposed over `WS:
 |:--|:--|:--|
 | **RHI seam** | `rhi` · `rhi-webgpu` · `rhi-wgpu` · `rhi-null` · `wgpu-wasm` | Pure interface + dual impl + headless + 🦀 WASM core |
 | **Rendering** | `runtime` · `render-graph` · `shader` · `shader-compiler` · `naga` | Renderer, SRP, RenderGraph, WGSL compose + reflect |
-| **Core** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` | Archetype World, game loop, math, `Result` SSOT, FSM |
+| **Core** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` · `animation` | Archetype World, game loop, math, `Result` SSOT, FSM |
 | **Simulation** | `physics` · `physics-rapier2d` · `physics-rapier3d` · `audio` · `audio-webaudio` | Rapier 2D/3D, Web Audio |
 | **Assets** | `pack` · `import` · `gltf` · `fbx` · `image` · `font` · `engine-project` | GUID sidecar pipeline, importers, `forge.json` manifest |
 | **Tooling** | `rhi-debug` · `debug-draw` · `remote` · `console` · `vite-plugin-*` | Frame debugger, live inspector, Vite integration |
 
 > [!NOTE]
 > Public packages share the `@forgeax/engine-` prefix; bare `@forgeax/engine` is a placeholder — install **`@forgeax/engine-runtime`**. Each `packages/<pkg>/README.md` is the SSOT for its API, error codes, and capability gates.
+> `animation` uses one animation-target model for ordinary `Transform` entities and skin joints.
 
 ## Layout
 

@@ -235,13 +235,15 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     const stableGuid = '019f0000-0000-7000-8000-000000000001';
     let writtenMeta: Record<string, unknown> | undefined;
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, init?: { body?: BodyInit | null }) => {
-      if (url.includes('/api/files/raw')) {
+      if (url.includes('optional=1')) {
         return Promise.resolve(new Response(JSON.stringify({
-          schemaVersion: '1.0.0',
-          importer: 'image',
-          importSettings: { colorSpace: 'linear', customSetting: 'keep-me' },
-          subAssets: [{ guid: stableGuid, kind: 'texture', sourceIndex: 0 }],
-        }), { status: 200 }));
+          content: JSON.stringify({
+            schemaVersion: '1.0.0',
+            importer: 'image',
+            importSettings: { colorSpace: 'linear', customSetting: 'keep-me' },
+            subAssets: [{ guid: stableGuid, kind: 'texture', sourceIndex: 0 }],
+          }),
+        }), { status: 200, headers: { 'content-type': 'application/json' } }));
       }
       if (url === '/api/files' && typeof init?.body === 'string') {
         const request = JSON.parse(init.body) as { content?: string };
@@ -396,8 +398,10 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       { guid: '019f0000-0000-7000-8000-000000000013', kind: 'font', sourceIndex: 0 },
     ];
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
-      if (url.includes('/api/files/raw')) {
-        return Promise.resolve(new Response(JSON.stringify({ importer: 'font', subAssets }), { status: 200 }));
+      if (url.includes('optional=1')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          content: JSON.stringify({ importer: 'font', subAssets }),
+        }), { status: 200, headers: { 'content-type': 'application/json' } }));
       }
       return Promise.resolve(new Response('', { status: 200 }));
     }) as unknown as typeof fetch;

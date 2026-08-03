@@ -39,9 +39,9 @@ describe('normalizeStoragePath — catalog address → file-backend client space
     expect(normalizeStoragePath('spin-cube/assets/foo.mp3', SLUG)).toBe('spin-cube/assets/foo.mp3');
   });
 
-  it('passes a games/<slug>/ relative path through unchanged', () => {
+  it('canonicalizes a legacy games/<slug>/ path to standalone client space', () => {
     expect(normalizeStoragePath('games/spin-cube/assets/foo.mp3', SLUG)).toBe(
-      'games/spin-cube/assets/foo.mp3',
+      'spin-cube/assets/foo.mp3',
     );
   });
 

@@ -28,7 +28,8 @@
 // Ports (see README "Run"):
 //   :15290  standalone chrome host (vite, root=standalone/) — the page you open
 //   :15280  edit-runtime (panel + viewport iframe source); host proxies /editor → it
-//   :15273  play-runtime (Play mode) — only with `start --play` (NOT 15173 — see
+//   :15273  play-runtime (pure engine preview) — with `start --play`, or
+//           automatically when `--game` is supplied (NOT 15173 — see
 //           PLAY_RUNTIME_PORT below: studio's superrepo stack owns 15173)
 
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
@@ -617,6 +618,19 @@ async function run(argv: string[]): Promise<void> {
     ...bridgeEnv,
     FORGEAX_GAME_DIR: gameDir,
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
+    // The pure preview is proxied through the standalone host. Play Runtime
+    // serves game files from an in-root `host-games/<slug>` farm, so a direct
+    // --game path is exposed through its parent directory and the stable URL
+    // prefix instead of falling through to the preview SPA HTML.
+    ...(gameDir
+      ? {
+          FORGEAX_PREVIEW_GAMES_DIR: dirname(gameDir),
+          FORGEAX_GAMES_URL_PREFIX: 'host-games',
+        }
+      : {}),
+    // Play Runtime's HMR client is also behind the standalone host proxy; the
+    // default 18920 target belongs to the studio embed and returns 400 here.
+    FORGEAX_HMR_CLIENT_PORT: String(STANDALONE_PORT),
     // Single SSOT for the editor stack's play-runtime port. Set AFTER the
     // ...process.env spread so it always wins: every spawn inherits this base env,
     // so play-runtime binds PLAY_RUNTIME_PORT AND edit-runtime's /preview proxy
@@ -684,7 +698,7 @@ async function run(argv: string[]): Promise<void> {
         detach: true,
         logFd: log('bridge'),
       });
-    if (play)
+    if (play || gameDir)
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
         // FORGEAX_ENGINE_PORT (= PLAY_RUNTIME_PORT) rides in the base `env`.
@@ -733,7 +747,7 @@ async function run(argv: string[]): Promise<void> {
     );
   }
 
-  if (play) {
+  if (play || gameDir) {
     step(`starting play-runtime :${PLAY_RUNTIME_PORT} ...`);
     children.push(
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
@@ -749,6 +763,72 @@ async function run(argv: string[]): Promise<void> {
   await new Promise<void>((resolvePromise) => {
     for (const ch of children) ch.on('exit', () => resolvePromise());
   });
+}
+
+// ── build (static single-game artifact) ─────────────────────────────────────
+// The dev stack deliberately keeps game modules host-injected and reloadable.
+// Shipping has a different contract: select one game, bundle its entry, stage
+// its persisted project facts, and leave a directory that a plain static HTTP
+// server can mount at /preview/.
+function build(argv: string[]): void {
+  let game = '';
+  let out = '';
+  let maxBytes = '';
+  let maxEntities = '';
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? '';
+    if (arg === '--game') game = argv[++i] ?? '';
+    else if (arg.startsWith('--game=')) game = arg.slice('--game='.length);
+    else if (arg === '--out') out = argv[++i] ?? '';
+    else if (arg.startsWith('--out=')) out = arg.slice('--out='.length);
+    else if (arg === '--max-bytes') maxBytes = argv[++i] ?? '';
+    else if (arg.startsWith('--max-bytes=')) maxBytes = arg.slice('--max-bytes='.length);
+    else if (arg === '--max-entities') maxEntities = argv[++i] ?? '';
+    else if (arg.startsWith('--max-entities=')) maxEntities = arg.slice('--max-entities='.length);
+    else die(`unknown build flag: ${arg} (supported: --game <dir>, --out <dir>, --max-bytes N, --max-entities N)`);
+  }
+  if (!game) die('build needs --game <dir> (the directory containing forge.json)');
+  const gameDir = resolve(ROOT, game);
+  if (!existsSync(gameDir)) die(`build game directory does not exist: ${gameDir}`);
+  const forgePath = join(gameDir, 'forge.json');
+  if (!existsSync(forgePath)) die(`build game directory has no forge.json: ${gameDir}`);
+  const gameId = gameDir.split(sep).pop() ?? '';
+  if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(gameId)) die(`build game directory name is not a valid game id: ${gameId}`);
+
+  let manifest: { entry?: unknown };
+  try {
+    manifest = JSON.parse(readFileSync(forgePath, 'utf8')) as { entry?: unknown };
+  } catch {
+    die(`build cannot parse ${forgePath}`);
+  }
+  const entry = typeof manifest.entry === 'string' && manifest.entry.length > 0 ? manifest.entry : 'main.ts';
+  const entryPath = resolve(gameDir, entry);
+  if (!entryPath.startsWith(`${gameDir}${sep}`) || !existsSync(entryPath)) {
+    die(`build game entry does not exist inside the game directory: ${entry}`);
+  }
+  const outDir = out ? resolve(ROOT, out) : resolve(ROOT, 'packages/play-runtime/dist');
+  const validationArgs = [join(ROOT, 'scripts/game-validation.mjs'), gameDir];
+  if (maxBytes) validationArgs.push(`--max-bytes=${maxBytes}`);
+  if (maxEntities) validationArgs.push(`--max-entities=${maxEntities}`);
+  step(`validating game content before build (${gameId}) ...`);
+  sh('bun', validationArgs, {
+    failureMessage: `build blocked by game validation for '${gameId}'`,
+  });
+  requireFreshEngineDist('build');
+  ok(`building static game '${gameId}' from ${gameDir}`);
+  sh('bun', ['-F', '@forgeax/editor-play-runtime', 'build'], {
+    env: {
+      ...process.env,
+      FORGEAX_PREVIEW_GAMES_DIR: dirname(gameDir),
+      FORGEAX_GAMES_URL_PREFIX: 'host-games',
+      FORGEAX_STATIC_GAME_DIR: gameDir,
+      FORGEAX_STATIC_GAME_ID: gameId,
+      FORGEAX_STATIC_GAME_ENTRY: entry,
+      FORGEAX_BUILD_OUT_DIR: outDir,
+    },
+    failureMessage: `build failed for game '${gameId}'`,
+  });
+  ok(`static artifact ready: ${outDir}`);
 }
 
 // ── ci ──────────────────────────────────────────────────────────────────────
@@ -778,6 +858,7 @@ const CI_FAST_STEPS: readonly CiStep[] = [
 
 const CI_COMPLETE_STEPS: readonly CiStep[] = [
   ...CI_FAST_STEPS,
+  ['J5 validation + static artifact browser smoke', 'bun', ['run', 'test:j5'], 'J5', 'C1/C4/C5/C6/C7'],
   ['browser smoke + viewport Play + save terminal roundtrip', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts', 'e2e/smoke-content-browser.spec.ts', 'e2e/save-operation-run.spec.ts', 'e2e/play-real-game-safety-net.spec.ts'], 'J0/J1', 'C4/C5/C6/C7'],
 ];
 
@@ -866,11 +947,17 @@ Usage:
 Lifecycle:
   setup | install               prepare everything (submodules, deps, engine dist + wasm)
   start | run [--play]          start the stack (:15290 host + :15280 edit-runtime
-                                [+ :15273 play-runtime with --play]); Ctrl-C stops
+                                [+ :15273 play-runtime with --play/--game]); Ctrl-C stops
   start --game DIR              open a real game (DIR directly contains forge.json)
   start --bg                    start in background, returns immediately
   start --rhi-debug            enable viewport RHI capture + reviewer (:15274)
   stop                          stop everything the CLI started (by port)
+
+Shipping:
+  build --game DIR [--out DIR]  validate and bundle one game into a static
+                                artifact; serve it with any plain HTTP server at
+                                /preview/. Optional budgets: --max-bytes N,
+                                --max-entities N.
 
   Live gateway bridge (:15296 by default) is ON so the forgeax-editor-gateway
   skill's gateway-live.mjs can drive the open window; set FORGEAX_BRIDGE=0 to
@@ -912,6 +999,9 @@ async function main(): Promise<void> {
       break;
     case 'stop':
       await stop();
+      break;
+    case 'build':
+      build(rest);
       break;
     case 'update':
       update(rest);

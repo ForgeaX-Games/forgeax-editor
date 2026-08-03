@@ -159,6 +159,35 @@ test('human save without a requestId cannot bypass the Gateway OperationRun path
   }
 });
 
+test('scene switch dispatch is request-correlated and retryable', async () => {
+  const completions: Array<Deferred<unknown>> = [];
+  const previousApplier = sessionAppliers.get('switchSceneFile');
+  sessionAppliers.set('switchSceneFile', () => {
+    const effect = deferred<unknown>();
+    completions.push(effect);
+    return { ok: true, completion: effect.promise };
+  });
+
+  try {
+    const gateway = new EditGateway(createEditSession());
+    const accepted = gateway.dispatch({ kind: 'switchSceneFile', id: 'level-b', dirtyPolicy: 'discard', requestId: 'switch-run-1' }, 'ai');
+    expect(accepted).toMatchObject({ ok: true, result: { operationRun: { operationId: 'switchSceneFile', requestId: 'switch-run-1', status: 'running' } } });
+    expect(completions).toHaveLength(1);
+    completions[0]!.reject({ code: 'scene-switch-load-failed', hint: 'fixture load failed', retryable: true, recoveryActions: ['operation.retry'] });
+    await expect(gateway.waitOperationRun('switch-run-1')).resolves.toMatchObject({ ok: true, value: { status: 'failed', error: { code: 'scene-switch-load-failed' } } });
+    expect(gateway.ledger).toHaveLength(0);
+
+    const retry = gateway.retryOperationRun('switch-run-1', 'switch-run-2', 'ai');
+    expect(retry).toMatchObject({ ok: true, result: { operationRun: { operationId: 'switchSceneFile', requestId: 'switch-run-2', parentRunId: expect.any(String), attempt: 2 } } });
+    completions[1]!.resolve({ ok: true, result: { sceneId: 'level-b' } });
+    await gateway.waitOperationRun('switch-run-2');
+    expect(gateway.ledger).toHaveLength(1);
+  } finally {
+    if (previousApplier === undefined) sessionAppliers.delete('switchSceneFile');
+    else sessionAppliers.set('switchSceneFile', previousApplier);
+  }
+});
+
 test('human and AI request-correlated saves share the same run facts and terminal notifications', async () => {
   const completions: Array<Deferred<unknown>> = [];
   const previousApplier = sessionAppliers.get('saveDocToDisk');

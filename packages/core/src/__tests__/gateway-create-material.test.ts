@@ -21,6 +21,7 @@
 
 import { describe, expect, it, beforeEach } from 'bun:test';
 import { EditGateway } from '../io/gateway';
+import { AssetIOFacade } from '../io/asset-io-facade';
 import { createEditSession } from '../session/document';
 import { hasOp, getOp, listOps } from '../io/catalog';
 // Importing the barrel loads pack-ops' side-effect (document applier registration),
@@ -158,6 +159,39 @@ describe('createMaterial applier builds a real Materials.standard() POD', () => 
     expect(payload.values.baseColor).toEqual([1, 0.84, 0, 1]);
     expect(payload.values.metallic).toBe(1);
     expect(payload.values.roughness).toBe(0.25);
+  });
+});
+
+describe('AssetIOFacade authored pack version', () => {
+  it('writes a new material pack in the runtime Pack v2 envelope', async () => {
+    const originalFetch = globalThis.fetch;
+    let posted: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/files?')) {
+        return new Response(null, { status: 404 });
+      }
+      posted = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await new AssetIOFacade().createAssetInPack({
+        packPath: 'sample/assets/new-materials.pack.json',
+        asset: {
+          guid: '019fc6d1-4a9f-74d2-af06-a41a3f0563ce',
+          kind: 'material',
+          name: 'New Material',
+          payload: { kind: 'material', values: {} },
+          refs: [],
+        },
+      });
+      expect(result.ok).toBe(true);
+      const writtenBody = posted as unknown as { content: string };
+      expect(writtenBody.content).toContain('"schemaVersion": "2.0.0"');
+      expect(writtenBody.content).toContain('"artifacts": {}');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

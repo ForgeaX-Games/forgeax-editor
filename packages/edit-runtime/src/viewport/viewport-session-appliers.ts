@@ -8,7 +8,7 @@
 
 import { getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
-import { registerSessionApplier, type DispatchResult, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
+import { registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
 
 export interface ViewportSessionApplierDeps {
   readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => DispatchResult;
@@ -66,6 +66,10 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       if (dirtyPolicy !== 'last-saved' && dirtyPolicy !== 'save-then-play' && dirtyPolicy !== 'cancel') {
         return invalidArgs('dirtyPolicy must be "last-saved", "save-then-play", or "cancel"');
       }
+      // Animation-preview defense (M1): entering Play forks/simulates the edit
+      // world — restore preview-touched runtime fields first so the simulation
+      // (and any save-then-play) starts from authored values.
+      if (ctx?.engine) restoreAllAnimationPreviews(ctx.engine);
       return deps.play(dirtyPolicy, ctx?.origin ?? 'human');
     }, 'Play', {
       type: 'object',

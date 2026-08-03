@@ -27,7 +27,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSceneReadModel, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -40,7 +40,9 @@ import {
   HIERARCHY_GROUP_TYPE_ID,
   HIERARCHY_SCENE_FOLDER_ID,
   expandHierarchyAll,
+  expandHierarchySceneFolder,
   getHierarchyPanelSnapshot,
+  hierarchyMobility,
   getHierarchyVisibleMatches,
   createHierarchyStructureSelector,
   type HierarchyStructureProjection,
@@ -259,22 +261,6 @@ function hierarchyTypeIcon(id: string): LucideIcon {
   }
 }
 
-function hierarchyMobilityKey(components: Record<string, unknown>): 'static' | 'movable' | 'stationary' | '' {
-  const explicit = Object.values(components)
-    .map((component) => {
-      if (typeof component !== 'object' || component === null) return undefined;
-      const value = (component as { mobility?: unknown; Mobility?: unknown }).mobility
-        ?? (component as { mobility?: unknown; Mobility?: unknown }).Mobility;
-      return typeof value === 'string' ? value : undefined;
-    })
-    .find(Boolean);
-  const normalized = explicit?.toLowerCase();
-  if (normalized === 'static' || normalized === 'movable' || normalized === 'stationary') return normalized;
-  if ('RigidBody' in components || 'Rigidbody' in components) return 'movable';
-  if ('Transform' in components) return 'static';
-  return '';
-}
-
 // ── Per-row value-stable snapshot ────────────────────────────────────────────
 // A Row's rendered output depends ONLY on this small structural view-model — not
 // on transform values or any other frame-volatile world state. We therefore let
@@ -291,7 +277,7 @@ interface HierarchyRowVM {
   readonly name: string;
   readonly typeId: string;
   readonly hidden: boolean;
-  readonly mobilityKey: ReturnType<typeof hierarchyMobilityKey>;
+  readonly mobilityKey: ReturnType<typeof hierarchyMobility>;
   readonly childIds: readonly EntityHandle[];
 }
 const MISSING_ROW_VM: HierarchyRowVM = {
@@ -337,7 +323,7 @@ function rowVmSnapshot(id: EntityHandle): HierarchyRowVM {
     name: entName(world, id),
     typeId: getHierarchyEntityType(names, world, id).id,
     hidden: names.includes('EditorHidden'),
-    mobilityKey: hierarchyMobilityKey(entComponentsPresent(world, id, names)),
+    mobilityKey: hierarchyMobility(entComponentsPresent(world, id, names)),
     childIds: childrenOf(world, id),
   };
   if (prev && rowVmEqual(prev, candidate)) return prev;
@@ -792,6 +778,22 @@ export function HierarchyPanel() {
       if (sel !== null) revealHierarchyEntity(sel);
     });
   }, []);
+
+  // Auto-expand the virtual "Scene" root whenever the active scene identity
+  // changes (initial boot, or a switch between scene files). A scene load clears
+  // the selection (replaceDoc), so revealHierarchyEntity — the only other path
+  // that opens the root — never fires here; without this the freshly loaded tree
+  // would stay hidden behind a persisted collapse of the root. Keyed on the scene
+  // id (not docVersion, which also bumps every Play-mode frame) so it fires once
+  // per real load, and expandHierarchySceneFolder is a no-op when already open.
+  const sceneModel = useSceneReadModel();
+  const activeSceneId = sceneModel.currentScene?.id
+    ?? sceneModel.scenes.find((entry) => entry.isCurrent)?.id
+    ?? null;
+  useEffect(() => {
+    if (activeSceneId === null) return;
+    expandHierarchySceneFolder();
+  }, [activeSceneId]);
 
   const readOnly = gateway.mode === 'play';
   const activeWorld = gateway.activeWorld;

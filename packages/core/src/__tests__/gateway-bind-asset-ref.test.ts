@@ -101,7 +101,7 @@ describe('bindAssetRef dispatch (session applier)', () => {
       expect((terminal.value.input as { guids?: string[] }).guids).toEqual(['019f56f2-0ac0-776a-9d28-50eaf795daed']);
       expect((terminal.value.input as { slot?: number }).slot).toBe(0);
       if (terminal.value.status === 'failed') {
-        expect(['ASSET_NOT_FOUND', 'asset-bind-failed']).toContain(terminal.value.error?.code ?? '');
+        expect(['ASSET_NOT_FOUND', 'asset-bind-failed', 'asset-bind-incompatible']).toContain(terminal.value.error?.code ?? '');
       }
     }
   });

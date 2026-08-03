@@ -75,6 +75,13 @@ export function useContentBrowserPanelContributions(): void {
             icon: 'Clapperboard',
             order: 20,
           },
+          {
+            id: 'contentBrowser.create.material',
+            command: 'contentBrowser.createAsset.material',
+            title: t('editor.contentBrowser.contextMenu.newMaterial'),
+            icon: 'Paintbrush',
+            order: 30,
+          },
         ],
       },
       {

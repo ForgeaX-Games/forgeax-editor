@@ -58,6 +58,10 @@ const GAME_DIR = process.env.FORGEAX_GAME_DIR
   : null;
 const GAME_SLUG = GAME_DIR ? basename(GAME_DIR) : null;
 const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
+// The standalone host owns the editor chrome, while the pure engine preview is
+// served by the separate play-runtime. Keep the proxy target on the same port
+// SSOT used by `bun fx start --play`.
+const PLAY_RUNTIME_PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15273);
 // The normal editor host remains :15290.  B2 self-boot deliberately supplies a
 // private free port, though: its self-hosted runner is persistent and can retain
 // a prior dev-server process, so probing the fixed human-development port can
@@ -272,6 +276,13 @@ export default defineConfig({
       // in-process in this host window (single realm, AC-04), so there is no
       // edit-runtime iframe to proxy to. The shader manifest + pack catalog are
       // served locally by enginePreset.plugins.
+      //
+      // The standalone preview is the opposite boundary: `/preview/` must stay
+      // a pure play-runtime page, never the editor SPA fallback. Proxy its
+      // engine-owned transport paths to the dedicated play-runtime server.
+      '/preview': { target: `http://127.0.0.1:${PLAY_RUNTIME_PORT}`, changeOrigin: true, ws: true },
+      '/__import': { target: `http://127.0.0.1:${PLAY_RUNTIME_PORT}`, changeOrigin: true },
+      '/__forgeax-ddc': { target: `http://127.0.0.1:${PLAY_RUNTIME_PORT}`, changeOrigin: true },
       //
       // --game: proxy /api → the standalone game-backend bun process (R3), which
       // mounts the real @forgeax/platform-io createFilesRouter confined to the

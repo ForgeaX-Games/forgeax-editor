@@ -30,42 +30,9 @@
 // imports each module exactly once and memoizes the pass. Edit and play therefore
 // share the same `Rotator` token and the same `rotate` handle.
 
-import { getRegisteredComponents, getRegisteredSystems, Update } from '@forgeax/engine-ecs';
-import type { World } from '@forgeax/engine-ecs';
-
-/** One discovered plugin module's registration delta. */
-export interface LoadedGamePlugin {
-  /** Client-space path, e.g. `sample/assets/rotator.plugin.ts`. */
-  readonly clientPath: string;
-  /** `/@fs/…` URL the module was imported from. */
-  readonly url: string;
-  /** Component names this module newly registered. */
-  readonly components: string[];
-  /** System names this module newly registered. */
-  readonly systems: string[];
-}
-
-/** Aggregate result of one plugin-load pass. */
-export interface GamePluginLoad {
-  readonly plugins: LoadedGamePlugin[];
-  /** Union of every plugin-registered system name (what play adds to its world). */
-  readonly systems: string[];
-  /** Union of every plugin-registered component name. */
-  readonly components: string[];
-  /** Per-file import failures (graceful degradation — one bad plugin does not
-   *  abort the others; the editor still boots). */
-  readonly errors: Array<{ clientPath: string; message: string }>;
-}
-
-/** Convert a per-file plugin import failure into the Play startup terminal fact. */
-export function getPlayPluginFailure(load: Pick<GamePluginLoad, 'errors'>): { code: 'play-plugin-failed'; hint: string } | null {
-  const first = load.errors[0];
-  if (!first) return null;
-  return {
-    code: 'play-plugin-failed',
-    hint: `Play plugin ${first.clientPath} failed to load: ${first.message}`,
-  };
-}
+import { loadGamePluginModules, type GamePluginLoad } from '@forgeax/engine-app';
+export { addGamePluginSystems, getPlayPluginFailure } from '@forgeax/engine-app';
+export type { GamePluginLoad, LoadedGamePlugin } from '@forgeax/engine-app';
 
 /** Explicit inputs (Pipeline Isolation — the headless test can fake all three). */
 export interface GamePluginDeps {
@@ -139,11 +106,6 @@ export async function ensureGamePluginsLoaded(deps: GamePluginDeps): Promise<Gam
   if (cached) return cached;
 
   const pass = (async (): Promise<GamePluginLoad> => {
-    const plugins: LoadedGamePlugin[] = [];
-    const errors: Array<{ clientPath: string; message: string }> = [];
-    const allSystems: string[] = [];
-    const allComponents: string[] = [];
-
     let files: string[];
     try {
       files = await listPluginFiles(deps);
@@ -153,33 +115,13 @@ export async function ensureGamePluginsLoaded(deps: GamePluginDeps): Promise<Gam
       return { plugins: [], systems: [], components: [], errors: [] };
     }
 
-    for (const clientPath of files) {
-      const url = toImportUrl(clientPath, deps.gameRoot, gameFsBase);
-      const beforeComps = new Map(getRegisteredComponents());
-      const beforeSystems = new Map(getRegisteredSystems());
-      try {
-        // No cache-bust: import ONCE for stable tokens (contrast discoverer.ts,
-        // which cache-busts for hot reload). @vite-ignore — the URL is dynamic.
-        await import(/* @vite-ignore */ url);
-      } catch (e) {
-        errors.push({ clientPath, message: e instanceof Error ? e.message : String(e) });
-        continue;
-      }
-
-      const comps: string[] = [];
-      for (const k of getRegisteredComponents().keys()) {
-        if (!beforeComps.has(k)) comps.push(k);
-      }
-      const systems: string[] = [];
-      for (const k of getRegisteredSystems().keys()) {
-        if (!beforeSystems.has(k)) systems.push(k);
-      }
-      plugins.push({ clientPath, url, components: comps, systems });
-      allComponents.push(...comps);
-      allSystems.push(...systems);
-    }
-
-    return { plugins, systems: allSystems, components: allComponents, errors };
+    return loadGamePluginModules({
+      modules: files.map((clientPath) => ({
+        clientPath,
+        url: toImportUrl(clientPath, deps.gameRoot, gameFsBase),
+      })),
+      importModule: (url) => import(/* @vite-ignore */ url),
+    });
   })();
 
   _loadCache.set(gameFsBase, pass);
@@ -192,15 +134,3 @@ export async function ensureGamePluginsLoaded(deps: GamePluginDeps): Promise<Gam
  * imports) and `world.addSystem`s the handle. Unknown names are skipped
  * defensively. Returns the names actually added.
  */
-export function addGamePluginSystems(world: World, load: GamePluginLoad): string[] {
-  const added: string[] = [];
-  const registry = getRegisteredSystems();
-  for (const name of load.systems) {
-    const handle = registry.get(name);
-    if (handle) {
-      world.addSystem(Update, handle).unwrap();
-      added.push(name);
-    }
-  }
-  return added;
-}

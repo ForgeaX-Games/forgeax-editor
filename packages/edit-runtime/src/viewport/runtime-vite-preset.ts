@@ -36,6 +36,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
+import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 
 // This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
 // edit-runtime's node_modules (../../node_modules) so the @forgeax workspace
@@ -504,7 +505,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       pluginPack({
         roots: packRoots,
         base,
-        importers: [imageImporter, gltfImporter, fbxImporter, fontImporter],
+        importers: [imageImporter, gltfImporter, fbxImporter, fontImporter, audioImporter],
         // No-op host refresh: the editor MUST NOT full-reload on a watched asset
         // change. Importing an asset writes source bytes + `.meta.json` to disk,
         // which the pluginPack watcher would otherwise answer with a Vite

@@ -349,7 +349,7 @@ describe('chrome performance trace summary', () => {
     ];
     const trace = summarizeTrace(traceEvents);
     const matrix = {
-      state: { ok: true, value: { phase: 'edit', mode: 'edit', transformRows: 1, meshRows: 1 } },
+      state: { ok: true, value: { phase: 'edit', mode: 'edit', transformRows: 1, meshRows: 1, rendererStats: null } },
       dom: {
         visible: 'visible',
         focused: true,
@@ -383,7 +383,7 @@ describe('chrome performance trace summary', () => {
       { name: 'WebGPUCommand', ts: 0, dur: 1000, cat: 'gpu' },
     ]);
     const matrix = {
-      state: { ok: true, value: { phase: 'play', mode: 'play', transformRows: 1, meshRows: 1 } },
+      state: { ok: true, value: { phase: 'play', mode: 'play', transformRows: 1, meshRows: 1, rendererStats: { frustumStats: { culled: 4, total: 10 } } } },
       dom: { visible: 'visible', focused: true, dpr: 1, innerWidth: 1280, innerHeight: 720, canvases: [] },
     };
     const evidence = validateEvidence({

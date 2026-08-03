@@ -227,6 +227,35 @@ const builtinOps: ReadonlyArray<{
     title: 'Set Component',
   },
   {
+    id: 'setSceneOverride', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'number', description: 'SceneInstance synthetic root handle; obtain it from gateway.sceneInstanceReadModel(root) or sceneInstanceForMember(member).' },
+        member: { type: 'number', description: 'Live member handle belonging to root. Entity identity is the engine handle, not a localId.' },
+        component: { type: 'string', description: 'Existing member component name, discovered with gateway.describeComponent().' },
+        field: { type: 'string', description: 'One field to override. Component add/remove, reparent, and entity-reference edits remain fail-closed in v1.' },
+        value: { description: 'New field value; the engine schema validates it and records the override in the instance state.' },
+      },
+      required: ['root', 'member', 'component', 'field', 'value'],
+    },
+    title: 'Set Scene Instance Override',
+  },
+  {
+    id: 'removeSceneOverride', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        root: { type: 'number', description: 'SceneInstance synthetic root handle.' },
+        member: { type: 'number', description: 'Live member handle belonging to root.' },
+        component: { type: 'string' },
+        field: { type: 'string', description: 'Field whose instance override should be reverted to the source value.' },
+      },
+      required: ['root', 'member', 'component', 'field'],
+    },
+    title: 'Revert Scene Instance Override',
+  },
+  {
     id: 'addComponent', domain: 'document',
     argsSchema: {
       type: 'object',
@@ -303,6 +332,21 @@ const builtinOps: ReadonlyArray<{
       required: ['entity'],
     },
     title: 'Duplicate Entity',
+  },
+  {
+    id: 'applyVisualQualityPreset', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        preset: {
+          type: 'string',
+          enum: ['draft', 'balanced', 'cinematic'],
+          description: 'Composes quality fields on existing Camera/light shadow components. It does not change artistic color, direction, or intensity values.',
+        },
+      },
+      required: ['preset'],
+    },
+    title: 'Apply Visual Quality Preset',
   },
   {
     id: 'transaction', domain: 'document',
@@ -528,10 +572,20 @@ const builtinOps: ReadonlyArray<{
           enum: ['save', 'discard', 'cancel'],
           description: 'When the outgoing scene has unsaved edits: save before switching, discard the in-memory edits, or cancel without switching. Omit only when the scene is clean; dirty omission returns scene-switch-dirty.',
         },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal scene-switch OperationRun.' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed scene-switch run being retried; the new requestId remains the public identity of the new attempt.' },
       },
-      required: ['id'],
+      required: ['id', 'requestId'],
     },
     title: 'Switch Scene',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
   { id: 'previewImportedScene', domain: 'session',
     argsSchema: {
@@ -991,6 +1045,27 @@ const builtinOps: ReadonlyArray<{
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
     },
+  },
+  // setAnimationPreview (animation-preview M1): the Inspector preview transport
+  // for AnimationPlayer. SESSION-domain, ledger-only, no undo — preview is
+  // session state, not authored intent. Cataloged so an AI drives the SAME
+  // preview the human transport bar drives (registry razor). The applier reads
+  // the component's reflected playback contract (meta.animation transport field
+  // names) and snapshots the declared runtimeFields before the first preview
+  // write; save/play/selection-change boundaries restore them, so a preview
+  // never pollutes the saved scene.
+  { id: 'setAnimationPreview', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'number', description: 'Entity handle carrying AnimationPlayer in the active edit world. The first preview write snapshots the runtimeFields; leaving the selection / saving / playing restores the authored values.' },
+        playing: { type: 'boolean', description: 'true resumes playback (paused=false); false pauses. At least one of playing/speed/phase is required per dispatch.' },
+        speed: { type: 'number', minimum: 0, maximum: 10, description: 'Playback speed multiplier written to the primary clip slot (transport clipIndex). 0 freezes the slot.' },
+        phase: { type: 'number', minimum: 0, maximum: 1, description: 'Normalized scrub position 0..1, converted to seconds via the bound clip duration. Fails fast (ASSET_NOT_FOUND) when no clip is bound to the primary slot.' },
+      },
+      required: ['entity'],
+    },
+    title: 'Preview Animation Playback',
   },
 
   // ══ transient domain (3 consolidated) ═══════════════════════════════════

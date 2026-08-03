@@ -66,6 +66,10 @@ type PublicProductTypes = {
 void (null as unknown as PublicProductTypes);
 
 describe('@forgeax/editor/product public surface', () => {
+  test('exposes the Gateway-backed product adapter through the facade', () => {
+    expect(typeof (product as Record<string, unknown>).createEditorProductFromGateway).toBe('function');
+  });
+
   test('exposes host-composition runtime constructors through the public subpath', () => {
     const workspace = product.createAssetWorkspace();
     const journal = new product.RunJournal({ scope: 'facade-test' });
@@ -82,5 +86,9 @@ describe('@forgeax/editor/product public surface', () => {
     expect(journal).toBeInstanceOf(product.RunJournal);
     expect(registry).toBeInstanceOf(product.CapabilityRegistry);
     expect(typeof service.handle).toBe('function');
+  });
+
+  test('exposes the browser runtime port through the facade', () => {
+    expect(typeof product.createBrowserGameRuntimePort).toBe('function');
   });
 });

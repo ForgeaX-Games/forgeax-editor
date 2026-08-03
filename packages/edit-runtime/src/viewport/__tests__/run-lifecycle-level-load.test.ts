@@ -89,6 +89,7 @@ function installFakeRaf() {
 function makeFakeRenderer() {
   const drawWorlds: unknown[] = [];
   const instantiateCalls: Array<{ handle: unknown; world: unknown }> = [];
+  const destroyedWorlds: unknown[] = [];
   let disposeCalls = 0;
   let onErrorUnsubscribeCalls = 0;
   const renderer = {
@@ -97,6 +98,11 @@ function makeFakeRenderer() {
       instantiate(handle: unknown, world: unknown) {
         instantiateCalls.push({ handle, world });
         return { ok: true as const, value: 1 };
+      },
+    },
+    store: {
+      destroyWorld(world: unknown) {
+        destroyedWorlds.push(world);
       },
     },
     // Engine #643 migrated the frame loop to composited multi-world rendering:
@@ -118,6 +124,7 @@ function makeFakeRenderer() {
     renderer,
     drawWorlds,
     instantiateCalls,
+    destroyedWorlds,
     get disposeCalls() {
       return disposeCalls;
     },
@@ -349,6 +356,7 @@ describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () =>
       expect(t.gateway.events.filter((e) => e.kind === 'exitPlay').length).toBe(2);
       // renderer survived both cycles.
       expect(t.fr.disposeCalls).toBe(0);
+      expect(t.fr.destroyedWorlds).toEqual([w1, w2]);
     } finally {
       fakeRaf.restore();
     }
@@ -1112,6 +1120,7 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
                 stop: () => ({ ok: true }),
               },
               playWorld: {},
+              disposeWorld: () => {},
               detach: () => {},
             } as never,
           };
@@ -1152,6 +1161,7 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
               stop: () => ({ ok: true }),
             },
             playWorld: {},
+            disposeWorld: () => {},
             detach: () => { detached++; },
           } as never,
         }),

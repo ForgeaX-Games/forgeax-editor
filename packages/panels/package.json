@@ -32,8 +32,10 @@
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-content-browser": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0"
   },

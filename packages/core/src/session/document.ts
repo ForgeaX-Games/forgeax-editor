@@ -32,6 +32,7 @@ import { EngineFacade } from '../io/engine-facade';
 import { assetIO } from '../io/asset-io-facade';
 import { worldRootHandles } from '../store/entity-state';
 import { getComponentSchema, type FieldSchema } from '../scene/schema';
+import { planGroupedArrayPatch } from '../scene/array-edit';
 
 export { createEditSession } from './edit-session';
 
@@ -61,7 +62,7 @@ export function applyCanonicalDocumentEffect(
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'set' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset' | 'patchLiveMaterialParams'
+  'get' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.
@@ -689,6 +690,111 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   return { ok: true, inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore }, created: [] };
 }
 
+// ── SceneInstance override appliers ─────────────────────────────────────────
+//
+// SceneInstance members are engine-derived entities. Their authored edit is
+// still a document operation, but the write must enter the engine's
+// setSceneOverride/removeSceneOverride owner so the runtime state and the
+// mount override collector observe exactly the same fact.
+
+export function applySetSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  const cmd = _cmd as {
+    kind: 'setSceneOverride';
+    root: number;
+    member: number;
+    component: string;
+    field: string;
+    value: unknown;
+    _beforeHadOverride?: boolean;
+    _beforeOverride?: unknown;
+  };
+  const tok = resolveToken(cmd.component);
+  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  const root = toEntity(ctx.alias, cmd.root);
+  const member = toEntity(ctx.alias, cmd.member);
+  const state = ctx.engine.getSceneInstanceState(root);
+  if (!state.ok) return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.root} is not a SceneInstance root`, details: { fieldPath: `SceneInstance(${cmd.root})`, reason: 'scene-instance-root-required' } } };
+  const localId = state.value.entityToLocalId.get(member);
+  if (localId === undefined) {
+    return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.member} is not a member of SceneInstance ${cmd.root}`, details: { fieldPath: `SceneInstance(${cmd.root}).member`, reason: 'member-not-in-instance' } } };
+  }
+  const current = ctx.engine.get(member, tok);
+  if (!current.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.member}` } };
+  const before = clone(current.value) as Record<string, unknown>;
+  const field = getComponentSchema(cmd.component)?.fields.find((candidate) => candidate.key === cmd.field);
+  let patch: Record<string, unknown> = { [cmd.field]: cmd.value };
+  if (field?.arrayMeta !== undefined) {
+    const planned = planGroupedArrayPatch({ component: cmd.component, field: cmd.field, value: cmd.value }, before);
+    if (!planned.ok) {
+      return { ok: false, error: { code: 'SET_FAILED', hint: planned.hint, details: { fieldPath: planned.fieldPath, reason: planned.reason } } };
+    }
+    patch = planned.patch;
+  }
+  const validation = validateComponentWrite(cmd.component, patch, before, 'SET_FAILED');
+  if (!validation.ok) return { ok: false, error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details } };
+  const resolved = resolveSharedFields(ctx.engine, cmd.component, patch);
+  if (!resolved.ok) return { ok: false, error: { code: 'SET_FAILED', hint: resolved.hint } };
+  const previous = new Map<string, unknown>();
+  for (const fieldName of Object.keys(patch)) {
+    const existing = state.value.overrides.get(localId)?.get(`${cmd.component}:${fieldName}`);
+    if (existing !== undefined) previous.set(fieldName, clone(existing.value));
+  }
+  const applied: string[] = [];
+  for (const fieldName of Object.keys(patch)) {
+    const result = ctx.engine.setSceneOverride(root, member, tok, fieldName, resolved.value[fieldName]);
+    if (!result.ok) {
+      for (const appliedField of [...applied].reverse()) {
+        const oldValue = previous.get(appliedField);
+        if (oldValue === undefined) ctx.engine.removeSceneOverride(root, member, tok, appliedField);
+        else ctx.engine.setSceneOverride(root, member, tok, appliedField, oldValue);
+      }
+      return { ok: false, error: { code: 'SET_FAILED', hint: String(result.error), details: { fieldPath: `${cmd.component}.${fieldName}`, reason: 'engine-scene-override-rejected' } } };
+    }
+    applied.push(fieldName);
+  }
+  const inverseCommands: EditorOp[] = Object.keys(patch).map((fieldName) => {
+    const oldValue = previous.get(fieldName);
+    return oldValue === undefined
+      ? { kind: 'removeSceneOverride', root: cmd.root, member: cmd.member, component: cmd.component, field: fieldName }
+      : { kind: 'setSceneOverride', root: cmd.root, member: cmd.member, component: cmd.component, field: fieldName, value: oldValue };
+  });
+  const inverse: EditorOp = inverseCommands.length === 1
+    ? inverseCommands[0]!
+    : { kind: 'transaction', label: `restore override ${cmd.component} ×${inverseCommands.length}`, commands: [...inverseCommands].reverse() };
+  return { ok: true, inverse, created: [] };
+}
+
+export function applyRemoveSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  const cmd = _cmd as {
+    kind: 'removeSceneOverride';
+    root: number;
+    member: number;
+    component: string;
+    field: string;
+  };
+  const tok = resolveToken(cmd.component);
+  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  const root = toEntity(ctx.alias, cmd.root);
+  const member = toEntity(ctx.alias, cmd.member);
+  const state = ctx.engine.getSceneInstanceState(root);
+  if (!state.ok) return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.root} is not a SceneInstance root`, details: { fieldPath: `SceneInstance(${cmd.root})`, reason: 'scene-instance-root-required' } } };
+  const localId = state.value.entityToLocalId.get(member);
+  if (localId === undefined) {
+    return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.member} is not a member of SceneInstance ${cmd.root}`, details: { fieldPath: `SceneInstance(${cmd.root}).member`, reason: 'member-not-in-instance' } } };
+  }
+  const existing = state.value.overrides.get(localId)?.get(`${cmd.component}:${cmd.field}`);
+  if (existing === undefined) {
+    return { ok: false, error: { code: 'SET_FAILED', hint: `no SceneInstance override exists for ${cmd.component}.${cmd.field} on entity ${cmd.member}`, details: { fieldPath: `${cmd.component}.${cmd.field}`, reason: 'override-not-found' } } };
+  }
+  const result = ctx.engine.removeSceneOverride(root, member, tok, cmd.field);
+  if (!result.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(result.error), details: { fieldPath: `${cmd.component}.${cmd.field}`, reason: 'engine-scene-override-rejected' } } };
+  return {
+    ok: true,
+    inverse: { kind: 'setSceneOverride', root: cmd.root, member: cmd.member, component: cmd.component, field: cmd.field, value: clone(existing.value) },
+    created: [],
+  };
+}
+
 // ── shared<T> front-door binder (M7 / AC-10, plan-strategy D-5) ──────────────
 // A catalogued asset GUID string written into a shared<T> component field
 // (AnimationPlayer.clips, MeshFilter.assetHandle, MeshRenderer.materials, …) must
@@ -1021,6 +1127,10 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       return applyReparent(ctx, cmd);
     case 'setComponent':
       return applySetComponent(ctx, cmd);
+    case 'setSceneOverride':
+      return applySetSceneOverride(ctx, cmd);
+    case 'removeSceneOverride':
+      return applyRemoveSceneOverride(ctx, cmd);
     case 'addComponent':
       return applyAddComponent(ctx, cmd);
     case 'removeComponent':

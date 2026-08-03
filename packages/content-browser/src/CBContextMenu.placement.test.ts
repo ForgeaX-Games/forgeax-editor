@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
 import { buildAssetContextMenu } from './CBContextMenu';
 import type { CBAsset, CBSelection } from './types';
+import type { EntityHandle } from '@forgeax/editor-core';
 
 function asset(kind: string, authoring = authoringCapabilityForAssetKind(kind)): CBAsset {
   return {
@@ -42,5 +43,13 @@ describe('Content Browser placement capability projection', () => {
       binding: authoringCapabilityForAssetKind('material').binding,
     });
     expect(addToSceneItem(target)?.disabled).toBe(true);
+  });
+
+  it('captures the entity before asset selection clears the entity domain', () => {
+    const target = asset('mesh');
+    const selection: CBSelection = { items: [target], primary: target };
+    const assign = buildAssetContextMenu(target, selection, [target], undefined, 42 as EntityHandle)
+      .find((item) => item.id === 'assign');
+    expect(assign).toBeDefined();
   });
 });

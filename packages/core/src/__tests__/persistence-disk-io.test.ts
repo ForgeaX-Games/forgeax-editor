@@ -31,6 +31,9 @@
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose).
 
 import { describe, expect, it } from 'bun:test';
+import { World } from '@forgeax/engine-ecs';
+import { Name, Transform } from '@forgeax/engine-scene';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
   createDiskIo,
   type DiskIoDeps,
@@ -119,6 +122,63 @@ describe('createDiskIo — factory shape + deps boundary (AC-02)', () => {
   });
 });
 
+describe('instantiateSceneRefUnderWorld — normalized mounts remain saveable', () => {
+  it('preserves the loaded scene GUID after animation compatibility normalization', async () => {
+    const world = new World();
+    const registry = new AssetRegistry({} as never);
+    const childGuid = '11111111-1111-4111-8111-111111111111';
+    const topGuid = '22222222-2222-4222-8222-222222222222';
+    const child = {
+      kind: 'scene' as const,
+      entities: [
+        {
+          localId: 0 as never,
+          components: { Name: { value: 'bed-mesh' }, Transform: { pos: [0, 0, 0] } },
+        },
+      ],
+    };
+    expect(registry.catalog(childGuid, child).ok).toBe(true);
+
+    const wrapper = world.spawn(
+      { component: Name, data: { value: 'bed.glb' } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
+    );
+    expect(wrapper.ok).toBe(true);
+    if (!wrapper.ok) return;
+
+    const ctx = createScenePersistenceContext();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneEntities = [wrapper.value];
+    const gateway = makeFakeGateway({ world, registry }).gateway;
+    const deps: DiskIoDeps = {
+      ctx,
+      gateway,
+      fetch: async () => new Response('{}', { status: 200 }),
+      fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+      resolveGamePath: (rel) => `/games/g1/${rel}`,
+      notifyDocChanged: () => {},
+    };
+    const io = createDiskIo(deps);
+
+    const mounted = await io.instantiateSceneRefUnderWorld(childGuid, wrapper.value as number);
+    expect(mounted).not.toBeNull();
+
+    const serialized = io.worldToPack(gateway.doc, topGuid);
+    expect(serialized).not.toBeNull();
+    if (serialized === null) return;
+    const pack = JSON.parse(serialized) as {
+      assets: Array<{
+        kind?: string;
+        refs?: string[];
+        payload?: { mounts?: Array<{ source: number }> };
+      }>;
+    };
+    const sceneEntry = pack.assets.find((asset) => asset.kind === 'scene');
+    expect(sceneEntry?.refs).toEqual([childGuid]);
+    expect(sceneEntry?.payload?.mounts?.map((mount) => mount.source)).toEqual([0]);
+  });
+});
+
 describe('scenePath — reads ctx via deps, no network (AC-02)', () => {
   it('returns null for the default game slug WITHOUT resolving a path or hitting net', () => {
     let resolveCalls = 0;
@@ -198,6 +258,38 @@ describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)',
     expect(result).toMatchObject({ ok: false, error: { code: 'save-serialization-failed' } });
     expect(net.fetchCalls.length).toBe(0);
     expect(net.fetchTimeoutCalls.length).toBe(0);
+  });
+});
+
+describe('worldToPack — preserves tracked scene roots when live root discovery is incomplete', () => {
+  it('serializes a loaded root even when it has no Name component', () => {
+    const world = new World();
+    const spawned = world.spawn({
+      component: Transform,
+      data: { pos: [1, 2, 3] },
+    });
+    expect(spawned.ok).toBe(true);
+    if (!spawned.ok) return;
+
+    const ctx = createScenePersistenceContext();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneEntities = [spawned.value];
+    const gateway = makeFakeGateway({ world, registry: new AssetRegistry({} as never) }).gateway;
+    const deps: DiskIoDeps = {
+      ctx,
+      gateway,
+      fetch: async () => new Response('{}', { status: 200 }),
+      fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+      resolveGamePath: (rel) => `/games/g1/${rel}`,
+      notifyDocChanged: () => {},
+    };
+
+    const serialized = createDiskIo(deps).worldToPack(gateway.doc, 'aaaaaaaa-bbbb-4ccc-dddd-000000000001');
+    expect(serialized).not.toBeNull();
+    const parsed = JSON.parse(serialized!);
+    const scene = parsed.assets.find((asset: { kind?: string }) => asset.kind === 'scene');
+    expect(scene.payload.entities).toHaveLength(1);
+    expect(scene.payload.entities[0].components.Transform.pos).toEqual([1, 2, 3]);
   });
 });
 

@@ -13,12 +13,20 @@
 
 // ── UI / Components ──
 export { ViewportBar } from './ViewportBar';
-export { ViewportHints } from './ViewportHints';
 
 // ── Engine ──
 export { createViewport } from './viewport/viewport';
 export { projectGatewayActions, projectGatewayOps } from './gateway-action-projection';
 export type { GatewayActionSource, ProjectedGatewayAction, RegisterGatewayAction } from './gateway-action-projection';
+
+// Public host seam for a managed Studio page. The port wraps the existing
+// RunLifecycle; it does not create a second World or own the editor session.
+export { createBrowserGameRuntimePort } from './runtime/browser-game-runtime-port';
+export type {
+  BrowserGameRuntimePort,
+  BrowserGameRuntimePortOptions,
+  BrowserRuntimeAvailability,
+} from './runtime/browser-game-runtime-port';
 
 // ── Hot reload (two-tier) ──
 export { applyScriptChange, initHotReload } from './hot-reload';

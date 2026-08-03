@@ -36,6 +36,8 @@ import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 import type { HandlePair } from './handle-pair';
 import { sessionAppliers } from '../io/appliers';
+import type { SessionApplierCtx } from '../io/appliers';
+import { restoreAnimationPreviewsOutside } from '../session/animation-preview';
 // Single-active-selection-domain: selecting an entity clears the asset/path
 // domains so Delete / blank-click resolve to exactly one target. These are
 // direct clears (not dispatched, guarded on non-empty) through the shared seam;
@@ -154,8 +156,18 @@ export function isSelected(handle: EntityHandle): boolean {
 // ── Session appliers (D-1): the mutation bodies, registered into the session
 // table. These are the ONLY code that touches selectionSet; UI/AI dispatch ops
 // that route here.
-function applySetSelection(op: EditorOp): { ok: true } {
+//
+// Animation-preview defense (M1): leaving an entity's selection ends its
+// preview session — restore the snapshotted runtime fields (times/speeds/
+// paused) for every entity NOT in the next selection, through the applier
+// ctx's engine write face.
+function restorePreviewsLeavingSelection(engine: SessionApplierCtx['engine'] | undefined, nextHandles: ReadonlySet<EntityHandle>): void {
+  if (engine === undefined) return;
+  restoreAnimationPreviewsOutside(engine, nextHandles as ReadonlySet<number>);
+}
+function applySetSelection(op: EditorOp, applierCtx?: SessionApplierCtx): { ok: true } {
   const id = (op as { id: EntityHandle | null }).id;
+  restorePreviewsLeavingSelection(applierCtx?.engine, id === null ? new Set() : new Set([id]));
   if (id === null) {
     if (selectionSet.size !== 0) { selectionSet = new Set(); emitSelection(); }
   } else if (!(selectionSet.size === 1 && derivedHandleSet.has(id))) {
@@ -168,7 +180,7 @@ function applySetSelection(op: EditorOp): { ok: true } {
   }
   return { ok: true };
 }
-function applyToggleSelection(op: EditorOp): { ok: true } {
+function applyToggleSelection(op: EditorOp, applierCtx?: SessionApplierCtx): { ok: true } {
   const id = (op as unknown as { id: EntityHandle }).id;
   const next = new Set(selectionSet);
   // Find the existing pair for this handle (if any) in the current set.
@@ -180,12 +192,14 @@ function applyToggleSelection(op: EditorOp): { ok: true } {
     // Re-insert so a toggled-on handle becomes the LAST element (primary).
     next.add(mint(id));
   }
+  restorePreviewsLeavingSelection(applierCtx?.engine, new Set([...next].map((p) => p.entity)));
   selectionSet = next;
   emitSelection();
   return { ok: true };
 }
-function applySetSelectionMany(op: EditorOp): { ok: true } {
+function applySetSelectionMany(op: EditorOp, applierCtx?: SessionApplierCtx): { ok: true } {
   const ids = (op as unknown as { ids: EntityHandle[] }).ids;
+  restorePreviewsLeavingSelection(applierCtx?.engine, new Set(ids));
   selectionSet = new Set(ids.map(mint));
   emitSelection();
   return { ok: true };

@@ -73,8 +73,10 @@ Run these calls in order. Each later call depends on the previous one succeeding
 | 4. Mutate / act | `gateway.dispatch(op, 'ai')` | Result is `{ ok: true }`; for async ops, await `gateway.waitOperationRun(requestId)` |
 | 5. Diagnose | `error.code`, `error.hint`, `gateway.trace.last()` | Retry only after reading the structured error |
 
-For standalone editor use relay `:15296`; Studio owns `:15295`. If a custom
-`FORGEAX_BRIDGE_PORT` is set, use the same value for the dev stack and CLI.
+For standalone editor use relay `:15296`. Studio no longer owns a `:15295` eval relay:
+use the server-side typed `editor_transport` host tool or `/api/editor/transport`, which
+executes in the connected in-process Editor realm. If a custom `FORGEAX_BRIDGE_PORT` is set,
+use the same value for the standalone dev stack and CLI.
 The health response also reports `evalTimeoutMs`; this is the relay wait budget,
 not an operation completion signal.
 
@@ -504,18 +506,25 @@ const rigged = query({ with: ['Skin'] });   // rows now include the Fox subtree 
 > (`addComponent`, **not** `setComponent` — `setComponent` only patches a component that already exists).
 > `describeComponent('AnimationPlayer')` gives the field schema (`clips/times/weights/speeds/paused/looping`).
 > **Clip binding and mount-member round-trip:**
-> 1. **Bind the clip GUID with `bindAssetRef`, NOT raw `addComponent`.** `clips` is
->    `array<shared<AnimationClip>,4>`; passing a clip **GUID** to `addComponent`/`setComponent` is silently
->    coerced to handle `0` (they pass component data raw). Use the front-door binder instead:
+> 1. **Bind the clip GUID with `bindAssetRef`, NOT raw `addComponent`.** `clips` belongs to
+>    a producer-declared `slots` group that keeps `clips`, `times`, `weights`, and `speeds` the same length;
+>    passing a clip **GUID** to `addComponent`/`setComponent` is silently coerced to handle `0` (they pass
+>    component data raw). Use the front-door binder instead:
 >    `dispatch({ kind:'bindAssetRef', entity, component:'AnimationPlayer', field:'clips', assetType:'AnimationClip', guids:[clipGuid], slot:0, requestId: crypto.randomUUID() })`
 >    — it resolves the GUID (`loadByGuid`→`allocSharedRef`) and writes the live handle. (First `addComponent`
 >    an `AnimationPlayer` with the scalar params — `weights/speeds/paused/looping` — then `bindAssetRef` the
->    `clips`; wait on the same requestId for terminal success/error.) This closes the old "no clip-binding leg"
->    gap for **owned** entities (solo round-11).
-> 2. **Mount-member component add, field patch, and shared refs round-trip.** The engine collector folds
->    these edits into the parent authored pack's `mounts[].overrides[]`. Component removal, member deletion,
->    structural reparent, and entity-reference patches are not representable in v1 and are rejected by the
->    editor before mutating the World.
+>    `clips`; wait on the same requestId for terminal success/error. For a second clip use `slot:1`; the
+>    binder pads the parallel columns with their producer defaults before one document write. A bad or
+>    uncatalogued GUID reaches a terminal structured `ASSET_NOT_FOUND` result without changing the arrays.
+>    This closes the old "no clip-binding leg" gap for **owned** and mounted entities (solo rounds 11 and
+>    R1-04).
+> 2. **Mount-member component add, field patch, and shared refs round-trip.** The public `setComponent`
+>    door automatically projects a mounted member's ordinary patch onto the engine-owned
+>    `setSceneOverride` path, so AI and Inspector callers do not need a private projection. The document
+>    applier expands a `slots` field into one complete parallel-group patch with rollback/inverse semantics.
+>    The engine collector folds these edits into the parent authored pack's `mounts[].overrides[]`.
+>    Component removal, member deletion, structural reparent, and entity-reference patches are not
+>    representable in v1 and are rejected by the editor before mutating the World.
 
 ### Discover component names + field schemas (before you spawn / setComponent)
 
@@ -553,6 +562,101 @@ const miss = gateway.describeComponent('Postion');   // typo
 > `schema` values are the engine's type keywords as strings (`'array<f32, 3>'`, `'f32'`,
 > `'shared<MeshAsset>'`, `'entity'`, …). `defaults` is present only when the component declared
 > layer-2 defaults; its vector values are plain `number[]` (JSON-safe), not live TypedArrays.
+
+### Author physics through the component schema
+
+Physics is authored with the same document operations as every other engine component. There is no
+physics-only mutation registry to keep in sync with the Inspector:
+
+| Intent | Component facts | Gateway shape |
+|:--|:--|:--|
+| Fixed/static scenery | `RigidBody.type = 0` (`static`) or `Collider` alone for an implicit fixed body | `spawnEntity` / `addComponent` |
+| Dynamic body | `RigidBody.type = 1` (`dynamic`), mass/damping/CCD | `spawnEntity` / `setComponent` |
+| Kinematic character | `RigidBody.type = 2` (`kinematic`) + capsule `Collider` + `CharacterController` | `spawnEntity` / `setComponent` |
+| Collision shape/filter | `Collider.shape = 0/1/2` (`cuboid`/`sphere`/`capsule`), `halfExtents`, `radius`, `halfHeight`, friction/restitution, sensor, collision/solver groups | `spawnEntity` / `setComponent` |
+
+```ts
+const rb = gateway.describeComponent('RigidBody');
+const collider = gateway.describeComponent('Collider');
+const controller = gateway.describeComponent('CharacterController');
+// Use rb.enums.type and collider.enums.shape; do not guess numeric enum values.
+
+gateway.dispatch({
+  kind: 'spawnEntity',
+  name: 'Physics Character',
+  components: {
+    Transform: { pos: [0, 1, 0] },
+    RigidBody: { type: 2 },
+    Collider: { shape: 2, radius: 0.3, halfHeight: 0.5 },
+    CharacterController: { maxSlopeClimbDeg: 40, snapToGroundDist: 0.25 },
+  },
+}, 'ai');
+```
+
+> [!CAUTION]
+> `restitution`, `friction`, `isSensor`, `collisionGroups`, and `solverGroups` belong to
+> `Collider`; `ccdEnabled`, `mass`, `gravityScale`, and damping belong to `RigidBody`. A wrong field
+> is rejected as a structured `SPAWN_FAILED` / `SET_FAILED` error before mutation. Fixed arrays such as
+> `Collider.halfExtents` require exactly three numbers and report `details.fieldPath` on failure.
+
+Collision status is a Play-only read projection. Query `CollidingEntities` after `play` reaches the
+terminal `gateway.playPhase === 'play'`; it is transient, is stripped from authored packs, and must not
+be added to a scene as a persistence workaround. In Edit, selecting an entity with `Collider` shows the
+selection-derived wireframe in the viewport; the DebugDraw lines are transient chrome and create no
+ledger entry or pack data. The current engine contract has no single `compound` field: a compound-shaped
+authored arrangement is a parent with multiple collider-bearing child entities; a true single-body
+compound requirement belongs to the Engine physics contract rather than an editor-side shadow format.
+
+### Author spatial audio through the component schema
+
+Audio uses the same Gateway document path. Discover the producer contract first, import a real audio
+source through the correlated `importAsset` run, then author a listener and source explicitly. An audio
+catalog row may truthfully report no generic drag-placement capability; that does not block the typed
+`AudioSource.clip` binding path below.
+
+```ts
+const sourceSchema = gateway.describeComponent('AudioSource');
+const listenerSchema = gateway.describeComponent('AudioListener');
+// AudioSource: clip shared<AudioClipAsset>, playing bool, loop bool, volume f32,
+// spatialBlend f32, bus string. AudioListener is an empty marker component.
+
+const listener = gateway.dispatch({
+  kind: 'spawnEntity',
+  name: 'Main Audio Listener',
+  components: { Transform: { pos: [0, 1, 4] }, AudioListener: {} },
+}, 'ai');
+const source = gateway.dispatch({
+  kind: 'spawnEntity',
+  name: 'Spatial Music Source',
+  components: {
+    Transform: { pos: [0, 1, 0] },
+    AudioSource: { playing: true, loop: true, volume: 0.4, spatialBlend: 1, bus: 'music' },
+  },
+}, 'ai');
+
+const audio = gateway.assetCatalog().find((asset) => asset.kind === 'audio');
+if (audio && source.ok) {
+  const bind = gateway.dispatch({
+    kind: 'bindAssetRef', entity: source.result.created[0],
+    component: 'AudioSource', field: 'clip', assetType: 'AudioClipAsset',
+    guids: [audio.guid], requestId: 'audio-bind-1',
+  }, 'ai');
+  const terminal = bind.ok ? await gateway.waitOperationRun('audio-bind-1') : bind;
+}
+```
+
+`bus` uses the engine audio buses `sfx` and `music`; `spatialBlend` is the 2D↔3D mix, while `playing`,
+`loop`, and `volume` are authored runtime controls. Use the Inspector to select the same source: it
+projects the clip GUID, booleans, numeric controls, and bus from the live component and dispatches the
+same `setComponent`/`bindAssetRef` operations. Save with `saveDocToDisk`, reopen, and query both
+`AudioSource` and `AudioListener` before Play. During Play, query those components again and require
+`playPhase === 'play'`; Stop must return to Edit without leaving a second audio world or listener.
+
+An invalid scalar (for example `AudioSource.volume: 'loud'`) fails before mutation with
+`SET_FAILED` and `details.fieldPath: 'AudioSource.volume'`; correct the value and retry through
+`setComponent`. Do not emulate decoder, device, bus, or spatial behavior in editor code. The empty
+`AudioListener` marker is authored state and must survive scene-pack serialization; only components
+declared `transient: true` are derived and excluded from save.
 
 > [!IMPORTANT]
 > **Camera post-processing lives on the `Camera` component, NOT `PostProcessParams`.** The knobs you

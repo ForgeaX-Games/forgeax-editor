@@ -7,8 +7,8 @@
 
 import { describe, expect, it, beforeAll } from 'bun:test';
 import { ChildOf, Children } from '@forgeax/engine-scene';
-import { getRegisteredComponents } from '@forgeax/engine-ecs';
-import { isComponentHidden, _resetSchemaCache } from '../scene/schema';
+import { defineComponent, getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { getComponentSchema, isComponentHidden, _resetSchemaCache } from '../scene/schema';
 import {
   applyEditorComponentMeta,
   editorMetaOf,
@@ -51,10 +51,43 @@ describe('editor component meta overlay', () => {
     expect(isComponentHidden('MeshRenderer')).toBe(false);
   });
 
-  it('config SSOT lists exactly the internal components as hidden', () => {
-    expect(Object.keys(EDITOR_COMPONENT_META).sort()).toEqual(['ChildOf', 'Children', 'Entity']);
-    for (const meta of Object.values(EDITOR_COMPONENT_META)) {
-      expect(meta.hidden).toBe(true);
+  it('config SSOT marks exactly the internal components as hidden', () => {
+    // The overlay grew past hiding with the animation-preview M1 contract
+    // (AnimationPlayer bespoke+animation keys); the HIDDEN set stays the three
+    // internal components — everything else is a non-hiding overlay entry.
+    const hidden = Object.entries(EDITOR_COMPONENT_META)
+      .filter(([, meta]) => meta.hidden === true)
+      .map(([name]) => name)
+      .sort();
+    expect(hidden).toEqual(['ChildOf', 'Children', 'Entity']);
+  });
+
+  it('AnimationPlayer carries the bespoke + animation contract (M1)', () => {
+    const meta = EDITOR_COMPONENT_META.AnimationPlayer;
+    expect(meta).toBeDefined();
+    expect(meta!.hidden).toBeUndefined();
+    expect(meta!.bespoke?.editorId).toBe('animation-transport');
+    expect(meta!.animation?.transport).toMatchObject({
+      clips: 'clips', times: 'times', weights: 'weights',
+      speeds: 'speeds', paused: 'paused', clipIndex: 0,
+    });
+    expect(meta!.animation?.runtimeFields).toEqual(['times', 'speeds', 'paused']);
+  });
+
+  // Regression (animation-preview PR #463 CI red): the apply guard was ONE-SHOT
+  // — a first apply running before AnimationPlayer registered skipped it and
+  // latched `_applied`, so the component NEVER received its overlay and the
+  // bespoke transport bar rendered null (import-order flaky). The guard is now
+  // per-name: late-registered components are injected on a later call.
+  it('late-registered components still receive the overlay (per-name guard)', () => {
+    const name = 'R1_OverlayLateRegistrationFixture';
+    if (resolveComponent(name) === undefined) {
+      // First apply while the fixture is NOT registered — skipped, must not latch.
+      applyEditorComponentMeta({ [name]: { bespoke: { editorId: 'late-fixture-editor' } } });
+      defineComponent(name, { value: 'f32' });
     }
+    applyEditorComponentMeta({ [name]: { bespoke: { editorId: 'late-fixture-editor' } } });
+    _resetSchemaCache();
+    expect(getComponentSchema(name)?.bespoke?.editorId).toBe('late-fixture-editor');
   });
 });

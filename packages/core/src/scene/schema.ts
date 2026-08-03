@@ -24,6 +24,7 @@ import type {
 } from '@forgeax/engine-ecs';
 import { getRegisteredComponents, RELATIONSHIP_COMPONENTS } from '@forgeax/engine-ecs';
 import { applyEditorComponentMeta, editorMetaOf } from './editor-component-meta';
+import type { AnimationComponentMeta, AnimationTransportDescriptor } from './editor-component-meta';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public types (unchanged API surface)
@@ -70,6 +71,11 @@ export interface ComponentSchema {
   name: string;
   fields: FieldSchema[];
   bespoke?: { editorId: string; hint?: string };
+  /** Playback contract for animation components (animation-preview M1).
+   *  Engine `meta.animation` (producer-owned, long-term SSOT) wins; the editor
+   *  overlay `meta.editor.animation` is the interim source until the producer
+   *  declares it. */
+  animation?: AnimationComponentMeta;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -333,7 +339,19 @@ function reflectComponent(comp: Component): ComponentSchema | null {
   }
 
   if (editorFields.length === 0) return null;
-  return { name, fields: editorFields };
+  // Component-level meta wiring (animation-preview M1): the bespoke Inspector
+  // editor id comes from the editor overlay; the playback contract prefers the
+  // producer-owned engine `meta.animation` and falls back to the editor overlay's
+  // interim copy (same shape — migration is a pure key move).
+  const overlay = editorMetaOf(comp);
+  const engineAnimation = (comp.meta as { animation?: AnimationComponentMeta } | undefined)?.animation;
+  const animation = engineAnimation ?? overlay?.animation;
+  return {
+    name,
+    fields: editorFields,
+    ...(overlay?.bespoke !== undefined ? { bespoke: overlay.bespoke } : {}),
+    ...(animation !== undefined ? { animation } : {}),
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -456,6 +474,17 @@ export function getComponentSchema(name: string): ComponentSchema | undefined {
 
 export function fieldSchema(component: string, key: string): FieldSchema | undefined {
   return getComponentSchema(component)?.fields.find((f) => f.key === key);
+}
+
+/** The playback contract an animation component declares (engine meta.animation
+ *  preferred, editor overlay interim), or undefined for non-animation components. */
+export function getAnimationComponentMeta(name: string): AnimationComponentMeta | undefined {
+  return getComponentSchema(name)?.animation;
+}
+
+/** The transport field-name descriptor for a component's generic preview UI. */
+export function getTransportDescriptor(name: string): AnimationTransportDescriptor | undefined {
+  return getComponentSchema(name)?.animation?.transport;
 }
 
 export function listComponentSchemas(): ComponentSchema[] {

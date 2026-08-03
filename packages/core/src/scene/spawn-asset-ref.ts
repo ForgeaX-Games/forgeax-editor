@@ -3,11 +3,15 @@
  * Single-realm: panels and viewport share the same host window.
  */
 import { resolveComponent } from '@forgeax/engine-ecs';
+import { walkMaterialPassesOverSharedRefs } from '@forgeax/engine-assets-runtime';
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
 import { recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { planAssetPlacement } from '../assets/asset-placement-plan';
 import { sessionAppliers } from '../io/appliers';
+import { syncAnimationSlotColumns, type AnimationSlotSyncIo } from './animation-slot-sync';
 import { broadcastAssetsError } from '../store/assets-error-bus';
+import { fieldSchema } from './schema';
+import { planGroupedArrayPatch } from './array-edit';
 import type { EntityHandle } from './scene-types';
 import type { AssetChatRef } from '../io/cross-panel-types';
 import type { CommandError } from '../types';
@@ -126,12 +130,12 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
 }
 
 /**
- * After a SceneInstance mount, find entities that carry Skin but lack
- * AnimationPlayer and add a default AnimationPlayer to each. This lets
- * the user immediately bind animation clips without needing to know which
- * entity inside the mount subtree is the skinned mesh. The collect fold
- * (`foldMountOverrides`) captures the runtime-added component as a
- * MountOverride automatically on save.
+ * After a SceneInstance mount, ensure every Skin entity has an AnimationPlayer
+ * whose four direct-play slot columns have one shared length. This covers both
+ * players we add for authoring convenience and players baked by an importer:
+ * imported clips can arrive with `clips=[handle]` while the runtime columns are
+ * still empty. The collect fold (`foldMountOverrides`) captures the runtime
+ * component repair as a MountOverride automatically on save.
  */
 function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
   try {
@@ -139,6 +143,7 @@ function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
       getSceneInstanceState(root: unknown): { ok: boolean; value?: { entityToLocalId: Map<unknown, unknown> } };
       get(entity: unknown, token: unknown): { ok: boolean; value?: unknown };
       addComponent(entity: unknown, data: { component: unknown; data: unknown }): { ok: boolean };
+      set(entity: unknown, token: unknown, data: Record<string, unknown>): { ok: boolean };
     };
     if (!w) return;
 
@@ -153,13 +158,41 @@ function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
       const hasSkin = w.get(member, skinToken);
       if (!hasSkin.ok) continue;
       const hasAnim = w.get(member, animToken);
-      if (hasAnim.ok) continue;
+      if (hasAnim.ok) {
+        const player = (hasAnim.value ?? {}) as Record<string, unknown>;
+        const clips = player.clips as { length?: unknown } | undefined;
+        const count = typeof clips?.length === 'number' ? clips.length : 0;
+        const times = normalizeAnimationSlots(player.times, count, 0);
+        const weights = normalizeAnimationSlots(player.weights, count, 1);
+        const speeds = normalizeAnimationSlots(player.speeds, count, 1);
+        const timesLength = slotLength(player.times);
+        const weightsLength = slotLength(player.weights);
+        const speedsLength = slotLength(player.speeds);
+        if (timesLength !== count || weightsLength !== count || speedsLength !== count) {
+          const r = w.set(member, animToken, { times, weights, speeds });
+          if (r.ok) {
+            console.info('[spawn-asset] normalized AnimationPlayer slots on Skin entity', member, {
+              clips: count,
+              times: times.length,
+              weights: weights.length,
+              speeds: speeds.length,
+            });
+          }
+        }
+        continue;
+      }
 
       const r = w.addComponent(member, {
         component: animToken,
         data: {
-          weights: new Float32Array([1, 0, 0, 0]),
-          speeds: new Float32Array([1, 1, 1, 1]),
+          // An auto-created player has no authored clip yet. Keep all four
+          // parallel slot columns at length 0; writing weights/speeds with
+          // four defaults while clips/times stay empty creates the guarded
+          // 0/0/4/4 mismatch on the first world.update().
+          clips: [],
+          times: new Float32Array(0),
+          weights: new Float32Array(0),
+          speeds: new Float32Array(0),
           paused: false,
           looping: true,
         },
@@ -171,6 +204,21 @@ function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
   } catch (e) {
     console.warn('[spawn-asset] autoAddAnimationPlayerToSkinEntities failed:', e);
   }
+}
+
+function slotLength(value: unknown): number {
+  const length = (value as { length?: unknown } | undefined)?.length;
+  return typeof length === 'number' ? length : 0;
+}
+
+function normalizeAnimationSlots(value: unknown, count: number, fallback: number): Float32Array {
+  const result = new Float32Array(count);
+  const source = value as ArrayLike<unknown> | undefined;
+  for (let i = 0; i < count; i++) {
+    const next = source?.[i];
+    result[i] = typeof next === 'number' && Number.isFinite(next) ? next : fallback;
+  }
+  return result;
 }
 
 type SceneMountCleanup =
@@ -305,7 +353,7 @@ sessionAppliers.set('addSceneAssetToScene', (op) => {
 });
 
 // ── Session applier: bindAssetRef (ledger-only, no undo on the resolve; the
-// resulting setComponent IS a document op that undoes) ─────────────────────────
+// resulting document write IS a document op that undoes) ────────────────────────
 // solo round-11 / P5 rendering-authoring convergence. WHY THIS EXISTS (the missing
 // front-door projection): `addComponent`/`setComponent` pass their value/patch RAW
 // to the engine — no shared<T> GUID->handle resolution — so a catalogued GUID
@@ -315,8 +363,9 @@ sessionAppliers.set('addSceneAssetToScene', (op) => {
 // resolve.ts) — reachable by a drag gesture, NOT by an AI dispatch. This op is the
 // general, dispatchable binder: loadByGuid -> allocSharedRef (resolveAssetRefToHandle,
 // the same engine spine addSceneAssetToScene uses) -> write the live handle(s) into
-// the field via a DOCUMENT setComponent (so the bind is undoable + round-trips like
-// any owned-entity component write). One op closes the whole shared<T> class.
+// the field via a DOCUMENT setComponent or setSceneOverride (so the bind is
+// undoable + round-trips like any owned-entity or mount-member write). One op
+// closes the whole shared<T> class.
 //
 // Request-correlated async (R0-05C): the applier returns the completion promise to
 // the Gateway, which owns the accepted/running/terminal OperationRun. Writes onto
@@ -337,6 +386,86 @@ type BindAssetRefRunResult = {
 type BindAssetRefEffect =
   | { ok: true; result: BindAssetRefRunResult }
   | { ok: false; error: CommandError };
+
+/**
+ * The renderer has a bidirectional Skin <-> pbr-skin contract. Keep the same
+ * contract at the bind gateway so a human context-menu action and an AI
+ * dispatch cannot author a combination that immediately enters the RHI error
+ * loop. This is deliberately a pre-write check: a rejected bind must not
+ * allocate a document mutation or leave a half-updated field behind.
+ */
+function hasActiveSkinBinding(entity: number): boolean {
+  try {
+    const world = gateway.doc.world;
+    const skin = resolveComponent('Skin');
+    if (!world || !skin) return false;
+    const result = world.get(entity as EntityHandle, skin);
+    if (!result.ok || !result.value) return false;
+    const skeleton = (result.value as { skeleton?: unknown }).skeleton;
+    return typeof skeleton === 'number' && skeleton !== 0;
+  } catch {
+    return false;
+  }
+}
+
+function firstMaterialShader(handle: number): string | undefined {
+  try {
+    const world = gateway.doc.world;
+    const registry = gateway.doc.registry;
+    if (!world || !registry) return undefined;
+    const result = walkMaterialPassesOverSharedRefs(world, handle as never, registry);
+    if (!result.ok) return undefined;
+    return result.value.passes[0]?.program.module;
+  } catch {
+    return undefined;
+  }
+}
+
+function validateMaterialBinding(
+  requestId: string,
+  entity: number,
+  component: string,
+  field: string,
+  assetType: string,
+  guids: string[],
+  handles: number[],
+): CommandError | undefined {
+  if (assetType !== 'MaterialAsset' || component !== 'MeshRenderer' || field !== 'materials') {
+    return undefined;
+  }
+
+  const targetIsSkinned = hasActiveSkinBinding(entity);
+  for (let i = 0; i < handles.length; i++) {
+    const shader = firstMaterialShader(handles[i] ?? 0);
+    if (shader === undefined) continue;
+    const materialIsSkinned = shader === 'forgeax::pbr-skin';
+    if (materialIsSkinned === targetIsSkinned) continue;
+    return {
+      code: 'asset-bind-incompatible',
+      hint: materialIsSkinned
+        ? `material ${guids[i] ?? '<unknown>'} uses forgeax::pbr-skin and requires a target entity with an active Skin.skeleton binding`
+        : `material ${guids[i] ?? '<unknown>'} is not forgeax::pbr-skin and cannot be bound to an entity with an active Skin.skeleton binding`,
+      current: {
+        requestId,
+        entity,
+        component,
+        field,
+        assetType,
+        guid: guids[i],
+        guidIndex: i,
+        targetIsSkinned,
+        materialShader: shader,
+      },
+      retryable: false,
+      recoveryActions: [
+        materialIsSkinned
+          ? 'select an entity whose Skin.skeleton is bound, or choose a non-skinned material'
+          : 'select a non-skinned entity, or choose a forgeax::pbr-skin material',
+      ],
+    };
+  }
+  return undefined;
+}
 
 async function bindAssetRefBody(
   requestId: string,
@@ -367,26 +496,47 @@ async function bindAssetRefBody(
     handles.push(h);
   }
 
-  // Compute the field value. `slot` targets one element of an array<shared<T>> field
-  // (preserving the other slots); otherwise write the whole field. A scalar
-  // shared<T> field takes handles[0]; an array field takes the handle list.
-  let value: number | number[];
-  if (slot !== undefined) {
-    // Read the current array to preserve untouched slots. resolveComponent +
-    // world.get is the SSOT read (same primitive query-snapshot uses); fall back to
-    // a fresh array if the component/field is absent.
-    const cur = readComponentField(entity, component, field);
-    const arr = Array.isArray(cur) ? [...(cur as number[])] : [];
-    while (arr.length <= slot) arr.push(0);
-    arr[slot] = handles[0] ?? 0;
-    value = arr;
-  } else {
-    // Whole-field write. A scalar shared<T> field (e.g. Skylight.equirect) gets a
-    // single handle; an array field (materials/clips) gets the list.
-    value = isScalarSharedField(component, field) ? (handles[0] ?? 0) : handles;
+  const compatibilityError = validateMaterialBinding(
+    requestId,
+    entity,
+    component,
+    field,
+    assetType,
+    guids,
+    handles,
+  );
+  if (compatibilityError !== undefined) {
+    return { ok: false, error: compatibilityError };
   }
 
-  const r = gateway.dispatch({ kind: 'setComponent', entity, component, patch: { [field]: value } }, 'ai');
+  // Whole-field writes and slot writes both use the component schema's producer-
+  // declared parallel-array metadata. One `setComponent` must carry the whole
+  // group or the strict document validator correctly rejects a length change as
+  // a temporarily desynchronised SoA write (e.g. AnimationPlayer clips/times/
+  // weights/speeds).
+  const isArrayField = fieldSchema(component, field)?.arrayMeta !== undefined;
+  const current = readComponentData(entity, component) ?? {};
+  const requestedValue = slot === undefined
+    ? (isScalarSharedField(component, field) ? (handles[0] ?? 0) : handles)
+    : (handles[0] ?? 0);
+  let patch: Record<string, unknown> = { [field]: requestedValue };
+  if (isArrayField) {
+    const planned = planGroupedArrayPatch({ component, field, value: requestedValue, ...(slot === undefined ? {} : { slot }) }, current);
+    if (!planned.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'SET_FAILED',
+          hint: planned.hint,
+          details: { fieldPath: planned.fieldPath, reason: planned.reason },
+          retryable: false,
+          recoveryActions: [],
+        },
+      };
+    }
+    patch = planned.patch;
+  }
+  const r = gateway.dispatch({ kind: 'setComponent', entity, component, patch }, 'ai');
   if (!r.ok) {
     return { ok: false, error: r.error };
   }
@@ -395,7 +545,7 @@ async function bindAssetRefBody(
   console.info('[editor-core] bindAssetRef: bound', { entity, component, field, assetType, count: handles.length, slot });
 
   if (component === 'AnimationPlayer' && field === 'clips') {
-    autoActivateWeightsForBoundClips(entity, handles, slot);
+    syncAnimationSlotColumns(ANIMATION_SLOT_SYNC_IO, entity, handles, slot);
   }
   return {
     ok: true,
@@ -414,37 +564,30 @@ async function bindAssetRefBody(
 }
 
 /**
- * When clips are bound to AnimationPlayer, auto-activate the corresponding
- * weight slots so the animation plays immediately. Without this, weights
- * default to [0,0,0,0] and the engine skips every slot.
+ * Binding clips pads/grows the clips column; the engine's parallel-length
+ * contract (animation-player.ts D-5) demands times/weights/speeds match it
+ * exactly, else advanceAnimationPlayer rejects the row. The compensating write
+ * (pad times=0 / speeds=1, weights=0 then activate the bound slots) lives in
+ * scene/animation-slot-sync — pure logic over this injected face, CI-testable
+ * without a live world. Routed through the one document door (setComponent) so
+ * the sync is undoable + round-trips like the bind itself.
  */
-function autoActivateWeightsForBoundClips(entity: number, handles: number[], slot: number | undefined): void {
-  try {
-    const raw = readComponentField(entity, 'AnimationPlayer', 'weights');
-    const weights = Array.isArray(raw) ? [...raw] as number[]
-      : raw instanceof Float32Array ? Array.from(raw) : [0, 0, 0, 0];
-
-    let changed = false;
-    if (slot !== undefined) {
-      if (weights[slot] === 0) { weights[slot] = 1; changed = true; }
-    } else {
-      for (let i = 0; i < handles.length; i++) {
-        if (handles[i] !== 0 && (weights[i] ?? 0) === 0) { weights[i] = 1; changed = true; }
-      }
-    }
-    if (!changed) return;
-
-    gateway.dispatch({ kind: 'setComponent', entity, component: 'AnimationPlayer', patch: { weights } }, 'ai');
-  } catch {
-    // best-effort; never block the bind
-  }
-}
+const ANIMATION_SLOT_SYNC_IO: AnimationSlotSyncIo = {
+  readField: readComponentField,
+  dispatchSetComponent: (entity, component, patch) => {
+    gateway.dispatch({ kind: 'setComponent', entity, component, patch }, 'ai');
+  },
+};
 
 /** Read a component field's live value via the engine reflection primitives (the
  *  same resolveComponent path query-snapshot uses). Returns undefined if the
  *  component/field is absent — the caller defaults sensibly. Kept best-effort:
  *  a read miss must not throw out of the fire-and-forget applier. */
 function readComponentField(entity: number, component: string, field: string): unknown {
+  return readComponentData(entity, component)?.[field];
+}
+
+function readComponentData(entity: number, component: string): Record<string, unknown> | undefined {
   try {
     const w = gateway.doc.world as unknown as { get(e: number, tok: unknown): { ok: boolean; value?: Record<string, unknown> } } | undefined;
     if (!w) return undefined;
@@ -452,9 +595,12 @@ function readComponentField(entity: number, component: string, field: string): u
     if (!tok) return undefined;
     const r = w.get(entity, tok);
     if (!r.ok || !r.value) return undefined;
-    const v = r.value[field];
-    // Normalize a typed-array field to a plain number[] so slot-splice is uniform.
-    return ArrayBuffer.isView(v) ? Array.from(v as unknown as ArrayLike<number>) : v;
+    const out: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(r.value)) {
+      // Normalize typed-array fields to plain arrays so group planning is uniform.
+      out[field] = ArrayBuffer.isView(value) ? Array.from(value as unknown as ArrayLike<number>) : value;
+    }
+    return out;
   } catch {
     return undefined;
   }

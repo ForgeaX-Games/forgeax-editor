@@ -116,6 +116,7 @@ export function buildAssetContextMenu(
   selection: CBSelection,
   allAssets: CBAsset[],
   callbacks?: CRUDCallbacks,
+  selectedEntity?: EntityHandle | null,
 ): ContextMenuItem[] {
   const selectedAssets = getAssetsInSelection(selection);
   const targets = selectedAssets.length > 1 ? selectedAssets : [asset];
@@ -194,7 +195,11 @@ export function buildAssetContextMenu(
       requestAddAssetToScene(ref);
     }},
     { id: 'assign', label: tr('editor.contentBrowser.contextMenu.assignToSelected'), action: () => {
-      const sel = getSelection();
+      // Opening an asset context menu publishes the asset selection, which is
+      // intentionally an exclusive selection domain and clears the entity
+      // selection. Capture the entity before that happens so this menu action
+      // still means "assign to the entity I had selected when I opened it".
+      const sel = selectedEntity !== undefined ? selectedEntity : getSelection();
       // With an entity selected AND an assignable kind → delegate to assignAssetToEntity
       // (uses bindAssetRef for material/mesh, createMaterial+bindAssetRef for texture/image).
       if (sel !== null && assignAssetToEntity(asset.kind, asset.guid, asset.name, sel)) {

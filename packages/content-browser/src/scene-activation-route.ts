@@ -6,7 +6,7 @@ export function sceneActivationToOp(
   requestId: string = globalThis.crypto.randomUUID(),
 ): EditorOp {
   if (descriptor.mode === 'open-authored') {
-    return { kind: 'switchSceneFile', id: descriptor.authoredSceneId ?? '' };
+    return { kind: 'switchSceneFile', id: descriptor.authoredSceneId ?? '', requestId };
   }
   return {
     kind: 'previewImportedScene',

@@ -11,7 +11,6 @@
 // UI 组件 + 引擎集成（本包）
 import {
   ViewportBar,
-  ViewportHints,
   createViewport,
   applyScriptChange,
   initHotReload,
@@ -29,7 +28,7 @@ import { bus, dispatch, useSelection } from '@forgeax/editor-shared';
 
 | 入口 | 说明 |
 |:--|:--|
-| `.` | UI 组件（ViewportBar、ViewportHints）、引擎集成（createViewport）、热重载（applyScriptChange、initHotReload） |
+| `.` | UI 组件（ViewportBar）、引擎集成（createViewport）、热重载（applyScriptChange、initHotReload） |
 | `./host-boot` | host 会话装配（initHostSession、configureHostSession）—— 单 realm host 入口复用 |
 | `./viewport/viewport-component` | ViewportComponent —— in-process 引擎 viewport（canvas+world+renderer+camera） |
 | `./package.json` | 包元信息 |

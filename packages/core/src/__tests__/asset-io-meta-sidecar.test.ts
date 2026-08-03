@@ -145,6 +145,17 @@ describe('assetIO facade — source sidecar file CAS', () => {
     expect(calls).toEqual([`/api/files/raw?path=${encodeURIComponent(META_PATH)}&revision=1`]);
   });
 
+  it('reads an existing meta sidecar through the optional text-file route', async () => {
+    const calls: string[] = [];
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ content: JSON.stringify(initialMeta()) }), { status: 200 });
+    }) as typeof fetch;
+
+    await expect(new AssetIOFacade().readExistingMeta(META_PATH)).resolves.toEqual(initialMeta());
+    expect(calls).toEqual([`/api/files?path=${encodeURIComponent(META_PATH)}&optional=1`]);
+  });
+
   it('built-in prepare performs no write and commit posts the file CAS', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string, init?: RequestInit) => {

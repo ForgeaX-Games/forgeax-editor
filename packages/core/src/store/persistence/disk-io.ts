@@ -51,6 +51,7 @@ import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-facade';
 import type { ImportedPreviewSessionState } from '../../io/scene-authoring-session';
+import { normalizeAnimationPlayerSceneAsset } from '../../scene/animation-slot-sync';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -85,6 +86,29 @@ export interface SaveDocToDiskCommit {
 export type SaveDocToDiskResult =
   | { readonly ok: true; readonly result: SaveDocToDiskCommit }
   | { readonly ok: false; readonly error: CommandError };
+
+/**
+ * Normalize a loaded scene without severing its catalog provenance. The
+ * animation compatibility pass intentionally returns a clone because the
+ * registry's loaded payload is cached/shared. That clone becomes the payload
+ * held by live SceneInstance.source handles, so it must replace the catalog
+ * payload under the same GUID before instantiate/collect can reverse-lookup it
+ * during save. Preserve the original envelope refs when re-cataloguing; those
+ * refs carry the imported package's shared-asset edges.
+ */
+function normalizeAndCatalogSceneAsset(
+  registry: AssetRegistry,
+  guid: string,
+  loaded: SceneAsset,
+): SceneAsset {
+  const normalized = normalizeAnimationPlayerSceneAsset(loaded);
+  const existing = registry.assetCatalog.get(guid.toLowerCase());
+  const cataloged = registry.catalog(guid, normalized, existing?.refs);
+  if (!cataloged.ok) {
+    throw new Error(`normalized scene catalog failed: ${cataloged.error.code}`);
+  }
+  return cataloged.value as SceneAsset;
+}
 
 /**
  * Everything createDiskIo needs, declared explicitly (Pipeline Isolation). No
@@ -354,7 +378,14 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     }
     // Collect ALL root entities (visible AND hidden) so hidden entities survive
     // the round-trip (AC-05); only the EditorHidden MARKER is stripped (AC-04).
-    const rootHandles: EntityHandle[] = worldRootHandles(w);
+    // The load path records the exact flat top-level roots in currentSceneEntities.
+    // Keep those roots in the save set even when the live Name query cannot see
+    // them (e.g. a scene entity with no Name component); the world walk still
+    // contributes roots spawned after load.
+    const rootHandles: EntityHandle[] = [...new Set<number>([
+      ...ctx.currentSceneEntities.map((handle) => handle as number),
+      ...(worldRootHandles(w) as number[]),
+    ])] as EntityHandle[];
     const assetR = rootsToSceneAsset(reg, w, rootHandles);
     if (!assetR.ok) {
       console.warn('[editor-core] worldToPack: rootsToSceneAsset failed:', assetR.error);
@@ -460,7 +491,8 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       // the current scene intact.
       const loadRes = await reg.loadByGuid(parsed.value);
       if (!loadRes.ok) return false;
-      const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
+      const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
+      const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
       // Do not overlap the replacement with the old scene in one World. See the
       // load-order invariant above: teardown after instantiation can delete the
       // new nested SceneInstance members through an old wrapper's subtree.
@@ -494,14 +526,15 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       if (!parsed.ok) return null;
       const loaded = await reg.loadByGuid<SceneAsset>(parsed.value);
       if (!loaded.ok || loaded.value.kind !== 'scene') return null;
-      const sceneHandle = w.allocSharedRef('SceneAsset', loaded.value);
+      const sceneAsset = normalizeAndCatalogSceneAsset(reg, facts.guid, loaded.value);
+      const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
       teardownCurrentScene();
       const instantiated = reg.instantiateFlat(sceneHandle, w);
       if (!instantiated.ok) return null;
       ctx.currentSceneEntities = [...instantiated.value];
       return {
         ...facts,
-        effectiveScene: structuredClone(loaded.value),
+        effectiveScene: structuredClone(sceneAsset),
         world: w,
         registry: reg,
       };
@@ -534,7 +567,8 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       if (!parsed.ok) return null;
       const loadRes = await reg.loadByGuid(parsed.value);
       if (!loadRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: loadByGuid failed:', loadRes.error); return null; }
-      const sceneHandle = w.allocSharedRef('SceneAsset', loadRes.value);
+      const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
+      const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
       const instRes = reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
       if (!instRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
       return instRes.value as number;

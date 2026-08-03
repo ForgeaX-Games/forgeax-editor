@@ -48,6 +48,12 @@ import {
 } from './scene-asset-collect';
 import { entName, entParent, worldEntityHandles } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
+import {
+  sceneInstanceRoots,
+  snapshotSceneInstanceValue,
+  type SceneInstanceReadModel,
+  type SceneInstanceReadResult,
+} from './scene-instance-read-model';
 // Asset read surface: resolveAssetHandle turns a shared<T> handle (query
 // returns it as opaque-handle.raw) into its live payload — covering both
 // builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets, O(1).
@@ -232,6 +238,10 @@ export interface ApplierCtx {
   query: QuerySnapshotFn;
   /** Origin of the outer Gateway dispatch, preserved for session appliers. */
   origin: CommandOrigin;
+  /** Resolve a live shared<T> handle to its asset payload against THIS gateway's
+   *  active world — lets a session applier read bound-asset facts (e.g. a clip's
+   *  duration) without importing the gateway singleton (animation-preview M1). */
+  resolveAsset(handle: number): { ok: true; asset: Asset } | { ok: false; error: CommandError };
   /** Gateway-owned progress reporter for request-correlated operations. */
   operationRun?: {
     reportProgress(progress: RunProgress): void;
@@ -621,6 +631,126 @@ export class EditGateway {
     return this._sceneReadProvider?.() ?? EMPTY_SCENE_READ_MODEL;
   }
 
+  /** Read every engine-owned SceneInstance in the active world. Synthetic
+   * roots are included even when they have no Name component. */
+  sceneInstancesReadModel(): readonly SceneInstanceReadModel[] {
+    const models: SceneInstanceReadModel[] = [];
+    for (const root of sceneInstanceRoots(this.doc.world)) {
+      const result = this.sceneInstanceReadModel(root);
+      if (result.ok) models.push(result.value);
+    }
+    return models;
+  }
+
+  /** Read one SceneInstance's source, stable local-id mapping, and overrides. */
+  sceneInstanceReadModel(root: EntityHandle): SceneInstanceReadResult {
+    const state = this._getEngineFacade().getSceneInstanceState(root);
+    if (!state.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'SCENE_COLLECT_FAILED',
+          hint: `entity ${root} is not a live SceneInstance root`,
+          details: { fieldPath: `SceneInstance(${root})`, reason: 'scene-instance-root-required' },
+        },
+      };
+    }
+    const sourceHandle = state.value.source as unknown as number;
+    const sourceAsset = resolveAssetHandle(
+      this.doc.world,
+      state.value.source as unknown as Handle<string, 'shared'>,
+    );
+    if (!sourceAsset.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'ASSET_NOT_FOUND',
+          hint: `no SceneAsset source for handle ${sourceHandle}; it may be stale or unloaded`,
+        },
+      };
+    }
+    const source = this.summarizeAsset(
+      sourceAsset.value,
+      this.doc.registry?._guidForAsset(sourceAsset.value),
+    );
+    const members = [...state.value.entityToLocalId.entries()]
+      .map(([entity, localId]) => ({
+        entity,
+        localId: Number(localId),
+        name: entName(this.doc.world, entity),
+        detached: state.value.detachedLocalIds.has(localId),
+      }))
+      .sort((a, b) => a.localId - b.localId);
+    const memberByLocalId = new Map(members.map((member) => [member.localId, member.entity]));
+    // `overrides` records live edits while `mountTimeOverrides` records the
+    // same authored fact after a save/reopen. Merge by semantic key so a
+    // reopened instance remains inspectable and revertible without adding a
+    // second persistence model in the editor.
+    const overrideByKey = new Map<string, SceneInstanceReadModel['overrides'][number]>();
+    for (const override of state.value.mountTimeOverrides) {
+      const localId = Number(override.localId);
+      const member = memberByLocalId.get(localId);
+      if (member === undefined) continue;
+      const key = `${localId}:${override.comp}:${override.field ?? ''}`;
+      overrideByKey.set(key, {
+        member,
+        localId,
+        component: override.comp,
+        ...(override.field === undefined ? {} : { field: override.field }),
+        value: snapshotSceneInstanceValue(override.value),
+      });
+    }
+    for (const [localId, fields] of state.value.overrides.entries()) {
+      for (const override of fields.values()) {
+        const localIdNumber = Number(localId);
+        const member = memberByLocalId.get(localIdNumber);
+        if (member === undefined) continue;
+        const key = `${localIdNumber}:${override.comp}:${override.field ?? ''}`;
+        overrideByKey.set(key, {
+          member,
+          localId: localIdNumber,
+          component: override.comp,
+          ...(override.field === undefined ? {} : { field: override.field }),
+          value: snapshotSceneInstanceValue(override.value),
+        });
+      }
+    }
+    const overrides = [...overrideByKey.values()]
+      .sort((a, b) => a.localId - b.localId || `${a.component}.${a.field ?? ''}`.localeCompare(`${b.component}.${b.field ?? ''}`));
+    return {
+      ok: true,
+      value: {
+        root,
+        source: {
+          handle: sourceHandle,
+          kind: source.kind,
+          ...(source.guid === undefined ? {} : { guid: source.guid }),
+          ...(source.name === undefined ? {} : { name: source.name }),
+          ...(source.builtin === undefined ? {} : { builtin: source.builtin }),
+          ...(source.meta === undefined ? {} : { meta: snapshotSceneInstanceValue(source.meta) as Record<string, unknown> }),
+        },
+        members,
+        overrides,
+      },
+    };
+  }
+
+  /** Resolve the owning SceneInstance for a live member handle. */
+  sceneInstanceForMember(member: EntityHandle): SceneInstanceReadResult {
+    for (const root of sceneInstanceRoots(this.doc.world)) {
+      const state = this._getEngineFacade().getSceneInstanceState(root);
+      if (state.ok && state.value.entityToLocalId.has(member)) return this.sceneInstanceReadModel(root);
+    }
+    return {
+      ok: false,
+      error: {
+        code: 'SCENE_COLLECT_FAILED',
+        hint: `entity ${member} is not a member of a live SceneInstance`,
+        details: { fieldPath: `SceneInstance.member(${member})`, reason: 'member-not-in-instance' },
+      },
+    };
+  }
+
   /** Read the transient selection projection from the selection store.
    *
    * The Gateway is the public read door for eval callers as well as panels. The
@@ -752,6 +882,9 @@ export class EditGateway {
       dispatchSub,
       query,
       origin,
+      // Bound to THIS gateway's active world so session appliers (e.g.
+      // setAnimationPreview) resolve shared handles without the singleton (M1).
+      resolveAsset: (handle: number) => this.resolveAsset(handle),
       ...(progressReporter === undefined
         ? {}
         : {
@@ -832,6 +965,39 @@ export class EditGateway {
     if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
     if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
     return { ok: true };
+  }
+
+  /** Project ordinary component writes onto the engine-owned mount override
+   *  operation. This keeps the public setComponent door symmetric for human UI
+   *  and AI callers, including grouped array fields such as AnimationPlayer's
+   *  clips/times/weights/speeds columns. */
+  private _projectMountMemberMutation(cmd: EditorOp): EditorOp {
+    if (cmd.kind === 'transaction') {
+      const transaction = cmd as { kind: 'transaction'; label: string; commands: EditorOp[] };
+      const commands = transaction.commands.map((sub) => this._projectMountMemberMutation(sub));
+      return { ...transaction, commands };
+    }
+    if (cmd.kind !== 'setComponent' || typeof cmd.entity !== 'number' || typeof cmd.patch !== 'object' || cmd.patch === null || Array.isArray(cmd.patch)) {
+      return cmd;
+    }
+    const set = cmd as { kind: 'setComponent'; entity: number; component: string; patch: Record<string, unknown> };
+    const instance = this.sceneInstanceForMember(set.entity as EntityHandle);
+    if (!instance.ok) return cmd;
+    const commands: EditorOp[] = [];
+    for (const [field, value] of Object.entries(set.patch)) {
+      commands.push({
+        kind: 'setSceneOverride',
+        root: instance.value.root,
+        member: set.entity,
+        component: set.component,
+        field,
+        value,
+      });
+    }
+    if (commands.length === 0) return cmd;
+    return commands.length === 1
+      ? commands[0]!
+      : { kind: 'transaction', label: `override ${set.component} ×${commands.length}`, commands };
   }
 
   /** Edit-time capability collar for derived SceneInstance members. */
@@ -919,7 +1085,7 @@ export class EditGateway {
   */
   dispatch(cmd: EditorOp, origin: CommandOrigin = 'human'): DispatchResult {
     const result: DispatchResult = (() => {
-      const kind = cmd.kind;
+      const requestedKind = cmd.kind;
 
     // Scan-lock guard: during startup scan, reject all dispatch until catalog is ready.
     // This is an infrastructure guard (not an op), matching the north-star §8 principle
@@ -931,17 +1097,25 @@ export class EditGateway {
     // Three-tier routing: the DOMAIN of an op = which applier table registers its
     // kind (plan-strategy §2 D-1, structural, no bypassable label). Unregistered
     // kind → UNKNOWN_OP (Fail Fast; headless play/stop lands here — D-11).
-    const domain = domainOf(kind);
+    const domain = domainOf(requestedKind);
     if (domain === null) {
       // D-11: play/stop are session ops whose applier is registered by
       // edit-runtime at boot (registerSessionApplier). In headless core they are
       // legitimately absent — say so instead of a generic miss, so a headless AI
       // caller learns it is a boot-registered capability, not a typo.
-      const hint = (kind === 'play' || kind === 'stop')
-        ? `op "${kind}" has no applier registered; edit-runtime registers it at boot via registerSessionApplier (D-11) — unavailable in headless core`
-        : `no applier registered for "${kind}"; see listOps()`;
+      const hint = (requestedKind === 'play' || requestedKind === 'stop')
+        ? `op "${requestedKind}" has no applier registered; edit-runtime registers it at boot via registerSessionApplier (D-11) — unavailable in headless core`
+        : `no applier registered for "${requestedKind}"; see listOps()`;
       return { ok: false, error: { code: 'UNKNOWN_OP', hint } };
     }
+
+    // The public document command is the single semantic door for both UI and
+    // AI. A mount member cannot be authored through a plain world.set: the
+    // engine only persists that edit when it enters setSceneOverride. Project
+    // here so headless AI dispatches and the Inspector's existing projection
+    // converge on the same document applier and ledger shape.
+    if (domain === 'document') cmd = this._projectMountMemberMutation(cmd);
+    const kind = cmd.kind;
 
     if (domain === 'document') {
       if (this.sceneAuthoringSession().mode === 'imported-preview') {
@@ -1155,7 +1329,7 @@ export class EditGateway {
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
-    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame'
+    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame'
       ? (cmd as { readonly requestId?: unknown }).requestId
       : undefined;
     const isRequestCorrelatedSave = kind === 'saveDocToDisk' && typeof requestId === 'string';
@@ -1163,6 +1337,7 @@ export class EditGateway {
     const isRequestCorrelatedImport = (kind === 'importAsset' || kind === 'reimportAsset') && typeof requestId === 'string';
     const isRequestCorrelatedSceneActivation = (kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene') && typeof requestId === 'string';
     const isRequestCorrelatedBind = kind === 'bindAssetRef' && typeof requestId === 'string';
+    const isRequestCorrelatedSceneSwitch = kind === 'switchSceneFile' && typeof requestId === 'string';
     const isRequestCorrelatedSceneCreate = kind === 'createSceneFile' && typeof requestId === 'string';
     const isRequestCorrelatedDefaultScene = kind === 'setDefaultScene' && typeof requestId === 'string';
     const isRequestCorrelatedSceneDelete = kind === 'deleteScene' && typeof requestId === 'string';
@@ -1277,7 +1452,7 @@ export class EditGateway {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
       }
       acceptedRun = { ok: true, value: accepted.run };
-    } else if (isRequestCorrelatedSceneCreate || isRequestCorrelatedDefaultScene || isRequestCorrelatedSceneDelete) {
+    } else if (isRequestCorrelatedSceneSwitch || isRequestCorrelatedSceneCreate || isRequestCorrelatedDefaultScene || isRequestCorrelatedSceneDelete) {
       const actor = origin === 'ai'
         ? { id: 'ai', kind: 'ai' as const }
         : { id: 'human', kind: 'human' as const };

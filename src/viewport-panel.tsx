@@ -860,6 +860,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             location: 'header/center',
             order: 10,
             overflowPriority: 900,
+            when: 'panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.gizmo == translate',
           },
@@ -872,6 +873,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             location: 'header/center',
             order: 20,
             overflowPriority: 900,
+            when: 'panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.gizmo == rotate',
           },
@@ -884,6 +886,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             location: 'header/center',
             order: 30,
             overflowPriority: 900,
+            when: 'panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.gizmo == scale',
           },
@@ -894,6 +897,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             control: 'viewport.coordMenu',
             location: 'header/center',
             order: 40,
+            when: 'panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
           },
           {
@@ -903,6 +907,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             control: 'viewport.snapMenu',
             location: 'header/center',
             order: 50,
+            when: 'panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
           },
           {
@@ -912,6 +917,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             control: 'viewport.separator',
             location: 'header/center',
             order: 60,
+            when: 'panel.viewport.isScene',
             enablement: 'panel.viewport.mounted',
           },
           {
@@ -978,6 +984,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             location: 'header/right',
             order: 60,
             overflowPriority: 1000,
+            when: 'panel.viewport.isEdit',
             enablement: 'panel.viewport.canUndo',
           },
           {
@@ -990,6 +997,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             location: 'header/right',
             order: 70,
             overflowPriority: 1000,
+            when: 'panel.viewport.isEdit',
             enablement: 'panel.viewport.canRedo',
           },
           {
@@ -1002,6 +1010,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             location: 'header/right',
             order: 80,
             overflowPriority: 1000,
+            when: 'panel.viewport.isEdit',
             enablement: 'panel.viewport.mounted',
             highlightWhen: 'panel.viewport.dirty',
           },

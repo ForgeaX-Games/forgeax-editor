@@ -656,12 +656,35 @@ export function createSceneList(deps: SceneListDeps): SceneList {
         return false;
       }
     }
+    const previousSceneFile = ctx.currentSceneFile;
+    const previousSceneGuid = ctx.currentSceneGuid;
+    const previousSceneEntities = ctx.currentSceneEntities.slice();
+    const previousInlineAssetFloor = ctx.loadedInlineAssetFloor;
+    const previousInlineAssets = ctx.loadedInlineAssets;
+    const previousEntityFloor = ctx.loadedEntityFloor;
     try { localStorage.setItem(sceneFileStorageKey(), id); } catch { /* unavailable */ }
     try {
       ctx.currentSceneFile = id;
       // Internal call → the impl, not the dispatching wrapper (no nested dispatch).
-      const ok = await deps.loadDocFromDisk();
-      if (!ok) deps.loadDocFromStorage();
+      const loadedFromDisk = await deps.loadDocFromDisk();
+      const loaded = loadedFromDisk || deps.loadDocFromStorage();
+      if (!loaded) {
+        // `loadSceneByGuid` resolves bytes before tearing down the old authored
+        // tree, so a failed load can safely restore the previous identity and
+        // let the Gateway publish a terminal failure instead of a false success.
+        ctx.currentSceneFile = previousSceneFile;
+        ctx.currentSceneGuid = previousSceneGuid;
+        ctx.currentSceneEntities = previousSceneEntities;
+        ctx.loadedInlineAssetFloor = previousInlineAssetFloor;
+        ctx.loadedInlineAssets = previousInlineAssets;
+        ctx.loadedEntityFloor = previousEntityFloor;
+        try {
+          if (previousSceneFile === null) localStorage.removeItem(sceneFileStorageKey());
+          else localStorage.setItem(sceneFileStorageKey(), previousSceneFile);
+        } catch { /* unavailable */ }
+        emitSceneList();
+        return false;
+      }
       // loadDocFromDisk/Storage set gateway.doc DIRECTLY and notify React doc
       // listeners, but NOT the gateway.subscribe listeners the viewport uses to
       // (re)build the RENDERED scene — fire them via replaceDoc, which also clears

@@ -36,8 +36,9 @@ function relativeDir(path: string): string {
  *  Both standalone (`singleGameFileBackend`) and studio (`studioFileBackend`)
  *  expect a relative path rooted at the slug (e.g. `<slug>/assets/foo.mp3`).
  *
- *  **Safe**: normal relative paths already starting with `<slug>/` or `games/<slug>/`
- *  (no `..`, no drive letter, no URL scheme) pass through unchanged.
+ *  **Safe**: normal relative paths already starting with `<slug>/` pass through;
+ *  the legacy `games/<slug>/` project-space alias is canonicalized to the same
+ *  standalone client coordinate because POST /api/files has no query rewriter.
  *  Exported for unit tests (pure function). */
 export function normalizeStoragePath(path: string | undefined, slug: string): string | undefined {
   if (!path) return path;
@@ -48,6 +49,9 @@ export function normalizeStoragePath(path: string | undefined, slug: string): st
       path = new URL(path).pathname;
     } catch { /* unparseable — fall through with the raw value */ }
   }
+  const studioPrefix = `games/${slug}`;
+  if (path === studioPrefix) return slug;
+  if (path.startsWith(`${studioPrefix}/`)) return `${slug}/${path.slice(studioPrefix.length + 1)}`;
   // Already a normal relative path (no `..`, no absolute drive/UNC prefix)
   const isAbsolute = /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('/');
   if (!isAbsolute && !path.includes('..')) return path;

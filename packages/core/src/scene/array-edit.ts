@@ -46,12 +46,132 @@ function fail(request: ArrayEditRequest, reason: string, hint: string, suffix = 
   };
 }
 
+export interface GroupedArrayPatchRequest {
+  readonly component: string;
+  readonly field: string;
+  /** Replace the complete target array when `slot` is omitted. */
+  readonly value: unknown;
+  /** Replace one slot and preserve the other slots when present. */
+  readonly slot?: number;
+}
+
+export type GroupedArrayPatchPlan =
+  | { readonly ok: true; readonly patch: Record<string, unknown> }
+  | {
+      readonly ok: false;
+      readonly fieldPath: string;
+      readonly reason: string;
+      readonly hint: string;
+    };
+
 function defaultElement(field: FieldSchema): unknown {
   if (field.arrayElementDefault !== undefined) return cloneValue(field.arrayElementDefault);
   const elementType = field.arrayMeta?.elementType ?? '';
   if (elementType === 'bool') return false;
   if (elementType === 'string') return '';
   return 0;
+}
+
+/**
+ * Plan a shared-array write while keeping every producer-declared parallel
+ * column aligned. This is the generic counterpart to `planArrayEdit`: callers
+ * such as asset binders may replace a whole array or target a slot, but still
+ * submit exactly one complete group patch through setComponent.
+ */
+export function planGroupedArrayPatch(
+  request: GroupedArrayPatchRequest,
+  data: Record<string, unknown>,
+): GroupedArrayPatchPlan {
+  const schema = getComponentSchema(request.component);
+  const field = schema?.fields.find((candidate) => candidate.key === request.field);
+  if (field?.arrayMeta === undefined) {
+    return {
+      ok: false,
+      fieldPath: `${request.component}.${request.field}`,
+      reason: 'array-field-required',
+      hint: `${request.component}.${request.field} is not an editable array field`,
+    };
+  }
+
+  if (request.slot !== undefined && (!Number.isInteger(request.slot) || request.slot < 0)) {
+    return {
+      ok: false,
+      fieldPath: `${request.component}.${request.field}[${request.slot}]`,
+      reason: 'index-out-of-range',
+      hint: `${request.component}.${request.field}[${request.slot}] requires a non-negative integer slot`,
+    };
+  }
+
+  const group = field.arrayGroup;
+  const fields = (schema?.fields ?? []).filter((candidate) =>
+    candidate.arrayMeta !== undefined && (group === undefined ? candidate.key === field.key : candidate.arrayGroup === group));
+  const arrays = new Map<string, unknown[]>();
+  for (const candidate of fields) {
+    const items = toItems(data[candidate.key]);
+    if (items === null) {
+      return {
+        ok: false,
+        fieldPath: `${request.component}.${candidate.key}`,
+        reason: 'array-required',
+        hint: `${request.component}.${candidate.key} must be present as an array`,
+      };
+    }
+    arrays.set(candidate.key, items);
+  }
+
+  const lengths = [...arrays.entries()].map(([key, items]) => [key, items.length] as const);
+  const currentLength = lengths[0]?.[1] ?? 0;
+  const mismatch = lengths.find(([, length]) => length !== currentLength);
+  if (mismatch !== undefined) {
+    return {
+      ok: false,
+      fieldPath: `${request.component}.${mismatch[0]}`,
+      reason: 'parallel-array-length',
+      hint: `${request.component}.${mismatch[0]} has ${mismatch[1]} items; expected ${currentLength}`,
+    };
+  }
+
+  let target: unknown[];
+  let targetLength: number;
+  if (request.slot !== undefined) {
+    target = [...(arrays.get(field.key) ?? [])];
+    targetLength = Math.max(currentLength, request.slot + 1);
+    while (target.length < targetLength) target.push(defaultElement(field));
+    target[request.slot] = cloneValue(request.value);
+  } else {
+    const replacement = toItems(request.value);
+    if (replacement === null) {
+      return {
+        ok: false,
+        fieldPath: `${request.component}.${request.field}`,
+        reason: 'array-required',
+        hint: `${request.component}.${request.field} requires an array value`,
+      };
+    }
+    target = replacement;
+    targetLength = replacement.length;
+  }
+
+  if (field.arrayMeta.length !== undefined && targetLength !== field.arrayMeta.length) {
+    return {
+      ok: false,
+      fieldPath: `${request.component}.${request.field}`,
+      reason: 'fixed-array-length',
+      hint: `${request.component}.${request.field} requires exactly ${field.arrayMeta.length} items (received ${targetLength})`,
+    };
+  }
+
+  const patch = new Map<string, unknown[]>();
+  for (const candidate of fields) {
+    if (candidate.key === field.key) {
+      patch.set(candidate.key, target);
+      continue;
+    }
+    const items = [...(arrays.get(candidate.key) ?? [])].slice(0, targetLength);
+    while (items.length < targetLength) items.push(defaultElement(candidate));
+    patch.set(candidate.key, items);
+  }
+  return { ok: true, patch: Object.fromEntries(patch) };
 }
 
 function move<T>(items: T[], from: number, to: number): T[] {

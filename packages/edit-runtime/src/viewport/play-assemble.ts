@@ -16,8 +16,9 @@
 // game's forge.json `defaultScene` GUID straight from disk (loadByGuid — a pure
 // read path that sidesteps the collect-side serialization hazards, research
 // Finding 2), instantiates it, and runs the game bootstrap. On ■ Stop the whole
-// playWorld/playApp is dropped and GC'd (no restore concept). The edit world is
-// never touched.
+// playWorld/playApp is stopped, its World-scoped GPU residency is destroyed once,
+// and then it is dropped and GC'd (no restore concept). The edit world is never
+// touched.
 //
 // Why the SINGLE renderer is reused (D-1): the editor owns exactly one host-owned
 // renderer (WebGPU canvas context is unique). The engine frame loop's contract is
@@ -35,8 +36,8 @@
 // disposed the shared renderer the edit viewport would go black. The shield wraps
 // the renderer in a Proxy that turns `dispose` into a no-op while passing every
 // other member through by reference, so playApp.stop() gets a clean teardown
-// (rAF cancel + renderer.onError unsubscribe → playWorld fully unreferenced and
-// GC-able, AC-05) WITHOUT killing the shared renderer.
+// (rAF cancel + renderer.onError unsubscribe) WITHOUT killing the shared renderer;
+// run-lifecycle owns the one-time World-scoped GPU cleanup after detach.
 //
 // REMOVAL ANCHOR (R-N2): when the engine assemble form exempts the host-owned
 // renderer from the stop-time dispose (symmetric with its existing audio-backend
@@ -83,6 +84,7 @@ import {
   WebAudioEngine,
   syncListenerFromWorldMatrix,
 } from '@forgeax/engine-audio-webaudio';
+import { normalizeAnimationPlayerSceneAsset, type SceneAsset } from '@forgeax/editor-core';
 import { createFramePhaseObserver } from './frame-phase-observer';
 
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
@@ -95,6 +97,8 @@ import { createFramePhaseObserver } from './frame-phase-observer';
 export interface ShieldableRenderer {
   dispose(): void;
   readonly assets: unknown;
+  /** Older renderer builds expose no per-world GPU eviction seam. */
+  readonly store: { destroyWorld?: (world: World) => void };
   [k: string]: unknown;
 }
 
@@ -137,6 +141,8 @@ export interface PlayAssembly {
   readonly installGameProjection?: () => void;
   /** Clear game-owned Play projections before this world is torn down. */
   readonly clearGameProjection?: () => void;
+  /** Release this world's GPU residency when the Play run is stopped. */
+  readonly disposeWorld: () => void;
   /** Tear down this play run's host-owned side effects. Called on ■ Stop AFTER
    *  playApp.stop() (run-lifecycle). Three things, in order:
    *   1. detach the play-side input backends (release the shared canvas), then
@@ -372,6 +378,7 @@ export async function assemblePlayWorld(
       console.warn('[editor] ▶ Play failed assembly stop threw:', err);
     }
     detachHostResources();
+    deps.renderer.store.destroyWorld?.(playWorld as World);
   };
 
   // Resolve the module BEFORE statePlugin() builds the fresh world. A game calls
@@ -665,9 +672,10 @@ export async function assemblePlayWorld(
     return { ok: false, error: startupError('play-default-scene-load-failed', error) };
   }
   if (sceneAsset !== null && sceneAsset !== undefined) {
-    defaultScene = sceneAsset;
+    const normalizedSceneAsset = normalizeAnimationPlayerSceneAsset(sceneAsset as SceneAsset);
+    defaultScene = normalizedSceneAsset;
     const w = playWorld as { allocSharedRef(kind: string, payload: unknown): unknown };
-    const handle = w.allocSharedRef('SceneAsset', sceneAsset);
+    const handle = w.allocSharedRef('SceneAsset', normalizedSceneAsset);
     const reg = deps.renderer.assets as SceneInstantiator;
     // reg.instantiate's Result value is the root EntityHandle directly (not { root }).
     const instRes = reg.instantiate(handle, playWorld);
@@ -737,6 +745,10 @@ export async function assemblePlayWorld(
       ...(gameProjection !== undefined
         ? { installGameProjection: gameProjection.install, clearGameProjection: gameProjection.clear }
         : {}),
+      // The current renderer owns a shared GPU store but does not yet expose a
+      // per-world eviction method. Call the seam when available; dropping the
+      // fresh Play world remains the safe fallback for older/current builds.
+      disposeWorld: () => deps.renderer.store.destroyWorld?.(playWorld as World),
       detach,
     },
   };

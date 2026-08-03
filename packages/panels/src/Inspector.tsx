@@ -50,6 +50,7 @@ import {
 } from '@forgeax/editor-ui';
 import { useNumberDraft } from './useNumberDraft';
 import { AssetPicker } from './AssetPicker';
+import { getBespokeEditor } from './bespoke-editors';
 import { inspectorFieldRendererKind, isUnsupportedRendererKind, isVectorRendererKind } from './inspector-field-shape';
 import './inspector.css';
 import { getOperationProjectionSource } from './operations/run-view-model';
@@ -921,6 +922,35 @@ function readOptsFor(sel: EntityHandle): HandleCheckOpts | undefined {
   return { binding, pair: { worldRef: pair.worldRef, epoch: pair.epoch } };
 }
 
+/** Project ordinary Inspector field edits onto the engine-owned SceneInstance
+ * override op. A selected mount member must never silently become a plain
+ * world.set: the same semantic command is what AI callers discover and what
+ * scene-pack collection folds into mounts[].overrides[]. */
+function projectSceneInstanceMutation(op: EditorOp): EditorOp {
+  if (op.kind === 'transaction') {
+    const commands = (op as Extract<EditorOp, { kind: 'transaction' }>).commands.map(projectSceneInstanceMutation);
+    return { ...op, commands };
+  }
+  if (op.kind !== 'setComponent') return op;
+  const set = op as Extract<EditorOp, { kind: 'setComponent' }>;
+  const instance = gateway.sceneInstanceForMember(set.entity as EntityHandle);
+  if (!instance.ok) return op;
+  const patch = set.patch;
+  const fields = Object.entries(patch);
+  if (fields.length === 0) return op;
+  const commands: EditorOp[] = fields.map(([field, value]) => ({
+    kind: 'setSceneOverride',
+    root: instance.value.root,
+    member: set.entity,
+    component: set.component,
+    field,
+    value,
+  }));
+  return commands.length === 1
+    ? commands[0]!
+    : { kind: 'transaction', label: `override ${set.component} ×${commands.length}`, commands };
+}
+
 function useLiveFieldValue(
   fallback: unknown,
   field: LiveFieldBinding | undefined,
@@ -974,7 +1004,7 @@ export function InspectorPanel() {
   const readOnly = gateway.mode === 'play';
   const dispatchMutation = (op: EditorOp) => {
     if (readOnly) return;
-    gateway.dispatch(op);
+    gateway.dispatch(projectSceneInstanceMutation(op));
   };
   const runtimeUiGraph = getActiveRuntimeUiGraph();
   const worldGeneration = runtimeUiGraph?.stats().worldGeneration ?? 0;
@@ -1058,6 +1088,10 @@ export function InspectorPanel() {
   }
   const nodeName = entName(gateway.activeWorld, sel);
   const nodeComponents = entComponents(gateway.activeWorld, sel, readOptsFor(sel));
+  const sceneInstance = gateway.sceneInstanceForMember(sel);
+  const sceneInstanceMember = sceneInstance.ok
+    ? sceneInstance.value.members.find((member) => member.entity === sel)
+    : undefined;
   const missingComponents = listComponentSchemas()
     .map((schema) => schema.name)
     .filter((c) => nodeComponents[c] === undefined);
@@ -1112,6 +1146,37 @@ export function InspectorPanel() {
           <ForgeaxIcon name="unlock" size={15} />
         </button>
       </div>
+
+      {sceneInstance.ok && sceneInstanceMember !== undefined && (
+        <div className="dp-comp" data-testid="insp-scene-instance">
+          <div className="ch">
+            <span className="lbl">Scene Instance</span>
+            <span className="badge">local {sceneInstanceMember.localId}</span>
+          </div>
+          <div className="dp-note" data-testid="insp-scene-instance-source">
+            source: {sceneInstance.value.source.name ?? sceneInstance.value.source.guid ?? sceneInstance.value.source.kind}
+            {' · '}root #{sceneInstance.value.root}
+            {' · '}{sceneInstance.value.overrides.filter((override) => override.member === sel).length} override(s)
+          </div>
+          {sceneInstance.value.overrides
+            .filter((override) => override.member === sel && override.field !== undefined)
+            .map((override) => (
+              <div className="f-row" key={`${override.component}:${override.field}`} data-testid={`insp-scene-instance-override-${override.component}-${override.field}`}>
+                <span className="f-name">{override.component}.{override.field}</span>
+                <span className="f-val">
+                  <button
+                    type="button"
+                    className="fbtn"
+                    data-testid={`insp-instance-revert-${override.component}-${override.field}`}
+                    onClick={() => dispatchMutation({ kind: 'removeSceneOverride', root: sceneInstance.value.root, member: sel, component: override.component, field: override.field! })}
+                  >
+                    revert
+                  </button>
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
 
       {/* ── Toolbar ──────────────────────────────────────────────── */}
       <div className="dp-toolbar">
@@ -1265,12 +1330,25 @@ export function InspectorPanel() {
                   )}
                 </span>
               </div>
-              {isCollapsed ? null : getComponentSchema(comp)?.bespoke ? (
-                <div className="bespoke-hint" data-testid={`insp-bespoke-${comp}`}>
-                  <span className="bespoke-icon"><ForgeaxIcon name="hexagon" size={13} /></span>
-                  <span>{getComponentSchema(comp)!.bespoke!.hint}</span>
-                </div>
-              ) : typeof value === 'object' && value !== null ? (
+              {isCollapsed ? null : (() => {
+                // Bespoke editors (animation-preview M1): the component's meta
+                // contract may name a bespoke editorId. A registered editor renders
+                // ABOVE the generic fields (fields stay editable); an unregistered
+                // id keeps the historical hint-only fallback.
+                const bespoke = getComponentSchema(comp)?.bespoke;
+                const BespokeEditor = bespoke !== undefined ? getBespokeEditor(bespoke.editorId) : undefined;
+                if (bespoke !== undefined && BespokeEditor === undefined) {
+                  return (
+                    <div className="bespoke-hint" data-testid={`insp-bespoke-${comp}`}>
+                      <span className="bespoke-icon"><ForgeaxIcon name="hexagon" size={13} /></span>
+                      <span>{bespoke.hint}</span>
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    {BespokeEditor !== undefined ? <BespokeEditor entity={sel} component={comp} /> : null}
+                    {typeof value === 'object' && value !== null ? (
                 <div className="cat-fields">
                   {(() => {
                     const data = value as Record<string, unknown>;
@@ -1427,6 +1505,15 @@ export function InspectorPanel() {
                           if (items.length !== slotCount) {
                             dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
                           }
+                          setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid });
+                          return;
+                        }
+                        // Fixed-capacity arrays (array<shared<T>,N>, e.g.
+                        // AnimationPlayer.clips): every slot already exists —
+                        // open the picker AT slot i. The variable-array path
+                        // below would append an element past the engine's fixed
+                        // column capacity.
+                        if (f.arrayMeta?.length !== undefined) {
                           setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid });
                           return;
                         }
@@ -1736,7 +1823,10 @@ export function InspectorPanel() {
                     return out;
                   })()}
                 </div>
-              ) : null}
+                    ) : null}
+                  </>
+                );
+              })()}
             </div>
           );
         })}

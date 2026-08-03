@@ -248,6 +248,18 @@
     "signature": "() => SceneAuthoringSessionReadModel"
   },
   {
+    "name": "sceneInstanceForMember",
+    "signature": "(member: EntityHandle) => SceneInstanceReadResult"
+  },
+  {
+    "name": "sceneInstanceReadModel",
+    "signature": "(root: EntityHandle) => SceneInstanceReadResult"
+  },
+  {
+    "name": "sceneInstancesReadModel",
+    "signature": "() => readonly SceneInstanceReadModel[]"
+  },
+  {
     "name": "sceneReadModel",
     "signature": "() => SceneReadModel"
   },

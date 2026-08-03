@@ -1,6 +1,9 @@
 import {
   createApp,
+  addGamePluginSystems,
   loadGame,
+  loadGamePluginModules,
+  type GamePluginLoad,
   type BootstrapEntry,
 } from '@forgeax/engine-app';
 import { perspective, Camera } from '@forgeax/engine-render';
@@ -36,6 +39,8 @@ import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
 import { createPlayProductRuntimeAdapter } from './product-runtime-adapter';
+import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
+import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
 
 // TODO 004: When this Play/preview viewport is embedded as a studio iframe,
 // forward global shortcuts to the studio shell. Standalone mode is a no-op.
@@ -82,9 +87,13 @@ function hideLoadingOverlay(): void {
 // Used for the physics gate below + the per-game pack-index URLs further down.
 const GAME_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 
+declare const __FORGEAX_STATIC_BUILD__: boolean;
+declare const __FORGEAX_STATIC_GAME_ID__: string;
+
 const qp = new URLSearchParams(location.search);
 const rawGameId = qp.get('game') ?? qp.get('slug');
-const gameId = (rawGameId && GAME_ID_RE.test(rawGameId)) ? rawGameId : '_template';
+const requestedGameId = rawGameId ?? (__FORGEAX_STATIC_BUILD__ ? __FORGEAX_STATIC_GAME_ID__ : null);
+const gameId = (requestedGameId && GAME_ID_RE.test(requestedGameId)) ? requestedGameId : '_template';
 const carrierRuntimeId = qp.get('runtimeId')?.trim() || null;
 const carrierOwnershipChallenge = qp.get('ownershipChallenge')?.trim() || null;
 let carrierScope: { projectId: string; gameId: string | null } | null = null;
@@ -307,19 +316,66 @@ const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
 const packBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
 const perGameUrl = `${packBase}/pack-index/${gameId}.json`;
 const globalUrl = `${packBase}/pack-index.json`;
-renderer.assets.configurePackIndex(perGameUrl);
-// Prefetch the per-game index to detect 404; fall back to global on failure.
-(async () => {
-  try {
-    const res = await fetch(perGameUrl, { method: 'HEAD' });
-    if (!res.ok && gameId !== '_template') {
-      console.log(`[engine] per-game pack-index ${perGameUrl} returned ${res.status}, falling back to global index`);
-      renderer.assets.configurePackIndex(globalUrl);
+renderer.assets.configurePackIndex(__FORGEAX_STATIC_BUILD__ ? globalUrl : perGameUrl);
+// The static artifact has one authoritative cooked catalog. The development
+// host keeps its per-game index because it can discover newly-added assets
+// without rebuilding; a static site cannot resolve the dev-only source paths.
+if (!__FORGEAX_STATIC_BUILD__) {
+  // Prefetch the per-game index to detect 404; fall back to global on failure.
+  (async () => {
+    try {
+      const res = await fetch(perGameUrl, { method: 'HEAD' });
+      if (!res.ok && gameId !== '_template') {
+        console.log(`[engine] per-game pack-index ${perGameUrl} returned ${res.status}, falling back to global index`);
+        renderer.assets.configurePackIndex(globalUrl);
+      }
+    } catch {
+      // Network error: keep the per-game URL and let the runtime retry.
     }
-  } catch {
-    // Network error: keep the per-game URL and let the runtime retry.
+  })();
+}
+
+// Asset-resident game plugins must register their component tokens before the
+// host instantiates defaultScene. The editor Play path discovers the same files
+// through its `/api` tree; pure preview receives a Vite URL manifest because it
+// owns a separate browser module realm. The registry-delta/import operation is
+// shared in @forgeax/engine-app; only discovery stays host-specific.
+let gamePluginLoad: GamePluginLoad = { plugins: [], systems: [], components: [], errors: [] };
+if (gameId !== '_template') {
+  try {
+    if (__FORGEAX_STATIC_BUILD__ && gameId === __FORGEAX_STATIC_GAME_ID__) {
+      gamePluginLoad = await loadGamePluginModules({
+        modules: staticGamePluginModules,
+        importModule: importStaticGamePlugin,
+      });
+      for (const error of gamePluginLoad.errors) {
+        console.error(`[engine] static game plugin failed: ${error.clientPath}: ${error.message}`);
+      }
+    } else {
+      const response = await fetch(`${packBase}/game-plugins/${gameId}.json`, { cache: 'no-store' });
+      if (response.ok) {
+        const body = await response.json() as { modules?: unknown };
+        const modules = Array.isArray(body.modules)
+          ? body.modules.filter((module): module is { clientPath: string; url: string } => (
+            typeof module === 'object'
+            && module !== null
+            && typeof (module as { clientPath?: unknown }).clientPath === 'string'
+            && typeof (module as { url?: unknown }).url === 'string'
+          ))
+          : [];
+        gamePluginLoad = await loadGamePluginModules({
+          modules,
+          importModule: (url) => import(/* @vite-ignore */ url),
+        });
+        for (const error of gamePluginLoad.errors) {
+          console.error(`[engine] game plugin failed: ${error.clientPath}: ${error.message}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[engine] game plugin manifest unavailable:', error);
   }
-})();
+}
 
 // DEBUG: expose for console probing
 (window as unknown as Record<string, unknown>).__forgeax = { app: app.value, world, renderer };
@@ -460,6 +516,15 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
   const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
   const gameBase = gameUrlBase(base, id);
 
+  if (__FORGEAX_STATIC_BUILD__ && id === __FORGEAX_STATIC_GAME_ID__ && typeof staticGameBootstrap === 'function') {
+    const result = await loadGame(id, async () => ({ bootstrap: staticGameBootstrap }));
+    if (!result.ok) {
+      console.error('[engine] static game entry failed validation:', result.error);
+      return null;
+    }
+    return result.value;
+  }
+
   // Entry resolution. The game entry filename is no longer hardcoded: the
   // authoritative source is forge.json's `entry` field (relative to the game
   // dir). The canonical convention is a root-level `main.ts` (sibling to
@@ -515,6 +580,15 @@ if (entry) {
     { component: Transform, data: { pos: [0, 0.6, 5] } },
     { component: Camera, data: perspective({ fov: 60, aspect: window.innerWidth / window.innerHeight, far: 1000 }) },
   );
+}
+
+// Match editor ▶ Play: plugin systems are attached only to the live runtime
+// world, after bootstrap has had a chance to register its own systems. Edit and
+// preview still share the same component/system registration facts, while the
+// editor retains ownership of its draw/input lifecycle.
+if (gamePluginLoad.systems.length > 0) {
+  const added = addGamePluginSystems(world, gamePluginLoad);
+  if (added.length > 0) console.log(`[engine] game systems added: ${added.join(', ')}`);
 }
 
 // ── Start the frame loop ──

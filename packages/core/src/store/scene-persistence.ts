@@ -27,10 +27,10 @@
 // factory directly with fakes (AC-02, see __tests__/persistence-*.test.ts) while
 // consumers see the same barrel. fetch moved from a module import to
 // `deps.fetch` (D-2 / R-P1 structural injection); the transport body is the
-// platform fetch (OOS-5). The async-op capture-promise seam
+// platform fetch (OOS-5). The legacy async-op capture-promise seam
 // (runAsyncOp / registerAsyncSessionOp / dispatchAsyncSessionOp, on
-// ctx.asyncOpResult) stays HERE so the one dispatch slot lives in one place; the
-// factories only produce the raw async impls this root registers + wraps.
+// ctx.asyncOpResult) stays HERE for the remaining load operation; scene switch
+// now uses the Gateway-owned OperationRun completion path.
 //
 // R3 (plan-strategy §4 / research F-4): the top-level `gateway.subscribe(...)` that
 // sets `ctx.isDirty = true` is an EVAL-TIME side effect and MUST stay a top-level
@@ -94,6 +94,7 @@ import { useSyncExternalStore } from 'react';
 import { broadcastAssetsChanged } from './assets-changed';
 import { createCommandError } from '@forgeax/editor-product';
 import { EngineFacade } from '../io/engine-facade';
+import { clearAnimationPreviews, restoreAllAnimationPreviews } from '../session/animation-preview';
 
 // ── ScenePersistenceContext: the one mutable persistence-state handle (D-2) ────
 // The formerly module-level persistence `let` singletons collapse into ONE object with
@@ -132,7 +133,7 @@ export interface ScenePersistenceContext {
   authoringSession: SceneAuthoringSessionReadModel;
   /** Immutable effective imported snapshot retained independently of the live preview. */
   previewState: ImportedPreviewSessionState | null;
-  /** Module-scoped slot carrying a legacy async session-op's in-flight promise
+  /** Module-scoped slot carrying the legacy load session-op's in-flight promise
    *  from the applier back to the public setter within one synchronous dispatch
    *  (M2 D-1). Request-correlated operations use Gateway OperationRun instead. */
   asyncOpResult: Promise<boolean> | null;
@@ -353,11 +354,59 @@ export const useSceneFile = sceneList.useSceneFile;
 export const useSceneReadModel = sceneList.useSceneReadModel;
 export const initSceneList = sceneList.initSceneList;
 
-// Session op (M2 D-1): switchSceneFile carries an id payload, so its applier
-// reads the id off the op before running the async impl (capture-promise seam).
+// Session op: switchSceneFile carries an id and caller-minted request id, so its
+// applier returns a Gateway-owned OperationRun completion for the async load.
+type SceneSwitchEffect =
+  | {
+      ok: true;
+      result: {
+        requestId: string;
+        sceneId: string;
+        sceneGuid: string | null;
+        previousSceneId: string | null;
+        changed: boolean;
+      };
+    }
+  | {
+      ok: false;
+      error: {
+        code: 'scene-switch-invalid' | 'scene-switch-load-failed';
+        hint: string;
+        current?: unknown;
+        retryable?: boolean;
+        recoveryActions?: readonly string[];
+      };
+    };
+
 sessionAppliers.set('switchSceneFile', (op, applierCtx) => {
-  const sceneOp = op as { id: string; dirtyPolicy?: SceneSwitchDirtyPolicy };
-  if (sceneOp.id === sceneList.getSceneFile()) return { ok: true };
+  const sceneOp = op as { id: string; dirtyPolicy?: SceneSwitchDirtyPolicy; requestId: string };
+  if (sceneOp.id === sceneList.getSceneFile()) {
+    return {
+      ok: true,
+      completion: Promise.resolve({
+        ok: true,
+        result: {
+          requestId: sceneOp.requestId,
+          sceneId: sceneOp.id,
+          sceneGuid: ctx.currentSceneGuid,
+          previousSceneId: sceneOp.id,
+          changed: false,
+        },
+      } satisfies SceneSwitchEffect),
+    };
+  }
+  if (!sceneList.getSceneList().some((entry) => entry.id === sceneOp.id)) {
+    return {
+      ok: false,
+      error: {
+        code: 'scene-switch-invalid',
+        hint: `Scene "${sceneOp.id}" is not present in the active scene manifest; no scene was changed.`,
+        current: { requestId: sceneOp.requestId, sceneId: sceneList.getSceneFile(), targetSceneId: sceneOp.id, availableSceneIds: sceneList.getSceneList().map((entry) => entry.id) },
+        retryable: false,
+        recoveryActions: ['editor.scene.inspect'],
+      },
+    };
+  }
   if (sceneOp.dirtyPolicy === 'cancel') {
     return {
       ok: false,
@@ -382,7 +431,13 @@ sessionAppliers.set('switchSceneFile', (op, applierCtx) => {
       },
     };
   }
-  runAsyncOp(async () => {
+  // Animation-preview defense (M1): restore preview-touched runtime fields to
+  // their authored values, then drop the snapshots — the switch tears the world
+  // down, so no restore can happen after this point.
+  if (applierCtx?.engine) restoreAllAnimationPreviews(applierCtx.engine);
+  clearAnimationPreviews();
+  const previousSceneId = sceneList.getSceneFile();
+  const completion = (async (): Promise<SceneSwitchEffect> => {
     const previousSession = getSceneAuthoringSession();
     const previousPreviewState = ctx.previewState;
     // The authored loader needs its pack target visible; preview mode deliberately
@@ -390,21 +445,40 @@ sessionAppliers.set('switchSceneFile', (op, applierCtx) => {
     // if the switch cannot complete.
     setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION);
     ctx.previewState = null;
-    const ok = await sceneList.doSwitchSceneFile(
-      sceneOp.id,
-      sceneOp.dirtyPolicy,
-      applierCtx?.origin ?? 'human',
-    );
+    const ok = await sceneList.doSwitchSceneFile(sceneOp.id, sceneOp.dirtyPolicy, applierCtx?.origin ?? 'human');
     if (!ok) {
       ctx.previewState = previousPreviewState;
       setAuthoringSession(previousSession);
+      return {
+        ok: false,
+        error: {
+          code: 'scene-switch-load-failed',
+          hint: `Scene "${sceneOp.id}" could not be loaded; the previous scene remains the active authoring scene.`,
+          current: { requestId: sceneOp.requestId, previousSceneId, targetSceneId: sceneOp.id, phase: 'load' },
+          retryable: true,
+          recoveryActions: ['operation.retry', 'scene.switch.discard'],
+        },
+      };
     }
-    return ok;
-  });
-  return { ok: true };
+    return {
+      ok: true,
+      result: {
+        requestId: sceneOp.requestId,
+        sceneId: sceneOp.id,
+        sceneGuid: ctx.currentSceneGuid,
+        previousSceneId,
+        changed: previousSceneId !== sceneOp.id,
+      },
+    };
+  })();
+  completion.catch(() => {});
+  return { ok: true, completion };
 });
 export function switchSceneFile(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy): Promise<boolean> {
-  return dispatchAsyncSessionOp({ kind: 'switchSceneFile', id, dirtyPolicy });
+  const requestId = globalThis.crypto.randomUUID();
+  const accepted = gateway.dispatch({ kind: 'switchSceneFile', id, dirtyPolicy, requestId });
+  if (!accepted.ok) return Promise.resolve(false);
+  return gateway.waitOperationRun(requestId).then((terminal) => terminal.ok && terminal.value.status === 'succeeded');
 }
 
 sessionAppliers.set('previewImportedScene', (op) => {
@@ -943,7 +1017,12 @@ export const inlineAssetCount = diskIo.inlineAssetCount;
 export { wouldDropInlineAssets, wouldDropAllEntities, mergeLoadedInlineOrphans } from './persistence/disk-io';
 
 // ── Disk load / save session ops (session-domain, ledger only, no undo) ────────
-registerAsyncSessionOp('loadDocFromDisk', diskIo.doLoadDocFromDisk);
+registerAsyncSessionOp('loadDocFromDisk', async () => {
+  // Animation-preview defense (M1): the reload tears the world down — drop any
+  // preview snapshots (restore is pointless against despawned entities).
+  clearAnimationPreviews();
+  return diskIo.doLoadDocFromDisk();
+});
 /** Load the game's authored scene from disk (session op). Internal callers
  *  (switchSceneFile) use diskIo.doLoadDocFromDisk directly to avoid a nested
  *  dispatch; this exported wrapper is the human/AI entry point (m2-w8). */
@@ -956,7 +1035,12 @@ export function loadDocFromDisk(): Promise<boolean> {
 // returns that completion to Gateway. The Gateway owns accepted/running/terminal
 // state and publishes the session ledger entry only after succeeded. The legacy
 // asyncOpResult slot below remains exclusively for load/switch paths.
-sessionAppliers.set('saveDocToDisk', (op) => {
+sessionAppliers.set('saveDocToDisk', (op, applierCtx) => {
+  // Animation-preview save-pollution defense (M1): restore the
+  // reflection-declared runtime fields (times/speeds/paused) to their
+  // pre-preview authored values BEFORE serialization so a preview never leaks
+  // into the pack bytes. Synchronous — precedes the async effect.
+  if (applierCtx?.engine) restoreAllAnimationPreviews(applierCtx.engine);
   const completion = diskIo.doSaveDocToDisk({ acceptedRevision: gateway.rev });
   completion.catch(() => {});
   return { ok: true, completion };
@@ -970,8 +1054,8 @@ export function saveDocToDisk(origin: CommandOrigin = 'human'): Promise<boolean>
   ));
 }
 
-// ── Async session-op collection seam (M2 D-1, m2-w8) ──────────────────────────
-// dispatch() is sync but load/switch are async. The applier runs the
+// ── Legacy async session-op collection seam (M2 D-1, m2-w8) ───────────────────
+// dispatch() is sync but load is async. The applier runs the
 // impl and stashes the in-flight promise; the public setter dispatches (ledger +
 // AI trigger) then returns the stashed promise. The slot is ctx.asyncOpResult
 // (ScenePersistenceContext) — one handle, no scattered `let`. This seam stays in

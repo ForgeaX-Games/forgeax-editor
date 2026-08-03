@@ -31,8 +31,13 @@ function assetKindToType(kind: string): string | null {
     case 'equirect': return 'EquirectAsset';
     case 'video': return 'VideoAsset';
     case 'audio': return 'AudioClipAsset';
+    case 'animation-clip':
     case 'animation':
-    case 'clip': return 'AnimationClip';
+    case 'clip':
+    // The catalogued kind the gltf/inline-pack cooks emit for clips
+    // (engine-types AnimationClipAsset.kind) — without it an AnimationPlayer
+    // clips slot's picker lists nothing.
+    case 'animation-clip': return 'AnimationClip';
     case 'scene': return 'SceneAsset';
     case 'font': return 'FontAsset';
     default: return null;

@@ -24,7 +24,12 @@ import { quat } from '@forgeax/engine-math';
 import { Camera, perspective, TONEMAP_REINHARD_EXTENDED, ANTIALIAS_FXAA, SceneInstance } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { defineSystem, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import {
+  FRAME_START_SCAN_SYSTEM_NAME,
+  INPUT_SNAPSHOT_RESOURCE_KEY,
+  type InputSnapshot,
+} from '@forgeax/engine-input';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import type { SceneAsset } from '@forgeax/engine-types';
 
@@ -36,6 +41,40 @@ const SCENE_GUID = '2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071';
 type Ctx = { world: World; assets?: import('@forgeax/engine-assets-runtime').AssetRegistry };
 
 interface PackNode { localId: number; components: Record<string, Record<string, unknown>> }
+
+const SAMPLE_PLAYER_ENTITY_KEY = 'sample-player-entity';
+const SAMPLE_PLAYER_INPUT_SYSTEM_NAME = 'sample-player-input';
+
+// Play-only gameplay logic consumes the engine's frozen frame-start snapshot.
+// The editor host injects the browser backend into the Play world, and
+// inputPlugin() schedules its scan before this system. No DOM listener is
+// allowed here: the same engine input contract must work in browser and CI.
+const samplePlayerInput = defineSystem({
+  name: SAMPLE_PLAYER_INPUT_SYSTEM_NAME,
+  queries: [],
+  after: [FRAME_START_SCAN_SYSTEM_NAME],
+  fn: (world) => {
+    if (!world.hasResource(SAMPLE_PLAYER_ENTITY_KEY) || !world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)) return;
+    const player = world.getResource<EntityHandle>(SAMPLE_PLAYER_ENTITY_KEY);
+    const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
+    const forward = snap.keyboard.down('w') || snap.keyboard.down('W') || snap.keyboard.down('ArrowUp');
+    const back = snap.keyboard.down('s') || snap.keyboard.down('S') || snap.keyboard.down('ArrowDown');
+    const left = snap.keyboard.down('a') || snap.keyboard.down('A') || snap.keyboard.down('ArrowLeft');
+    const right = snap.keyboard.down('d') || snap.keyboard.down('D') || snap.keyboard.down('ArrowRight');
+    const mvx = (right ? 1 : 0) - (left ? 1 : 0);
+    const mvz = (back ? 1 : 0) - (forward ? 1 : 0);
+    if (mvx === 0 && mvz === 0) return;
+
+    const current = world.get(player, Transform);
+    if (!current.ok) return;
+    const length = Math.hypot(mvx, mvz) || 1;
+    const step = 6 * world.getResource(Time).delta;
+    const px = Math.max(-9, Math.min(9, (current.value.pos[0] ?? 0) + (mvx / length) * step));
+    const py = current.value.pos[1] ?? 0.75;
+    const pz = Math.max(-9, Math.min(9, (current.value.pos[2] ?? 0) + (mvz / length) * step));
+    world.set(player, Transform, { pos: [px, py, pz] });
+  },
+});
 
 // Load the authored scene the canonical way -> return the localId->Entity mapping
 // (so the caller can find the Player) + the nodes. Returns null on any failure
@@ -67,8 +106,6 @@ async function loadScene(
 }
 
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
-  const { registerUpdate } = ctx ?? {};
-
   const canvas = document.querySelector<HTMLCanvasElement>('#app')!;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
@@ -124,58 +161,59 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       player = loaded.mapping.get(playerNode.localId);
     }
   }
+  if (player !== undefined) {
+    world.insertResource(SAMPLE_PLAYER_ENTITY_KEY, player);
+    world.addSystem(Update, samplePlayerInput).unwrap();
+  }
 
   // ── camera: a high tilted follow cam (top-down 2.5D) ─────────────────────────
+  // An authored scene Camera is the user's visual intent. Reuse it in Play so
+  // the sample game does not introduce a second camera behind the editor's
+  // back. The follow camera remains the standalone/no-authored-camera default.
+  const authoredCameraNode = loaded?.nodes.find((n) => n.components.Camera !== undefined);
+  const authoredCamera = authoredCameraNode === undefined
+    ? undefined
+    : loaded?.mapping.get(authoredCameraNode.localId);
   // The camera is spawned in code (same as templates/game-default): ▶ Play forks a
-  // fresh play world whose only camera is this one. clearColor = visible sky (the
-  // sample scene has no SkyboxBackground entity, so this quartet IS the background;
-  // the engine's Camera stores it as an `array<f32,4>` field named `clearColor`).
+  // fresh play world whose only camera is this one when the scene has no authored
+  // camera. clearColor = visible sky (the sample scene has no SkyboxBackground
+  // entity, so this quartet IS the background; the engine's Camera stores it as
+  // an `array<f32,4>` field named `clearColor`).
   const TOP_DY = 12, TOP_DZ = 9;
   const CAM_FOLLOW = 8;
   const topPitch = -Math.atan2(TOP_DY, TOP_DZ);
   const topQ = quat.create();
   quat.fromAxisAngle(topQ, [1, 0, 0], topPitch);
   let camX = initX, camZ = initZ + TOP_DZ;
-  const camera = world.spawn(
+  const camera = authoredCamera ?? world.spawn(
     { component: Transform, data: { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
   ).unwrap();
 
-  // ── input: WASD / arrows move the Player on the ground plane ──────────────────
-  const keys: Record<string, boolean> = {};
-  window.addEventListener('keydown', (e) => {
-    keys[e.code] = true;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  });
-  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-
-  const SPEED = 6;      // walk speed (units/s)
-  const BOUND = 9;      // keep the player on the ground slab
+  // ── camera follow: movement itself is the module-level Play system above ──────
   let px = initX, pz = initZ;
-
-  if (registerUpdate) {
-    registerUpdate((dt: number) => {
-      const f = ((keys['KeyW'] || keys['ArrowUp']) ? 1 : 0) - ((keys['KeyS'] || keys['ArrowDown']) ? 1 : 0);
-      const s = ((keys['KeyD'] || keys['ArrowRight']) ? 1 : 0) - ((keys['KeyA'] || keys['ArrowLeft']) ? 1 : 0);
-      // top-down world-relative: W -> -Z, D -> +X
-      let mvx = s, mvz = -f;
-      if (mvx !== 0 || mvz !== 0) {
-        const l = Math.hypot(mvx, mvz) || 1;
-        const step = SPEED * dt;
-        px = Math.max(-BOUND, Math.min(BOUND, px + (mvx / l) * step));
-        pz = Math.max(-BOUND, Math.min(BOUND, pz + (mvz / l) * step));
-        if (player !== undefined) {
-          const cur = world.get(player, Transform);
-          const py = cur.ok ? (cur.value.pos[1] ?? 0.75) : 0.75;
-          world.set(player, Transform, { pos: [px, py, pz] });
+  world.addSystem(Update, {
+    name: 'sample-follow-camera',
+    queries: [],
+    after: [SAMPLE_PLAYER_INPUT_SYSTEM_NAME],
+    fn: () => {
+      if (player !== undefined) {
+        const current = world.get(player, Transform);
+        if (current.ok) {
+          px = current.value.pos[0] ?? px;
+          pz = current.value.pos[2] ?? pz;
         }
       }
 
-      // follow camera
-      const a = 1 - Math.exp(-CAM_FOLLOW * dt);
-      camX += (px - camX) * a;
-      camZ += (pz + TOP_DZ - camZ) * a;
-      world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] });
-    });
-  }
+      // Follow only the game-owned fallback camera. Authored cameras keep the
+      // exact scene transform and projection through the Edit → Play roundtrip.
+      if (authoredCamera === undefined) {
+        const dt = world.getResource(Time).delta;
+        const a = 1 - Math.exp(-CAM_FOLLOW * dt);
+        camX += (px - camX) * a;
+        camZ += (pz + TOP_DZ - camZ) * a;
+        world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!] });
+      }
+    },
+  }).unwrap();
 }

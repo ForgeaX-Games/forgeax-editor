@@ -106,7 +106,9 @@ export function SceneEntryBar(): ReactNode {
   const switchScene = (id: string, dirtyPolicy?: 'save' | 'discard'): void => {
     setDispatchError(null);
     const result = gateway.dispatch(
-      dirtyPolicy === undefined ? { kind: 'switchSceneFile', id } : { kind: 'switchSceneFile', id, dirtyPolicy },
+      dirtyPolicy === undefined
+        ? { kind: 'switchSceneFile', id, requestId: crypto.randomUUID() }
+        : { kind: 'switchSceneFile', id, dirtyPolicy, requestId: crypto.randomUUID() },
       'human',
     );
     if (!result.ok) {

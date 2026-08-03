@@ -89,6 +89,17 @@
 .fx-inspector .bespoke-hint { display: flex; align-items: center; gap: 7px; padding: 6px 12px 6px 26px; font-size: 11px; color: var(--color-text-tertiary); }
 .fx-inspector .bespoke-hint .bespoke-icon { color: var(--color-brand-primary); }
 
+/* ════════════════ Animation preview transport (bespoke editor) ════════════════ */
+.fx-inspector .anim-transport { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 26px; border-bottom: 1px solid var(--color-border-subtle); }
+.fx-inspector .anim-transport .anim-toggle { display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--prim-radius-4); border: 1px solid var(--color-border-subtle); background: var(--color-background-elevated); color: var(--color-text-primary); cursor: pointer; flex: 0 0 auto; }
+.fx-inspector .anim-transport .anim-toggle:hover:not(:disabled) { border-color: var(--color-brand-line); color: var(--color-brand-primary); }
+.fx-inspector .anim-transport .anim-toggle:disabled { opacity: 0.45; cursor: default; }
+.fx-inspector .anim-transport .anim-phase { flex: 1 1 80px; min-width: 0; accent-color: var(--color-brand-primary); }
+.fx-inspector .anim-transport .anim-phase:disabled { opacity: 0.45; }
+.fx-inspector .anim-transport .anim-speed { flex: 0 0 auto; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 5px; color: var(--color-text-primary); font-size: 11px; font-family: var(--prim-font-mono); padding: 2px 4px; outline: none; }
+.fx-inspector .anim-transport .anim-speed:disabled { opacity: 0.45; }
+.fx-inspector .anim-transport .anim-hint { font-size: 10.5px; color: var(--color-text-tertiary); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* ════════════════ Field rows ════════════════ */
 .fx-inspector .f-row { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 26px; min-height: 26px; }
 .fx-inspector .f-row:hover { background: var(--color-interaction-hover); }

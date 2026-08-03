@@ -19,12 +19,6 @@
       "nameLabel": "Scene name",
       "guidUnavailable": "This scene has no stable GUID and cannot be changed."
     },
-    "viewportHints": {
-      "toggleTitle": "Show controls",
-      "closeTitle": "Close (click the ? at the bottom-right to reopen)",
-      "row1": "<b>Middle</b> orbit · <b>Shift+Middle</b> pan · <b>Ctrl+Middle / Wheel</b> zoom · <b>Left</b> select",
-      "row2": "<b>W / E / R</b> move·rotate·scale · <b>F</b> focus selection · trackpad <b>Alt+Left</b> orbit · <b>⇧Alt</b> pan"
-    },
     "hierarchy": {
       "outliner": "Outliner",
       "sceneRoot": "Scene",
@@ -167,7 +161,12 @@
       "showModifiedOnly": "Show modified only",
       "expandAll": "Expand all",
       "collapseAll": "Collapse all",
-      "resetAll": "Reset all properties"
+      "resetAll": "Reset all properties",
+      "animPlay": "Play preview",
+      "animPause": "Pause preview",
+      "animNoClip": "bind a clip to slot 0 to preview",
+      "animPhase": "Preview position",
+      "animSpeed": "Preview speed"
     },
     "launcher": {
       "title": "Launcher",

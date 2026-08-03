@@ -330,14 +330,19 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
   // only for inline/dev entries with no sourcePath. For an external import
   // (FBX/GLB/HDR/audio/font) packageUrl points at a DDC artefact
   // (`*.{guid}.bin` or `/__forgeax-ddc/{guid}.pack.json`) that has no stable
-  // mapping back to the source; the CRUD target is the `.meta.json` sidecar beside
-  // the source file, derived from sourcePath.
+  // mapping back to the source. An authored pack can also be projected through
+  // that DDC URL in dev, so sourcePath owns the distinction: a `.pack.json`
+  // source remains a pack CRUD target; an imported source uses its `.meta.json`
+  // sidecar.
+  const sourcePath = e.sourcePath?.replace(/^\//, '');
   const packPath = (e.packageUrl.includes('__forgeax-ddc'))
-    ? (e.sourcePath ? metaPathForSource(e.sourcePath.replace(/^\//, '')) : e.packageUrl)
+    ? (sourcePath?.endsWith('.pack.json')
+      ? sourcePath
+      : sourcePath ? metaPathForSource(sourcePath) : e.packageUrl)
     : e.packageUrl.endsWith('.pack.json')
-      ? (e.sourcePath ? e.sourcePath.replace(/^\//, '') : e.packageUrl)
-      : e.sourcePath
-        ? metaPathForSource(e.sourcePath.replace(/^\//, ''))
+      ? (sourcePath ?? e.packageUrl)
+      : sourcePath
+        ? metaPathForSource(sourcePath)
         : e.packageUrl;
   return {
     type: 'asset',

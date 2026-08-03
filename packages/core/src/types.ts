@@ -45,6 +45,8 @@ export type BuiltinEditorOp =
   | { kind: 'rename'; entity: EntityId; name: string }
   | { kind: 'reparent'; entity: EntityId; parent: EntityId | null }
   | { kind: 'setComponent'; entity: EntityId; component: string; patch: Record<string, unknown> }
+  | { kind: 'setSceneOverride'; root: EntityId; member: EntityId; component: string; field: string; value: unknown; /** Gateway-filled prior state for undo. */ _beforeHadOverride?: boolean; _beforeOverride?: unknown }
+  | { kind: 'removeSceneOverride'; root: EntityId; member: EntityId; component: string; field: string }
   | { kind: 'addComponent'; entity: EntityId; component: string; value: unknown }
   | { kind: 'removeComponent'; entity: EntityId; component: string }
   | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
@@ -64,6 +66,7 @@ export type BuiltinEditorOp =
   // exactly once from the live source, so redo re-instantiates the same GUID-backed
   // POD even if the original later changes or disappears.
   | { kind: 'duplicateEntity'; entity: EntityId; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** Gateway-filled replay snapshot */ _asset?: SceneAsset }
+  | { kind: 'applyVisualQualityPreset'; preset: 'draft' | 'balanced' | 'cinematic' }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
   | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
@@ -100,7 +103,10 @@ export type BuiltinEditorOp =
   | { kind: 'captureFrame'; frames?: number; requestId: string; retryOfRequestId?: string }
   | { kind: 'requestRename'; entity: EntityId }
   | { kind: 'setSceneId'; id: string | null | undefined }
-  | { kind: 'switchSceneFile'; id: string; dirtyPolicy?: SceneSwitchDirtyPolicy }
+  // switchSceneFile is request-correlated: scene loading is asynchronous and
+  // callers must read the Gateway-owned terminal result instead of treating the
+  // dispatch acceptance as a successful scene change.
+  | { kind: 'switchSceneFile'; id: string; dirtyPolicy?: SceneSwitchDirtyPolicy; requestId: string; retryOfRequestId?: string }
   | { kind: 'previewImportedScene'; guid: string; sourceKey: string; sourcePath?: string; revision: string; requestId: string }
   | { kind: 'editImportedSource'; guid: string; sourceKey: string; metaPath: string; revision: string; requestId: string }
   | { kind: 'saveImportedSource'; requestId: string; retryOfRequestId?: string }
@@ -156,6 +162,14 @@ export type BuiltinEditorOp =
   // nested setComponent remains the authored undoable write. `slot` targets one
   // array element; omit it to write the whole field from `guids`.
   | { kind: 'bindAssetRef'; entity: EntityHandle; component: string; field: string; assetType: string; guids: string[]; slot?: number; requestId: string }
+  // setAnimationPreview (animation-preview M1): drive an entity's AnimationPlayer
+  // playback transport for Inspector preview. SESSION-domain, ledger-only, no undo
+  // — preview is session state, not authored intent. The applier snapshots the
+  // reflection-declared runtimeFields before the first preview write; the
+  // save/play/selection-change boundaries restore them so a preview never
+  // pollutes the saved document. Transport field names come from the component's
+  // reflected playback contract (meta.animation; editor overlay interim).
+  | { kind: 'setAnimationPreview'; entity: EntityId; playing?: boolean; speed?: number; phase?: number }
   | { kind: 'setFolderSelection'; paths?: string[]; items?: { path: string; kind: 'dir' | 'file' }[] }
   | { kind: 'setCBPath'; path: string }
   | { kind: 'cbGoBack' }
@@ -292,6 +306,8 @@ export interface CommandError extends CommandErrorContext {
     | 'play-cancelled-dirty'
     // Scene switching must not silently flush authored edits. Callers either
     // choose save/discard explicitly or branch on this structured refusal.
+    | 'scene-switch-invalid'
+    | 'scene-switch-load-failed'
     | 'scene-switch-dirty'
     | 'scene-switch-cancelled'
     // R0-02C: create/duplicate is one request-correlated run spanning file
@@ -319,6 +335,9 @@ export interface CommandError extends CommandErrorContext {
     | 'scene-preview-failed'
     // ── Async shared-ref binding failure (R0-05C) ──
     | 'asset-bind-failed'
+    // Asset/material binding was rejected before the document write because
+    // the target's skin state and the material's first-pass shader disagree.
+    | 'asset-bind-incompatible'
     // Asset import executor failures (stable terminal taxonomy).
     | 'IMPORT_UNSUPPORTED_FORMAT'
     | 'IMPORT_SOURCE_BYTES_MISSING'

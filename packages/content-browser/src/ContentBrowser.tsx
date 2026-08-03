@@ -4,7 +4,7 @@ import { useHost } from '@forgeax/interface/core/app-shell';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { describeSceneActivation, generateAssetGuid, gateway, requestAddAssetsToChat, resolveGamePath, showContextMenu,
+import { describeSceneActivation, generateAssetGuid, gateway, getSelection, requestAddAssetsToChat, resolveGamePath, showContextMenu,
   ResizeHandle, useLocalSize, useSceneReadModel, validateAssetBasename } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
@@ -360,7 +360,7 @@ export function ContentBrowser() {
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
   // (gateway-only door, M3), which is no longer exported from the barrel.
   const requestSceneSwitch = useCallback((id: string) => {
-    const result = gateway.dispatch({ kind: 'switchSceneFile', id }, 'human');
+    const result = gateway.dispatch({ kind: 'switchSceneFile', id, requestId: crypto.randomUUID() }, 'human');
     if (!result.ok && result.error.code === 'scene-switch-dirty') {
       setPendingSceneSwitch(id);
     }
@@ -370,7 +370,7 @@ export function ContentBrowser() {
     const id = pendingSceneSwitch;
     setPendingSceneSwitch(null);
     if (id !== null && dirtyPolicy !== 'cancel') {
-      gateway.dispatch({ kind: 'switchSceneFile', id, dirtyPolicy }, 'human');
+      gateway.dispatch({ kind: 'switchSceneFile', id, dirtyPolicy, requestId: crypto.randomUUID() }, 'human');
     }
   }, [pendingSceneSwitch]);
 
@@ -868,6 +868,7 @@ export function ContentBrowser() {
   const handleContextMenu = useCallback((e: React.MouseEvent, item: CBViewItem) => {
     e.preventDefault();
     e.stopPropagation();
+    const selectedEntity = getSelection();
     selectItemForContextMenu(item, e);
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     if (item.type === 'folder') {
@@ -883,7 +884,7 @@ export function ContentBrowser() {
     const contextSelection: CBSelection = selectedItems.some(selected => viewItemKey(selected) === viewItemKey(asset))
       ? multiSelect.selection
       : { items: [asset], primary: asset };
-    const menuItems = buildAssetContextMenu(asset, contextSelection, allAssets, crudCallbacks);
+    const menuItems = buildAssetContextMenu(asset, contextSelection, allAssets, crudCallbacks, selectedEntity);
     const resolved = menuItems.filter(m => !m.separator && !['rename', 'copy-path', 'delete', 'add-to-chat'].includes(m.id)).map(m => ({
       label: m.label,
       icon: m.icon ?? menuIconForId(m.id),

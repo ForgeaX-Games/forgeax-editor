@@ -264,7 +264,7 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
   it('does not add run metadata or change the domain of unrelated operations', () => {
     const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
     for (const op of gw.listOps()) {
-      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame') continue;
+      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame') continue;
       expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
       expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
     }

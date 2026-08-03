@@ -19,6 +19,8 @@ const fakeCatalog = [
   { guid: 'g-cube', kind: 'mesh', name: 'Cube', packageUrl: 'cube.mesh' },
   { guid: 'g-sphere', kind: 'mesh', name: 'Sphere', packageUrl: 'sphere.mesh' },
   { guid: 'g-red', kind: 'material', name: 'RedMat', packageUrl: 'red.mat' },
+  { guid: 'g-run', kind: 'animation-clip', name: 'Run', packageUrl: 'run.anim' },
+  { guid: 'g-walk', kind: 'animation-clip', name: 'Walk', packageUrl: 'fox.anim' },
 ];
 
 const gw = gateway as unknown as { assetCatalog: unknown; describeAssetByGuid: unknown };
@@ -69,6 +71,19 @@ describe('AssetPicker', () => {
     expect(html).toContain('No AudioClipAsset in project');
   });
 
+  // Regression (animation-preview M1): the catalogued kind the gltf/inline-pack
+  // cooks emit for clips is 'animation-clip' (AnimationClipAsset.kind) — without
+  // the mapping an AnimationPlayer clips slot's picker listed NOTHING.
+  it('AnimationClip field → catalogued animation-clip rows', () => {
+    const html = renderToStaticMarkup(
+      <AssetPicker assetType="AnimationClip" onPick={() => {}} onClose={() => {}} />,
+    );
+    expect(html).toContain('asset-picker-row-g-run');
+    expect(html).toContain('Run');
+    expect(html).not.toContain('asset-picker-row-g-cube');
+    expect(html).not.toContain('asset-picker-row-g-red');
+  });
+
   it('AudioClipAsset field → only audio rows', () => {
     gw.assetCatalog = () => [
       ...fakeCatalog,
@@ -81,5 +96,14 @@ describe('AssetPicker', () => {
     expect(html).toContain('test_mp3');
     expect(html).not.toContain('asset-picker-row-g-cube');
     gw.assetCatalog = () => fakeCatalog;
+  });
+
+  it('AnimationClip field → imported animation-clip rows', () => {
+    const html = renderToStaticMarkup(
+      <AssetPicker assetType="AnimationClip" onPick={() => {}} onClose={() => {}} />,
+    );
+    expect(html).toContain('asset-picker-row-g-walk');
+    expect(html).toContain('Walk');
+    expect(html).not.toContain('asset-picker-row-g-cube');
   });
 });

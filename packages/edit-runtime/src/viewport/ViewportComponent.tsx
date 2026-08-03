@@ -817,28 +817,41 @@ async function bootViewport(
   registerTeardown(onViewportQuadrantChange(syncTransientMode));
 
   // active-camera derivation (was :658-710). Game-camera discovery walks the live
-  // world archetype graph for the first non-editor Camera entity.
-  const discoverGameCameraFromWorld = (): void => {
+  // authored/play world graph for its first Camera entity.
+  const discoverGameCameraFromWorld = (sourceWorld?: unknown): void => {
     interface ArchCam { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }
     interface WorldGraph { _getGraph: () => { archetypes: ArchCam[] } }
-    const graph = (world as unknown as WorldGraph)._getGraph();
-    const editorCam = cameraEntity as unknown as number;
+    const cameraWorld = (sourceWorld as World | undefined) ?? world;
+    const graph = (cameraWorld as unknown as WorldGraph)._getGraph();
     for (const arch of graph.archetypes) {
       if (!arch.columns.has(Camera.id)) continue;
       const selfCol = arch.columns.get(Entity.id)?.get('self');
       if (!selfCol) continue;
       for (let row = 0; row < arch.size; row++) {
         const packed = selfCol.view[row]!;
-        if (packed !== 0 && (packed as unknown as number) !== editorCam) {
-          setGameCameraEntity(packed as unknown as number);
-          return;
-        }
+        // `packed` belongs to cameraWorld. Never compare it with the editor
+        // camera's numeric handle: identical numbers in different Worlds are
+        // unrelated entities (especially across the fresh Play World boundary).
+        setGameCameraEntity(packed as unknown as number);
+        return;
       }
     }
   };
+  // The render draw-source makes editorWorld the cameraOwner in Edit and
+  // play·scene, while play·game renders the transient playWorld as a
+  // single-world app. ActiveCamera is a resource on that cameraOwner world;
+  // putting the editor handle on the authored scene world leaves the actual
+  // camera owner unselected and turns a second authored Camera into a real
+  // render-system-multi-camera failure after reload.
+  let livePlayWorld: World | undefined;
   const applyActiveCamera = (): void => {
     const camEnt = deriveActiveCameraEntity();
-    if (camEnt !== undefined) setActiveCamera(world as never, camEnt as unknown as number);
+    if (camEnt === undefined) return;
+    const q = getViewportQuadrant();
+    const cameraOwner = q.run === 'play' && q.display === 'game'
+      ? livePlayWorld
+      : worldManager.editorWorld;
+    if (cameraOwner !== undefined) setActiveCamera(cameraOwner, camEnt as unknown as number);
   };
   applyActiveCamera();
   registerTeardown(onViewportQuadrantChange(() => applyActiveCamera()));
@@ -887,19 +900,28 @@ async function bootViewport(
         setFps(0);
         onFps(0);
         installFpsReport(playWorld as World, onFps);
+        livePlayWorld = playWorld as World;
         canvas.focus({ preventScroll: true });
         canvasInput.grantGame();
         setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
       },
       onPlayFailed: () => {
         // Degrade back to a coherent edit viewport if fresh-world assembly fails.
+        livePlayWorld = undefined;
         canvasInput.revokeGame();
         setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
       },
     });
   } catch (err) {
     console.error('[editor] host session init failed:', err);
-    session = { playSimulation: () => ({ ok: true }), stopSimulation: () => {}, dispose: () => {}, getPlayPauseHandle: () => null };
+    session = {
+      playSimulation: () => ({ ok: true }),
+      stopSimulation: () => {},
+      dispose: () => {},
+      currentPlayWorld: () => null,
+      currentPlayRunId: () => null,
+      getPlayPauseHandle: () => null,
+    };
   }
   const revokeGameControl = (): void => {
     canvasInput.revokeGame();
@@ -1042,6 +1064,10 @@ async function bootViewport(
     app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
     playSimulation: (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human') => actionsRef.current.playSimulation(policy, origin),
     stopSimulation: () => actionsRef.current.stopSimulation(),
+    dispose: () => session.dispose(),
+    currentPlayWorld: () => session.currentPlayWorld(),
+    currentPlayRunId: () => session.currentPlayRunId(),
+    getPlayPauseHandle: () => session.getPlayPauseHandle(),
     readActiveWorld: () => gateway.activeWorld.inspect(),
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
     // M5 (w29): expose the super coordination layer so out-of-frame scripts (AC-02

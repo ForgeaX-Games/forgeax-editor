@@ -22,6 +22,8 @@ void SceneInstance; void ChildOf; void Children; void Name;
 import {
   _resetSchemaCache,
   getComponentSchema,
+  getAnimationComponentMeta,
+  getTransportDescriptor,
   fieldSchema,
   listComponentSchemas,
   defaultComponentData,
@@ -188,7 +190,7 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
   });
 
   it('AnimationPlayer: direct clips plus optional animation graph', () => {
-    expectKeys('AnimationPlayer', 'clips', 'graph', 'targetRoot', 'paused', 'looping');
+    expectKeys('AnimationPlayer', 'clips', 'graph', 'paused', 'looping');
     expectFieldType('AnimationPlayer', 'clips', 'asset');
     expectFieldType('AnimationPlayer', 'times', 'array');
     expect(fieldSchema('AnimationPlayer', 'times')).toMatchObject({
@@ -199,7 +201,6 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
     });
     expect(fieldSchema('AnimationPlayer', 'weights')).toMatchObject({ arrayGroup: 'slots', arrayElementDefault: 1 });
     expectFieldType('AnimationPlayer', 'graph', 'asset');
-    expect(fieldSchema('AnimationPlayer', 'targetRoot')).toMatchObject({ type: 'number', shape: 'optional', default: null });
   });
 
   it('GlyphText: fontHandle (asset), text, fontSize, color', () => {
@@ -349,6 +350,52 @@ describe('Reflection: listComponentSchemas completeness', () => {
         else if (f.type === 'vec') expect(Array.isArray(dv)).toBe(true);
       }
     }
+  });
+});
+
+describe('Reflection: animation preview meta contract (M1)', () => {
+  it('AnimationPlayer surfaces the bespoke editor + playback transport via the editor overlay', () => {
+    const schema = getComponentSchema('AnimationPlayer');
+    expect(schema?.bespoke?.editorId).toBe('animation-transport');
+    const animation = schema?.animation;
+    expect(animation).toBeDefined();
+    expect(animation!.transport).toMatchObject({
+      clips: 'clips',
+      times: 'times',
+      weights: 'weights',
+      speeds: 'speeds',
+      paused: 'paused',
+      clipIndex: 0,
+    });
+    expect(animation!.runtimeFields).toEqual(['times', 'speeds', 'paused']);
+    // The convenience accessors read the same SSOT (Derive, don't Duplicate).
+    expect(getAnimationComponentMeta('AnimationPlayer')).toEqual(animation);
+    expect(getTransportDescriptor('AnimationPlayer')).toEqual(animation!.transport);
+  });
+
+  it('components without the contract expose no animation meta', () => {
+    expect(getAnimationComponentMeta('Transform')).toBeUndefined();
+    expect(getTransportDescriptor('Transform')).toBeUndefined();
+  });
+
+  it('engine-provided meta.animation surfaces through the same schema field', () => {
+    // Engine meta is the long-term SSOT (the overlay is the interim owner); a
+    // component carrying its own meta.animation must surface identically.
+    ensureComponent('R1_AnimMetaFixture', { value: 'f32' }, {
+      meta: {
+        animation: {
+          transport: {
+            clips: 'clips', times: 'times', weights: 'weights',
+            speeds: 'speeds', paused: 'paused', clipIndex: 0,
+          },
+          runtimeFields: ['times'],
+        },
+      },
+    });
+    _resetSchemaCache();
+    const meta = getAnimationComponentMeta('R1_AnimMetaFixture');
+    expect(meta?.transport.clips).toBe('clips');
+    expect(meta?.runtimeFields).toEqual(['times']);
   });
 });
 

@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'bun:test';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { applyCommand, createEditSession } from '../session/document';
 import { _resetSchemaCache } from '../scene/schema';
-import { planArrayEdit } from '../scene/array-edit';
+import { planArrayEdit, planGroupedArrayPatch } from '../scene/array-edit';
 
 beforeAll(() => {
   void AnimationPlayer;
@@ -39,6 +39,28 @@ describe('R0-03D array edit planning', () => {
     );
     expect(plan.ok).toBe(false);
     if (!plan.ok) expect(plan.fieldPath).toBe('AnimationPlayer.times');
+  });
+
+  it('binds a new slot as one complete parallel-group patch', () => {
+    const plan = planGroupedArrayPatch(
+      { component: 'AnimationPlayer', field: 'clips', value: 20, slot: 1 },
+      { clips: [10], times: [1], weights: [0.5], speeds: [2] },
+    );
+    expect(plan).toEqual({
+      ok: true,
+      patch: { clips: [10, 20], times: [1, 0], weights: [0.5, 1], speeds: [2, 1] },
+    });
+  });
+
+  it('replaces all bound clips while retaining and defaulting sibling columns', () => {
+    const plan = planGroupedArrayPatch(
+      { component: 'AnimationPlayer', field: 'clips', value: [20, 30] },
+      { clips: [10], times: [1], weights: [0.5], speeds: [2] },
+    );
+    expect(plan).toEqual({
+      ok: true,
+      patch: { clips: [20, 30], times: [1, 0], weights: [0.5, 1], speeds: [2, 1] },
+    });
   });
 });
 

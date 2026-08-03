@@ -34,6 +34,8 @@ import {
   applyRename,
   applyReparent,
   applySetComponent,
+  applySetSceneOverride,
+  applyRemoveSceneOverride,
   applyAddComponent,
   applyRemoveComponent,
   applySetHidden,
@@ -41,6 +43,7 @@ import {
   applyDuplicateEntity,
   applyTransaction,
 } from '../session/document';
+import { applyVisualQualityPreset } from '../session/visual-quality';
 import { registerBuiltinOp as catalogRegisterBuiltinOp } from './catalog';
 
 // ── Applier types ────────────────────────────────────────────────────────────
@@ -81,6 +84,14 @@ export interface SessionApplierCtx {
       | { readonly ok: false; readonly error: CommandError }
     ): void;
   };
+  /** Resolve a live shared<T> handle to its asset payload against the ACTIVE
+   *  world of the dispatching gateway (animation-preview M1: the preview applier
+   *  reads a bound clip's duration without importing the gateway singleton —
+   *  IoC symmetry with ctx.engine, and test-dispatchable on a throwaway
+   *  gateway). */
+  resolveAsset?(handle: number):
+    | { ok: true; asset: unknown }
+    | { ok: false; error: CommandError };
 }
 
 /** A SESSION / TRANSIENT applier (plan-strategy §2 D-11): takes the op and an
@@ -192,12 +203,15 @@ registerApplier('document', 'spawnEntity', applySpawnEntity as unknown as Applie
 registerApplier('document', 'destroyEntity', applyDestroyEntity as unknown as ApplierFn);
 registerApplier('document', 'rename', applyRename as unknown as ApplierFn);
 registerApplier('document', 'reparent', applyReparent as unknown as ApplierFn);
-	registerApplier('document', 'setComponent', applySetComponent as unknown as ApplierFn);
+registerApplier('document', 'setComponent', applySetComponent as unknown as ApplierFn);
+registerApplier('document', 'setSceneOverride', applySetSceneOverride as unknown as ApplierFn);
+registerApplier('document', 'removeSceneOverride', applyRemoveSceneOverride as unknown as ApplierFn);
 	registerApplier('document', 'addComponent', applyAddComponent as unknown as ApplierFn);
 	registerApplier('document', 'removeComponent', applyRemoveComponent as unknown as ApplierFn);
 	registerApplier('document', 'setHidden', applySetHidden as unknown as ApplierFn);
 	registerApplier('document', 'instantiateSceneAsset', applyInstantiateSceneAsset as unknown as ApplierFn);
 registerApplier('document', 'duplicateEntity', applyDuplicateEntity as unknown as ApplierFn);
+registerApplier('document', 'applyVisualQualityPreset', applyVisualQualityPreset as unknown as ApplierFn);
 
 // ── transaction applier (M1 t4 → F-1 IoC: ctx-based recursion) ─────────────
 // The transaction applier recurses through `ctx.dispatchSub`, which the caller

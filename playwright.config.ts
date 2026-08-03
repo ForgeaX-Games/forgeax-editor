@@ -30,9 +30,12 @@ const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
 const e2eTempRoot = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'forgeax-save-e2e-'));
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
-// J1 stages its disposable source fixture from the assets submodule in the
-// test worker. Exposing only the temp path keeps the product tree binary-free
-// while letting that test exercise the same on-disk import contract as a user.
+// J1's disposable source fixture must exist before all three webServers start:
+// the browser/backend import path reads the isolated game directory that is
+// captured at server boot. Keep the binary in the temp copy only, so the
+// product tree remains binary-free while J1 exercises the real on-disk import
+// contract.
+cpSync(resolve('forgeax-editor-assets/characters/Fox.glb'), join(e2eGameDir, 'assets/Fox.glb'));
 process.env.FORGEAX_E2E_GAME_DIR = e2eGameDir;
 process.once('exit', () => rmSync(e2eTempRoot, { recursive: true, force: true }));
 
@@ -77,9 +80,11 @@ export default defineConfig({
       env: {
         ...process.env as Record<string, string>,
         FORGEAX_GAME_DIR: e2eGameDir,
+        FORGEAX_ENGINE_PORT: e2eEnginePort,
         FORGEAX_INTERFACE_PORT: e2eHostPort,
         FORGEAX_STANDALONE_PORT: e2eHostPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
+        FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
       },
       url: `http://127.0.0.1:${e2eHostPort}`,
       reuseExistingServer: !process.env.CI,
@@ -93,7 +98,13 @@ export default defineConfig({
       // untouched by M2. Port 15173 is the play-runtime vite.config.ts default.
       command: `bunx vite --port ${e2eEnginePort} --strictPort`,
       cwd: './packages/play-runtime',
-      env: { ...process.env, FORGEAX_ENGINE_PORT: e2eEnginePort },
+      env: {
+        ...process.env,
+        FORGEAX_ENGINE_PORT: e2eEnginePort,
+        FORGEAX_PREVIEW_GAMES_DIR: e2eTempRoot,
+        FORGEAX_GAMES_URL_PREFIX: 'e2e-games',
+        FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
+      },
       url: `http://127.0.0.1:${e2eEnginePort}/preview/`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,

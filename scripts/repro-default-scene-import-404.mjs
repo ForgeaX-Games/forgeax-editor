@@ -199,7 +199,12 @@ async function main() {
         if (!meshes.ok) return { ok: false, error: meshes.error };
         const roots = query({ with: ['Name', 'Transform'] });
         if (!roots.ok) return { ok: false, error: roots.error };
-        const foxRoot = roots.rows.find((row) => row.Name.value === 'Fox');
+        // J0 deliberately renames the authored root to "Fox J0 Human" through
+        // the same Gateway path a user follows. Keep the probe keyed to the
+        // stable asset identity prefix, not the pre-J0 display-name snapshot.
+        const foxRoot = roots.rows.find((row) => (
+          typeof row.Name.value === 'string' && row.Name.value.startsWith('Fox')
+        ));
         const fox = meshes.rows.find((row) => row.MeshRenderer.materials.some((handle) => {
           const material = gateway.resolveAsset(handle);
           const texture = material.ok ? material.asset.values?.baseColorTexture : undefined;

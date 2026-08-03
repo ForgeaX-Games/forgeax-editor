@@ -19,7 +19,8 @@ import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { parseScenePayload } from '@forgeax/engine-assets-runtime';
-import { createRuntimeUiGraph, entComponent, panelBridge, publishMeshStats } from '@forgeax/editor-core';
+import type { SceneAsset } from '@forgeax/engine-types';
+import { createRuntimeUiGraph, entComponent, normalizeAnimationPlayerSceneAsset, panelBridge, publishMeshStats } from '@forgeax/editor-core';
 import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDirtyPolicy, SelectedAsset } from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
@@ -90,7 +91,7 @@ export interface HostSessionContext {
   /** Boot-stage setter (shared with the viewport watchdog). */
   readonly setBootStage: (s: string) => void;
   /** Re-discover the game camera on the live world (AC-12 hard cut). */
-  readonly discoverGameCameraFromWorld: () => void;
+  readonly discoverGameCameraFromWorld: (world?: unknown) => void;
   /** Re-apply the derived active camera to the engine. */
   readonly applyActiveCamera: () => void;
   /**
@@ -197,6 +198,10 @@ export interface HostSession {
    * calls it (teardown = page navigation).
    */
   dispose(options?: { flushPendingSave?: boolean }): void;
+  /** The live play world while playing, else null. */
+  currentPlayWorld(): unknown;
+  /** The stable run id while playing, else null. */
+  currentPlayRunId(): string | null;
   /** The live play App's pause/resume handle while playing, else null. */
   getPlayPauseHandle(): { pause(): void; resume(): void } | null;
 }
@@ -740,7 +745,7 @@ export function createHostSession(deps: HostSessionDeps): {
         }
         return res;
       },
-      onAfterPlay: () => { discoverGameCameraFromWorld(); applyActiveCamera(); },
+      onAfterPlay: (playWorld) => { discoverGameCameraFromWorld(playWorld); applyActiveCamera(); },
       onPlayStarted: ctx.onPlayStarted,
       onPlayFailed: ctx.onPlayFailed,
       // DEV bridge only: register the eval-queue drain on the play world so a CLI
@@ -829,6 +834,8 @@ export function createHostSession(deps: HostSessionDeps): {
       playSimulation,
       stopSimulation,
       dispose,
+      currentPlayWorld: () => runLifecycle?.currentPlayWorld() ?? null,
+      currentPlayRunId: () => runLifecycle?.currentPlayRunId() ?? null,
       getPlayPauseHandle: () => runLifecycle?.getPlayPauseHandle() ?? null,
     };
   }
@@ -1031,7 +1038,8 @@ export function createHostSession(deps: HostSessionDeps): {
       // call whose second arg is the engine World the scene instantiates into (not a
       // mutator on the facade surface) — it keeps the raw world handle.
       const eid = (h: unknown): EntityHandle => h as EntityHandle;
-      const sceneHandle = engine.allocSharedRef('SceneAsset', sceneRes.value);
+      const sceneAsset = normalizeAnimationPlayerSceneAsset(sceneRes.value as SceneAsset);
+      const sceneHandle = engine.allocSharedRef('SceneAsset', sceneAsset);
       const inst = (assets as never as { instantiate: (h: unknown, w: unknown) => { ok: boolean; value?: unknown; error?: unknown } }).instantiate(sceneHandle, world);
       if (!inst.ok) { console.warn('[editor] preview skin instantiate failed:', (inst.error as { code?: string })?.code); return; }
       const skinRoot = inst.value as unknown as { generation: number; index: number };

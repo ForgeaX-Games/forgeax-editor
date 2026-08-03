@@ -155,7 +155,7 @@ describe('session routing — async persistence op-kinds reach the ledger (m2-w2
     loadDocFromDisk: { kind: 'loadDocFromDisk' },
     // Dirty state is global persistence context; discard makes this routing
     // test deterministic while exercising the new explicit policy contract.
-    switchSceneFile: { kind: 'switchSceneFile', id: 'level-2', dirtyPolicy: 'discard' },
+    switchSceneFile: { kind: 'switchSceneFile', id: 'level-2', dirtyPolicy: 'discard', requestId: 'routing-switch-1' },
     createSceneFile: { kind: 'createSceneFile', id: 'level-2', duplicateCurrent: false, requestId: 'routing-create-1' },
   };
   for (const kind of ['saveDocToDisk', 'loadDocFromDisk', 'switchSceneFile', 'createSceneFile'] as const) {
@@ -165,6 +165,14 @@ describe('session routing — async persistence op-kinds reach the ledger (m2-w2
       const r = gw.dispatch(wellFormed[kind]!);
       // The op is routable (session domain), applied without a structured error,
       // and appended to the flat ledger; undo stays frozen.
+      if (kind === 'switchSceneFile') {
+        // The real applier now rejects an unavailable target synchronously after
+        // accepting the request, and preserves the reason in the OperationRun.
+        // This is the terminal contract that the old detached boolean dropped.
+        expect(r).toMatchObject({ ok: false, error: { code: 'scene-switch-invalid' } });
+        expect(gw.getOperationRunResult('routing-switch-1')).toMatchObject({ ok: true, value: { status: 'failed', error: { code: 'scene-switch-invalid' } } });
+        return;
+      }
       expect(r.ok).toBe(true);
       // Request-correlated saves enter the ledger only after their asynchronous
       // terminal success; the other session ops record immediately.
@@ -190,7 +198,7 @@ describe('session routing — dirty scene switch policy (R0-02B)', () => {
     ];
     ctx.isDirty = true;
     try {
-      const refused = gw.dispatch({ kind: 'switchSceneFile', id: 'level-2' }, 'ai');
+      const refused = gw.dispatch({ kind: 'switchSceneFile', id: 'level-2', requestId: 'routing-switch-dirty-1' }, 'ai');
       expect(refused).toMatchObject({
         ok: false,
         error: {
@@ -222,7 +230,7 @@ describe('session routing — dirty scene switch policy (R0-02B)', () => {
     ];
     ctx.isDirty = true;
     try {
-      const cancelled = gw.dispatch({ kind: 'switchSceneFile', id: 'level-2', dirtyPolicy: 'cancel' }, 'ai');
+      const cancelled = gw.dispatch({ kind: 'switchSceneFile', id: 'level-2', dirtyPolicy: 'cancel', requestId: 'routing-switch-cancel-1' }, 'ai');
       expect(cancelled).toMatchObject({
         ok: false,
         error: { code: 'scene-switch-cancelled', current: { sceneId: 'level-1', dirty: true } },

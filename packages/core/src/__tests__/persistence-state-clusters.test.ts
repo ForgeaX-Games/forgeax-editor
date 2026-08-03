@@ -371,7 +371,7 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
   });
 
   it('discard clears dirty before switching', async () => {
-    const { sl, ctx } = make();
+    const { sl, ctx } = make({ loadDocFromDisk: () => Promise.resolve(true) });
     ctx.currentSceneId = 'shoot';
     ctx.currentSceneFile = 'lvl1';
     ctx.sceneList = [
@@ -386,7 +386,10 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
 
   it('save policy persists before switching and preserves origin', async () => {
     const origins: string[] = [];
-    const { sl, ctx } = make({ savePendingScene: (origin) => { origins.push(origin); return Promise.resolve(true); } });
+    const { sl, ctx } = make({
+      savePendingScene: (origin) => { origins.push(origin); return Promise.resolve(true); },
+      loadDocFromDisk: () => Promise.resolve(true),
+    });
     ctx.currentSceneId = 'shoot';
     ctx.currentSceneFile = 'lvl1';
     ctx.sceneList = [
@@ -397,5 +400,25 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
     expect(await sl.doSwitchSceneFile('lvl2', 'save', 'ai')).toBe(true);
     expect(ctx.currentSceneFile).toBe('lvl2');
     expect(origins).toEqual(['ai']);
+  });
+
+  it('load failure restores the previous scene identity and returns false', async () => {
+    const { sl, ctx } = make();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.currentSceneGuid = 'guid-lvl1';
+    ctx.currentSceneEntities = [7, 9] as never;
+    ctx.loadedInlineAssetFloor = 3;
+    ctx.loadedEntityFloor = 2;
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'p', guid: 'guid-lvl1' },
+      { id: 'lvl2', name: 'Level 2', pack: 'q', guid: 'guid-lvl2' },
+    ];
+    expect(await sl.doSwitchSceneFile('lvl2', 'discard')).toBe(false);
+    expect(ctx.currentSceneFile).toBe('lvl1');
+    expect(ctx.currentSceneGuid).toBe('guid-lvl1');
+    expect(ctx.currentSceneEntities as unknown as number[]).toEqual([7, 9]);
+    expect(ctx.loadedInlineAssetFloor).toBe(3);
+    expect(ctx.loadedEntityFloor).toBe(2);
   });
 });

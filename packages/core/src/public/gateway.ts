@@ -19,6 +19,13 @@ export type { SelectionReadModel } from '../io/selection-read-model';
 export type { CollectSceneAssetResult } from '../io/scene-asset-collect';
 export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from '../io/scene-read-model';
 export type {
+  SceneInstanceMemberReadModel,
+  SceneInstanceOverrideReadModel,
+  SceneInstanceReadModel,
+  SceneInstanceReadResult,
+  SceneInstanceSourceReadModel,
+} from '../io/scene-instance-read-model';
+export type {
   SceneAuthoringMode,
   SceneAuthoringSaveTarget,
   SceneAuthoringSessionReadModel,

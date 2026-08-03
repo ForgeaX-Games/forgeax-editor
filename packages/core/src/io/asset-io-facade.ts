@@ -12,7 +12,7 @@
 //   requirements AC-05: writes go through ctx.assetIO (trace only)
 //   feat (keyboard-router convergence) M2 T2-1: AssetIOFacade encapsulates the
 //     pack-ops low-level primitives readPack / writePack / deleteAsset.
-import type { PackFile } from '../scene/scene-pack';
+import { normalizePackForRuntime, type PackFile } from '../scene/scene-pack';
 import {
   readPack, writePack, deleteAsset, generateAssetGuid,
   readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset, type MetaSubAsset,
@@ -334,7 +334,10 @@ export class AssetIOFacade {
     let pack = await readPack(opts.packPath);
     if (!pack) {
       // Create the pack file on first asset
-      pack = { schemaVersion: '1.0', kind: 'internal-text-package', assets: [] };
+      // The engine runtime's loadByGuid boundary accepts Pack v2 only. The
+      // editor's read validator intentionally keeps accepting legacy string
+      // versions, but every authored write must emit the runtime envelope.
+      pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
     }
     pack.assets.push({
       guid: opts.asset.guid,
@@ -343,6 +346,11 @@ export class AssetIOFacade {
       payload: opts.asset.payload as Record<string, unknown>,
       refs: opts.asset.refs ?? [],
     });
+    // Upgrade legacy editor-created packs and add the asset-local artifact
+    // map required by the Pack v2 loader. normalizePackForRuntime preserves
+    // unknown fields, so this remains a lossless repair at the shared write
+    // gate for both human UI and AI dispatches.
+    pack = normalizePackForRuntime(pack as unknown as Record<string, unknown>) as PackFile;
     const ok = await writePack(opts.packPath, pack);
     return { ok };
   }
@@ -518,13 +526,15 @@ export class AssetIOFacade {
   }
 
   /** Read an existing `.meta.json` (parsed) for reimport GUID reuse; null on first
-   *  import / missing / parse error. `GET /api/files/raw`. */
+   *  import / missing / parse error. The optional text-file route keeps the
+   *  expected first-import miss out of the browser's failed-resource console. */
   async readExistingMeta(metaPath: string): Promise<unknown> {
     recordAssetLeaf('assetIO.readSourceBytes');
     try {
-      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}`);
+      const r = await fetch(`/api/files?path=${encodeURIComponent(metaPath)}&optional=1`);
       if (!r.ok) return undefined;
-      return JSON.parse(await r.text());
+      const body = await r.json() as { content?: unknown };
+      return typeof body.content === 'string' ? JSON.parse(body.content) : undefined;
     } catch {
       return undefined;
     }

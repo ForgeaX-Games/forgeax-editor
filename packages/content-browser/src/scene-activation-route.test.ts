@@ -23,7 +23,7 @@ describe('Content Browser scene activation route', () => {
       provenance: 'authored-pack',
       mode: 'open-authored',
       authoredSceneId: 'main',
-    })).toEqual({ kind: 'switchSceneFile', id: 'main' });
+    })).toMatchObject({ kind: 'switchSceneFile', id: 'main', requestId: expect.any(String) });
   });
 
   it('routes imported descriptors by GUID without scene-list/path guessing', () => {

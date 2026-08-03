@@ -40,6 +40,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetError, SceneAsset } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { activeSpan, type EngineInterfaceName } from './trace';
+import { normalizeAnimationPlayerSceneAsset } from '../scene/animation-slot-sync';
 
 // feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
 // "engine interface name -> side-effect hint" table (SSOT, AC-07 / D-4). It
@@ -161,6 +162,12 @@ export class EngineFacade {
     return this._world.get(entity, component);
   }
 
+  /** Read the engine-owned SceneInstance state payload. This is a read seam;
+   * the editor never stores a parallel instance map. */
+  getSceneInstanceState(root: EntityHandle): ReturnType<World['getSceneInstanceState']> {
+    return this._world.getSceneInstanceState(root);
+  }
+
   /** Set a component field on an entity. Records 'world.set' leaf when an
    *  active span exists (AC-09). */
   set<S extends ComponentSchema>(
@@ -170,6 +177,29 @@ export class EngineFacade {
   ): Result<void, EcsError> {
     _recordLeaf('world.set');
     return this._world.set(entity, component, value);
+  }
+
+  /** Write an instance member through the engine's override owner. */
+  setSceneOverride<S extends ComponentSchema>(
+    root: EntityHandle,
+    member: EntityHandle,
+    component: Component<string, S>,
+    field: keyof ShapeOf<S> & string,
+    value: unknown,
+  ): ReturnType<World['setSceneOverride']> {
+    _recordLeaf('world.set');
+    return this._world.setSceneOverride(root, member, component, field, value);
+  }
+
+  /** Remove an instance override and let the engine restore its source value. */
+  removeSceneOverride<S extends ComponentSchema>(
+    root: EntityHandle,
+    member: EntityHandle,
+    component: Component<string, S>,
+    field: keyof ShapeOf<S> & string,
+  ): ReturnType<World['removeSceneOverride']> {
+    _recordLeaf('world.set');
+    return this._world.removeSceneOverride(root, member, component, field);
   }
 
   /** Spawn a new entity with initial components. Records 'world.spawn' leaf.
@@ -274,7 +304,8 @@ export class EngineFacade {
       });
     }
     _recordLeaf('world.allocSharedRef');
-    const handle = this._world.allocSharedRef('SceneAsset', asset);
+    const normalizedAsset = normalizeAnimationPlayerSceneAsset(asset);
+    const handle = this._world.allocSharedRef('SceneAsset', normalizedAsset);
     _recordLeaf('registry.instantiateFlat');
     return this._registry.instantiateFlat(
       handle as Handle<'SceneAsset', 'shared'>,

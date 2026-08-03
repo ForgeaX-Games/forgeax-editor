@@ -1,17 +1,15 @@
 // ViewportChrome — conditional wrapper for the editor chrome layer
 // (feat-20260630-viewport M5 / w24, requirements AC-13).
 //
-// display='scene': ViewportHints rendered (editor mode). The toolbar is now the
-// host panel header, contributed through the unified panel action/control path.
-// display='game': both hidden; GameOverlay provides a minimal semi-transparent
-//   hover bar with Play/Stop + FPS so the user has a discoverable exit path.
+// display='game': GameOverlay provides a minimal semi-transparent hover bar
+//   with Play/Stop + FPS so the user has a discoverable exit path.
 //
 // The display mode is read from the quadrant SSOT via a subscription; the FPS
 // value is passed through from the frame-loop accumulator held in main.tsx.
 
 import { useState, useEffect } from 'react';
+import { gateway, VISUAL_QUALITY_PRESETS, type VisualQualityPreset } from '@forgeax/editor-core';
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
-import { ViewportHints } from './ViewportHints';
 import { GameOverlay } from './GameOverlay';
 import { PlayTerminal } from './PlayTerminal';
 
@@ -25,6 +23,7 @@ interface ViewportChromeProps {
 
 export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControlGame }: ViewportChromeProps) {
   const [isGame, setIsGame] = useState<boolean>(() => getViewportQuadrant().display === 'game');
+  const [qualityPreset, setQualityPreset] = useState<VisualQualityPreset>('balanced');
 
   useEffect(() => {
     const unsub = onViewportQuadrantChange((q) => {
@@ -48,5 +47,25 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControl
     );
   }
 
-  return <><PlayTerminal onPlay={onPlay} onStop={onStop} /><ViewportHints /></>;
+  return (
+    <>
+      <PlayTerminal onPlay={onPlay} onStop={onStop} />
+      <div className="vp-quality-control" data-testid="vp-visual-quality-control">
+        <label htmlFor="vp-visual-quality">Visual quality</label>
+        <select
+          id="vp-visual-quality"
+          data-testid="vp-visual-quality"
+          aria-label="Visual quality"
+          value={qualityPreset}
+          onChange={(event) => {
+            const preset = event.target.value as VisualQualityPreset;
+            setQualityPreset(preset);
+            gateway.dispatch({ kind: 'applyVisualQualityPreset', preset }, 'human');
+          }}
+        >
+          {VISUAL_QUALITY_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+        </select>
+      </div>
+    </>
+  );
 }

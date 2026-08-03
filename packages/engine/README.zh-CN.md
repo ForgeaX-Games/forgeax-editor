@@ -175,13 +175,14 @@ record → replay → inspect，第一用户是 AI subagent（经 `WS:5732` JSON
 |:--|:--|:--|
 | **RHI 缝合面** | `rhi` · `rhi-webgpu` · `rhi-wgpu` · `rhi-null` · `wgpu-wasm` | 纯接口 + 双实现 + headless + 🦀 WASM 内核 |
 | **渲染** | `runtime` · `render-graph` · `shader` · `shader-compiler` · `naga` | Renderer、SRP、RenderGraph、WGSL 组合 + 反射 |
-| **核心** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` | Archetype World、游戏循环、数学、`Result` SSOT、状态机 |
+| **核心** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` · `animation` | Archetype World、游戏循环、数学、`Result` SSOT、状态机 |
 | **仿真** | `physics` · `physics-rapier2d` · `physics-rapier3d` · `audio` · `audio-webaudio` | Rapier 2D/3D、Web Audio |
 | **资产** | `pack` · `import` · `gltf` · `fbx` · `image` · `font` · `engine-project` | GUID sidecar 管线、导入器、`forge.json` manifest |
 | **工具** | `rhi-debug` · `debug-draw` · `remote` · `console` · `vite-plugin-*` | 帧调试器、活体 inspector、Vite 集成 |
 
 > [!NOTE]
-> 公共包统一前缀 `@forgeax/engine-`；裸 `@forgeax/engine-runtime` 是 placeholder——安装 **`@forgeax/engine-runtime`**。每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
+> 公共包统一前缀 `@forgeax/engine-`；裸 `@forgeax/engine` 是 placeholder——安装 **`@forgeax/engine-runtime`**。每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
+> `animation` 对普通 `Transform` 实体与骨骼关节使用同一种动画目标模型。
 
 ## 布局
 

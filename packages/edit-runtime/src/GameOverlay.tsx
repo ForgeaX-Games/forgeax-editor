@@ -1,7 +1,7 @@
 // GameOverlay — minimal semi-transparent hover controls for display='game'
 // (feat-20260630-viewport M5 / w24, requirements AC-13).
 //
-// display='game' hides the full ViewportBar and ViewportHints. The user needs a
+// display='game' hides the full ViewportBar. The user needs a
 // discoverable exit path — hover the viewport top edge to reveal a minimal
 // semi-transparent overlay with only Play(▶)/Stop(■) + FPS readout. Touching
 // nothing else, no gizmo mode, no save — just the two actions that transition out

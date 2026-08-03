@@ -14,8 +14,8 @@
 // instantiateScene → bootstrap, see play-assemble.ts) → playApp.start() (the one
 // live rAF) → gateway.enterPlay(playWorld) (switch the single active-world pointer
 // + clear selection + emit). stop = playApp.stop() (dispose-shield keeps the shared
-// renderer alive; rAF cancel + renderer.onError unsubscribe → playWorld fully
-// unreferenced and GC-able, AC-05) → detach play-side backends → gateway.exitPlay()
+// renderer alive; rAF cancel + renderer.onError unsubscribe → detach play-side
+// backends → destroy the play World's GPU residency once → gateway.exitPlay()
 // (pointer back to edit world + clear selection + emit) → editorApp.resume().
 //
 // ── Why this shape (design anchors) ──
@@ -234,6 +234,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     } catch (err) {
       console.warn(`[editor] ${label} detach() threw:`, err);
     }
+    try {
+      assembly.disposeWorld();
+    } catch (err) {
+      console.warn(`[editor] ${label} GPU world cleanup threw:`, err);
+    }
   }
 
   function reportPlayFailure(error: unknown): void {
@@ -391,7 +396,8 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     resumeEditorIfLive();
 
     // assembly (and thus playWorld/playApp) is now unreferenced by the lifecycle
-    // → GC-able (AC-05). No restore, no rebind, no despawn.
+    // → GC-able (AC-05). Its World-scoped GPU residency was destroyed once above;
+    // there is no restore, rebind, or despawn.
   }
 
   function dispose(): void {

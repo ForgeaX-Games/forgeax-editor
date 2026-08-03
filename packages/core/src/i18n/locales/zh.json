@@ -19,12 +19,6 @@
       "nameLabel": "场景名称",
       "guidUnavailable": "此场景没有稳定 GUID，无法修改。"
     },
-    "viewportHints": {
-      "toggleTitle": "显示操作说明",
-      "closeTitle": "关闭（点右下角 ? 可重新打开）",
-      "row1": "<b>中键</b> 旋转 · <b>Shift+中键</b> 平移 · <b>Ctrl+中键 / 滚轮</b> 缩放 · <b>左键</b> 选择",
-      "row2": "<b>W / E / R</b> 移动·旋转·缩放 · <b>F</b> 聚焦选中 · 触控板 <b>Alt+左键</b> 旋转 · <b>⇧Alt</b> 平移"
-    },
     "hierarchy": {
       "outliner": "场景物",
       "sceneRoot": "场景",
@@ -167,7 +161,12 @@
       "showModifiedOnly": "只看已修改",
       "expandAll": "全部展开",
       "collapseAll": "全部折叠",
-      "resetAll": "重置全部属性"
+      "resetAll": "重置全部属性",
+      "animPlay": "播放预览",
+      "animPause": "暂停预览",
+      "animNoClip": "绑定 clip 到槽 0 后可预览",
+      "animPhase": "预览进度",
+      "animSpeed": "预览速度"
     },
     "launcher": {
       "title": "启动器",

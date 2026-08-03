@@ -17,6 +17,7 @@ export type {
 // EntityHandle / WorldType are thin re-exports of engine types so consumers can
 // reach them from the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
+export { normalizeAnimationPlayerSceneAsset } from './scene/animation-slot-sync';
 
 export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy, SceneSwitchDirtyPolicy } from './types';
 export type { EditorOpLifecycle } from './types';
@@ -95,6 +96,13 @@ export type {
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
 export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from './io/scene-read-model';
+export type {
+  SceneInstanceMemberReadModel,
+  SceneInstanceOverrideReadModel,
+  SceneInstanceReadModel,
+  SceneInstanceReadResult,
+  SceneInstanceSourceReadModel,
+} from './io/scene-instance-read-model';
 export type { SelectionReadModel } from './io/selection-read-model';
 export type {
   ImportedSceneSessionIdentity,
@@ -219,6 +227,8 @@ export {
   fieldVisible,
   defaultFieldValue,
   isComponentHidden,
+  getAnimationComponentMeta,
+  getTransportDescriptor,
 } from './scene/schema';
 export type {
   FieldSchema,
@@ -236,6 +246,22 @@ export {
   EDITOR_COMPONENT_META,
 } from './scene/editor-component-meta';
 export type { EditorComponentMeta } from './scene/editor-component-meta';
+export type { AnimationComponentMeta, AnimationTransportDescriptor } from './scene/editor-component-meta';
+
+// ── Animation preview (M1) ──
+// Snapshot/restore registry (save-pollution defense) + the setAnimationPreview
+// session op. The op registers itself into the session table at module eval
+// (side-effect import, same pattern as material-ops).
+export {
+  snapshotAnimationPreview,
+  restoreAnimationPreview,
+  restoreAllAnimationPreviews,
+  restoreAnimationPreviewsOutside,
+  clearAnimationPreviews,
+  hasAnimationPreview,
+  previewedAnimationEntities,
+} from './session/animation-preview';
+import './session/animation-preview-ops';
 
 // ── Euler↔quat conversion (SSOT, XYZ order, AGENTS.md #6) ──
 export { quatToEuler, eulerToQuat } from './util/euler-quat';
@@ -271,6 +297,11 @@ export {
   getPreset,
   buildPresetComponents,
 } from './scene/presets';
+export {
+  VISUAL_QUALITY_PRESETS,
+  VISUAL_QUALITY_PATCHES,
+} from './session/visual-quality';
+export type { VisualQualityPreset } from './session/visual-quality';
 
 // ── Manifest (SSOT for panel IDs) ──
 export { EDITOR_PANELS } from './manifest';

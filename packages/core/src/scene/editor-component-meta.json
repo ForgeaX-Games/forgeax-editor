@@ -1,5 +1,22 @@
 {
   "Entity": { "hidden": true },
   "Children": { "hidden": true },
-  "ChildOf": { "hidden": true }
+  "ChildOf": { "hidden": true },
+  "AnimationPlayer": {
+    "bespoke": {
+      "editorId": "animation-transport",
+      "hint": "Animation preview transport — bind a clip to slot 0, then play / scrub / change speed. Preview writes never reach the saved scene."
+    },
+    "animation": {
+      "transport": {
+        "clips": "clips",
+        "times": "times",
+        "weights": "weights",
+        "speeds": "speeds",
+        "paused": "paused",
+        "clipIndex": 0
+      },
+      "runtimeFields": ["times", "speeds", "paused"]
+    }
+  }
 }

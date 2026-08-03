@@ -22,6 +22,17 @@ describe('UI asset Content Browser support', () => {
     expect(asset.packPath).toBe('assets/ui/hud.meta.json');
   });
 
+  it('keeps authored packs writable when dev projects them through a DDC URL', () => {
+    const asset = registryEntryToCBAsset({
+      guid: 'material-guid',
+      kind: 'material',
+      name: 'Metal',
+      packageUrl: '/__forgeax-ddc/material-guid.pack.json',
+      sourcePath: 'sample/assets/Materials.pack.json',
+    }, 0);
+    expect(asset.packPath).toBe('sample/assets/Materials.pack.json');
+  });
+
   it('projects producer authoring facts onto the browser asset without a kind switch', () => {
     const authoring = {
       placement: { operation: 'spawnEntity' as const },
