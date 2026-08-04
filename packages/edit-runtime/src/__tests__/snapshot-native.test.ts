@@ -19,6 +19,7 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '@forgeax/engine-ecs';
+import '@forgeax/engine-render';
 import { Transform, Name } from '@forgeax/engine-scene';
 
 // ── Test helpers ──────────────────────────────────────────────────────────

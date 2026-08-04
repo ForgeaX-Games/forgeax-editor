@@ -64,13 +64,20 @@ export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): G
   };
 }
 
-type GameplayGateway = Pick<EditGateway, 'invokeGameAction' | 'readGameState'> & {
+type GameplayGateway = Pick<
+  EditGateway,
+  'invokeGameAction' | 'readGameState' | 'listGameActions' | 'listGameReads'
+> & {
   readonly playPhase: EditGateway['playPhase'];
 };
 
 const unavailable = (hint: string): GameplayProducerResult => ({ ok: false, error: { code: 'surface-unavailable', hint } });
 
 export interface GameplayOperations {
+  describe(): {
+    readonly actions: ReturnType<GameplayGateway['listGameActions']>;
+    readonly reads: ReturnType<GameplayGateway['listGameReads']>;
+  };
   input(action: GameplayInput): Promise<GameplayProducerResult>;
   query(query: string): Promise<GameplayProducerResult>;
   capture(): Promise<GameplayProducerResult>;
@@ -155,7 +162,10 @@ export function createGameplayCarrierBridge(
           version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
           operation: request.operation,
           ok: true,
-          data: GAMEPLAY_CONTRACT_DESCRIPTION,
+          data: {
+            ...GAMEPLAY_CONTRACT_DESCRIPTION,
+            projections: operations.describe(),
+          },
         };
       }
       const before = getIdentity();
@@ -215,6 +225,10 @@ export function createGameplayCarrierBridge(
 /** The typed producer for the already-connected live Gateway projection. */
 export function createGameplayOperations(gateway: GameplayGateway, capture?: GameplayCaptureGateway): GameplayOperations {
   return {
+    describe: () => ({
+      actions: gateway.listGameActions(),
+      reads: gateway.listGameReads(),
+    }),
     async input(action) {
       if (gateway.playPhase !== 'play') return unavailable('input requires an active live Play projection');
       const result = await gateway.invokeGameAction('input', action);

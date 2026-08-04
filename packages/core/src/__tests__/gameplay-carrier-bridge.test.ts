@@ -28,6 +28,16 @@ describe('live gameplay carrier bridge', () => {
     const capture = createGameplayCaptureGateway({ canvas, getProvenance: () => identity });
     const bridge = createGameplayCarrierBridge(createGameplayOperations(gateway, capture), () => identity);
 
+    await expect(bridge.execute({ version: 1, operation: 'describe' })).resolves.toMatchObject({
+      ok: true,
+      operation: 'describe',
+      data: {
+        projections: {
+          actions: [{ id: 'input', title: 'Input' }],
+          reads: [{ id: 'world', title: 'World' }],
+        },
+      },
+    });
     await expect(bridge.execute({ version: 1, operation: 'input', action: { type: 'key', key: 'ArrowRight', phase: 'down' } })).resolves.toMatchObject({ ok: true, operation: 'input', identity });
     await expect(bridge.execute({ version: 1, operation: 'input', action: {
       type: 'pointer', phase: 'down', pointerId: 7, pointerType: 'touch', x: 120, y: 80,
@@ -44,13 +54,18 @@ describe('live gameplay carrier bridge', () => {
   test('rejects malformed requests and missing live numeric identity before touching the producer', async () => {
     let calls = 0;
     const bridge = createGameplayCarrierBridge({
+      describe: () => ({ actions: [], reads: [] }),
       input: async () => { calls += 1; return { ok: true }; },
       query: async () => { calls += 1; return { ok: true, data: null }; },
       capture: async () => { calls += 1; return { ok: true, data: null }; },
     }, () => null);
 
     const description = await bridge.execute({ version: 1, operation: 'describe' });
-    expect(description).toMatchObject({ ok: true, operation: 'describe' });
+    expect(description).toMatchObject({
+      ok: true,
+      operation: 'describe',
+      data: { projections: { actions: [], reads: [] } },
+    });
     expect(Array.isArray(description.ok && description.data
       ? (description.data as { operations?: unknown }).operations
       : undefined)).toBe(true);
