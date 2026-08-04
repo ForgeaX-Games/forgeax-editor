@@ -85,7 +85,7 @@ import {
   syncListenerFromWorldMatrix,
 } from '@forgeax/engine-audio-webaudio';
 import { normalizeAnimationPlayerSceneAsset, type SceneAsset } from '@forgeax/editor-core';
-import { createFramePhaseObserver } from './frame-phase-observer';
+import { createFramePhaseProfiler } from './frame-phase-profiler';
 
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
@@ -440,7 +440,7 @@ export async function assemblePlayWorld(
       world: playWorld as never,
       plugins: plugins as never,
       ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
-      framePhaseObserver: createFramePhaseObserver(),
+      profiler: createFramePhaseProfiler(),
     });
   } catch (error) {
     detachHostResources();

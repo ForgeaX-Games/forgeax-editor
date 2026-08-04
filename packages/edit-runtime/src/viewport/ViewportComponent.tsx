@@ -73,7 +73,7 @@ import {
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
-import { createFramePhaseObserver, createRenderPhaseObserver } from './frame-phase-observer';
+import { createFramePhaseProfiler } from './frame-phase-profiler';
 // M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
 // bridges moved to viewport-runtime-bridges.ts (decoupled from the createApp
 // hotspot, AC-10). bootViewport keeps only the call sites.
@@ -448,8 +448,7 @@ async function bootViewport(
   // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
 
-  const framePhaseObserver = createFramePhaseObserver();
-  const renderPhaseObserver = createRenderPhaseObserver();
+  const profiler = createFramePhaseProfiler();
 
   // ── createApp with GPU-failure auto-fallback ────────────────────────────
   // When no WebGPU adapter is available (headless browser, GPU-less CI), the
@@ -463,8 +462,7 @@ async function bootViewport(
     input: canvasInput.editor,
     pointerLockAllowed: () => false,
     drawSource: worldManager.createDrawSource(),
-    framePhaseObserver,
-    renderPhaseObserver,
+    profiler,
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
     importTransport: {
@@ -499,8 +497,7 @@ async function bootViewport(
         input: canvasInput.editor,
         pointerLockAllowed: () => false,
         drawSource: worldManager.createDrawSource(),
-        framePhaseObserver,
-        renderPhaseObserver,
+        profiler,
         rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
       }, {
         shaderManifestUrl: `${BASE}/shaders/manifest.json`,

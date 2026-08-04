@@ -20,7 +20,7 @@
 //   io/args-schema.ts validate()
 
 import { describe, expect, it, beforeEach } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
+import { defineComponent, World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
@@ -185,6 +185,42 @@ describe('solo round-14 — builtin document op args validation', () => {
     const after = gw.doc.world.get(ent as EntityHandle, Transform);
     if (!after.ok) throw new Error('test Transform disappeared');
     expect([...after.value.pos]).toEqual([...before.value.pos]);
+  });
+
+  it('setComponent rejects an enum value outside the producer labels and does not mutate', () => {
+    const componentName = `R1_05_PhysicsEnum_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
+    const PhysicsMode = defineComponent(componentName, {
+      mode: { type: 'enum', default: 1, labels: { static: 0, dynamic: 1, kinematic: 2 } },
+    });
+    const spawned = gw.dispatch({
+      kind: 'spawnEntity',
+      name: 'PhysicsEnumTarget',
+      components: { [componentName]: { mode: 1 } },
+    } as unknown as EditorOp, 'ai');
+    expect(spawned.ok).toBe(true);
+    const entity = spawned.ok ? spawned.result?.created?.[0] as number : -1;
+    const before = gw.doc.world.get(entity as EntityHandle, PhysicsMode);
+    if (!before.ok) throw new Error('enum fixture component missing');
+    const ledgerBefore = gw.ledger.length;
+    const rejected = gw.dispatch({
+      kind: 'setComponent',
+      entity,
+      component: componentName,
+      patch: { mode: 99 },
+    } as unknown as EditorOp, 'ai');
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.error.code).toBe('SET_FAILED');
+      expect(rejected.error.details).toMatchObject({
+        fieldPath: `${componentName}.mode`,
+        reason: 'enum-value',
+        allowed: [0, 1, 2],
+      });
+    }
+    expect(gw.ledger.length).toBe(ledgerBefore);
+    const after = gw.doc.world.get(entity as EntityHandle, PhysicsMode);
+    if (!after.ok) throw new Error('enum fixture component disappeared');
+    expect(after.value.mode).toBe(before.value.mode);
   });
 
   it('spawnEntity{parent:null} still succeeds (nullable regression guard)', () => {

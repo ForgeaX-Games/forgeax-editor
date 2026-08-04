@@ -14,10 +14,14 @@ import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { engineVitePreset } from './src/viewport/runtime-vite-preset';
+import { readWorktreePorts, resolveWorktreePorts } from '../../scripts/lib/worktree-ports';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const worktreeRoot = resolve(here, '../..');
+const worktreePorts = resolveWorktreePorts(worktreeRoot);
+const assignedWorktreePorts = readWorktreePorts(worktreeRoot);
 
-const PORT = Number(process.env.FORGEAX_EDITOR_PORT ?? 15280);
+const PORT = Number(process.env.FORGEAX_EDITOR_PORT ?? worktreePorts.editRuntime);
 const HOST = process.env.FORGEAX_EDITOR_HOST ?? '0.0.0.0';
 const BASE = '/editor/';
 
@@ -81,7 +85,10 @@ export default defineConfig({
     // FORGEAX_INTERFACE_PORT for exactly this case.
     hmr: {
       clientPort: Number(
-        process.env.FORGEAX_HMR_CLIENT_PORT ?? process.env.FORGEAX_INTERFACE_PORT ?? 18920,
+        process.env.FORGEAX_HMR_CLIENT_PORT ??
+          process.env.FORGEAX_INTERFACE_PORT ??
+          assignedWorktreePorts?.standalone ??
+          18920,
       ),
     },
     // Scene persistence (store.ts) reads/writes the game's scene.json through the

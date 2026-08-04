@@ -49,6 +49,7 @@ describe('createMaterial op registration (catalog SSOT)', () => {
     expect(String(props.guid?.description ?? '')).toMatch(/bindAssetRef|reuse/i);
     // baseColor is the load-bearing PBR param.
     expect(props.baseColor?.type).toBe('array');
+    expect(String(props.baseColor?.description ?? '')).toMatch(/sRGB|stored unchanged/);
   });
 });
 
@@ -163,13 +164,15 @@ describe('createMaterial applier builds a real Materials.standard() POD', () => 
     const cap = captured as unknown as CapturedCreate;
     expect(cap.asset.kind).toBe('material');
     expect(cap.asset.guid).toBe('abc');
-    const payload = cap.asset.payload as { kind: string; passes: unknown[]; values: Record<string, unknown> };
+    const payload = cap.asset.payload as { kind: string; colorSpace?: string; passes: unknown[]; values: Record<string, unknown> };
     expect(payload.kind).toBe('material');
     // Materials.standard emits the multi-pass HDRP shape (>=2 passes incl. ShadowCaster).
     expect(Array.isArray(payload.passes)).toBe(true);
     expect(payload.passes.length).toBeGreaterThanOrEqual(2);
     // The authored params survive into values (the data-loss the friction feared).
     expect(payload.values.baseColor).toEqual([1, 0.84, 0, 1]);
+    // Omission is the schema-defined sRGB default; existing numeric assets need no migration.
+    expect(payload.colorSpace).toBeUndefined();
     expect(payload.values.metallic).toBe(1);
     expect(payload.values.roughness).toBe(0.25);
   });

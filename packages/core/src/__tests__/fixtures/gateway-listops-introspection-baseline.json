@@ -518,7 +518,7 @@
           "items": {
             "type": "number"
           },
-          "description": "PBR base color as [r,g,b,a], each 0..1 (a = opacity)."
+          "description": "PBR base color authored in sRGB as [r,g,b,a], each 0..1 (a = linear opacity). Values are stored unchanged; render extraction converts RGB to linear."
         },
         "metallic": {
           "type": "number",
@@ -2097,7 +2097,7 @@
         },
         "paramPatch": {
           "type": "object",
-          "description": "Shallow merge into MaterialAsset.values. Keys should come from the shader's paramSchema. undefined deletes the key. Example: {\"baseColor\":[1,0,0,1],\"metallic\":0.2,\"roughness\":0.4}"
+          "description": "Shallow merge into MaterialAsset.values. Color values such as baseColor are sRGB by default and are stored unchanged; alpha and non-color values are linear data. Keys should come from the shader's paramSchema. undefined deletes the key. Example: {\"baseColor\":[1,0,0,1],\"metallic\":0.2,\"roughness\":0.4}"
         },
         "textureGuids": {
           "type": "object",

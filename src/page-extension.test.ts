@@ -12,6 +12,8 @@ describe('Editor Page contribution', () => {
       ['@forgeax/editor#page/mesh', 'resource'],
       ['@forgeax/editor#page/material', 'resource'],
     ]);
+    const level = pages.find((page) => page.id.endsWith('/level'));
+    expect(level?.panels.map((panel) => panel.id)).toContain('ep:capabilities');
     expect(pages.find((page) => page.id.endsWith('/mesh'))?.panels.map((panel) => panel.id))
       .toContain('ep:mesh-slots');
     expect(pages.find((page) => page.id.endsWith('/material'))?.panels.map((panel) => panel.id))

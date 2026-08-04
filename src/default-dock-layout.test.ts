@@ -60,7 +60,7 @@ describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
   test('contains exactly the default visible dock panels', () => {
     const views = collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root).sort();
 
-    expect(views).toEqual(['chat', 'ep:assets', 'ep:hierarchy', 'ep:history', 'ep:inspector', 'info', 'viewport']);
+    expect(views).toEqual(['chat', 'ep:assets', 'ep:capabilities', 'ep:hierarchy', 'ep:history', 'ep:inspector', 'info', 'viewport']);
   });
 
   test('has a matching dockview panel descriptor for every view', () => {
@@ -74,11 +74,12 @@ describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
     expect(assets?.size).toBeGreaterThanOrEqual(280);
   });
 
-  test('groups History with Content Browser and Info', () => {
+  test('groups History and Capabilities with Content Browser and Info', () => {
     expect(leafViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root, 'ep:assets')).toEqual([
       'ep:assets',
       'info',
       'ep:history',
+      'ep:capabilities',
     ]);
   });
 });

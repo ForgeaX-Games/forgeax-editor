@@ -332,6 +332,21 @@ function validateComponentWrite(
         },
       };
     }
+    const enumOptions = componentFieldSchema(component, field)?.enumOptions;
+    if (enumOptions !== undefined && !enumOptions.some((option) => option.value === value)) {
+      const fieldPath = `${component}.${field}`;
+      return {
+        ok: false,
+        hint: `${fieldPath} requires one of the producer-declared enum values (${enumOptions.map((option) => `${option.value}=${option.label}`).join(', ')})`,
+        details: {
+          fieldPath,
+          reason: 'enum-value',
+          allowed: enumOptions.map((option) => option.value),
+          labels: Object.fromEntries(enumOptions.map((option) => [option.label, option.value])),
+          actual: value,
+        },
+      };
+    }
     if (arrayInfo === undefined) continue;
     const length = arrayLength(value);
     if (length === null) {

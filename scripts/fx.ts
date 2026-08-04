@@ -69,6 +69,13 @@ import {
   type RegressionCheck,
   type RegressionProfile,
 } from './regression-manifest.ts';
+import {
+  WORKTREE_CONFIG_FILE,
+  portEnvironment,
+  resolveWorktreePorts,
+  type PortMap,
+} from './lib/worktree-ports.ts';
+import { createWorktree } from './worktree.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
@@ -98,24 +105,26 @@ const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
 // `bun -F @forgeax/editor-play-runtime dev` path still defaults to 15173
 // (play-runtime/vite.config.ts default — unchanged, so studio keeps working);
 // only fx orchestration pins 15273 (fed via the base `env` FORGEAX_ENGINE_PORT).
-function envPort(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+let WORKTREE_PORTS: PortMap;
+try {
+  WORKTREE_PORTS = resolveWorktreePorts(ROOT);
+} catch (error) {
+  console.error(`[fx] invalid worktree port configuration: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
 }
 
-const STANDALONE_PORT = envPort('FORGEAX_STANDALONE_PORT', 15290);
-const EDIT_RUNTIME_PORT = envPort('FORGEAX_EDIT_RUNTIME_PORT', 15280);
-const PLAY_RUNTIME_PORT = envPort('FORGEAX_PLAY_RUNTIME_PORT', 15273);
+const STANDALONE_PORT = WORKTREE_PORTS.standalone;
+const EDIT_RUNTIME_PORT = WORKTREE_PORTS.editRuntime;
+const PLAY_RUNTIME_PORT = WORKTREE_PORTS.playRuntime;
 // The RHI reviewer is a separate dev-only engine app. It receives capture
 // artifacts by URL from the editor host, so opening a frame needs no file picker.
-const RHI_REVIEWER_PORT = envPort('FORGEAX_RHI_REVIEWER_PORT', 15274);
+const RHI_REVIEWER_PORT = WORKTREE_PORTS.rhiReviewer;
 // 15296 = editor standalone's DEV-only live gateway bridge relay. Studio's
 // superrepo stack owns :15295; do not reuse it here.
-const EDITOR_BRIDGE_PORT = 15296;
 // These are editor-owned service ports. The bridge port is appended dynamically
 // below so FORGEAX_BRIDGE_PORT overrides are cleaned up without sweeping a
 // hard-coded Studio port.
-const GAME_API_PORT = envPort('FORGEAX_GAME_API_PORT', 15281);
+const GAME_API_PORT = WORKTREE_PORTS.gameApi;
 const PORTS = [STANDALONE_PORT, EDIT_RUNTIME_PORT, GAME_API_PORT, PLAY_RUNTIME_PORT, RHI_REVIEWER_PORT];
 // The gateway scripts live under the forgeax-editor-gateway skill (AI-first:
 // the AI tools and their harness ship together). ROOT-relative because
@@ -380,7 +389,11 @@ function clean(argv: string[]): void {
   // 3. scrub every submodule tree to bare pin state (tracked + untracked + ignored).
   run('sub-scrub', ['submodule', 'foreach', '--recursive', subScrub], 'submodule trees scrubbed');
   // 4. remove root untracked, always preserving the harness floating clone.
-  run('root-clean', ['clean', rootFlags, '-e', '.forgeax-harness', ...(dryRun ? ['-n'] : [])], 'root untracked removed');
+  run(
+    'root-clean',
+    ['clean', rootFlags, '-e', '.forgeax-harness', '-e', WORKTREE_CONFIG_FILE, ...(dryRun ? ['-n'] : [])],
+    'root untracked removed (worktree port assignment preserved)',
+  );
 
   console.log(`\n${report(rows)}`);
   if (!dryRun) {
@@ -404,8 +417,7 @@ async function stop(): Promise<void> {
 }
 
 function editorBridgePort(): number {
-  const parsed = Number.parseInt(process.env.FORGEAX_BRIDGE_PORT ?? '', 10);
-  return Number.isFinite(parsed) ? parsed : EDITOR_BRIDGE_PORT;
+  return WORKTREE_PORTS.bridge;
 }
 
 function managedPorts(bridgePort: number, bridgeEnabled: boolean): number[] {
@@ -624,6 +636,7 @@ async function run(argv: string[]): Promise<void> {
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...portEnvironment(WORKTREE_PORTS),
     ...bridgeEnv,
     FORGEAX_GAME_DIR: gameDir,
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
@@ -1048,11 +1061,11 @@ Usage:
 
 Lifecycle:
   setup | install               prepare everything (submodules, deps, engine dist + wasm)
-  start | run [--play]          start the stack (:15290 host + :15280 edit-runtime
-                                [+ :15273 play-runtime with --play/--game]); Ctrl-C stops
+  start | run [--play]          start the stack (:${STANDALONE_PORT} host + :${EDIT_RUNTIME_PORT} edit-runtime
+                                [+ :${PLAY_RUNTIME_PORT} play-runtime with --play/--game]); Ctrl-C stops
   start --game DIR              open a real game (DIR directly contains forge.json)
   start --bg                    start in background, returns immediately
-  start --rhi-debug            enable viewport RHI capture + reviewer (:15274)
+  start --rhi-debug            enable viewport RHI capture + reviewer (:${RHI_REVIEWER_PORT})
   stop                          stop everything the CLI started (by port)
 
 Shipping:
@@ -1061,7 +1074,7 @@ Shipping:
                                 /preview/. Optional budgets: --max-bytes N,
                                 --max-entities N.
 
-  Live gateway bridge (:15296 by default) is ON so the forgeax-editor-gateway
+  Live gateway bridge (:${editorBridgePort()} for this checkout) is ON so the forgeax-editor-gateway
   skill's gateway-live.mjs can drive the open window; set FORGEAX_BRIDGE=0 to
   disable, FORGEAX_BRIDGE_PORT to move it.
 
@@ -1082,6 +1095,12 @@ Repo maintenance:
   ci:fast / ci:full             package-script aliases for the two profiles;
                                 both require bun fx setup; --full also needs
                                 installed Playwright Chromium.
+
+  worktree <name> [--from REF]  create .worktrees/<name>, initialize recursive
+                                submodules, install dependencies, run setup,
+                                and allocate a persistent isolated port slot.
+                                --no-setup skips the engine dist/wasm build.
+                                Alias: wt. Run bun fx start inside the result.
 
   help | -h | --help            show this message
 
@@ -1114,6 +1133,14 @@ async function main(): Promise<void> {
       break;
     case 'ci':
       ci(rest);
+      break;
+    case 'worktree':
+    case 'wt':
+      try {
+        await createWorktree(rest);
+      } catch (error) {
+        die(error instanceof Error ? error.message : String(error));
+      }
       break;
     case '':
     case '-h':

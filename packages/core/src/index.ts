@@ -268,7 +268,13 @@ import './session/animation-preview-ops';
 export { quatToEuler, eulerToQuat } from './util/euler-quat';
 
 // ── Hex↔float color conversion (used by the Material inspector) ──
-export { hexToFloat, floatToHex } from './util/color-utils';
+export {
+  floatToHex,
+  hexToFloat,
+  hexToMaterialColor,
+  materialColorToHex,
+  type AuthoredColorSpace,
+} from './util/color-utils';
 
 // ── Cross-panel types ──
 export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';

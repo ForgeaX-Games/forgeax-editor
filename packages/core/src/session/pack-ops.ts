@@ -498,7 +498,7 @@ registerApplier('document', 'createAsset', applyCreateAsset as unknown as Applie
 // payloads per kind ("UI/AI never carry payloads") and supports only 'scene', so it
 // cannot author a material's params; bindAssetRef (round-11) only BINDS an existing
 // catalogued GUID. This op fills the gap: mint a NEW MaterialAsset from
-// baseColor/metallic/roughness into the pack, so an AI can create a look from scratch
+// sRGB baseColor plus linear metallic/roughness into the pack, so an AI can create a look from scratch
 // then bindAssetRef it onto a mesh. DOCUMENT-domain like createAsset (undoable,
 // inverse=destroyAsset, writes through ctx.assetIO — the sole asset write gate).
 //
@@ -523,7 +523,7 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires a non-empty `name`' } };
   }
   if (!Array.isArray(baseColor) || baseColor.length !== 4 || !baseColor.every((c) => typeof c === 'number')) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires `baseColor` as [r,g,b,a] (four numbers, 0..1)' } };
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires sRGB `baseColor` as [r,g,b,a] (four numbers, 0..1; alpha is linear)' } };
   }
   if (metallic !== undefined && typeof metallic !== 'number') {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `metallic` must be a number (0..1) if given' } };

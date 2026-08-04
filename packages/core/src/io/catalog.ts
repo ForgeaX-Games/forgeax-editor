@@ -430,7 +430,7 @@ const builtinOps: ReadonlyArray<{
       properties: {
         guid: { type: 'string', description: 'Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles).' },
         name: { type: 'string', description: 'Human-readable material name shown in the asset catalog.' },
-        baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color as [r,g,b,a], each 0..1 (a = opacity).' },
+        baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color authored in sRGB as [r,g,b,a], each 0..1 (a = linear opacity). Values are stored unchanged; render extraction converts RGB to linear.' },
         metallic: { type: 'number', description: 'PBR metallic 0..1 (default 0 = dielectric).' },
         roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
         baseColorTexture: { type: 'string', description: 'Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format).' },
@@ -455,7 +455,7 @@ const builtinOps: ReadonlyArray<{
         guid: { type: 'string', description: 'Material asset GUID to update.' },
         paramPatch: {
           type: 'object',
-          description: 'Shallow merge into MaterialAsset.values. Keys should come from the shader\'s paramSchema. undefined deletes the key. Example: {"baseColor":[1,0,0,1],"metallic":0.2,"roughness":0.4}',
+          description: 'Shallow merge into MaterialAsset.values. Color values such as baseColor are sRGB by default and are stored unchanged; alpha and non-color values are linear data. Keys should come from the shader\'s paramSchema. undefined deletes the key. Example: {"baseColor":[1,0,0,1],"metallic":0.2,"roughness":0.4}',
         },
         textureGuids: {
           type: 'object',

@@ -17,14 +17,18 @@ import { type ChildProcess } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installCleanup, spawnService } from './lib/dev-stack.ts';
+import { portEnvironment, resolveWorktreePorts } from './lib/worktree-ports.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const PORTS = [15290, 15280];
-const EDITOR_BRIDGE_PORT = 15296;
-const bridgePort = process.env.FORGEAX_BRIDGE_PORT ?? String(EDITOR_BRIDGE_PORT);
+const WORKTREE_PORTS = resolveWorktreePorts(ROOT);
+const PORTS = [WORKTREE_PORTS.standalone, WORKTREE_PORTS.editRuntime];
+const bridgePort = String(WORKTREE_PORTS.bridge);
+const bridgeEnabled = process.env.FORGEAX_BRIDGE !== '0';
+const managedPorts = bridgeEnabled ? [...PORTS, WORKTREE_PORTS.bridge] : PORTS;
+const portEnv = portEnvironment(WORKTREE_PORTS);
 
 const children: ChildProcess[] = [];
-installCleanup(children, PORTS);
+installCleanup(children, managedPorts);
 
 // The page bridge is opt-in so standalone starts the relay and page together,
 // while CI / bare Vite hosts never attempt a dead websocket. CRITICAL: these
@@ -41,14 +45,22 @@ const bridgeEnv: NodeJS.ProcessEnv = {
   VITE_FORGEAX_BRIDGE_PORT: bridgePort,
 };
 
-console.log('[dev-standalone] starting edit-runtime :15280 (HMR→15290) ...');
+console.log(`[dev-standalone] starting edit-runtime :${WORKTREE_PORTS.editRuntime} (HMR→${WORKTREE_PORTS.standalone}) ...`);
 children.push(
   spawnService(
     'bun',
-    ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', '15280', '--strictPort'],
+    [
+      '-F',
+      '@forgeax/editor-edit-runtime',
+      'dev',
+      '--',
+      '--port',
+      String(WORKTREE_PORTS.editRuntime),
+      '--strictPort',
+    ],
     {
       cwd: ROOT,
-      env: { ...process.env, ...bridgeEnv, FORGEAX_INTERFACE_PORT: '15290' },
+      env: { ...process.env, ...portEnv, ...bridgeEnv },
     },
   ),
 );
@@ -57,7 +69,7 @@ children.push(
 // window in real time (skills/forgeax-editor-gateway/scripts/gateway-live.mjs) instead of a headless
 // playwright instance. Loopback-only; the page bridge (ViewportComponent, DEV
 // build) dials it. Opt out with FORGEAX_BRIDGE=0.
-if (process.env.FORGEAX_BRIDGE !== '0') {
+if (bridgeEnabled) {
   console.log(`[dev-standalone] starting gateway bridge relay :${bridgePort} ...`);
   children.push(
     // `bun` not `node`: `ws` lives only in bun's isolated store
@@ -66,18 +78,18 @@ if (process.env.FORGEAX_BRIDGE !== '0') {
     // their harness); cwd=ROOT so `ws` still resolves from the root node_modules.
     spawnService('bun', ['skills/forgeax-editor-gateway/scripts/gateway-bridge-server.mjs'], {
       cwd: ROOT,
-      env: { ...process.env, FORGEAX_BRIDGE_PORT: bridgePort },
+      env: { ...process.env, ...portEnv, FORGEAX_BRIDGE_PORT: bridgePort },
     }),
   );
 }
 
-console.log('[dev-standalone] starting standalone host :15290 ...');
+console.log(`[dev-standalone] starting standalone host :${WORKTREE_PORTS.standalone} ...`);
 // Forward env (not just the default process.env fallback) so an exported
 // FORGEAX_ENGINE_RHI_DEBUG=1 reaches the host too — the host is where the engine
 // boots + POSTs captured tapes, so it needs the rhi-debug plugin's endpoints.
 // bridgeEnv too: the host vite inlines VITE_FORGEAX_BRIDGE into the in-process
 // ViewportComponent (see the bridgeEnv comment above).
-children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env: { ...process.env, ...bridgeEnv } }));
+children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env: { ...process.env, ...portEnv, ...bridgeEnv } }));
 
 // Keep alive until a child exits (then cleanup trap tears the rest down).
 await new Promise<void>((resolvePromise) => {

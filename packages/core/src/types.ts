@@ -72,7 +72,7 @@ export type BuiltinEditorOp =
   | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
   | { kind: 'createAsset'; packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[] }
   // createMaterial (solo round-12 / P5 rendering-authoring): mint a NEW PBR
-  // MaterialAsset from params (baseColor/metallic/roughness) into a pack, so an AI
+  // MaterialAsset from params (sRGB baseColor; linear metallic/roughness) into a pack, so an AI
   // can AUTHOR a look — not just BIND an existing catalogued GUID (bindAssetRef,
   // round-11). DOCUMENT-domain like createAsset (undoable, inverse=destroyAsset),
   // but param-driven (createAsset builds only blank payloads) and CATALOGUED (AI-
@@ -85,7 +85,8 @@ export type BuiltinEditorOp =
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
-  // values in-place. DOCUMENT-domain (undoable — inverse carries old patch).
+  // values in-place. Authored colors default to sRGB and remain numerically
+  // unchanged on disk. DOCUMENT-domain (undoable — inverse carries old patch).
   // Shallow-merges paramPatch into the asset's values; writes the new entry
   // through ctx.assetIO then invalidates the registry cache for hot viewport reload.
   // Gateway fills _oldPatch / _oldRefs / _oldEntry synchronously from the catalog.

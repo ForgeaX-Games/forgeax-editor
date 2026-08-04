@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useActiveEditorAsset, gateway, panelBridge, ensureAssetCataloged } from '@forgeax/editor-core';
+import {
+  ensureAssetCataloged,
+  gateway,
+  hexToMaterialColor,
+  materialColorToHex,
+  panelBridge,
+  useActiveEditorAsset,
+} from '@forgeax/editor-core';
 import { AssetPicker } from '../AssetPicker';
 import { PropertyRow } from './PropertyRow';
 import type { PreviewProps } from './index';
@@ -18,23 +25,6 @@ const TEXTURE_FIELD_NAMES: ReadonlySet<string> = new Set([
 
 /** Accepted drag-drop kinds for texture assignment. */
 const DROPPABLE_TEXTURE_KINDS: ReadonlySet<string> = new Set(['texture', 'image']);
-
-/** Convert linear [0,1] RGB to sRGB hex string. */
-function linearToSrgbHex(linear: number[]): string {
-  const toSrgb = (c: number) => Math.round(Math.pow(Math.max(0, Math.min(1, c)), 1 / 2.2) * 255);
-  const r = toSrgb(linear[0] ?? 0);
-  const g = toSrgb(linear[1] ?? 0);
-  const b = toSrgb(linear[2] ?? 0);
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-}
-
-/** Convert sRGB hex to linear [r,g,b,a] array. */
-function srgbHexToLinear(hex: string, alpha: number = 1): [number, number, number, number] {
-  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
-  if (!m) return [1, 1, 1, alpha];
-  const fromSrgb = (s: string) => Math.pow(parseInt(s, 16) / 255, 2.2);
-  return [fromSrgb(m[1]!), fromSrgb(m[2]!), fromSrgb(m[3]!), alpha];
-}
 
 /** From values' stored value (integer refs index OR raw GUID string) resolve
  *  to the actual texture GUID. Pack format stores `values[key] = refs[] index`
@@ -176,6 +166,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
   const parent = payload.parent as string | undefined;
   const values = (payload.values ?? {}) as Record<string, unknown>;
+  const colorSpace = payload.colorSpace === 'linear' ? 'linear' : 'srgb';
 
   const baseColor = Array.isArray(values.baseColor) ? values.baseColor as number[] : [1, 1, 1, 1];
   const metallic = typeof values.metallic === 'number' ? values.metallic : 0;
@@ -234,8 +225,8 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const handleColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const hex = e.target.value;
     const alpha = baseColor[3] ?? 1;
-    dispatchParam({ baseColor: srgbHexToLinear(hex, alpha) });
-  }, [dispatchParam, baseColor]);
+    dispatchParam({ baseColor: hexToMaterialColor(hex, alpha, colorSpace) });
+  }, [dispatchParam, baseColor, colorSpace]);
 
   const handleMetallicCommit = useCallback((val: number) => {
     dispatchParam({ metallic: val });
@@ -260,18 +251,25 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
 
       {/* Base Color */}
       <div className="f-row" data-testid="mat-baseColor">
-        <span className="f-name">Base Color</span>
+        <span
+          className="f-name"
+          title={colorSpace === 'srgb'
+            ? 'Stored as sRGB; converted to linear once at render extraction'
+            : 'Stored as explicit linear RGB; the browser color picker is displayed in sRGB'}
+        >
+          Base Color ({colorSpace === 'srgb' ? 'sRGB' : 'Linear'})
+        </span>
         <span className="f-val">
           <input
             type="color"
-            value={linearToSrgbHex(baseColor)}
+            value={materialColorToHex(baseColor, colorSpace)}
             onChange={handleColorChange}
             disabled={!canEdit}
             data-testid="mat-baseColor-input"
             style={{ width: 32, height: 22, border: 'none', padding: 0, cursor: canEdit ? 'pointer' : 'default' }}
           />
           <span className="hexval" style={{ marginLeft: 6, fontSize: '0.82em', fontFamily: 'monospace' }}>
-            {linearToSrgbHex(baseColor)}
+            {materialColorToHex(baseColor, colorSpace)}
           </span>
         </span>
       </div>

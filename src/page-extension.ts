@@ -28,7 +28,7 @@ const ASSET_PAGE = pageId('asset');
 const MESH_PAGE = pageId('mesh');
 const MATERIAL_PAGE = pageId('material');
 
-const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'ep:assets', 'ep:history'];
+const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'ep:assets', 'ep:history', 'ep:capabilities'];
 const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview'];
 const MESH_PANELS = [...ASSET_PANELS, 'ep:mesh-slots'];
 

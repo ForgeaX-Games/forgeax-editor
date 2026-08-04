@@ -27,10 +27,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename, join } from 'node:path';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
 import { engineVitePreset } from './packages/edit-runtime/src/viewport/runtime-vite-preset';
+import { resolveWorktreePorts } from './scripts/lib/worktree-ports.ts';
 import tailwindcss from 'tailwindcss';
 import autoprefixer from 'autoprefixer';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
+const WORKTREE_PORTS = resolveWorktreePorts(PACKAGE_DIR);
 
 // ── standalone game backend — REUSE platform-io (R3, ideal-clean-architecture §5) ─
 // The standalone stack has NO studio server (forgeax-server :18900 is studio-only).
@@ -57,16 +59,16 @@ const GAME_DIR = process.env.FORGEAX_GAME_DIR
   ? resolve(process.env.FORGEAX_GAME_DIR)
   : null;
 const GAME_SLUG = GAME_DIR ? basename(GAME_DIR) : null;
-const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
+const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? WORKTREE_PORTS.gameApi);
 // The standalone host owns the editor chrome, while the pure engine preview is
 // served by the separate play-runtime. Keep the proxy target on the same port
 // SSOT used by `bun fx start --play`.
-const PLAY_RUNTIME_PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15273);
+const PLAY_RUNTIME_PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? WORKTREE_PORTS.playRuntime);
 // The normal editor host remains :15290.  B2 self-boot deliberately supplies a
 // private free port, though: its self-hosted runner is persistent and can retain
 // a prior dev-server process, so probing the fixed human-development port can
 // otherwise block on an unrelated listener before this Vite instance has bound.
-const STANDALONE_PORT = Number(process.env.FORGEAX_STANDALONE_PORT ?? 15290);
+const STANDALONE_PORT = Number(process.env.FORGEAX_STANDALONE_PORT ?? WORKTREE_PORTS.standalone);
 
 // D7: the shared engine-serve fragment. base '/' (this IS the host origin —
 // shader/pack routes arrive un-prefixed, no base-strip needed); gameDirAbs =
