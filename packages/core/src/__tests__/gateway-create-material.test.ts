@@ -96,6 +96,19 @@ describe('createMaterial dispatch (document applier — validation)', () => {
     expect(r.ok).toBe(true);
   });
 
+  it('an out-of-range alphaCutoff fails fast with a STRUCTURED error', () => {
+    const r = gw.dispatch({
+      kind: 'createMaterial',
+      guid: 'g',
+      name: 'Red',
+      baseColor: [1, 0, 0, 1],
+      alphaCutoff: 1.5,
+      packPath: 'games/sample/assets/scene.pack.json',
+    } as never);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
+  });
+
   it('no packPath + no resolver fails fast with a STRUCTURED error (not a throw)', () => {
     // In the unit env no host path resolver is installed; omitting packPath must
     // return INVALID_ARGS, never let resolveGamePath throw out of dispatch.
@@ -159,6 +172,128 @@ describe('createMaterial applier builds a real Materials.standard() POD', () => 
     expect(payload.values.baseColor).toEqual([1, 0.84, 0, 1]);
     expect(payload.values.metallic).toBe(1);
     expect(payload.values.roughness).toBe(0.25);
+  });
+
+  it('a valid alphaCutoff lands in the POD values (UE-Masked equivalent)', async () => {
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    interface CapturedCreate {
+      packPath: string;
+      asset: { guid: string; kind: string; name: string; payload: Record<string, unknown> };
+    }
+    let captured: CapturedCreate | null = null;
+    const fakeCtx = {
+      assetIO: {
+        createAssetInPack(opts: CapturedCreate) {
+          captured = opts;
+          return Promise.resolve({ ok: true });
+        },
+      },
+    } as never;
+    const r = applyCreateMaterial(fakeCtx, {
+      kind: 'createMaterial',
+      guid: 'abc2',
+      name: 'Leaf',
+      baseColor: [1, 1, 1, 1],
+      baseColorTexture: 'e5555555-5555-4555-8555-555555555555',
+      alphaCutoff: 0.5,
+      packPath: 'some/pack.pack.json',
+    } as never);
+    expect(r.ok).toBe(true);
+    const cap = captured as unknown as CapturedCreate;
+    const payload = cap.asset.payload as { values: Record<string, unknown> };
+    expect(payload.values.alphaCutoff).toBe(0.5);
+    // The texture GUID is stored as a refs[] index (engine disk format SSOT).
+    expect(payload.values.baseColorTexture).toBe(0);
+    expect((cap.asset as unknown as { refs: string[] }).refs).toContain('e5555555-5555-4555-8555-555555555555');
+  });
+});
+
+// Phantom-texture Fail Fast (gray-quad root cause): a material authored with a
+// baseColorTexture GUID that is not in the live catalog can NEVER resolve at
+// render — it silently shades with the plain baseColor forever. The applier
+// must reject it synchronously with INVALID_ARGS instead of writing an orphan
+// pack entry. Validation is registry-mediated: a KNOWN miss rejects, an
+// unavailable registry (direct-applier unit ctx with no engine facade) is
+// tolerated so the IO/payload contract tests above keep their narrow focus.
+describe('createMaterial baseColorTexture phantom-ref validation', () => {
+  const baseOp = {
+    kind: 'createMaterial',
+    guid: 'mat-1',
+    name: 'Wood',
+    baseColor: [1, 1, 1, 1],
+    packPath: 'some/pack.pack.json',
+  } as const;
+
+  it('rejects a non-GUID baseColorTexture (path / display name)', async () => {
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const r = applyCreateMaterial({} as never, {
+      ...baseOp,
+      baseColorTexture: 'assets/wood.png',
+    } as never);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('INVALID_ARGS');
+      expect(r.error.hint).toContain('RFC 4122');
+    }
+  });
+
+  it('rejects a well-formed GUID that is a KNOWN catalog miss', async () => {
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const fakeCtx = {
+      engine: { isAssetCatalogued: () => false },
+      assetIO: { createAssetInPack() { return Promise.resolve({ ok: true }); } },
+    } as never;
+    const r = applyCreateMaterial(fakeCtx, {
+      ...baseOp,
+      baseColorTexture: 'e5555555-5555-4555-8555-555555555555',
+    } as never);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('INVALID_ARGS');
+      expect(r.error.hint).toContain('not in the live asset catalog');
+    }
+  });
+
+  it('accepts a catalogued texture GUID (isAssetCatalogued true)', async () => {
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    let captured: { asset: { refs?: string[] } } | null = null;
+    const fakeCtx = {
+      engine: { isAssetCatalogued: () => true },
+      assetIO: {
+        createAssetInPack(opts: { asset: { refs?: string[] } }) {
+          captured = opts;
+          return Promise.resolve({ ok: true });
+        },
+      },
+    } as never;
+    const r = applyCreateMaterial(fakeCtx, {
+      ...baseOp,
+      baseColorTexture: 'e5555555-5555-4555-8555-555555555555',
+    } as never);
+    expect(r.ok).toBe(true);
+    expect((captured as unknown as { asset: { refs: string[] } }).asset.refs)
+      .toContain('e5555555-5555-4555-8555-555555555555');
+  });
+
+  it('tolerates an unavailable registry (isAssetCatalogued undefined / no engine)', async () => {
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const withEngine = applyCreateMaterial({
+      engine: { isAssetCatalogued: () => undefined },
+      assetIO: { createAssetInPack() { return Promise.resolve({ ok: true }); } },
+    } as never, {
+      ...baseOp,
+      guid: 'mat-2',
+      baseColorTexture: 'e5555555-5555-4555-8555-555555555555',
+    } as never);
+    expect(withEngine.ok).toBe(true);
+    const noEngine = applyCreateMaterial({
+      assetIO: { createAssetInPack() { return Promise.resolve({ ok: true }); } },
+    } as never, {
+      ...baseOp,
+      guid: 'mat-3',
+      baseColorTexture: 'e5555555-5555-4555-8555-555555555555',
+    } as never);
+    expect(noEngine.ok).toBe(true);
   });
 });
 

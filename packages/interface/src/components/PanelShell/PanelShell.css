@@ -10,6 +10,7 @@
 }
 
 .fx-panel-header {
+  position: relative;
   min-height: var(--fx-panel-header-height, 38px);
   flex: 0 0 auto;
   display: flex;
@@ -28,18 +29,11 @@
   gap: 6px;
 }
 
-/* All three zones grow (flex-grow: 1) so every zone can RECLAIM slack when the
-   header widens. This is the crux: a content-sized zone (flex-grow: 0) shrinks to
-   its folded content and can never grow back, so its overflow group stays stuck
-   folded after a widen — which is exactly what happened when only the center grew
-   (sides stuck) and later when only the sides grew (center stuck). With every zone
-   growing, each gets "content + its share of slack": it always fits while slack
-   exists and only folds once the header itself overflows (flex-shrink),
-   symmetrically on grow and shrink. Trade-off: the center is not pixel-perfectly
-   centered when left/right content widths differ (a constant offset), which we
-   accept in exchange for correct dynamic fold/unfold on all three zones. */
+/* Zones are content-sized: folding is decided against the header width in JS, so
+   the zones never have to absorb overflow by shrinking. Only the center grows,
+   which keeps it centered in whatever space the sides leave. */
 .fx-panel-header-zone[data-zone="left"] {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   z-index: 2;
 }
 
@@ -50,9 +44,18 @@
 }
 
 .fx-panel-header-zone[data-zone="right"] {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   justify-content: flex-end;
+  margin-left: auto;
   z-index: 2;
+}
+
+.fx-panel-title-block {
+  min-width: 0;
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .fx-panel-icon {
@@ -100,6 +103,13 @@
   gap: 6px;
 }
 
+.fx-panel-toolbar-item {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
 /* Overflow-aware toolbar zone: shrinks under flex pressure and clips its
    visible row; JS folds the surplus buttons into the flyout. flex-basis is
    pinned to the measured natural width so folding cannot feed back into the
@@ -127,12 +137,16 @@
 }
 
 /* Off-screen clone used only to measure each item's natural width. Absolutely
-   positioned so it never contributes to the live container's layout. */
+   positioned so it never contributes to the live container's layout.
+   Prefer translate over visibility:hidden — some Radix-wrapped triggers report
+   0×0 under visibility:hidden/inert, which would permanently exclude them from
+   the fold set (e.g. the viewport "视图预设" control). */
 .fx-panel-overflow-measure {
   position: absolute;
   top: 0;
   left: 0;
-  visibility: hidden;
+  transform: translateY(-9999px);
+  opacity: 0;
   pointer-events: none;
   display: inline-flex;
   align-items: center;
@@ -152,11 +166,19 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
+  /* PopoverContent already provides border/padding/surface — avoid a second
+     inner frame that reads as a stray top divider above the first item. */
   padding: 6px;
-  border: 1px solid var(--color-border-default);
+  border: none;
   border-radius: 10px;
   background: var(--color-background-floating);
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.6);
+  box-shadow: none;
+}
+
+/* Belt-and-suspenders: never paint a separator as the first/last flyout row. */
+.fx-panel-overflow-flyout > .fx-panel-control:first-child:has(.fx-vp-separator),
+.fx-panel-overflow-flyout > .fx-panel-control:last-child:has(.fx-vp-separator) {
+  display: none;
 }
 
 .fx-panel-control {

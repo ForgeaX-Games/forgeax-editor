@@ -1,0 +1,80 @@
+.fx-document-tabs {
+  display: flex;
+  align-items: stretch;
+  min-height: 34px;
+  padding: 0 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--color-background-base, #0d0d0f);
+  border-bottom: 1px solid var(--color-border-default, #2a2d30);
+  flex: 0 0 auto;
+}
+
+.fx-document-tab {
+  display: flex;
+  align-items: center;
+  min-width: 112px;
+  max-width: 240px;
+  color: var(--color-text-secondary, #9aa0aa);
+  background: var(--color-background-elevated, #161619);
+  border-right: 1px solid var(--color-border-default, #2a2d30);
+  border-top: 2px solid transparent;
+}
+
+.fx-document-tab:first-child {
+  border-left: 1px solid var(--color-border-default, #2a2d30);
+}
+
+.fx-document-tab[data-active='1'] {
+  color: var(--color-text-primary, #e8eaed);
+  background: var(--color-background-overlay, #1e1e22);
+  border-top-color: var(--color-brand-primary, #d4ff48);
+}
+
+.fx-document-tab-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.fx-document-tab-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fx-document-tab-main:focus-visible,
+.fx-document-tab-close:focus-visible {
+  outline: 1px solid var(--color-border-strong, #8a8f98);
+  outline-offset: -2px;
+}
+
+.fx-document-tab-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  color: var(--color-text-tertiary, #5f6368);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.fx-document-tab-close:hover {
+  color: var(--color-text-primary, #e8eaed);
+  background: rgba(255, 255, 255, 0.08);
+}

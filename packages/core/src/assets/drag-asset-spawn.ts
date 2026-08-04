@@ -30,11 +30,13 @@
 //     the guid, loadByGuid -> allocSharedRef('MeshAsset') -> dispatches
 //     setComponent(MeshFilter.assetHandle) over the EditGateway. Round-trip to Play
 //     is guaranteed by engine writeback _guidForAsset (research Finding 4e).
-//   texture/material branches KEEP HANDLE_CUBE: there the cube is proxy geometry
-//   (a texture/material needs a surface to display on), not a missing-mesh
-//   placeholder (plan-strategy §D-5 narrows AC-10 to the mesh branch only).
+//   The texture branch uses HANDLE_QUAD (UE-Plane-equivalent builtin, XY plane
+//   facing +Z): a texture drops in as a flat textured card, not a squashed cube.
+//   The material branch KEEPS HANDLE_CUBE: there the cube is proxy geometry (a
+//   material needs a mesh to shade), not a missing-mesh placeholder
+//   (plan-strategy §D-5 narrows AC-10 to the mesh branch only).
 
-import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import type { AssetAuthoringCapability } from '@forgeax/engine-types';
 import { resolveMeshOriginalMaterials } from '../scene/mesh-original-materials';
 
@@ -72,7 +74,8 @@ export function stemName(ref: DragAssetRef): string {
   return raw.replace(/[^\w.-]+/g, '_').slice(0, 48) || 'Asset';
 }
 
-/** Returns a `scale` array [x, y, z]. */
+/** Returns a `scale` array [x, y, z]. The texture branch renders on HANDLE_QUAD
+ *  (a flat XY plane), so z is always 1 — no thickness axis to squash. */
 function textureScale(payload?: Record<string, unknown>): [number, number, number] {
   const w = typeof payload?.width === 'number' && payload.width > 0 ? payload.width : null;
   const h = typeof payload?.height === 'number' && payload.height > 0 ? payload.height : null;
@@ -80,10 +83,10 @@ function textureScale(payload?: Record<string, unknown>): [number, number, numbe
   if (w && h) {
     const aspect = w / h;
     return aspect >= 1
-      ? [base, base / aspect, 0.02]
-      : [base * aspect, base, 0.02];
+      ? [base, base / aspect, 1]
+      : [base * aspect, base, 1];
   }
-  return [base, base, 0.02];
+  return [base, base, 1];
 }
 
 /** engine-native Transform POD (array-TRS) with identity quaternion rotation. */
@@ -113,13 +116,15 @@ export function buildSpawnEntityFromDragRef(ref: DragAssetRef, opts?: SpawnRefOp
       name,
       components: {
         Transform: nativeTransform({ y: scale[1] / 2 + 0.01 }, scale),
-        MeshFilter: { assetHandle: HANDLE_CUBE },
+        MeshFilter: { assetHandle: HANDLE_QUAD },
         // EditorPendingTextureAsset: command-level marker (schema-outsider, dropped by
         // spawnComponentData). The edit-runtime resolver (drag-spawn-resolve.ts) reads
         // the guid, creates a new MaterialAsset with this texture bound, and binds it
         // to the spawned entity's MeshRenderer via bindAssetRef — same pattern as the
-        // mesh branch's EditorPendingMeshAsset marker.
-        EditorPendingTextureAsset: { guid: ref.guid },
+        // mesh branch's EditorPendingMeshAsset marker. `name` rides along so the
+        // resolver can mint a UE-style material name (M_<texture>) instead of a
+        // guid-derived one.
+        EditorPendingTextureAsset: { guid: ref.guid, name },
       },
     };
   }

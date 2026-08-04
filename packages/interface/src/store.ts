@@ -291,33 +291,6 @@ export function tabLabel(tab: Pick<ChatTab, 'sid' | 'displayName'>): string {
 }
 
 export interface AppState {
-  // P2.6a — widened from a closed union to `string` because the Sidebar TOOLS
-  // row now mixes built-in tabs (`agents`/`files`) with bus-sourced workbench
-  // plugin ids (e.g. `wb:character`, `wb:skill`). The set is open and grows
-  // as new wb-* manifests land in packages/marketplace/extensions/.
-  workbenchTab: string;
-  setWorkbenchTab: (t: string) => void;
-
-  // 2026-05-21 — When a workbench plugin opts into MainArea takeover (its
-  // panel is bigger than what fits in the Sidebar — iframe-embedded editors
-  // like wb-character), tile click sets this slot instead of workbenchTab.
-  // MainArea/WorkbenchMode.tsx early-returns a full-bleed plugin host when
-  // this is non-null; null = show the default workbench gallery / editor.
-  workbenchExpandedExtensionId: string | null;
-  setWorkbenchExpandedExtensionId: (id: string | null) => void;
-
-  // 2026-06 (architecture review §B3) — workbenchTab (sidebar nav) and
-  // workbenchExpandedExtensionId (center takeover) used to be set by separate
-  // calls on every "open a plugin" path; missing one desynced the sidebar
-  // left pane from the center (the left-pane-blank class of bug). openWorkbench
-  // is the ONE atomic action every open path funnels through, so the two fields
-  // can never drift. (The low-level setters above remain only for the center
-  // "返回工作台" collapse, which clears expandedExtensionId while keeping the tab.)
-  //   tab               — sidebar tab to activate ('agents' | 'files' | 'wb:<id>')
-  //   expandedExtensionId  — plugin to expand into the center, or null (none).
-  //                       Omit to leave the current center plugin untouched.
-  openWorkbench: (opts: { tab?: string; expandedExtensionId?: string | null }) => void;
-
   // ── Windowing (detached OS windows) ──
   // Set of surface keys (see lib/platform/surface.ts `surfaceKey`) currently
   // hosted in their own OS window instead of the main window's keep-alive
@@ -334,9 +307,6 @@ export interface AppState {
   redockSurface: (d: import('./lib/platform').SurfaceDescriptor) => Promise<void>;
   /** Plugin IDs currently open as top-level DockShell panels (so Sidebar knows
    *  to hide their keep-alive iframes to avoid double-rendering). */
-  dockedExtensions: Set<string>;
-  addDockedExtension: (id: string) => void;
-  removeDockedExtension: (id: string) => void;
   /** Internal: called by the WindowManager close listener (see main.tsx) when
    *  the user closes a detached window — redocks without re-closing the window. */
   markSurfaceDocked: (key: string) => void;

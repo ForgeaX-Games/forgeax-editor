@@ -11,7 +11,9 @@ describe('Inspector draft focus and live pulse contracts', () => {
     expect(panel).toContain('const num = useNumberDraft(shown, fs, onCommit, generation);');
     expect(panel).toContain('data-scrubbing={isScrubbing}');
     expect(draft).toContain('value: draft !== null ? draft : String(display),');
-    expect(draft).toContain('onFocus: () => setDraft(String(display)),');
+    expect(draft).toContain('const changed = useRef(false);');
+    expect(draft).toContain('if (!changed.current)');
+    expect(draft).toContain('onFocus: () => { changed.current = false; setDraft(String(display)); },');
   });
 
   it('keys draft identity by selection and world generation', () => {

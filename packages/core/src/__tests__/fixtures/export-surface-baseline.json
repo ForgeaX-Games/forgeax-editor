@@ -12,6 +12,10 @@
     "signature": "() => void"
   },
   {
+    "name": "configureEditorPageNavigation",
+    "signature": "(next: EditorPageNavigation | null) => () => void"
+  },
+  {
     "name": "createSceneFile",
     "signature": "(id: string, duplicateCurrent: boolean) => Promise<boolean>"
   },
@@ -22,6 +26,10 @@
   {
     "name": "gateway",
     "signature": "EditGateway"
+  },
+  {
+    "name": "getActiveEditorAsset",
+    "signature": "() => SelectedAsset | null"
   },
   {
     "name": "getActiveScenePackPath",
@@ -198,6 +206,10 @@
   {
     "name": "triggerAssetSelectAll",
     "signature": "() => void"
+  },
+  {
+    "name": "useActiveEditorAsset",
+    "signature": "() => SelectedAsset | null"
   },
   {
     "name": "useAssetSelection",

@@ -24,6 +24,7 @@ import { join, resolve } from 'node:path';
 const e2eHostPort = process.env.FORGEAX_E2E_PORT ?? '15290';
 const e2eApiPort = process.env.FORGEAX_E2E_API_PORT ?? '15281';
 const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
+const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
 // Save E2E must exercise real file IO without rewriting the tracked sample.
 // The copy is exact, isolated to this Playwright process, and removed only at
 // process exit; the browser still addresses it as the game slug "sample".
@@ -129,6 +130,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         browserName: 'chromium',
+        ...(e2eBrowserChannel ? { channel: e2eBrowserChannel } : {}),
         launchOptions: {
           args: [
             '--enable-unsafe-webgpu',

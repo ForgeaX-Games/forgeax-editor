@@ -511,9 +511,9 @@ registerApplier('document', 'createAsset', applyCreateAsset as unknown as Applie
 // basePath, so it defaults to the active game's scene.pack.json (the same target
 // disk-io.ts writes the scene to).
 export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { guid, name, baseColor, metallic, roughness, baseColorTexture, packPath, refs } = cmd as {
+  const { guid, name, baseColor, metallic, roughness, baseColorTexture, alphaCutoff, packPath, refs } = cmd as {
     guid: string; name: string; baseColor: [number, number, number, number];
-    metallic?: number; roughness?: number; baseColorTexture?: string; packPath?: string; refs?: string[];
+    metallic?: number; roughness?: number; baseColorTexture?: string; alphaCutoff?: number; packPath?: string; refs?: string[];
   };
   // Fail Fast (§5): reject a malformed op before it writes a broken pack entry.
   if (typeof guid !== 'string' || guid.length === 0) {
@@ -530,6 +530,26 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   }
   if (roughness !== undefined && typeof roughness !== 'number') {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `roughness` must be a number (0..1) if given' } };
+  }
+  if (alphaCutoff !== undefined && (typeof alphaCutoff !== 'number' || alphaCutoff < 0 || alphaCutoff > 1)) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `alphaCutoff` must be a number in [0, 1] if given (UE-Masked equivalent: baseColorTexture alpha below the cutoff is discarded)' } };
+  }
+  if (baseColorTexture !== undefined) {
+    if (typeof baseColorTexture !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(baseColorTexture)) {
+      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `baseColorTexture` must be a texture asset GUID (RFC 4122), not a path or display name' } };
+    }
+    // Fail Fast on a phantom texture ref: a material whose baseColorTexture GUID
+    // is not catalogued can NEVER resolve at render — it silently shades with
+    // the plain baseColor forever (no retry), which is exactly the "gray quad"
+    // failure a stale Content Browser row produces when dragged into the scene.
+    // ctx.engine is a facade with a registry in the live gateway; direct-applier
+    // unit envs pass a partial ctx without it — isAssetCatalogued also returns
+    // undefined when the facade has no registry (validation unavailable), and
+    // we reject only on a KNOWN miss.
+    const catalogProbe = ctx.engine as { isAssetCatalogued?: (guid: string) => boolean | undefined } | undefined;
+    if (catalogProbe?.isAssetCatalogued?.(baseColorTexture) === false) {
+      return { ok: false, error: { code: 'INVALID_ARGS', hint: `createMaterial baseColorTexture ${baseColorTexture} is not in the live asset catalog — the texture may have been deleted or its import failed; re-import it before authoring the material` } };
+    }
   }
   // Default to the ACTIVE scene's real pack path — the SAME path disk-io saves the
   // scene to (via the registered scenePath resolver), so an authored material lands in
@@ -560,6 +580,7 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
     baseColor,
     ...(metallic !== undefined ? { metallic } : {}),
     ...(roughness !== undefined ? { roughness } : {}),
+    ...(alphaCutoff !== undefined ? { alphaCutoff } : {}),
   }) as unknown as Record<string, unknown>;
 
   // Texture GUID → pack refs index chain (engine disk format SSOT).

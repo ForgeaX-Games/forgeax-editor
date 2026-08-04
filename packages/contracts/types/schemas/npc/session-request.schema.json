@@ -1,0 +1,126 @@
+{
+  "$ref": "#/definitions/NpcSessionRequest",
+  "definitions": {
+    "NpcSessionRequest": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "playerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "npcIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "npcs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "npcId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              },
+              "soulId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              },
+              "decisionDeadline": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "preset": {
+                        "type": "string",
+                        "const": "fast"
+                      }
+                    },
+                    "required": [
+                      "preset"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "preset": {
+                        "type": "string",
+                        "const": "balanced"
+                      }
+                    },
+                    "required": [
+                      "preset"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "preset": {
+                        "type": "string",
+                        "const": "patient"
+                      }
+                    },
+                    "required": [
+                      "preset"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "preset": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 30000
+                      }
+                    },
+                    "required": [
+                      "preset",
+                      "timeoutMs"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "npcId"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "game"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

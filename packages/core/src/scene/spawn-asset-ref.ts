@@ -57,7 +57,16 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
     materialGuids: materialGuids ?? [],
   })}`);
 
-  const plan = planAssetPlacement(ref, materialGuids ? { materialGuids } : undefined);
+  // Phantom-ref guard input: the live catalog GUIDs, when a registry is bound
+  // (always in the dev shell; absent in registry-less headless envs where the
+  // validation is skipped rather than rejecting every spawn).
+  const catalogGuids = gateway.doc.registry !== undefined
+    ? gateway.assetCatalog().map((row) => row.guid)
+    : undefined;
+  const plan = planAssetPlacement(ref, {
+    ...(materialGuids ? { materialGuids } : {}),
+    ...(catalogGuids !== undefined ? { catalogGuids } : {}),
+  });
   console.info(`[placement-diag] reference.plan ${JSON.stringify(plan.ok
     ? {
         ok: true,
@@ -65,7 +74,22 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
         componentKeys: plan.plan.operation === 'spawnEntity' ? Object.keys(plan.plan.args.components) : [],
       }
     : { ok: false, code: plan.error.code, hint: plan.error.hint })}`);
-  if (!plan.ok || plan.plan.operation !== 'spawnEntity') return false;
+  if (!plan.ok) {
+    // A phantom-ref rejection (stale Content Browser row: deleted / failed-import
+    // source) is TERMINAL — spawning would produce an entity whose mesh/material/
+    // texture can never resolve (silent gray card, no retry). Surface the precise
+    // reason through the panel error bus instead of falling through to the
+    // generic "unsupported kind" broadcast below. All OTHER plan failures keep
+    // the prior fall-through (e.g. a scene ref re-plans with a requestId in the
+    // scene-mount path; an unsupported kind reaches the bottom refusal).
+    if (plan.error.code === 'placement-asset-unknown') {
+      console.warn('[spawn-asset] placement rejected (phantom asset ref):', plan.error.hint);
+      broadcastAssetsError({ op: 'placeAsset', ...(ref.path ? { path: ref.path } : {}), hint: plan.error.hint });
+      return true;
+    }
+    return false;
+  }
+  if (plan.plan.operation !== 'spawnEntity') return false;
 
   const dispatchResult = gateway.dispatch(plan.plan.args);
   console.info(`[placement-diag] reference.dispatch ${JSON.stringify(dispatchResult.ok

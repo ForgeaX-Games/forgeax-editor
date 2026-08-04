@@ -54,6 +54,7 @@ export type {
   CommandOrigin,
   DispatchResult,
   EngineFacade,
+  HistoryDiff,
   OpDescriptor,
   OpHandle,
   OperationRun,
@@ -374,7 +375,11 @@ export {
   publishMeshStats,
   getMeshStats,
   useMeshStats,
+  configureEditorPageNavigation,
+  getActiveEditorAsset,
+  useActiveEditorAsset,
 } from './store/store';
+export type { EditorPageNavigation } from './store/page-navigation';
 // Single-source "who was selected last" Derive — keyboard router + panel
 // scope-ring both read this; no second divergent state.
 export {

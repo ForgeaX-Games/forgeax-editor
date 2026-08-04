@@ -3,7 +3,9 @@ import { expect, test } from 'bun:test';
 import {
   acceptedEvent,
   createOperationRun,
+  isOperationRun,
   isTerminalRunStatus,
+  OperationRunSchema,
   reduceOperationRun,
   type OperationRunEvent,
 } from './run';
@@ -157,4 +159,58 @@ test('requestId format is validated at the OperationRun boundary', () => {
     ok: false,
     error: { code: 'invalid-request-id' },
   });
+});
+
+test('OperationRunSchema machine-validates every lifecycle shape without promoting accepted to success', () => {
+  const accepted = createOperationRun({ ...request, runId: 'run-1', requestId: 'save-1' }, 1);
+  expect(accepted.ok).toBe(true);
+  if (!accepted.ok) return;
+  expect(OperationRunSchema.safeParse(accepted.value)).toMatchObject({ success: true });
+  expect(isOperationRun(accepted.value)).toBe(true);
+
+  const running = reduceOperationRun(accepted.value, event('running', { sequence: 2, at: 2 }));
+  expect(running.ok).toBe(true);
+  if (!running.ok) return;
+  expect(OperationRunSchema.safeParse(running.value)).toMatchObject({ success: true });
+
+  const succeeded = reduceOperationRun(running.value, event('succeeded', { sequence: 3, at: 3, result: { revision: 2 } }));
+  expect(succeeded.ok).toBe(true);
+  if (!succeeded.ok) return;
+  expect(OperationRunSchema.safeParse(succeeded.value)).toMatchObject({ success: true });
+});
+
+test('OperationRunSchema rejects malformed transport facts and impossible lifecycle combinations', () => {
+  const accepted = createOperationRun({ ...request, runId: 'run-1' }, 1);
+  expect(accepted.ok).toBe(true);
+  if (!accepted.ok) return;
+
+  const malformed = {
+    ...accepted.value,
+    status: 'succeeded',
+    completedAt: 2,
+    error: { code: 'broken' },
+  };
+  const parsed = OperationRunSchema.safeParse(malformed);
+  expect(parsed.success).toBe(false);
+  if (parsed.success) return;
+  expect(parsed.error.issues).toEqual(expect.arrayContaining([
+    'error must be a structured CommandError.',
+    'succeeded runs require startedAt/completedAt and cannot carry an error.',
+  ]));
+  expect(isOperationRun(malformed)).toBe(false);
+});
+
+test('the reducer rejects progress that would publish an invalid OperationRun', () => {
+  const accepted = createOperationRun({ ...request, runId: 'run-1' }, 1);
+  expect(accepted.ok).toBe(true);
+  if (!accepted.ok) return;
+  const running = reduceOperationRun(accepted.value, event('running', { sequence: 2, at: 2 }));
+  expect(running.ok).toBe(true);
+  if (!running.ok) return;
+  const invalid = reduceOperationRun(running.value, event('progress', {
+    sequence: 3,
+    at: 3,
+    progress: { fraction: 2, stage: 'invalid' },
+  }));
+  expect(invalid).toMatchObject({ ok: false, error: { code: 'invalid-run-schema' } });
 });

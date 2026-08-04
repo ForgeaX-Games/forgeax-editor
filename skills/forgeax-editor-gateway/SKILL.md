@@ -173,7 +173,8 @@ and `run.cancel`. Generic non-save runs continue to use their existing transport
 | `gateway.collectSceneAsset(entity)` | `(EntityHandle) => {ok:true, asset} \| {ok:false, error}` | Read one live subtree as a GUID-backed SceneAsset POD; no world/ledger mutation |
 | `gateway.resolveAsset(handle)` | `(number) => {ok:true, asset} \| {ok:false, error}` | Resolve a shared<T> handle (query's opaque-handle.raw) to its live asset payload; covers builtin + catalog, O(1) |
 | `gateway.describeAsset(handle)` | `(number) => {ok:true, kind, guid?, name?, builtin?} \| {ok:false, error}` | Human-readable identity of an asset handle: kind + (catalog assets) guid+name, or builtin:true |
-| `gateway.assetCatalog()` | `() => readonly {guid, kind, name?, relativeUrl}[]` | List the asset catalog (projects registry.listCatalog); [] if no registry |
+| `gateway.assetCatalog()` | `() => readonly catalog rows` | List the canonical producer catalog (including `relations`, `refs`, source and authoring facts); [] if no registry |
+| `gateway.assetImpact(request)` | `(request: {operation: 'delete'\|'move'\|'reimport', guid?, sourcePath?}) => AssetImpactResult` | Derive bounded direct/transitive referencers from the current producer catalog; read-only, no second index |
 | `gateway.sceneReadModel()` | `() => {gameId, currentScene, defaultScene, scenes}` | Read the persistence-owned scene list with stable GUIDs and derived current/default markers; []/null fields mean no game or no declared scene |
 | `gateway.hasPendingDiskSave()` | `() => boolean` | Read the persistence-owned authored-vs-disk dirty fact shared by AI and the human dirty indicator |
 | `dispatch({kind:'switchSceneFile', id, dirtyPolicy?})` | `dirtyPolicy: 'save' \| 'discard' \| 'cancel'` when dirty | Switch through the scene-list owner; omitting policy on dirty state returns `scene-switch-dirty`, and `cancel` returns `scene-switch-cancelled` without switching |
@@ -186,8 +187,9 @@ and `run.cancel`. Generic non-save runs continue to use their existing transport
 | `gateway.auditLog()` | `() => ReadonlyArray<{op, origin}>` | "Who did what" — the append-only ledger zipped with its index-aligned origin ('human'\|'ai'), oldest→newest; includes irreversible session ops (setSelection/save/play), unlike undoStack-derived `historySteps()` |
 | `gateway.undo()` / `gateway.redo()` | `() => boolean` | Roll the document timeline back / forward one step. **Returns a bare `boolean`** (did-something), **NOT `DispatchResult`** — there is no `.ok`. `false` = nothing to undo/redo (empty stack). Gate with `canUndo()`/`canRedo()`, don't branch on `.ok`. Session ops (setSelection/save/play) are NOT on this stack — see "Session ops are irreversible" |
 | `gateway.canUndo()` / `gateway.canRedo()` | `() => boolean` | Whether the undo/redo stack is non-empty — the guard for undo/redo UI buttons and for a docs-following AI's loop condition |
-| `gateway.appliedCount()` | `() => number` | Number of currently-applied document steps (the timeline head position); pairs with `gotoStep(n)` |
+| `gateway.appliedCount()` | `() => number` | Number of currently-applied document steps (the timeline head position); pairs with `jumpTo(n)` |
 | `gateway.historySteps()` | `() => HistoryStep[]` | undoStack-derived timeline (applied oldest→newest, then redoable future), each with origin; **document ops only** (no session ops — use `auditLog()` for those) |
+| `gateway.historyDiff(index)` | `(number) => HistoryDiff \| undefined` | One bounded, one-based review projection from the same timeline entry: `{index, label, origin, future, entity?, op, inverse}`; `op` applies the change and `inverse` returns to the prior state |
 | `registerSessionApplier(kind, applier, meta?)` | `(string, fn, meta?) => () => void` | Downstream registration seam: edit-runtime registers play/stop/cameraOrbit/requestFrame/captureFrame appliers |
 | `createEvalChannel(gw, opts?)` | `(EditGateway, {rawScope?}) => EvalChannel` | Create dev-only eval channel; `globalThis.__forgeaxEval` in DEV builds |
 | `channel.eval(code)` | `(string) => EvaluateResult` | Evaluate JS code with scope①={gateway, query, _import} |
@@ -359,7 +361,7 @@ const d = gateway.describeAsset(handle);
 const a = gateway.resolveAsset(handle);           // { ok:true, asset:{ kind:'mesh', vertices, … } }
 
 // Enumerate / look up the catalog directly:
-const catalog = gateway.assetCatalog();           // [{ guid, kind, name?, relativeUrl }]
+const catalog = gateway.assetCatalog();           // canonical rows: [{ guid, kind, packageUrl, relations?, refs? }]
 const payload = gateway.lookupAsset(someGuid);    // Asset | undefined (catalog only) — FULL payload
 
 // Following a GUID pointer (e.g. a material's texture binding)? Use the LIGHTWEIGHT
@@ -381,6 +383,31 @@ projection): `{ kind, guid?, name?, builtin?, meta? }`. `meta` carries the POD's
 fields (a texture's `width`/`height`/`format`, a mesh's `attributes`, …) with binary buffers
 removed — so it is safe to log/inspect. Reach for `resolveAsset`/`lookupAsset` **only** when you
 actually need the pixels/vertices.
+
+### Preview asset impact before a destructive or source operation
+
+The producer catalog is the graph authority. `gateway.assetImpact` folds its current `relations`
+into the bounded impact of one catalog GUID or one source path; it does not retain an editor-side
+dependency index. Rows without producer relations use the catalog's legacy `refs` projection, so
+older packs remain inspectable while they migrate. A source path may resolve to several imported
+outputs from one source file.
+
+```ts
+const preview = gateway.assetImpact({ operation: 'delete', guid: materialGuid });
+if (preview.resolution !== 'resolved') throw new Error(preview.hint ?? 'asset selector unresolved');
+if (preview.blocking) {
+  // Show preview.directReferencers / preview.transitiveReferencers to the user
+  // before dispatching the existing delete op.
+}
+
+const reimportPreview = gateway.assetImpact({ operation: 'reimport', sourcePath: 'models/hero.glb' });
+// reimportPreview.targets = every catalog output of the source file
+```
+
+The preview is a pure read. It never mutates, deletes, moves, or reimports; the existing registered
+Gateway operations remain the write owner. Callers must pass exactly one selector (`guid` or
+`sourcePath`) and must treat `blocking`, `confirmation.required`, and the returned relation
+provenance as facts to present or record before invoking a destructive operation.
 
 ```ts
 // Inspect what texture a material binds — WITHOUT a multi-MB pixel dump:

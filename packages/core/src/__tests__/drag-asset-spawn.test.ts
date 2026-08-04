@@ -10,9 +10,10 @@
 // component name it does not register, so EditorPendingMeshAsset never reaches
 // the world/persist layer (plan-strategy §D-2).
 //
-// texture/material branches KEEP HANDLE_CUBE — there it is proxy geometry (a
-// texture needs a surface to display on; a material needs a mesh to shade), not
-// a placeholder for a missing mesh (plan-strategy §D-5 — narrowing of AC-10).
+// texture branch uses HANDLE_QUAD (UE-Plane-equivalent builtin, XY plane facing
+// +Z): a texture drops in as a flat textured card. The material branch KEEPS
+// HANDLE_CUBE — there it is proxy geometry (a material needs a mesh to shade),
+// not a placeholder for a missing mesh (plan-strategy §D-5 — narrowing of AC-10).
 //
 // Anchors:
 //   plan-tasks.json w8: mesh branch RED — assetHandle:0 + marker guid + no cube
@@ -69,11 +70,25 @@ describe('w8 buildSpawnEntityFromDragRef mesh branch (RED before w10)', () => {
     expect(ent!.components.EditorPendingMeshMaterials).toEqual({ guids: ['mat-guid-99'] });
   });
 
-  it('(d2) texture branch: keeps HANDLE_CUBE (proxy geometry) + no pending marker', () => {
+  it('(d2) texture branch: HANDLE_QUAD (flat card) + pending-texture marker carries guid and name', () => {
     const ent = buildSpawnEntityFromDragRef(textureRef());
     expect(ent).not.toBeNull();
     const mf = ent!.components.MeshFilter as { assetHandle: number };
-    expect(mf.assetHandle).toBe(1); // HANDLE_CUBE
+    expect(mf.assetHandle).toBe(3); // HANDLE_QUAD
     expect(ent!.components.EditorPendingMeshAsset).toBeUndefined();
+    const marker = ent!.components.EditorPendingTextureAsset as { guid: string; name: string } | undefined;
+    expect(marker).toBeDefined();
+    expect(marker!.guid).toBe('tex-guid-77');
+    expect(marker!.name).toBe('Wood');
+  });
+
+  it('(d3) texture branch: quad scale keeps z=1 (no thickness axis to squash), aspect on x/y', () => {
+    const wide = buildSpawnEntityFromDragRef({ type: 'asset', guid: 'g', kind: 'texture', name: 'W', payload: { width: 1024, height: 512 } });
+    const tall = buildSpawnEntityFromDragRef({ type: 'asset', guid: 'g', kind: 'texture', name: 'T', payload: { width: 256, height: 512 } });
+    const none = buildSpawnEntityFromDragRef({ type: 'asset', guid: 'g', kind: 'texture', name: 'N' });
+    const sc = (e: { components: Record<string, unknown> } | null) => (e!.components.Transform as { scale: number[] }).scale;
+    expect(sc(wide)).toEqual([2, 1, 1]);
+    expect(sc(tall)).toEqual([1, 2, 1]);
+    expect(sc(none)).toEqual([2, 2, 1]);
   });
 });

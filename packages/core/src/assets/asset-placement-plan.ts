@@ -30,7 +30,7 @@ export type AssetPlacementPlan =
     };
 
 export type AssetPlacementPlanError = {
-  readonly code: 'placement-unavailable' | 'placement-input-invalid';
+  readonly code: 'placement-unavailable' | 'placement-input-invalid' | 'placement-asset-unknown';
   readonly hint: string;
 };
 
@@ -45,6 +45,14 @@ export interface AssetPlacementPlanOptions {
   readonly materialGuids?: readonly string[];
   /** Resolved scene sub-asset GUID when the source ref came from a meta file. */
   readonly sceneGuid?: string;
+  /** Live catalog GUIDs (gateway.assetCatalog()) for phantom-ref validation.
+   *  When provided, a spawnEntity-planned ref whose guid is NOT in the live
+   *  catalog is rejected (placement-input-invalid) instead of spawning an
+   *  entity whose mesh/material/texture can never resolve — the "gray quad"
+   *  failure a stale Content Browser row (deleted / failed-import source)
+   *  otherwise produces silently. Omit only where the catalog is genuinely
+   *  unavailable (unit env); the spawn door always passes it. */
+  readonly catalogGuids?: readonly string[];
 }
 
 function capabilityFor(ref: DragAssetRef): AssetAuthoringCapability {
@@ -85,6 +93,29 @@ export function planAssetPlacement(
         capability,
       },
     };
+  }
+
+  // Phantom-ref guard (Fail Fast): every spawnEntity resolution path (mesh /
+  // material / texture) goes through loadByGuid, which requires the GUID to be
+  // in the live catalog. A stale ref (its source file was deleted or its
+  // import failed) would otherwise spawn an entity that silently keeps the
+  // engine's default gray material with zero user feedback. Validated BEFORE
+  // building the spawn command so no world mutation is allocated.
+  if (options.catalogGuids !== undefined) {
+    const guid = ref.guid ?? '';
+    const key = guid.toLowerCase();
+    const known = guid.length > 0 && options.catalogGuids.some((g) => typeof g === 'string' && g.toLowerCase() === key);
+    if (!known) {
+      return {
+        ok: false,
+        error: {
+          code: 'placement-asset-unknown',
+          hint: guid.length === 0
+            ? `asset '${ref.name ?? '?'}' (kind '${ref.kind ?? ''}') carries no asset GUID — it is not an imported asset; import it before adding to the scene`
+            : `asset '${ref.name ?? guid}' is not in the live asset catalog — it may have been deleted, failed to import, or is still indexing; re-import it or retry once indexing completes`,
+        },
+      };
+    }
   }
 
   const spawn = buildSpawnEntityFromDragRef(ref, options.materialGuids ? { materialGuids: [...options.materialGuids] } : undefined);

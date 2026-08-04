@@ -24,6 +24,7 @@
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import type { EditorOp } from '@forgeax/editor-core';
+import { registerPostAssetWriteCatalogSync, recentAssetsErrors } from '@forgeax/editor-core';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { installDragSpawnMeshResolver } from '../viewport/drag-spawn-resolve';
 
@@ -34,8 +35,16 @@ const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 interface DispatchedCmd { cmd: EditorOp; origin?: string }
 
-/** Minimal bus stub: captures the subscribed listener + dispatched commands. */
-function makeBusStub() {
+/** Minimal bus stub: captures the subscribed listener + dispatched commands.
+ *  `failDispatch[kind]` makes that op's dispatch return a structured rejection;
+ *  `runResult` controls what waitOperationRun resolves (default: succeeded). */
+function makeBusStub(
+  catalogRows: unknown[] = [],
+  extra: {
+    failDispatch?: Record<string, { code: string; hint: string }>;
+    runResult?: { ok: true; value: { status: string; error?: { hint: string } } } | { ok: false; error: { hint: string } };
+  } = {},
+) {
   let listener: ((doc: unknown, lastCommand: EditorOp | null) => void) | null = null;
   const dispatched: DispatchedCmd[] = [];
   return {
@@ -45,7 +54,15 @@ function makeBusStub() {
     },
     dispatch(cmd: EditorOp, origin?: string) {
       dispatched.push({ cmd, origin });
+      const fail = extra.failDispatch?.[cmd.kind as string];
+      if (fail) return { ok: false as const, error: fail };
       return { ok: true as const };
+    },
+    assetCatalog() {
+      return catalogRows;
+    },
+    waitOperationRun(_requestId: string) {
+      return Promise.resolve(extra.runResult ?? { ok: true as const, value: { status: 'succeeded' } });
     },
     /** Test-only: fire the captured listener with a synthetic lastCommand. */
     fire(lastCommand: EditorOp | null) {
@@ -317,5 +334,273 @@ describe('w2 material resolve branch (RED before w7)', () => {
     bus.fire(matSpawnCmd({ id: 7 })); // no guids
     await flush();
     expect(meshRendererPatch(bus.dispatched)).toBeNull();
+  });
+});
+
+// ── texture resolve branch (UE-style drop) ──────────────────────────────────
+//
+// A texture drag emits EditorPendingTextureAsset{guid,name}. The resolver:
+//   0. LOADS the texture once (aspect dims + alpha facts). A LOAD MISS is
+//      terminal: the whole resolve aborts with a broadcastAssetsError toast —
+//      a material referencing an unloadable texture can never render (t5).
+//   1. DEDUPs against bus.assetCatalog() — a material already referencing the
+//      texture GUID is rebound, never duplicated.
+//   2. Otherwise dispatches createMaterial (M_<name>, baseColorTexture, and
+//      alphaCutoff ONLY when a raw-RGBA pixel scan finds non-opaque alpha).
+//      A synchronous rejection surfaces via broadcastAssetsError (t11).
+//   3. Awaits the host catalog-visibility barrier, THEN dispatches
+//      bindAssetRef — dispatching immediately raced createMaterial's
+//      fire-and-forget pack write (loadByGuid missed → entity stuck on the
+//      default gray material forever). Ordering is pinned by (t7). A terminal
+//      bind-run failure surfaces via broadcastAssetsError (t12).
+
+const TEX_GUID = 'c3333333-3333-4333-8333-333333333333';
+
+function texSpawnCmd(opts: { guid?: string; name?: string | null; id?: number } = {}): EditorOp {
+  const marker: Record<string, unknown> = { guid: opts.guid ?? TEX_GUID };
+  if (opts.name !== null) marker.name = opts.name ?? 'Wood';
+  return {
+    kind: 'spawnEntity',
+    name: 'Wood',
+    components: {
+      Transform: { pos: [0, 1, 0], quat: [0, 0, 0, 1], scale: [2, 2, 1] },
+      MeshFilter: { assetHandle: 3 },
+      EditorPendingTextureAsset: marker,
+    },
+    _id: opts.id ?? 7,
+  };
+}
+
+/** RGBA8 texture POD stub; `alpha` fills every alpha byte (255 = opaque). */
+function rgbaTexture(w: number, h: number, alpha: number) {
+  const data = new Uint8Array(w * h * 4);
+  for (let a = 3; a < data.length; a += 4) data[a] = alpha;
+  return { kind: 'texture', width: w, height: h, format: 'rgba8unorm', data };
+}
+
+function createMaterialCmd(dispatched: DispatchedCmd[]) {
+  const hit = dispatched.find((d) => d.cmd.kind === 'createMaterial');
+  return hit ? (hit.cmd as Record<string, unknown>) : null;
+}
+
+function bindCmd(dispatched: DispatchedCmd[]) {
+  const hit = dispatched.find((d) => d.cmd.kind === 'bindAssetRef');
+  return hit ? (hit.cmd as Record<string, unknown>) : null;
+}
+
+function transformPatchCmd(dispatched: DispatchedCmd[]) {
+  const hit = dispatched.find((d) =>
+    d.cmd.kind === 'setComponent' && (d.cmd as { component?: string }).component === 'Transform');
+  return hit ? (hit.cmd as Record<string, unknown>) : null;
+}
+
+describe('texture resolve branch (UE-style drop)', () => {
+  it('(t1) fresh drop: createMaterial(M_Wood, baseColorTexture, opaque → no alphaCutoff) + bindAssetRef', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    const cm = createMaterialCmd(bus.dispatched);
+    expect(cm).not.toBeNull();
+    expect(cm!.name).toBe('M_Wood');
+    expect(cm!.baseColorTexture).toBe(TEX_GUID);
+    expect(cm!.alphaCutoff).toBeUndefined();
+
+    const bind = bindCmd(bus.dispatched);
+    expect(bind).not.toBeNull();
+    expect(bind!.entity).toBe(7);
+    expect(bind!.guids).toEqual([cm!.guid]);
+  });
+
+  it('(t2) alpha scan: any alpha<255 pixel → createMaterial carries alphaCutoff 0.5', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 128) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    expect(createMaterialCmd(bus.dispatched)!.alphaCutoff).toBe(0.5);
+  });
+
+  it('(t3) undecidable payload (non-RGBA8 / compressed) → opaque, no alphaCutoff', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({
+      [TEX_GUID]: { kind: 'texture', width: 4, height: 4, format: 'bc1-rgba-unorm', data: new Uint8Array(8) },
+    });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    const cm = createMaterialCmd(bus.dispatched);
+    expect(cm).not.toBeNull();
+    expect(cm!.alphaCutoff).toBeUndefined();
+  });
+
+  it('(t4) dedup: catalog material already refs the texture → bind existing, no createMaterial', async () => {
+    const bus = makeBusStub([
+      { guid: 'd4444444-4444-4444-8444-444444444444', kind: 'material', refs: [TEX_GUID] },
+    ]);
+    const world = makeMaterialWorldStub();
+    // A dedup-eligible texture IS catalogued, hence loadable — square dims so
+    // the aspect patch stays a no-op.
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(1024, 1024, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    expect(createMaterialCmd(bus.dispatched)).toBeNull();
+    const bind = bindCmd(bus.dispatched);
+    expect(bind).not.toBeNull();
+    expect(bind!.guids).toEqual(['d4444444-4444-4444-8444-444444444444']);
+    // The aspect-facts load still runs on the dedup path (the card scale needs
+    // the decoded dims even when the material is reused).
+    expect(renderer.assets.loadByGuid).toHaveBeenCalledTimes(1);
+    expect(transformPatchCmd(bus.dispatched)).toBeNull();
+  });
+
+  it('(t5) texture load miss → ABORTS with a user-visible error (no orphan material, no bind)', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({}); // every guid misses
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    const errorsBefore = recentAssetsErrors().length;
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    // Fail Fast: no material is authored for an unloadable texture (it could
+    // never resolve at render — the gray-quad failure), and nothing is bound.
+    expect(createMaterialCmd(bus.dispatched)).toBeNull();
+    expect(bindCmd(bus.dispatched)).toBeNull();
+    // No dims → no aspect patch (the square spawn scale stands).
+    expect(transformPatchCmd(bus.dispatched)).toBeNull();
+    // The failure is user-visible (panel toast), not console-only.
+    const errs = recentAssetsErrors().slice(errorsBefore);
+    expect(errs.some((e) => e.op === 'placeAsset' && e.hint.includes('Wood') && e.hint.includes('could not be loaded'))).toBe(true);
+  });
+
+  it('(t6) marker without name → material falls back to guid-derived name', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7, name: null }));
+    await flush();
+
+    expect(createMaterialCmd(bus.dispatched)!.name).toBe(`M_${TEX_GUID.slice(0, 8)}`);
+  });
+
+  it('(t7) RACE REGRESSION: bindAssetRef is dispatched only AFTER the catalog-visibility barrier resolves', async () => {
+    const order: string[] = [];
+    let releaseBarrier!: () => void;
+    registerPostAssetWriteCatalogSync(
+      () => new Promise<void>((resolve) => { releaseBarrier = () => { order.push('barrier'); resolve(); }; }),
+    );
+    try {
+      const bus = makeBusStub();
+      const world = makeMaterialWorldStub();
+      const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 255) });
+      installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+      bus.fire(texSpawnCmd({ id: 7 }));
+      await flush();
+
+      // Barrier still pending: createMaterial landed, but NO bind yet.
+      expect(createMaterialCmd(bus.dispatched)).not.toBeNull();
+      expect(bindCmd(bus.dispatched)).toBeNull();
+
+      releaseBarrier();
+      await flush();
+      const bind = bindCmd(bus.dispatched);
+      expect(bind).not.toBeNull();
+      expect(order).toEqual(['barrier']);
+    } finally {
+      registerPostAssetWriteCatalogSync(null);
+    }
+  });
+
+  it('(t8) ASPECT REGRESSION: wide texture (2048x512) patches Transform to [2, 0.5, 1] with pos.y = 0.26', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(2048, 512, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 })); // spawn scale [2,2,1] (dev rows omit dims)
+    await flush();
+
+    const patch = transformPatchCmd(bus.dispatched);
+    expect(patch).not.toBeNull();
+    expect(patch!.entity).toBe(7);
+    const p = patch!.patch as { pos: number[]; scale: number[] };
+    expect(p.scale).toEqual([2, 0.5, 1]);
+    expect(p.pos[0]).toBe(0);
+    expect(p.pos[1]).toBeCloseTo(0.26, 6);
+    expect(p.pos[2]).toBe(0);
+    // Aspect patch lands BEFORE the material ops (geometry correct first).
+    const kinds = bus.dispatched.map((d) => d.cmd.kind);
+    expect(kinds.indexOf('setComponent')).toBeLessThan(kinds.indexOf('createMaterial'));
+  });
+
+  it('(t9) tall texture (512x2048) patches Transform to [0.5, 2, 1] with pos.y = 1.01', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(512, 2048, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    const patch = transformPatchCmd(bus.dispatched);
+    expect(patch).not.toBeNull();
+    const p = patch!.patch as { pos: number[]; scale: number[] };
+    expect(p.scale).toEqual([0.5, 2, 1]);
+    expect(p.pos[1]).toBeCloseTo(1.01, 6);
+  });
+
+  it('(t10) square texture matching the spawn scale → no Transform patch (no ledger noise)', async () => {
+    const bus = makeBusStub();
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(1024, 1024, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    expect(transformPatchCmd(bus.dispatched)).toBeNull();
+    expect(createMaterialCmd(bus.dispatched)).not.toBeNull();
+  });
+
+  it('(t11) createMaterial rejected → user-visible error, no bind attempted', async () => {
+    const bus = makeBusStub([], {
+      failDispatch: { createMaterial: { code: 'INVALID_ARGS', hint: 'baseColorTexture is not in the live asset catalog' } },
+    });
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    const errorsBefore = recentAssetsErrors().length;
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    expect(createMaterialCmd(bus.dispatched)).not.toBeNull(); // attempted
+    expect(bindCmd(bus.dispatched)).toBeNull(); // but never bound
+    const errs = recentAssetsErrors().slice(errorsBefore);
+    expect(errs.some((e) => e.op === 'createMaterial' && e.hint.includes('M_Wood') && e.hint.includes('not in the live asset catalog'))).toBe(true);
+  });
+
+  it('(t12) terminal bind-run failure (ASSET_NOT_FOUND) → user-visible error', async () => {
+    const bus = makeBusStub([], {
+      runResult: { ok: true, value: { status: 'failed', error: { hint: 'could not resolve catalogued asset GUID' } } },
+    });
+    const world = makeMaterialWorldStub();
+    const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 255) });
+    installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+    const errorsBefore = recentAssetsErrors().length;
+    bus.fire(texSpawnCmd({ id: 7 }));
+    await flush();
+
+    expect(bindCmd(bus.dispatched)).not.toBeNull(); // bind was dispatched...
+    const errs = recentAssetsErrors().slice(errorsBefore);
+    // ...but its terminal failure does not die invisibly inside the OperationRun.
+    expect(errs.some((e) => e.op === 'bindAssetRef' && e.hint.includes('M_Wood') && e.hint.includes('could not resolve catalogued asset GUID'))).toBe(true);
   });
 });

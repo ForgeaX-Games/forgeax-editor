@@ -28,7 +28,7 @@
 import { useEffect } from 'react';
 import { t } from '@/i18n';
 import { useShellStore } from '../store';
-import { loadWorkbenchList, setActiveWorkbench } from './workbenches';
+import { loadWorkbenchList, setActiveWorkbench, getWorkbenchListSnapshot } from './workbenches';
 import { toggleCommandPalette } from './command-palette-store';
 
 export interface ShortcutDef {
@@ -75,6 +75,28 @@ export function isComposing(e: KeyboardEvent): boolean {
 // Ctrl-or-Cmd helper.
 function mod(e: KeyboardEvent): boolean {
   return e.ctrlKey || e.metaKey;
+}
+
+// Is the scene editor the surface the user is currently looking at?
+//
+// The `edit` group (Delete / F2 / Ctrl+D / Ctrl+A / viewport W-E-R-F …) is
+// injected globally at boot and dispatches against module-level editor
+// selection / viewport state — it has no notion of "which page am I on". So
+// pressing F2 on the Dashboard or Delete on the AI workbench still routed to a
+// stale scene selection. This coarse surface gate lets those keys ESCAPE (fall
+// through to the focused component / browser default) whenever the editor is
+// not the foreground surface. Two facts, both interface-local (no editor
+// import, no focus/DOM resolver — that larger redesign is ADR-0029 scope; this
+// is its Phase 0 short-term mitigation):
+//   1. an overlay (Dashboard / Settings) is covering the shell, or
+//   2. the active workbench tab is not the built-in Scene workbench that hosts
+//      the viewport / Hierarchy / Content Browser.
+// Read live at event time (cached snapshot — cheap) so switching tab / opening
+// an overlay takes effect immediately.
+export function isEditorSurfaceActive(): boolean {
+  if (useShellStore.getState().activeOverlay) return false;
+  if (getWorkbenchListSnapshot().activeId !== 'scene') return false;
+  return true;
 }
 
 // ── Editor keyboard-router deps (keyboard-router convergence, M4 T4-1..T4-3) ──
@@ -514,6 +536,10 @@ export function useGlobalShortcuts(): void {
       // 1. Find first matching shortcut.
       for (const s of shortcuts) {
         if (!s.match(e)) continue;
+        // 1a. Surface gate — edit-group keys only act while the scene editor is
+        // the foreground surface; otherwise let them escape (fall through to the
+        // focused component / browser default). See isEditorSurfaceActive.
+        if (s.group === 'edit' && !isEditorSurfaceActive()) continue;
         // 2. Typing target → only allow shortcuts marked allowInInput.
         if (isTypingTarget(e) && !s.allowInInput) return;
         const shouldPreventDefault = s.run(e) !== false;

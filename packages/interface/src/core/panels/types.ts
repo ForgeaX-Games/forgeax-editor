@@ -28,6 +28,8 @@ export interface PanelCommandActionContribution {
   readonly overflowPriority?: number;
   /** When true, never folds into the overflow flyout. */
   readonly pinned?: boolean;
+  /** When true, folding drops the action instead of moving it into the flyout. */
+  readonly hideOnOverflow?: boolean;
   readonly when?: string;
   readonly enablement?: string;
   readonly activeWhen?: string;
@@ -57,6 +59,8 @@ export interface PanelMenuActionContribution {
   readonly overflowPriority?: number;
   /** When true, never folds into the overflow flyout. */
   readonly pinned?: boolean;
+  /** When true, folding drops the action instead of moving it into the flyout. */
+  readonly hideOnOverflow?: boolean;
 }
 
 export interface PanelControlActionContribution {
@@ -73,6 +77,8 @@ export interface PanelControlActionContribution {
   readonly overflowPriority?: number;
   /** When true, never folds into the overflow flyout. */
   readonly pinned?: boolean;
+  /** When true, folding drops the action instead of moving it into the flyout. */
+  readonly hideOnOverflow?: boolean;
 }
 
 export type PanelMenuItemContribution =

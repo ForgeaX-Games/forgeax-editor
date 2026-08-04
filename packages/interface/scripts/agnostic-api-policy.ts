@@ -6,6 +6,7 @@ export interface ApiCallRule {
 export const allowedApiRules: ApiCallRule[] = [
   { pattern: /^\/api\/boot-splash$/ },
   { pattern: /^\/api\/extensions\/list(?:\?kind=(?:\$\{[^}]+\}|cli-provider))?$/ },
+  { pattern: /^\/api\/extensions\/capabilities$/ },
   { pattern: /^\/api\/bus\/ui\/surfaces(?:\/\$\{[^}]+\}\/(?:ack|pending|snapshot)|\/\$\{[^}]+\})?$/ },
   { pattern: /^\/api\/cli\/health$/ },
   { pattern: /^\/api\/commands\/(?:\$\{[^}]+\}|upload)\/(?:execute|query)$/ },

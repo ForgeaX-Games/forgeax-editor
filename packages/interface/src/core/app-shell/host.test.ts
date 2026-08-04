@@ -1,6 +1,7 @@
 // packages/interface/src/core/app-shell/host.test.ts
 import { describe, expect, it, mock } from 'bun:test';
 import { createAppHost } from './host';
+import { qualifyContributionId } from '@forgeax/types';
 
 describe('createAppHost', () => {
   it('has base capabilities present', () => {
@@ -10,6 +11,34 @@ describe('createAppHost', () => {
     expect(host.capabilities.has('storage')).toBe(true);
     expect(host.capabilities.has('panels')).toBe(true);
     expect(host.capabilities.has('contextKeys')).toBe(true);
+    expect(host.capabilities.has('pages')).toBe(true);
+    expect(host.capabilities.has('activities')).toBe(true);
+    expect(host.capabilities.has('resourceEditors')).toBe(true);
+  });
+
+  it('publishes page and panel types as one extension-owned bundle', async () => {
+    const owner = '@forgeax-plugin/host-test';
+    const pageId = qualifyContributionId(owner, 'page', 'workspace');
+    const panelId = qualifyContributionId(owner, 'panel', 'main');
+    const { host, control } = createAppHost();
+    const cleanup = control.contributePagePlatform(owner, {
+      panelTypes: [{ id: panelId, runtime: { kind: 'inline', render: () => null } }],
+      pageTypes: [{
+        id: pageId,
+        title: 'Workspace',
+        cardinality: 'singleton',
+        layout: { version: 1, root: { kind: 'tabs', placements: ['main'] } },
+        panels: [{ id: 'main', panelTypeId: panelId }],
+      }],
+    });
+
+    expect(host.pageRegistry.get(pageId)?.status).toBe('available');
+    await host.pages.open({ typeId: pageId });
+    expect(host.pages.getSnapshot().instances).toHaveLength(1);
+    await cleanup();
+    expect(host.pages.getSnapshot().instances).toHaveLength(0);
+    expect(host.pageRegistry.get(pageId)).toBeUndefined();
+    await control.dispose();
   });
 
   it('extend() outside a plugin setup throws', () => {

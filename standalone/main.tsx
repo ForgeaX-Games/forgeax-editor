@@ -54,7 +54,7 @@ import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
-import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContributionsExtension } from '@forgeax/editor/bridge';
+import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContributionsExtension, createEditorPageExtension } from '@forgeax/editor/bridge';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
@@ -140,7 +140,8 @@ function EditorPanelBody({ id }: { id: string }): ReactNode {
 const EDITOR_PANEL_TITLES: Record<string, string> = {
   hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
   history: 'History', capabilities: 'Capabilities',
-  launcher: 'Launcher', 'asset-inspector': 'Asset Inspector',
+  launcher: 'Launcher', 'asset-overview': 'Asset Overview',
+  'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
 };
 
 const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
@@ -172,7 +173,10 @@ const standaloneEditorIntegrationExtension: AppExtension = {
   setup(ctx) {
     return ctx.contributePanels({
       builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
-      editor: { setContextMenuRenderer, installBridge: installInterfaceBridge },
+      editor: {
+        setContextMenuRenderer,
+        installBridge: installInterfaceBridge,
+      },
     });
   },
 };
@@ -190,6 +194,7 @@ const STANDALONE_OVERRIDES = {
       surfaces: { SceneEditor: StandaloneSceneEditor },
     }),
     createEditorPanelContributionsExtension(),
+    createEditorPageExtension((id) => <EditorPanelBody id={id} />),
     standaloneEditorIntegrationExtension,
   ] as readonly AppExtension[],
 } as const;

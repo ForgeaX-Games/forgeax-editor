@@ -18,6 +18,7 @@ import {
 
 export { createViewportPanelContributionsExtension } from './viewport-panel';
 export { createHierarchyPanelContributionsExtension } from './hierarchy-panel';
+export { createEditorPageExtension } from './page-extension';
 
 export function createEditorPanelContributionsExtension(): AppExtension {
   const viewport = createViewportPanelContributionsExtension();

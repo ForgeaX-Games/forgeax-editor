@@ -62,7 +62,7 @@ export function applyCanonicalDocumentEffect(
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'invalidateAsset' | 'patchLiveMaterialParams'
+  'get' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.

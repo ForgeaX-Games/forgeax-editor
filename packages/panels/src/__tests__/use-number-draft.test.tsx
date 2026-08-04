@@ -161,8 +161,9 @@ describe('useNumberDraft', () => {
   });
 
   it('rejects non-numeric characters at the onChange boundary (draft never adopts garbage)', () => {
+    let committed = 0;
     act(() => {
-      root.render(<NumberField value={1} onCommit={() => {}} />);
+      root.render(<NumberField value={1} onCommit={() => { committed += 1; }} />);
     });
     const el = input();
     act(() => { el.focus(); });
@@ -170,6 +171,8 @@ describe('useNumberDraft', () => {
     // regex rejects "12a" outright -> draft stays whatever it was ("1", the
     // focus-seeded display value), never adopts the invalid string.
     expect(el.value).toBe('1');
+    act(() => { el.blur(); });
+    expect(committed).toBe(0); // the ignored invalid change must not re-submit "1"
   });
 
   it('ArrowUp/ArrowDown commit immediately using the field step (compensates for the lost native spinner)', () => {

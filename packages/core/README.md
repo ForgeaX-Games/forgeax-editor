@@ -2,6 +2,16 @@
 
 > forgeax editor 核心逻辑层 — EditSession 单一真相源（scene-as-asset）、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
 
+## Asset impact reads
+
+`EditGateway.assetImpact({ operation, guid })` or `assetImpact({ operation, sourcePath })` is the
+read-only, AI-usable preview for asset `delete`, `move`, and `reimport`. It derives direct and
+transitive referencers from the engine producer catalog's `relations` on every call; it does not
+create a second dependency index. A catalog row with no producer relations falls back to its legacy
+`refs` field. Pass exactly one selector, inspect `resolution`, `targets`, `directReferencers`,
+`transitiveReferencers`, `blocking`, and `confirmation.required`, then invoke the existing Gateway
+write operation. The preview itself never mutates the document, catalog, or source files.
+
 ## 导入示例
 
 ```ts

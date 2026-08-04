@@ -217,12 +217,15 @@ export interface PanelRenderers {
         summary?: { totalAssets: number; kinds: Record<string, number>; guids: string[] };
       }>): void;
     }) => () => void;
+    /** Optional Scene-workbench document scope. DockRegion subscribes to this
+     * external store and swaps panel domains without changing Workbench. */
   };
 
   /** Fixed shell chrome regions (outside dockview). */
   chrome?: {
     /** Items injected into the bottom StatusBar (pulse feeds, version badge). */
     StatusFeeds?: ComponentType;
+    /** Host-owned semantic document tab strip, rendered between TopBar and dock. */
   };
 
   /** Bodies of DETACHED OS-windows (Tauri or `window.open`) keyed by surface id.

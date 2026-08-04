@@ -509,6 +509,10 @@
           "type": "string",
           "description": "Human-readable material name shown in the asset catalog."
         },
+        "alphaCutoff": {
+          "type": "number",
+          "description": "Optional alpha-cutoff 0..1 (UE-Masked equivalent): baseColorTexture alpha below the cutoff is discarded. Omit for a fully opaque material."
+        },
         "baseColor": {
           "type": "array",
           "items": {
@@ -526,7 +530,7 @@
         },
         "baseColorTexture": {
           "type": "string",
-          "description": "Optional TextureAsset GUID to set as baseColorTexture. Stored as refs[] index in pack (engine disk format)."
+          "description": "Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format)."
         },
         "packPath": {
           "type": "string",
@@ -976,6 +980,23 @@
     "source": "builtin",
     "argsSchema": null,
     "title": "Load from Disk"
+  },
+  {
+    "id": "openAssetEditor",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "asset"
+      ]
+    },
+    "title": "Open Asset Editor"
   },
   {
     "id": "play",

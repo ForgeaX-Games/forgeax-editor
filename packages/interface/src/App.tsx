@@ -16,6 +16,7 @@ import { TopBar } from './components/TopBar/TopBar';
 import { GameDirectoryModalHost } from './components/TopBar/ProjectSwitcher';
 import { GameModalHost } from './components/TopBar/GameSwitcher';
 import { ActivityRail } from './components/ActivityRail/ActivityRail';
+import { PageTabStrip } from './components/PageTabs/PageTabStrip';
 import { ChatColumn } from './components/ChatColumn/ChatColumn';
 import { DockRegion } from './components/DockShell/DockRegion';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS } from './components/DockShell/panelRenderers';
@@ -131,6 +132,7 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
           <OnboardingController />
           <ConnectModelPrompt />
           <TopBar />
+          <PageTabStrip />
           <div className="studio-body">
             <DockRegion region="DockShell" />
             <DockRegion region="AuxBar" />

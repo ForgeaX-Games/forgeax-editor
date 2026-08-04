@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAssetSelection, gateway, panelBridge, ensureAssetCataloged } from '@forgeax/editor-core';
+import { useActiveEditorAsset, gateway, panelBridge, ensureAssetCataloged } from '@forgeax/editor-core';
 import { AssetPicker } from '../AssetPicker';
 import { PropertyRow } from './PropertyRow';
 import type { PreviewProps } from './index';
@@ -171,7 +171,7 @@ function useLivePayload(propsPayload: Record<string, unknown>, guid: string | un
 }
 
 export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewProps) {
-  const asset = useAssetSelection();
+  const asset = useActiveEditorAsset();
   const { payload, refs } = useLivePayload(propsPayload, asset?.guid);
   const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
   const parent = payload.parent as string | undefined;

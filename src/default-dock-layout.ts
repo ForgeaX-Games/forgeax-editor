@@ -37,7 +37,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
             {
               type: 'leaf',
               size: 382,
-              data: { views: ['ep:inspector', 'ep:asset-inspector'], activeView: 'ep:inspector', id: 'g-inspector' },
+              data: { views: ['ep:inspector'], activeView: 'ep:inspector', id: 'g-inspector' },
             },
           ],
         },
@@ -48,20 +48,14 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
             { type: 'leaf', size: 500, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
             {
               type: 'leaf',
-              // Content Browser owns a wrapped scene-entry bar plus its
-              // navigation row. Keep enough default height for the first
-              // asset card to remain inside this Dockview group.
-              size: 300,
+              // Keep enough default height for the Content Browser grid.
+              // History is a peer tab here rather than a dedicated strip.
+              size: 312,
               data: {
-                views: ['ep:assets', 'info'],
+                views: ['ep:assets', 'info', 'ep:history'],
                 activeView: 'ep:assets',
-                id: 'g-history',
+                id: 'g-content-browser',
               },
-            },
-            {
-              type: 'leaf',
-              size: 100,
-              data: { views: ['ep:history'], activeView: 'ep:history', id: 'g-operation-center' },
             },
           ],
         },
@@ -77,11 +71,125 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
     'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
     'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
-    'ep:asset-inspector': { id: 'ep:asset-inspector', contentComponent: 'ep:asset-inspector', title: 'Asset Inspector' },
     'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     info: { id: 'info', contentComponent: 'info', title: 'Info' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
   },
   activeGroup: 'g-chat',
+};
+
+/** Dedicated asset-document layout. Asset panels are intentionally absent from
+ *  the Level layout above; this scope is switched by Editor Document Tabs, not
+ *  by the persistent Scene/AI workbench selector. */
+export const DEFAULT_ASSET_EDITOR_DOCK_LAYOUT: SerializedDockview = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as Orientation,
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf',
+          size: 880,
+          data: {
+            views: ['ep:asset-properties'],
+            activeView: 'ep:asset-properties',
+            id: 'g-asset-properties',
+          },
+        },
+        {
+          type: 'leaf',
+          size: 320,
+          data: {
+            views: ['ep:asset-overview'],
+            activeView: 'ep:asset-overview',
+            id: 'g-asset-overview',
+          },
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:asset-properties': {
+      id: 'ep:asset-properties',
+      contentComponent: 'ep:asset-properties',
+      title: 'Properties',
+    },
+    'ep:asset-overview': {
+      id: 'ep:asset-overview',
+      contentComponent: 'ep:asset-overview',
+      title: 'Asset Overview',
+    },
+  },
+  activeGroup: 'g-asset-properties',
+};
+
+/** Mesh document family. It shares the asset overview/property vocabulary but
+ * owns an additional material-slot panel that no other page can restore. */
+export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as Orientation,
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf',
+          size: 820,
+          data: {
+            views: ['ep:asset-properties'],
+            activeView: 'ep:asset-properties',
+            id: 'g-mesh-properties',
+          },
+        },
+        {
+          type: 'branch',
+          size: 380,
+          data: [
+            {
+              type: 'leaf',
+              size: 300,
+              data: {
+                views: ['ep:asset-overview'],
+                activeView: 'ep:asset-overview',
+                id: 'g-mesh-overview',
+              },
+            },
+            {
+              type: 'leaf',
+              size: 512,
+              data: {
+                views: ['ep:mesh-slots'],
+                activeView: 'ep:mesh-slots',
+                id: 'g-mesh-slots',
+              },
+            },
+          ],
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:asset-properties': {
+      id: 'ep:asset-properties',
+      contentComponent: 'ep:asset-properties',
+      title: 'Mesh Properties',
+    },
+    'ep:asset-overview': {
+      id: 'ep:asset-overview',
+      contentComponent: 'ep:asset-overview',
+      title: 'Asset Overview',
+    },
+    'ep:mesh-slots': {
+      id: 'ep:mesh-slots',
+      contentComponent: 'ep:mesh-slots',
+      title: 'Material Slots',
+    },
+  },
+  activeGroup: 'g-mesh-properties',
 };

@@ -1,0 +1,45 @@
+{
+  "name": "@forgeax/types",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared zod schemas + TS contracts for forgeax-extension.json, agent/skill/tool/host-sdk. Single source of truth for ExtensionManifest validation across server / interface / cli.",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./manifest": "./src/manifest.ts",
+    "./page": "./src/page.ts",
+    "./agent": "./src/agent.ts",
+    "./skill": "./src/skill.ts",
+    "./tool": "./src/tool.ts",
+    "./host-sdk": "./src/host-sdk.ts",
+    "./observability": "./src/observability.ts",
+    "./permission-rules": "./src/permission-rules.ts",
+    "./shell-split": "./src/shell-split.ts",
+    "./visual-generation": "./src/visual-generation.ts",
+    "./npc-protocol": "./src/npc-protocol.ts",
+    "./npc-tools": "./src/npc-tools.ts",
+    "./schemas/npc/*": "./schemas/npc/*",
+    "./capability": "./src/capability.ts"
+  },
+  "files": [
+    "src",
+    "schemas"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "generate:npc-schemas": "bun scripts/generate-npc-schemas.ts",
+    "check:npc-schema-drift": "bun scripts/check-npc-schema-drift.ts",
+    "lint": "bun run check:npc-schema-drift",
+    "validate-manifests": "bun test/validate-manifests.ts"
+  },
+  "dependencies": {
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.13",
+    "typescript": "^5.6.3"
+  }
+}

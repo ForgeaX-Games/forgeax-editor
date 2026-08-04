@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "audio",
+  "source": "zz-r1-08-pickup.wav",
+  "importSettings": {},
+  "subAssets": [
+    {
+      "guid": "a1b2c3d4-e5f6-4789-9abc-def012345678",
+      "sourceIndex": 0,
+      "kind": "audio"
+    }
+  ]
+}

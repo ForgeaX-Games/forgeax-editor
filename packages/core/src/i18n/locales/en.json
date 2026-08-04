@@ -135,7 +135,9 @@
       "empty": "No operations",
       "jumpToStep": "Jump to step {{step}}",
       "originAi": "AI",
-      "originHuman": "Human"
+      "originHuman": "Human",
+      "diffApply": "apply",
+      "diffUndo": "undo"
     },
     "inspector": {
       "batchTitle": "Inspector · Batch ({{count}})",

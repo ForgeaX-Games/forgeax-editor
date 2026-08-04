@@ -12,17 +12,9 @@ export function createShellState(
   get: GetAppState,
 ): Pick<
   AppState,
-  | 'workbenchTab'
-  | 'setWorkbenchTab'
-  | 'workbenchExpandedExtensionId'
-  | 'setWorkbenchExpandedExtensionId'
-  | 'openWorkbench'
   | 'floatingSurfaces'
   | 'detachSurface'
   | 'redockSurface'
-  | 'dockedExtensions'
-  | 'addDockedExtension'
-  | 'removeDockedExtension'
   | 'markSurfaceDocked'
   | 'activeSession'
   | 'setActiveSession'
@@ -48,25 +40,6 @@ export function createShellState(
   | 'toggleChatpanel'
 > {
   return {
-    workbenchTab: 'agents',
-    setWorkbenchTab: (t) => set({ workbenchTab: t }),
-    workbenchExpandedExtensionId: null,
-    setWorkbenchExpandedExtensionId: (id) => set({ workbenchExpandedExtensionId: id }),
-    openWorkbench: ({ tab, expandedExtensionId }) => set((s) => ({
-      workbenchTab: tab ?? s.workbenchTab,
-      workbenchExpandedExtensionId: expandedExtensionId !== undefined
-        ? expandedExtensionId
-        : s.workbenchExpandedExtensionId,
-    })),
-
-    dockedExtensions: new Set<string>(),
-    addDockedExtension: (id) => set((s) => ({ dockedExtensions: new Set([...s.dockedExtensions, id]) })),
-    removeDockedExtension: (id) => set((s) => {
-      const next = new Set(s.dockedExtensions);
-      next.delete(id);
-      return { dockedExtensions: next };
-    }),
-
     floatingSurfaces: {},
     detachSurface: async (d: SurfaceDescriptor, opts?: { title?: string }) => {
       const wm = getWindowManager();

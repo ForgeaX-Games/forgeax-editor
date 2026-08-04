@@ -1,6 +1,7 @@
 // P2.6a — typed client for /api/bus/* endpoints.
 // Mirrors the slim shape returned by packages/server/src/api/bus.ts so the UI
 // never depends on full ExtensionManifest fields server-side never exposes.
+import type { ExtensionManifestV2 } from '@forgeax/types';
 
 export interface ExtensionWorkbenchPaneInfo {
   defaultWidth?: number;
@@ -105,6 +106,7 @@ export interface ExtensionInfo {
   description?: { zh?: string; en?: string; ja?: string } | string;
   icon?: string;
   experimental?: boolean;
+  contributes?: ExtensionManifestV2['contributes'];
   workbench?: ExtensionWorkbenchInfo;
   modelBinding?: ExtensionModelBindingInfo;
   skills?: ExtensionSkillInfo[];
@@ -213,7 +215,13 @@ export async function listExtensions(kind?: string): Promise<ExtensionListRespon
   if (!res.headers.get('content-type')?.includes('application/json')) {
     return empty;
   }
-  return (await res.json()) as ExtensionListResponse;
+  const payload = (await res.json()) as Partial<ExtensionListResponse>;
+  if (!Array.isArray(payload.items)) return empty;
+  return {
+    kind: typeof payload.kind === 'string' || payload.kind === null ? payload.kind : empty.kind,
+    count: typeof payload.count === 'number' ? payload.count : payload.items.length,
+    items: payload.items,
+  };
 }
 
 // Shared short-TTL cache + in-flight dedupe for the full (no-kind) plugin

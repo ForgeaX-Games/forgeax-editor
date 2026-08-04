@@ -3,3 +3,4 @@ export * from './types';
 export * from './host';
 export * from './logger';
 export { HostProvider, useHost, useCommand, useContextKey } from './react/HostProvider';
+export * from '../page-platform';

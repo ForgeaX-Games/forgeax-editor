@@ -17,9 +17,12 @@ import {
   registerKeyboardRouterDeps,
   isComposing,
   isTypingTarget,
+  isEditorSurfaceActive,
   type KeyboardRouterDeps,
   type RouterSelectedAsset,
 } from './global-shortcuts';
+import { useShellStore } from '../store';
+import { setActiveWorkbench } from './workbenches';
 
 type Calls = {
   dispatch: Array<[unknown, string?]>;
@@ -249,6 +252,31 @@ describe('keyboard router — F2 / Ctrl+D / Ctrl+A routing (AC-C3/C4/C6)', () =>
     const ca = findByCombo(buildShortcuts(), 'Ctrl+A');
     expect(ca.run()).toBe(true);
     expect(deps.calls.selectAllAssets).toEqual([1]);
+  });
+});
+
+describe('keyboard router — edit-group surface gate (ADR-0029 Phase 0)', () => {
+  // The onKey wrapper skips edit-group shortcuts (letting them escape to the
+  // focused component / browser) whenever isEditorSurfaceActive() is false, so
+  // F2 / Delete / W-E-R-F no longer route to a stale scene selection while the
+  // user is on another workbench tab or under an overlay.
+  beforeEach(() => {
+    useShellStore.setState({ activeOverlay: null });
+    setActiveWorkbench('scene');
+  });
+
+  it('scene workbench + no overlay → active (edit keys act)', () => {
+    expect(isEditorSurfaceActive()).toBe(true);
+  });
+
+  it('an overlay covering the shell → inactive (edit keys escape)', () => {
+    useShellStore.setState({ activeOverlay: 'settings' });
+    expect(isEditorSurfaceActive()).toBe(false);
+  });
+
+  it('a non-scene workbench tab → inactive (edit keys escape)', () => {
+    setActiveWorkbench('ai');
+    expect(isEditorSurfaceActive()).toBe(false);
   });
 });
 

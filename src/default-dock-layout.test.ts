@@ -4,7 +4,11 @@
 // must remain derived from the editor-core manifest. This catches a panel being
 // added or removed without the default editor chrome following suit.
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_EDITOR_DOCK_LAYOUT } from './default-dock-layout';
+import {
+  DEFAULT_ASSET_EDITOR_DOCK_LAYOUT,
+  DEFAULT_EDITOR_DOCK_LAYOUT,
+  DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
+} from './default-dock-layout';
 
 function collectViews(node: unknown): string[] {
   if (!node || typeof node !== 'object') return [];
@@ -35,11 +39,28 @@ function findLeaf(node: unknown, view: string): { size?: number } | undefined {
   return undefined;
 }
 
+function leafViews(node: unknown, view: string): string[] | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  const item = node as { type?: string; data?: unknown };
+  if (item.type === 'leaf') {
+    const data = item.data as { views?: unknown } | undefined;
+    const views = Array.isArray(data?.views) ? data.views.filter((entry): entry is string => typeof entry === 'string') : [];
+    return views.includes(view) ? views : undefined;
+  }
+  if (item.type === 'branch' && Array.isArray(item.data)) {
+    for (const child of item.data) {
+      const found = leafViews(child, view);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
   test('contains exactly the default visible dock panels', () => {
     const views = collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root).sort();
 
-    expect(views).toEqual(['chat', 'ep:asset-inspector', 'ep:assets', 'ep:hierarchy', 'ep:history', 'ep:inspector', 'info', 'viewport']);
+    expect(views).toEqual(['chat', 'ep:assets', 'ep:hierarchy', 'ep:history', 'ep:inspector', 'info', 'viewport']);
   });
 
   test('has a matching dockview panel descriptor for every view', () => {
@@ -48,10 +69,38 @@ describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
     }
   });
 
-  test('gives the Content Browser enough height for its wrapped entry bar', () => {
+  test('gives the Content Browser enough height for its asset grid', () => {
     const assets = findLeaf(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root, 'ep:assets');
-    const history = findLeaf(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root, 'ep:history');
     expect(assets?.size).toBeGreaterThanOrEqual(280);
-    expect(assets?.size).toBeGreaterThan(history?.size ?? 0);
+  });
+
+  test('groups History with Content Browser and Info', () => {
+    expect(leafViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root, 'ep:assets')).toEqual([
+      'ep:assets',
+      'info',
+      'ep:history',
+    ]);
+  });
+});
+
+describe('DEFAULT_ASSET_EDITOR_DOCK_LAYOUT', () => {
+  test('is a separate closed panel domain from Level', () => {
+    expect(collectViews(DEFAULT_ASSET_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
+      'ep:asset-overview',
+      'ep:asset-properties',
+    ]);
+    expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:asset-overview']).toBeUndefined();
+    expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:asset-properties']).toBeUndefined();
+  });
+
+  test('mesh pages alone own the material-slot panel', () => {
+    expect(collectViews(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
+      'ep:asset-overview',
+      'ep:asset-properties',
+      'ep:mesh-slots',
+    ]);
+    expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeDefined();
+    expect(DEFAULT_ASSET_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
+    expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
   });
 });

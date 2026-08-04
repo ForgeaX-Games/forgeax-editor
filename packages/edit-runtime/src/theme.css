@@ -522,6 +522,9 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 .hist-origin.ai { color: var(--lime, #7ee04a); }
 .hist-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hist-ent { color: var(--fg3); }
+.hist-diff { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1px 6px; margin: 0 10px 4px 28px; color: var(--fg3); font-size: 10px; line-height: 1.35; }
+.hist-diff-label { color: var(--fg3); }
+.hist-diff code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
 
 /* Capabilities panel */
 .cap-list { padding: 4px 8px; }

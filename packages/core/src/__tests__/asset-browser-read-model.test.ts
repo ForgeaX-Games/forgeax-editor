@@ -71,6 +71,30 @@ describe('AssetBrowserSnapshot read model (M2)', () => {
     expect(snapshot.assets[0]?.authoring).toEqual(authoring);
   });
 
+  it('projects producer relations into the shared workspace and ignores stale refs', async () => {
+    const { model } = makeModel({
+      treeValue: { type: 'dir', name: 'game', path: '/game', children: [] },
+      rows: [
+        { guid: 'GUID-MATERIAL', kind: 'material', packageUrl: 'material.pack.json' },
+        {
+          guid: 'GUID-SCENE', kind: 'scene', packageUrl: 'scene.pack.json', refs: ['stale-target'],
+          relations: [{
+            from: { type: 'asset', id: 'GUID-SCENE' },
+            to: { type: 'asset', id: 'GUID-MATERIAL' },
+            type: 'references',
+            provenance: { provider: 'pack', version: '2.0.0' },
+          }],
+        },
+      ],
+    });
+
+    const snapshot = await model.refresh();
+
+    expect(snapshot.workspace?.relations).toEqual([
+      { kind: 'depends-on', from: 'guid-scene', to: 'guid-material' },
+    ]);
+  });
+
   it('reports pending, indexed, raw, and invalid-meta source states', async () => {
     const pending = makeModel({ rows: [], meta: {
       kind: 'external-asset-package', source: 'Fox.glb', subAssets: [{ guid: 'GUID-PENDING', kind: 'mesh' }],

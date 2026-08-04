@@ -334,7 +334,7 @@
 }
 
 /* Plugin main-window header (product prototype `pl-head`): icon + name +
-   description + 「插件 · 主窗口」tag + ✕ close. */
+   description + ✕ close. */
 .wb-plugin-host-bar.fx-plugin-head {
   height: auto;
   min-height: 48px;
@@ -363,13 +363,12 @@
   color: var(--color-text-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.fx-plugin-head-tag {
-  margin-left: auto; flex: 0 0 auto;
-  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
-  padding: 2px 9px;
-  border-radius: 10px;
-  background: rgba(212, 255, 72, 0.14);
-  color: var(--color-brand-primary);
+.fx-plugin-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 .fx-plugin-head-close {
   width: 26px; height: 26px; flex: 0 0 auto;

@@ -1,6 +1,6 @@
 // Versioned OperationRun contract and deterministic state reducer.
 
-import type { CommandError } from './error';
+import { isCommandError, type CommandError } from './error';
 
 export const OPERATION_RUN_SCHEMA_VERSION = 'operation-run/v1' as const;
 export const OPERATION_REQUEST_ID_PATTERN = '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' as const;
@@ -63,6 +63,92 @@ export interface OperationRun {
   readonly startedAt?: number;
   readonly completedAt?: number;
   readonly sequence: number;
+}
+
+export type OperationRunSchemaResult<T> =
+  | { readonly success: true; readonly data: T }
+  | { readonly success: false; readonly error: { readonly issues: readonly string[] } };
+
+export interface OperationRunSchemaContract<T> {
+  safeParse(value: unknown): OperationRunSchemaResult<T>;
+}
+
+const operationRunStatuses: readonly OperationRunStatus[] = Object.freeze([
+  'accepted', 'running', 'succeeded', 'failed', 'cancelled',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function operationRunIssues(value: unknown): readonly string[] {
+  if (!isRecord(value)) return ['OperationRun must be an object.'];
+  const candidate = value as Partial<OperationRun>;
+  const issues: string[] = [];
+  const requiredString = (name: string): void => {
+    if (typeof candidate[name as keyof OperationRun] !== 'string' || (candidate[name as keyof OperationRun] as string).trim() === '') {
+      issues.push(`${name} must be a non-empty string.`);
+    }
+  };
+
+  if (candidate.schemaVersion !== OPERATION_RUN_SCHEMA_VERSION) issues.push(`schemaVersion must be ${OPERATION_RUN_SCHEMA_VERSION}.`);
+  requiredString('runId');
+  if (candidate.requestId !== undefined && !operationRequestIdPattern.test(candidate.requestId)) issues.push('requestId has an invalid format.');
+  requiredString('operationId');
+  if (typeof candidate.status !== 'string' || !(operationRunStatuses as readonly string[]).includes(candidate.status)) issues.push('status is not a supported OperationRun status.');
+  if (!isRecord(candidate.actor) || typeof candidate.actor.id !== 'string' || candidate.actor.id.trim() === '' || typeof candidate.actor.kind !== 'string' || candidate.actor.kind.trim() === '') issues.push('actor must contain non-empty id and kind strings.');
+  requiredString('sessionId');
+  requiredString('scope');
+  for (const name of ['parentRunId', 'traceId', 'idempotencyKey'] as const) {
+    if (candidate[name] !== undefined && typeof candidate[name] !== 'string') issues.push(`${name} must be a string when provided.`);
+  }
+  if (typeof candidate.traceId !== 'string' || candidate.traceId.trim() === '') issues.push('traceId must be a non-empty string.');
+  const attempt = candidate.attempt;
+  if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1) issues.push('attempt must be a positive integer.');
+  if (typeof candidate.cancellable !== 'boolean') issues.push('cancellable must be a boolean.');
+  if (typeof candidate.retryable !== 'boolean') issues.push('retryable must be a boolean.');
+  if (!isRecord(candidate.progress) || !isFiniteNumber(candidate.progress.fraction) || candidate.progress.fraction < 0 || candidate.progress.fraction > 1 || typeof candidate.progress.stage !== 'string') {
+    issues.push('progress must contain a finite fraction between 0 and 1 and a stage string.');
+  }
+  if (!Array.isArray(candidate.recoveryActions) || !candidate.recoveryActions.every((action) => typeof action === 'string')) issues.push('recoveryActions must be a string array.');
+  if (!isRecord(candidate.effectResults)) issues.push('effectResults must be an object.');
+  if (!isFiniteNumber(candidate.acceptedAt)) issues.push('acceptedAt must be a finite number.');
+  if (candidate.startedAt !== undefined && !isFiniteNumber(candidate.startedAt)) issues.push('startedAt must be a finite number when provided.');
+  if (candidate.completedAt !== undefined && !isFiniteNumber(candidate.completedAt)) issues.push('completedAt must be a finite number when provided.');
+  const sequence = candidate.sequence;
+  if (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1) issues.push('sequence must be a positive integer.');
+  if (candidate.error !== undefined && !isCommandError(candidate.error)) issues.push('error must be a structured CommandError.');
+
+  if (candidate.status === 'accepted') {
+    if (candidate.startedAt !== undefined || candidate.completedAt !== undefined || candidate.result !== undefined || candidate.error !== undefined) issues.push('accepted runs cannot carry started, completed, result, or error facts.');
+  } else if (candidate.status === 'running') {
+    if (candidate.startedAt === undefined || candidate.completedAt !== undefined || candidate.result !== undefined || candidate.error !== undefined) issues.push('running runs require startedAt and cannot carry terminal facts.');
+  } else if (candidate.status === 'succeeded') {
+    if (candidate.startedAt === undefined || candidate.completedAt === undefined || candidate.error !== undefined) issues.push('succeeded runs require startedAt/completedAt and cannot carry an error.');
+  } else if (candidate.status === 'failed') {
+    if (candidate.startedAt === undefined || candidate.completedAt === undefined || !isCommandError(candidate.error)) issues.push('failed runs require startedAt/completedAt and a structured error.');
+  } else if (candidate.status === 'cancelled') {
+    if (candidate.startedAt === undefined || candidate.completedAt === undefined || candidate.result !== undefined) issues.push('cancelled runs require startedAt/completedAt and cannot carry a result.');
+  }
+  return Object.freeze(issues);
+}
+
+/** Runtime validator for OperationRun values crossing transport or restore boundaries. */
+export const OperationRunSchema: OperationRunSchemaContract<OperationRun> = Object.freeze({
+  safeParse(value: unknown): OperationRunSchemaResult<OperationRun> {
+    const issues = operationRunIssues(value);
+    return issues.length === 0
+      ? { success: true, data: value as OperationRun }
+      : { success: false, error: { issues } };
+  },
+});
+
+export function isOperationRun(value: unknown): value is OperationRun {
+  return OperationRunSchema.safeParse(value).success;
 }
 
 /** Read result for a request-correlated operation run. */
@@ -143,6 +229,13 @@ function failure(
   };
 }
 
+function validatedRun(run: OperationRun): RunReducerResult {
+  const parsed = OperationRunSchema.safeParse(run);
+  return parsed.success
+    ? { ok: true, value: run }
+    : failure('invalid-run-schema', parsed.error.issues.join(' '));
+}
+
 export function createOperationRun(
   request: OperationRunRequest,
   acceptedAt: number = Date.now(),
@@ -175,7 +268,7 @@ export function createOperationRun(
     acceptedAt,
     sequence: 1,
   };
-  return { ok: true, value: frozenRun(run) };
+  return validatedRun(frozenRun(run));
 }
 
 function withError(run: OperationRun, error: CommandError): OperationRun {
@@ -199,7 +292,7 @@ export function reduceOperationRun(
   }
   if (event.type === 'assert-terminal') {
     return isTerminalRunStatus(current.status)
-      ? { ok: true, value: current }
+      ? validatedRun(current)
       : failure('run-not-terminal', 'The run has not published a terminal event.', ['run.wait']);
   }
   if (event.type === 'accepted') return failure('invalid-run-transition', 'An accepted event can only be the first event.');
@@ -220,25 +313,19 @@ export function reduceOperationRun(
   }
 
   const next: OperationRun = { ...current, sequence: event.sequence };
-  if (event.type === 'running') return { ok: true, value: frozenRun({ ...next, status: 'running', startedAt: event.at }) };
-  if (event.type === 'progress') return { ok: true, value: frozenRun({ ...next, progress: frozenProgress(event.progress) }) };
-  if (event.type === 'effect-result') return { ok: true, value: frozenRun({ ...next, effectResults: { ...current.effectResults, [event.effectKey]: event.result } }) };
+  if (event.type === 'running') return validatedRun(frozenRun({ ...next, status: 'running', startedAt: event.at }));
+  if (event.type === 'progress') return validatedRun(frozenRun({ ...next, progress: frozenProgress(event.progress) }));
+  if (event.type === 'effect-result') return validatedRun(frozenRun({ ...next, effectResults: { ...current.effectResults, [event.effectKey]: event.result } }));
   if (event.type === 'succeeded') {
-    return {
-      ok: true,
-      value: frozenRun({ ...next, status: 'succeeded', completedAt: event.at, result: event.result, recoveryActions: [] }),
-    };
+    return validatedRun(frozenRun({ ...next, status: 'succeeded', completedAt: event.at, result: event.result, recoveryActions: [] }));
   }
-  if (event.type === 'failed') return { ok: true, value: frozenRun({ ...withError(next, event.error), completedAt: event.at, sequence: event.sequence }) };
-  if (event.type === 'cancelled') return {
-    ok: true,
-    value: frozenRun({
+  if (event.type === 'failed') return validatedRun(frozenRun({ ...withError(next, event.error), completedAt: event.at, sequence: event.sequence }));
+  if (event.type === 'cancelled') return validatedRun(frozenRun({
       ...next,
       status: 'cancelled',
       completedAt: event.at,
       ...(event.error === undefined ? {} : { error: event.error, recoveryActions: event.error.recoveryActions }),
-    }),
-  };
+    }));
   return failure('invalid-run-event', 'The event type cannot change a run.');
 }
 

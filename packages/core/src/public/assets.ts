@@ -91,6 +91,7 @@ export {
   createDirectory,
   deleteDirectory,
   registerPostAssetWriteCatalogSync,
+  awaitPostAssetWriteCatalogSync,
 } from '../session/pack-ops';
 export { createImportFailure, executeAssetImport } from '../session/import-ops';
 export type {

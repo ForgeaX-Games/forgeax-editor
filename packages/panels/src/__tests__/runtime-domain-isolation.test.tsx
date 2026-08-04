@@ -6,12 +6,12 @@ const source = (file: string): string => readFileSync(resolve(import.meta.dir, '
 
 describe('non-World panel invalidation', () => {
   it('non-World panels are not awakened by runtime-only document churn', () => {
-    expect(source('AssetInspector.tsx')).toContain('useAssetSelection');
+    expect(source('AssetEditors.tsx')).toContain('useActiveEditorAsset');
     expect(source('History.tsx')).toContain('gateway.historySteps');
   });
 
   it('keeps producer-owned signals visible at each panel boundary', () => {
-    expect(source('AssetInspector.tsx')).toContain('useSelectedAssetIdentity');
+    expect(source('AssetEditors.tsx')).toContain('const asset = useActiveEditorAsset()');
     expect(source('Capabilities.tsx')).toContain('listComponentSchemas');
     expect(source('Launcher.tsx')).toContain('useSceneReadModel');
   });

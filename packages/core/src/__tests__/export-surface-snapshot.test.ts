@@ -259,9 +259,10 @@ describe('AC-01 export-surface snapshot', () => {
     // R0-02A adds the single React projection hook shared by human scene UI and
     // the Gateway's public sceneReadModel, bringing the surface to 63.
     // Imported preview/source authoring adds the persistence-owned Human/AI read
-    // model plus explicit activation wrappers → 67. Save and Promote remain
-    // public through Gateway listOps/dispatch, not second store wrappers.
-    expect(entries.length).toBe(67);
+    // model plus explicit activation wrappers → 67. The Page navigation bridge
+    // adds configureEditorPageNavigation plus active-asset get/use projections;
+    // mutations remain Gateway/PagePort-only → 70.
+    expect(entries.length).toBe(70);
 
     // Every entry must be non-empty.
     for (const e of entries) {

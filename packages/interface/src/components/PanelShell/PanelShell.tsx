@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -157,6 +159,23 @@ function ActionTooltip({ title, children }: { title: string; children: ReactNode
   );
 }
 
+const LOCATION_RANK: Record<PanelActionLocation, number> = {
+  'header/left': 0,
+  'header/center': 1,
+  'header/right': 2,
+  context: 3,
+};
+
+/** Visual left→right toolbar order: zone first, then per-zone `order`.
+ *  Sorting by `order` alone interleaves left/center/right (all use 10/20/…)
+ *  and breaks both overflow fold priority and flyout item order. */
+function compareActionsVisual(a: PanelActionContribution, b: PanelActionContribution): number {
+  const locA = LOCATION_RANK[a.location ?? 'header/right'] ?? 2;
+  const locB = LOCATION_RANK[b.location ?? 'header/right'] ?? 2;
+  if (locA !== locB) return locA - locB;
+  return (a.order ?? 0) - (b.order ?? 0);
+}
+
 function mergeActions(
   panelId: string,
   panelActions: readonly PanelActionContribution[],
@@ -165,7 +184,7 @@ function mergeActions(
   const byId = new Map<string, PanelActionContribution>();
   for (const action of panelActions) byId.set(action.id, { ...action, panelId: action.panelId || panelId });
   for (const action of contributedActions) byId.set(action.id, action);
-  return [...byId.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return [...byId.values()].sort(compareActionsVisual);
 }
 
 function useActionRegistryVersion(): number {
@@ -242,6 +261,8 @@ function executePanelCommand(
   });
 }
 
+const OverflowFlyoutContext = createContext(false);
+
 function PanelCommandButton({
   action,
   panelId,
@@ -252,11 +273,14 @@ function PanelCommandButton({
   location: PanelActionLocation;
 }): ReactNode {
   const host = useHost();
+  const inOverflow = useContext(OverflowFlyoutContext);
   useContextExpressionVersion(action);
   const state = resolvePanelActionState(action, host.contextKeys);
   if (!state.visible) return null;
   const Icon = action.icon ? ICONS[action.icon] : undefined;
-  const label = action.label ?? (!Icon ? action.title : '');
+  // In the flyout, always surface the title so icon-only header buttons remain
+  // recognizable once relocated out of the toolbar.
+  const label = action.label ?? (inOverflow || !Icon ? action.title : '');
   return (
     <ActionTooltip title={action.title}>
       <button
@@ -500,38 +524,82 @@ function OverflowMenu({
         onPointerEnter={clearClose}
         onPointerLeave={scheduleClose}
       >
-        {actions.map((action) => (
-          <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
-        ))}
+        <OverflowFlyoutContext.Provider value={true}>
+          {actions.map((action) => (
+            <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
+          ))}
+        </OverflowFlyoutContext.Provider>
       </PopoverContent>
     </Popover>
   );
 }
 
+/** Default band for actions that omit `overflowPriority`. Zone-local `order` is
+ *  NOT used — it would scramble fold order across left/center/right. Ties break
+ *  by rightmost-first so the toolbar shrinks from the trailing edge. */
+const DEFAULT_OVERFLOW_PRIORITY = 100;
+
 function foldPriority(action: PanelActionContribution): number {
-  return action.overflowPriority ?? action.order ?? 0;
+  return action.overflowPriority ?? DEFAULT_OVERFLOW_PRIORITY;
+}
+
+/** Separator controls become horizontal rules in the flyout — never leave one
+ *  dangling at either end (or doubled up), which reads as a stray divider. */
+function isSeparatorAction(action: PanelActionContribution): boolean {
+  if (action.kind !== 'control') return false;
+  return action.id.includes('separator') || action.control.includes('separator');
+}
+
+function sanitizeOverflowActions(
+  actions: readonly PanelActionContribution[],
+): PanelActionContribution[] {
+  const trimmed: PanelActionContribution[] = [];
+  for (const action of actions) {
+    if (isSeparatorAction(action) && (trimmed.length === 0 || isSeparatorAction(trimmed[trimmed.length - 1]!))) {
+      continue;
+    }
+    trimmed.push(action);
+  }
+  while (trimmed.length > 0 && isSeparatorAction(trimmed[trimmed.length - 1]!)) {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+const HEADER_LOCATIONS = ['header/left', 'header/center', 'header/right'] as const;
+
+type HeaderLocation = (typeof HEADER_LOCATIONS)[number];
+
+function headerLocationOf(action: PanelActionContribution): HeaderLocation {
+  const location = action.location ?? 'header/right';
+  return location === 'context' ? 'header/right' : location;
 }
 
 /**
- * Renders a header toolbar zone whose icon buttons fold into a hover flyout when
- * the zone is too narrow. Folded actions keep the exact same `PanelActionControl`
- * rendering — they are relocated, not restyled. Natural (unfolded) width is
- * measured off-screen so the flex-basis stays constant, which prevents the
- * fold→shrink→fold oscillation that a content-sized container would cause.
+ * Renders the panel header and folds its icon buttons into a hover flyout when
+ * the header is too narrow. Folded actions keep the exact same
+ * `PanelActionControl` rendering — they are relocated, not restyled. The fold is
+ * decided for the header as a whole rather than per zone, so there is exactly
+ * one overflow menu, and the budget comes from the header's own width — which
+ * does not depend on the buttons — so folding cannot feed back into the
+ * available width and oscillate.
  */
-function OverflowGroup({
-  panelId,
-  actions,
-  location,
-}: {
-  panelId: string;
-  actions: readonly PanelActionContribution[];
-  location: Exclude<PanelActionLocation, 'context'>;
-}): ReactNode {
-  const containerRef = useRef<HTMLDivElement>(null);
+function PanelHeaderBar({ panelId, panel }: { panelId: string; panel: PanelDescriptor }): ReactNode {
+  const host = useHost();
+  const actionVersion = useActionRegistryVersion();
+  const actions = useMemo(
+    () => mergeActions(
+      panelId,
+      panel.actions ?? [],
+      host.panelActions.list(panelId),
+    ).filter((action) => (action.location ?? 'header/right') !== 'context'),
+    [actionVersion, host, panel.actions, panelId],
+  );
+
+  const headerRef = useRef<HTMLElement>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const [foldCount, setFoldCount] = useState(0);
-  const [naturalWidth, setNaturalWidth] = useState<number | undefined>(undefined);
 
   const foldOrder = useMemo(
     () =>
@@ -547,45 +615,81 @@ function OverflowGroup({
         .map(({ action }) => action.id),
     [actions],
   );
-  const maxFold = foldOrder.length;
-  const clampedFold = Math.min(foldCount, maxFold);
+  const clampedFold = Math.min(foldCount, foldOrder.length);
   const foldedSet = useMemo(() => new Set(foldOrder.slice(0, clampedFold)), [foldOrder, clampedFold]);
 
-  const visible = actions.filter((action) => !foldedSet.has(action.id));
-  const overflow = actions.filter((action) => foldedSet.has(action.id));
+  // Keep flyout order identical to the toolbar's left→right sequence.
+  const overflow = sanitizeOverflowActions(
+    actions
+      .filter((action) => foldedSet.has(action.id) && action.hideOnOverflow !== true)
+      .slice()
+      .sort(compareActionsVisual),
+  );
 
   // Deterministically derive the exact number of items to fold from the live
-  // container width + measured per-item widths. Runs on every ResizeObserver
-  // tick (panel drag) for BOTH container and measure row, so it handles grow
-  // and shrink symmetrically without any "reset then converge" state dance.
+  // header width + measured per-item widths. Runs on every ResizeObserver tick
+  // (panel drag) for BOTH header and measure row, so it handles grow and shrink
+  // symmetrically without any "reset then converge" state dance.
   const recompute = useCallback(() => {
-    const container = containerRef.current;
+    const header = headerRef.current;
     const measure = measureRef.current;
-    if (!container || !measure) return;
+    if (!header || !measure) return;
 
     const GAP = 6;
     const TRIGGER = 26;
+    // Zones use the same gap as the toolbars inside them, so a button pair costs
+    // one GAP wherever a zone border happens to fall. An empty zone still emits
+    // its own gap; this slack absorbs that.
+    const SLACK = 12;
+    // Some Radix-wrapped controls measure as 0 inside the off-screen clone
+    // (visibility:hidden + inert). Fall back to the live toolbar width, then to
+    // a minimum, so those actions stay foldable instead of sticking on the bar.
+    const MIN_ACTION_WIDTH = 30;
     const items = actions
       .map((action) => {
-        const el = measure.querySelector<HTMLElement>(`[data-fold-id="${CSS.escape(action.id)}"]`);
-        return { id: action.id, width: el ? el.getBoundingClientRect().width : 0 };
+        const measured = measure.querySelector<HTMLElement>(`[data-fold-id="${CSS.escape(action.id)}"]`);
+        let width = measured ? measured.getBoundingClientRect().width : 0;
+        if (width <= 0.5) {
+          const live = header.querySelector<HTMLElement>(`[data-fold-live-id="${CSS.escape(action.id)}"]`);
+          width = live ? live.getBoundingClientRect().width : 0;
+        }
+        if (width <= 0.5) {
+          // Still mounted in the live toolbar? Keep a seat so it can fold.
+          const live = header.querySelector(`[data-fold-live-id="${CSS.escape(action.id)}"]`);
+          if (!live) return { id: action.id, width: 0 };
+          width = MIN_ACTION_WIDTH;
+        }
+        return { id: action.id, width };
       })
       .filter((item) => item.width > 0.5);
 
     const rowWidth = (widths: readonly number[]): number =>
       widths.reduce((sum, w) => sum + w, 0) + GAP * Math.max(0, widths.length - 1);
 
-    setNaturalWidth(Math.ceil(rowWidth(items.map((item) => item.width))));
+    const style = getComputedStyle(header);
+    const titleWidth = titleRef.current?.getBoundingClientRect().width ?? 0;
+    const available = header.clientWidth
+      - parseFloat(style.paddingLeft)
+      - parseFloat(style.paddingRight)
+      - (titleWidth > 0 ? titleWidth + GAP : 0)
+      - SLACK;
 
-    const available = container.clientWidth;
     const presentIds = new Set(items.map((item) => item.id));
     const foldable = foldOrder.filter((id) => presentIds.has(id));
+    const dropped = new Set(
+      actions.filter((action) => action.hideOnOverflow === true).map((action) => action.id),
+    );
 
     const fits = (count: number): boolean => {
-      const hidden = new Set(foldable.slice(0, count));
-      const visibleWidths = items.filter((item) => !hidden.has(item.id)).map((item) => item.width);
+      const hidden = foldable.slice(0, count);
+      const hiddenSet = new Set(hidden);
+      const visibleWidths = items.filter((item) => !hiddenSet.has(item.id)).map((item) => item.width);
       let width = rowWidth(visibleWidths);
-      if (count > 0) width += TRIGGER + (visibleWidths.length > 0 ? GAP : 0);
+      // Folded-and-dropped actions never reach the flyout, so they alone do not
+      // cost the trigger's width.
+      if (hidden.some((id) => !dropped.has(id))) {
+        width += TRIGGER + (visibleWidths.length > 0 ? GAP : 0);
+      }
       return width <= available + 0.5;
     };
 
@@ -612,7 +716,7 @@ function OverflowGroup({
       raf = requestAnimationFrame(recompute);
     };
     const ro = new ResizeObserver(schedule);
-    if (containerRef.current) ro.observe(containerRef.current);
+    if (headerRef.current) ro.observe(headerRef.current);
     if (measureRef.current) ro.observe(measureRef.current);
     return () => {
       cancelAnimationFrame(raf);
@@ -620,85 +724,53 @@ function OverflowGroup({
     };
   }, [recompute]);
 
-  if (actions.length === 0) return null;
   return (
-    <>
-      <div
-        ref={containerRef}
-        className="fx-panel-toolbar fx-panel-toolbar-overflow"
-        data-location={location}
-        style={naturalWidth != null ? { flexBasis: `${naturalWidth}px` } : undefined}
-      >
-        {visible.map((action) => (
-          <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
-        ))}
-        {overflow.length > 0 && <OverflowMenu panelId={panelId} actions={overflow} location={location} />}
-      </div>
+    <header className="fx-panel-header" ref={headerRef}>
+      {HEADER_LOCATIONS.map((location) => {
+        const zoneActions = actions.filter(
+          (action) => headerLocationOf(action) === location && !foldedSet.has(action.id),
+        );
+        const showOverflow = location === 'header/right' && overflow.length > 0;
+        return (
+          <div key={location} className="fx-panel-header-zone" data-zone={location.slice('header/'.length)}>
+            {location === 'header/left' && panel.header?.showTitle !== false && (
+              <div className="fx-panel-title-block" ref={titleRef}>
+                {panel.icon && <span className="fx-panel-icon" aria-hidden="true">{panel.icon}</span>}
+                <div className="fx-panel-title-wrap">
+                  <div className="fx-panel-title" title={panel.title}>{panel.title}</div>
+                  {panel.header?.subtitle && <div className="fx-panel-subtitle">{panel.header.subtitle}</div>}
+                </div>
+              </div>
+            )}
+            {(zoneActions.length > 0 || showOverflow) && (
+              <div className="fx-panel-toolbar" data-location={location}>
+                {zoneActions.map((action) => (
+                  <span key={action.id} data-fold-live-id={action.id} className="fx-panel-toolbar-item">
+                    <PanelActionControl action={action} panelId={panelId} location={location} />
+                  </span>
+                ))}
+                {showOverflow && (
+                  <OverflowMenu panelId={panelId} actions={overflow} location="header/right" />
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
       <div ref={measureRef} className="fx-panel-overflow-measure" aria-hidden="true">
         {actions.map((action) => (
           <span key={action.id} data-fold-id={action.id} className="fx-panel-overflow-measure-item">
-            <PanelActionControl action={action} panelId={panelId} location={location} />
+            <PanelActionControl action={action} panelId={panelId} location={headerLocationOf(action)} />
           </span>
         ))}
       </div>
-    </>
+    </header>
   );
-}
-
-function PanelToolbar({
-  panelId,
-  panel,
-  location,
-}: {
-  panelId: string;
-  panel: PanelDescriptor;
-  location: PanelActionLocation;
-}): ReactNode {
-  const host = useHost();
-  const actionVersion = useActionRegistryVersion();
-  const actions = useMemo(() => mergeActions(
-    panelId,
-    panel.actions ?? [],
-    host.panelActions.list(panelId),
-  ).filter((action) => (action.location ?? 'header/right') === location), [actionVersion, host, location, panel.actions, panelId]);
-
-  if (actions.length === 0) return null;
-  if (location === 'context') {
-    return (
-      <div className="fx-panel-toolbar" data-location={location}>
-        {actions.map((action) => (
-          <PanelActionControl key={action.id} action={action} panelId={panelId} location={location} />
-        ))}
-      </div>
-    );
-  }
-  return <OverflowGroup panelId={panelId} actions={actions} location={location} />;
 }
 
 function PanelHeader({ panelId, panel }: { panelId: string; panel: PanelDescriptor }): ReactNode {
   if (panel.header?.visible !== true) return null;
-  return (
-    <header className="fx-panel-header">
-      <div className="fx-panel-header-zone" data-zone="left">
-        {panel.header?.showTitle !== false && (
-          <>
-            {panel.icon && <span className="fx-panel-icon" aria-hidden="true">{panel.icon}</span>}
-            <div className="fx-panel-title-wrap">
-              <div className="fx-panel-title" title={panel.title}>{panel.title}</div>
-              {panel.header?.subtitle && <div className="fx-panel-subtitle">{panel.header.subtitle}</div>}
-            </div>
-          </>
-        )}
-        <PanelToolbar panelId={panelId} panel={panel} location="header/left" />
-      </div>
-      <div className="fx-panel-header-zone" data-zone="center">
-        <PanelToolbar panelId={panelId} panel={panel} location="header/center" />
-      </div>
-      <div className="fx-panel-header-zone" data-zone="right">
-        <PanelToolbar panelId={panelId} panel={panel} location="header/right" />
-      </div>
-    </header>
-  );
+  return <PanelHeaderBar panelId={panelId} panel={panel} />;
 }
 
 function PanelUnavailable({ id }: { id: string }): ReactNode {

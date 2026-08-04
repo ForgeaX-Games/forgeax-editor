@@ -19,6 +19,7 @@ import type { ReactElement } from 'react';
 import { getLocale, useTranslation } from '@/i18n';
 import type { ExtensionInfo } from '../../lib/extension-api';
 import { useShellStore } from '../../store';
+import { openExtensionPage } from '../../core/page-navigation';
 import { getSessionClient } from '../../store-parts/session-client';
 import { getWorkbenchClient } from '../../store';
 import { ExtensionIframeHost } from '../ExtensionHost/ExtensionIframeHost';
@@ -90,26 +91,6 @@ function buildIframeSrc(
   return base + (base.includes('?') ? '&' : '?') + params.join('&');
 }
 
-/** Workbench id for a plugin id — mirrors WbGallery's `m.workbench?.id ??
- *  m.id.replace(/^@forgeax-plugin\//,'')`. We don't have the manifest here, so
- *  use the prefix-strip fallback (matches every current wb-* plugin: wb-anim →
- *  'anim' has workbench.id 'anim', so set the tab to 'wb:anim'... but the
- *  fallback would give 'wb:wb-anim'). To stay correct we special-case the known
- *  workbench ids; unknown plugins fall back to the strip. */
-const PLUGIN_TO_WB_ID: Record<string, string> = {
-  '@forgeax-plugin/wb-anim': 'anim',
-  '@forgeax-plugin/wb-character': 'character',
-  '@forgeax-plugin/wb-skill': 'skill',
-  '@forgeax-plugin/wb-reel': 'reel',
-  '@forgeax/wb-game-video': 'wb-game-video',
-  // ADR 0025 renamed forgeax-plugin → forgeax-extension; keep both until all
-  // handoff callers emit the new prefix.
-  '@forgeax-extension/wb-anim': 'anim',
-  '@forgeax-extension/wb-character': 'character',
-  '@forgeax-extension/wb-skill': 'skill',
-  '@forgeax-extension/wb-reel': 'reel',
-};
-
 /** localStorage key the host writes the cross-workbench handoff payload to.
  *  Same-origin so the target plugin iframe (e.g. wb-anim) can read it on boot
  *  + via the 'storage' event. Mirrored constant lives in wb-anim's bridge. */
@@ -129,8 +110,7 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
   } catch {
     /* localStorage unavailable (private mode) — target falls back to selector */
   }
-  const wbId = PLUGIN_TO_WB_ID[targetPluginId] ?? targetPluginId.replace(/^@[^/]+\//, '');
-  useShellStore.getState().openWorkbench({ tab: `wb:${wbId}`, expandedExtensionId: targetPluginId });
+  void openExtensionPage(targetPluginId);
 }
 
 export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {

@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "forgeax editor business panels (Hierarchy, Inspector, Assets, History, Capabilities, Material, Mesh, Launcher, AssetInspector, Systems) + panel manifest SSOT. The Assets panel lazy-loads @forgeax/editor-content-browser.",
+  "description": "forgeax editor business panels (Hierarchy, Inspector, Assets, History, Capabilities, Launcher, asset Overview/Properties, mesh Material Slots) + panel manifest SSOT. The Assets panel lazy-loads @forgeax/editor-content-browser.",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -36,6 +36,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
+    "@tanstack/react-virtual": "^3.14.3",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0"
   },

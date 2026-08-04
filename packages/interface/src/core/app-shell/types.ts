@@ -7,6 +7,17 @@ import type { ContextKeysApi } from '../extension-foundation/context-keys';
 import type { StorageApi } from '../extension-foundation/storage';
 import type { PanelRenderers } from '../../components/DockShell/panelRenderers';
 import type { PanelActionContribution, PanelActionsApi, PanelControlContribution, PanelControlsApi } from '../panels';
+import type {
+  PagePlatformContribution,
+  PagePort,
+  PageRegistry,
+  PageTypeRegistration,
+  PanelTypeRegistration,
+  ActivityRegistration,
+  ResourceEditorRegistration,
+  ActivityRegistry,
+  ResourceEditorResolver,
+} from '../page-platform';
 
 export type AppShellPillKind =
   | 'file' | 'dir' | 'agent' | 'tool' | 'game' | 'log' | 'entity' | 'paste'
@@ -35,7 +46,8 @@ export interface AppBusEventMap extends Record<string, unknown> {
 }
 
 export type HostCapability =
-  | 'commands' | 'bus' | 'storage' | 'panels' | 'panelActions' | 'panelControls' | 'contextKeys'
+  | 'commands' | 'bus' | 'storage' | 'panels' | 'panelActions' | 'panelControls' | 'contextKeys' | 'pages'
+  | 'activities' | 'resourceEditors'
   | 'session' | 'workbench' | 'observability' | 'editor'
   | (string & {});
 
@@ -54,6 +66,10 @@ export interface AppHostBase {
   readonly panels: PanelRenderers;
   readonly panelActions: PanelActionsApi;
   readonly panelControls: PanelControlsApi;
+  readonly pages: PagePort;
+  readonly pageRegistry: PageRegistry;
+  readonly activities: ActivityRegistry;
+  readonly resourceEditors: ResourceEditorResolver;
   readonly capabilities: ReadonlySet<HostCapability>;
   extend<K extends HostCapability>(capability: K, api: unknown): void;
 }
@@ -76,6 +92,7 @@ export interface AppExtensionContext {
   contributePanels(patch: Partial<PanelRenderers>): Cleanup;
   contributePanelActions(actions: readonly PanelActionContribution[]): Cleanup;
   contributePanelControls(controls: readonly PanelControlContribution[]): Cleanup;
+  contributePagePlatform(contribution: PagePlatformContribution): Cleanup;
 }
 
 /** ADR 0025 M2 — declarative contributions. Applied by the bootstrap glue
@@ -85,6 +102,10 @@ export interface AppExtensionContributes {
   readonly panels?: Partial<PanelRenderers>;
   readonly panelActions?: readonly PanelActionContribution[];
   readonly panelControls?: readonly PanelControlContribution[];
+  readonly pages?: readonly PageTypeRegistration[];
+  readonly panelTypes?: readonly PanelTypeRegistration[];
+  readonly activities?: readonly ActivityRegistration[];
+  readonly resourceEditors?: readonly ResourceEditorRegistration[];
 }
 
 /** An app-shell extension manifest. Unlike the domain-agnostic

@@ -81,7 +81,7 @@ export type BuiltinEditorOp =
   // `guid` is caller-minted (the dispatch contract has no channel to return one;
   // the caller reuses the same guid for the follow-up bindAssetRef). `packPath`
   // optional — defaults to the active game's scene.pack.json in the applier.
-  | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; baseColorTexture?: string; packPath?: string; refs?: string[] }
+  | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; baseColorTexture?: string; alphaCutoff?: number; packPath?: string; refs?: string[] }
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
@@ -95,6 +95,7 @@ export type BuiltinEditorOp =
   | { kind: 'toggleSelection'; id: EntityId }
   | { kind: 'setSelectionMany'; ids: EntityId[] }
   | { kind: 'setAssetSelection'; assets: SelectedAsset[]; primary: SelectedAsset | null }
+  | { kind: 'openAssetEditor'; asset: SelectedAsset }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
   | { kind: 'requestFrame' }
   // captureFrame is a request-correlated session operation. The actual RHI
@@ -263,6 +264,8 @@ export interface CommandError extends CommandErrorContext {
     // Asset read surface (Part 4): resolveAsset/describeAsset given a handle that
     // resolves to no asset (slot 0 unset, stale, or not a shared<T> handle).
     | 'ASSET_NOT_FOUND'
+    | 'editor-document-not-found'
+    | 'editor-document-protected'
     // Accepted async source-file deletion failed at the filesystem boundary.
     | 'SOURCE_FILE_DELETE_FAILED'
     | 'SOURCE_FILE_VERIFY_FAILED'

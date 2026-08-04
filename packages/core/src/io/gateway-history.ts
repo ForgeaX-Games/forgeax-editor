@@ -42,6 +42,20 @@ export interface HistoryStep {
   entity?: number;
 }
 
+/**
+ * One bounded, reviewable operation pair for a timeline position.
+ *
+ * `op` is the forward command recorded by the document timeline and `inverse`
+ * is the command the same Gateway derived to return to the prior state. This
+ * is a projection of the existing undo/redo entries, not a second collaboration
+ * log or a snapshot diff. `index` is one-based and follows `historySteps()`.
+ */
+export interface HistoryDiff extends HistoryStep {
+  index: number;
+  op: EditorOp;
+  inverse: EditorOp;
+}
+
 /** Derive a human-readable timeline label from a command (kind + component if any). */
 export function labelOf(cmd: EditorOp): string {
   return cmd.kind + ('component' in cmd ? ` ${(cmd as { component: string }).component}` : '');

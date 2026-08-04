@@ -37,6 +37,12 @@ describe('listExtensions — no-bus degrade', () => {
     const res = await listExtensions('workbench');
     expect(res).toEqual(payload);
   });
+
+  it('200 + incomplete json → empty list, no throw', async () => {
+    mockFetch(200, 'application/json', JSON.stringify({}));
+    const res = await listExtensions('workbench');
+    expect(res).toEqual({ kind: 'workbench', count: 0, items: [] });
+  });
 });
 
 describe('extensionIdSlug — strip known package scopes', () => {

@@ -9,13 +9,15 @@ describe('non-World panels subscription red path', () => {
     for (const file of ['History.tsx', 'Capabilities.tsx', 'Launcher.tsx']) {
       expect(source(file), file).not.toContain('useDocVersion');
     }
-    expect(source('AssetInspector.tsx')).not.toContain('useDocVersion');
+    expect(source('AssetEditors.tsx')).not.toContain('useDocVersion');
   });
 
   it('preserves the producer-owned read paths and DOM contracts', () => {
     expect(source('History.tsx')).toContain('data-testid="panel-history"');
     expect(source('Capabilities.tsx')).toContain('data-testid="panel-capabilities"');
     expect(source('Launcher.tsx')).toContain('data-testid="panel-launcher"');
-    expect(source('AssetInspector.tsx')).toContain('data-testid="panel-asset-inspector"');
+    expect(source('AssetEditors.tsx')).toContain('data-testid="panel-asset-overview"');
+    expect(source('AssetEditors.tsx')).toContain('data-testid="panel-asset-properties"');
+    expect(source('AssetEditors.tsx')).toContain('data-testid="panel-mesh-slots"');
   });
 });

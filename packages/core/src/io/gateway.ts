@@ -33,7 +33,7 @@ import { describeSceneActivation } from '../assets/scene-activation';
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
 // reader binding). None of them route a command or decide a domain.
 import { labelOf, entityOf, step, nextOpHandleId } from './gateway-history';
-import type { CommandOrigin, HistoryStep } from './gateway-history';
+import type { CommandOrigin, HistoryDiff, HistoryStep } from './gateway-history';
 import { makeQueryFn } from './gateway-query';
 import {
   GameProjectionRegistry,
@@ -70,6 +70,11 @@ import {
   sourceFileDeletePath,
 } from '../session/source-file-delete-status';
 import type { SourceFileDeleteStatus } from '../session/source-file-delete-status';
+import {
+  deriveAssetImpact,
+  type AssetImpactResult,
+  type AssetMutationPreviewRequest,
+} from './asset-impact';
 import {
   OperationRunRegistry,
   type OperationRun,
@@ -165,15 +170,17 @@ function isHeavyBuffer(value: unknown): boolean {
   return ArrayBuffer.isView(value) || value instanceof ArrayBuffer;
 }
 
-// CommandOrigin + HistoryStep now live in io/gateway-history.ts (sunk non-entry
+// CommandOrigin + HistoryStep + HistoryDiff now live in io/gateway-history.ts (sunk non-entry
 // detail, w10). Re-exported here so the barrel (index.ts) surface stays byte-
 // identical — every consumer keeps importing them from editor-core unchanged
 // (AC-03 consumers zero-edit).
-export type { CommandOrigin, HistoryStep };
+export type { CommandOrigin, HistoryDiff, HistoryStep };
 
 interface StackEntry {
   cmd: EditorOp;
   inverse: EditorOp;
+  /** Original command inverse retained for review after an undo/redo round-trip. */
+  reviewInverse?: EditorOp;
   origin: CommandOrigin;
 }
 
@@ -1759,7 +1766,12 @@ export class EditGateway {
       this.undoStack.push(entry);
       return false;
     }
-    this.redoStack.push({ cmd: entry.cmd, inverse: r.inverse, origin: entry.origin });
+    this.redoStack.push({
+      cmd: entry.cmd,
+      inverse: r.inverse,
+      reviewInverse: entry.reviewInverse ?? entry.inverse,
+      origin: entry.origin,
+    });
     popSpan('OK');
     this.emit(entry.inverse);
     return true;
@@ -1776,7 +1788,12 @@ export class EditGateway {
       this.redoStack.push(entry);
       return false;
     }
-    this.undoStack.push({ cmd: entry.cmd, inverse: r.inverse, origin: entry.origin });
+    this.undoStack.push({
+      cmd: entry.cmd,
+      inverse: r.inverse,
+      reviewInverse: entry.reviewInverse ?? entry.inverse,
+      origin: entry.origin,
+    });
     popSpan('OK');
     this.emit(entry.cmd);
     return true;
@@ -1792,6 +1809,33 @@ export class EditGateway {
     const applied = this.undoStack.map((e) => step(labelOf(e.cmd), e.origin, false, entityOf(e.cmd)));
     const future = [...this.redoStack].reverse().map((e) => step(labelOf(e.cmd), e.origin, true, entityOf(e.cmd)));
     return [...applied, ...future];
+  }
+
+  /**
+   * Read one bounded review projection from the existing document timeline.
+   * The one-based index follows historySteps(): applied entries first, then
+   * redoable future entries in replay order. Invalid positions are absent so a
+   * caller can probe a changing timeline without an exception or mutation.
+   */
+  historyDiff(index: number): HistoryDiff | undefined {
+    if (!Number.isInteger(index) || index < 1) return undefined;
+    const appliedCount = this.undoStack.length;
+    const total = appliedCount + this.redoStack.length;
+    if (index > total) return undefined;
+
+    const future = index > appliedCount;
+    const entry = future
+      ? this.redoStack[this.redoStack.length - (index - appliedCount)]
+      : this.undoStack[index - 1];
+    if (!entry) return undefined;
+
+    const timelineStep = step(labelOf(entry.cmd), entry.origin, future, entityOf(entry.cmd));
+    return {
+      ...timelineStep,
+      index,
+      op: entry.cmd,
+      inverse: entry.reviewInverse ?? entry.inverse,
+    };
   }
 
   /**
@@ -2026,6 +2070,16 @@ export class EditGateway {
     const registry = this.doc.registry;
     if (registry === undefined) return [];
     return registry.listCatalog();
+  }
+
+  /**
+   * Derive the current asset reference impact from producer catalog facts.
+   * This is a bounded read for delete, source move, and reimport decisions;
+   * it never builds or stores a second graph. A sourcePath selector may match
+   * several imported outputs from one source file.
+   */
+  assetImpact(request: AssetMutationPreviewRequest): AssetImpactResult {
+    return deriveAssetImpact(this.assetCatalog(), request);
   }
 
   /** Read the terminal state of an accepted deleteSourceFile request. */

@@ -92,6 +92,7 @@ import { extensionManifestPathHint, listExtensions, pickLang, type ExtensionInfo
 import { dashApi, type ProviderHealth } from '../../lib/dashboard-api';
 import { useShellStore } from '../../store';
 import { emitDeepLink, useDeepLink } from '../../lib/deep-link-bus';
+import { openExtensionPage } from '../../core/page-navigation';
 import { CapabilityOverview } from './CapabilityOverview';
 import './BusAdminPanel.css';
 
@@ -1852,10 +1853,9 @@ function ExtensionDetail({
   // P3.33 — reverse deep-link wiring. kind=agent rows offer "← 在 Sidebar 高亮"
   // (sets store.pendingSidebarFocusExtensionId → AgentsPanel scrolls + flashes the
   // matching card). kind=workbench rows offer "← 打开 wb-* tab" (setMode
-  // 'ai' + setWorkbenchTab(wb.id) so MainArea opens the placeholder).
+  // Workbench rows open the extension-owned Page through the shell port.
   // Together with P3.32's forward AgentsPanel pill + P2.7f's wb-tab "在 Bus
   // 详情查看 →" button, this completes the Sidebar ⇄ Bus admin round-trip.
-  const openWorkbench = useShellStore((s) => s.openWorkbench);
   // R5/P2 — reverse deep-links now emit bus intents (their consumers —
   // AgentsPanel scroll / Sidebar kind-flash — were lost in R4 and are re-added
   // in P4/P6 in the right app; publishing is harmless while unsubscribed).
@@ -1866,10 +1866,7 @@ function ExtensionDetail({
   };
   const onOpenWbTab = () => {
     if (!wb) return;
-    // Sidebar entries key as `wb:<workbench.id>` (see Sidebar.tsx busEntries),
-    // not the raw wb.id, so we must prefix to match. No center expand → the
-    // sidebar opens the plugin's placeholder/left pane.
-    openWorkbench({ tab: `wb:${wb.id}`, expandedExtensionId: null });
+    void openExtensionPage(p.id);
   };
   const onFlashKindFooter = () => {
     emitDeepLink('sidebar:flash-kind', p.kind);

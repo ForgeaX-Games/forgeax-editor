@@ -14,12 +14,23 @@ import type { PanelActionContribution, PanelControlContribution } from '../panel
 import type {
   AppBusEventMap, AppHost, AppHostBase, AppLogger, AppExtension, HostCapability,
 } from './types';
+import {
+  createPageRegistry,
+  createPageSession,
+  createActivityRegistry,
+  createResourceEditorResolver,
+  type PagePlatformContribution,
+  type PageRegistry,
+  type PageSession,
+} from '../page-platform';
 import { consoleLogger } from './logger';
 import { derivePanelRenderers } from './derive-panel-renderers';
 import { DEFAULT_PANEL_RENDERERS, type PanelRenderers } from '../../components/DockShell/panelRenderers';
+import { installPageNavigation } from '../page-navigation';
 
 const BUILT_IN_CAPS: readonly HostCapability[] = [
-  'commands', 'bus', 'storage', 'panels', 'panelActions', 'panelControls', 'contextKeys',
+  'commands', 'bus', 'storage', 'panels', 'panelActions', 'panelControls', 'contextKeys', 'pages',
+  'activities', 'resourceEditors',
 ];
 
 interface ExtensionRecord { capability: HostCapability; owner: string; }
@@ -39,10 +50,11 @@ export interface AppHostControl {
   contributePanels(owner: string, patch: Partial<PanelRenderers>): Cleanup;
   contributePanelActions(owner: string, actions: readonly PanelActionContribution[]): Cleanup;
   contributePanelControls(owner: string, controls: readonly PanelControlContribution[]): Cleanup;
+  contributePagePlatform(owner: string, contribution: PagePlatformContribution): Cleanup;
   /** Coarse change signal for the derived panels snapshot (React subscribes
    *  via useSyncExternalStore in App.tsx). */
   onPanelsChange(listener: () => void): () => void;
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 export interface CreateAppHostResult {
@@ -61,6 +73,14 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
   const contextKeys: ContextKeysApi = createContextKeys();
   const panelActions = createPanelActionRegistry();
   const panelControls = createPanelControlRegistry();
+  // Page Types and Panel Types share one owner-tagged contribution bundle.
+  // A bundle publish is one registry change, so the PageRegistry never exposes
+  // a page without the panel types activated in the same extension setup.
+  const pageContributions = createContributionRegistry<PagePlatformContribution>();
+  const pageRegistry: PageRegistry = createPageRegistry(pageContributions);
+  const pageSession: PageSession = createPageSession(pageRegistry);
+  const activities = createActivityRegistry(pageContributions, pageSession, commands);
+  const resourceEditors = createResourceEditorResolver(pageContributions, pageSession);
   // ADR 0025 M2: the ContributionRegistry is the SSOT; host.panels is a
   // memoized DERIVED snapshot (new identity per registry version — App.tsx
   // reads it through useSyncExternalStore, so post-boot contributions and
@@ -90,6 +110,10 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
     get panels() { return panelsSnapshot(); },
     panelActions,
     panelControls,
+    pages: pageSession,
+    pageRegistry,
+    activities,
+    resourceEditors,
     get capabilities() { return caps.snapshot(); },
     extend(capability, api) {
       if (activeSetup === null) {
@@ -147,6 +171,7 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
       return undefined;
     },
   });
+  const removePageNavigation = installPageNavigation(host);
 
   const control: AppHostControl = {
     beginSetup(m) {
@@ -160,6 +185,19 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
     contributePanels(owner, patch) { return panelsRegistry.contribute(owner, patch); },
     contributePanelActions(owner, actions) { return panelActions.contribute(owner, actions); },
     contributePanelControls(owner, controls) { return panelControls.contribute(owner, controls); },
+    contributePagePlatform(owner, contribution) {
+      pageRegistry.validateContribution(owner, contribution);
+      const removeContribution = pageContributions.contribute(owner, contribution);
+      let removed = false;
+      return async () => {
+        if (removed) return;
+        // The registry still knows the owner while controllers preflight close.
+        // A dirty/vetoed page rejects cleanup and leaves the contribution live.
+        await pageSession.closeOwnedBy(owner);
+        removeContribution();
+        removed = true;
+      };
+    },
     onPanelsChange(listener) { return panelsRegistry.onChange(listener); },
     removeExtensionsByOwner(ownerId) {
       const indices: number[] = [];
@@ -175,7 +213,11 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
         extensions.splice(i, 1);
       }
     },
-    dispose() { bus.destroy(); },
+    async dispose() {
+      removePageNavigation();
+      await pageSession.dispose();
+      bus.destroy();
+    },
   };
 
   return { host, control };

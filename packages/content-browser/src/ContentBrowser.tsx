@@ -39,7 +39,6 @@ import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asse
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { resolveFileActivateAction } from './folder-view';
 import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
-import { SceneEntryBar } from './SceneEntryBar';
 import { sceneActivationToOp, scenePromoteToOp, sceneSourceEditToOp } from './scene-activation-route';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
 import {
@@ -382,19 +381,25 @@ export function ContentBrowser() {
     // `{kind:'setAssetSelection', asset}` mix is no longer valid — argsSchema
     // requires the base `{assets, primary}` shape; sugar keeps the old single
     // call site working without re-emitting the full set.
-    gateway.dispatch({ kind: 'setAssetSelectionOne', asset: {
+    const selectedAsset = {
       guid: asset.guid,
       kind: asset.kind,
       name: asset.name,
       payload: asset.payload,
       packPath: asset.packPath,
-    } });
+    };
+    gateway.dispatch({ kind: 'setAssetSelectionOne', asset: selectedAsset });
     if (asset.activation) {
       if (asset.activation.mode === 'open-authored') {
         requestSceneSwitch(asset.activation.authoredSceneId ?? '');
       } else {
         gateway.dispatch(sceneActivationToOp(asset.activation, asset.sourcePath), 'human');
       }
+    } else if (asset.kind !== 'scene') {
+      // A double-click opens a semantic editor document. The document tab owns
+      // its panel domain; focusing Asset Inspector inside the Level layout was
+      // the old layout-as-document conflation.
+      gateway.dispatch({ kind: 'openAssetEditor', asset: selectedAsset }, 'human');
     }
   }, [requestSceneSwitch]);
 
@@ -409,17 +414,11 @@ export function ContentBrowser() {
       setPreviewItem(item);
       if (action.type === 'open-asset') {
         openAsset(action.asset);
-        if (action.asset.kind !== 'scene') {
-          void host.commands.execute('app.editor.focus', { panel: 'asset-inspector' });
-        }
       }
       return;
     }
     openAsset(item);
-    if (item.kind !== 'scene') {
-      void host.commands.execute('app.editor.focus', { panel: 'asset-inspector' });
-    }
-  }, [nav, openAsset, togglePackExpansion, viewMode, host]);
+  }, [nav, openAsset, togglePackExpansion, viewMode]);
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
@@ -992,7 +991,6 @@ export function ContentBrowser() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
-      <SceneEntryBar />
       <input
         ref={fileInputRef}
         data-cb-file-input="1"

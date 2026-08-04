@@ -11,7 +11,7 @@
 import { registerAction, registerStateSlice } from './action-registry';
 import { getSessionClient } from '../store-parts/session-client';
 import { useShellStore, tabLabel } from '../store';
-import { setActiveWorkbench, appMode } from './workbenches';
+import { openExtensionPage } from '../core/page-navigation';
 import { useHealthStore } from '../components/StatusBar/healthStore';
 import { getBrowserConsole, clearBrowserConsole } from '../components/StatusBar/healthBridge';
 import { listExtensions, pickLang } from './extension-api';
@@ -40,11 +40,10 @@ export function registerBuiltinActions(): void {
     capability: 'write',
     firstClass: true, // P1-9:高频 action 派生一等 ToolSpec(ui_act_*)
     surface: 'ui',
-    run: (args) => {
+    run: async (args) => {
       const mode = args.mode as 'scene' | 'ai';
-      // activeId 是唯一真值源;切活动工作区即完成切换,mode 由它派生,无影子可写。
-      setActiveWorkbench(mode);
-      return { status: 'completed', stateDigest: { mode, activeWorkspace: mode } };
+      await openExtensionPage(mode === 'scene' ? '@forgeax/editor' : '@forgeax/studio-agents');
+      return { status: 'completed', stateDigest: { page: mode } };
     },
   });
 
@@ -93,15 +92,9 @@ export function registerBuiltinActions(): void {
     capability: 'write',
     firstClass: true, // P1-9:高频 action 派生一等 ToolSpec(ui_act_*)
     surface: 'ui',
-    run: (args) => {
-      // 当前布局按「活动工作区」渲染(Edit / AI 标签,AI 的 workbench id 即 'ai');
-      // 切活动工作区即完成切换,和标签的 switchTo 一致。
-      setActiveWorkbench('ai');
-      st().openWorkbench({ ...(typeof args.tab === 'string' ? { tab: args.tab } : {}) });
-      return {
-        status: 'completed',
-        stateDigest: { mode: 'ai', activeWorkspace: 'ai', workbenchTab: st().workbenchTab },
-      };
+    run: async () => {
+      await openExtensionPage('@forgeax/studio-agents');
+      return { status: 'completed', stateDigest: { page: 'agents' } };
     },
   });
 
@@ -144,11 +137,10 @@ export function registerBuiltinActions(): void {
     choices: {
       extensionId: async () => (await listExtensions('workbench')).items.filter((p) => !p.workbench?.hidden).map((p) => p.id),
     },
-    run: (args) => {
+    run: async (args) => {
       const extensionId = args.extensionId as string;
-      setActiveWorkbench('ai');
-      st().openWorkbench({ expandedExtensionId: extensionId });
-      return { status: 'completed', stateDigest: { activeWorkspace: 'ai', expandedExtensionId: extensionId } };
+      await openExtensionPage(extensionId);
+      return { status: 'completed', stateDigest: { extensionId } };
     },
   });
 
@@ -239,10 +231,9 @@ export function registerBuiltinActions(): void {
     capability: 'read',
     firstClass: true,
     surface: 'ui',
-    run: (args) => {
+    run: async (args) => {
       const id = typeof args.id === 'string' && args.id.trim() ? args.id.trim() : '';
-      setActiveWorkbench('ai');
-      st().openWorkbench({});
+      await openExtensionPage('@forgeax/studio-agents');
       if (id) {
         const sid = st().activeSid;
         if (sid) st().setTabAgent(sid, id); // 绑角色到当前会话 → 聊天区展示其 persona 详情条
@@ -540,7 +531,6 @@ export function registerBuiltinActions(): void {
   });
 
   // ── 状态摘要片(评审 2.5:注册式 derive,禁手写台账)────────────────────────
-  registerStateSlice('app.mode', () => appMode());
   registerStateSlice('app.layout', () => ({
     fullscreen: st().fullscreen,
     sidebarCollapsed: st().sidebarCollapsed,

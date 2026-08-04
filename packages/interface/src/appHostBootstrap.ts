@@ -40,6 +40,7 @@ import './core/extensions/observability.d'; // side-effect: AppHost.observabilit
 import { observabilityExtension } from './core/extensions/observability';
 import { trajectoryExtension } from './core/extensions/trajectory';
 import { consoleLogger } from './core/app-shell/logger';
+import { loadCatalogPageExtensions } from './core/app-shell/catalog-page-extensions';
 
 export interface AppHostBootstrapOverrides {
   /** Studio injects dashboard / settings / surfaces / slots / detached /
@@ -68,6 +69,7 @@ export async function bootstrapAppHost(
     contributePanels: (patch) => control.contributePanels(m.id, patch),
     contributePanelActions: (actions) => control.contributePanelActions(m.id, actions),
     contributePanelControls: (controls) => control.contributePanelControls(m.id, controls),
+    contributePagePlatform: (contribution) => control.contributePagePlatform(m.id, contribution),
   });
 
   const loader = createExtensionLoader<AppExtensionContext, string>({
@@ -88,6 +90,7 @@ export async function bootstrapAppHost(
       control.beginSetup(m);
       try {
         const cleanups: Cleanup[] = [];
+        let pageCleanup: Cleanup | undefined;
         if (m.contributes?.panels) {
           cleanups.push(control.contributePanels(m.id, m.contributes.panels));
         }
@@ -97,10 +100,21 @@ export async function bootstrapAppHost(
         if (m.contributes?.panelControls) {
           cleanups.push(control.contributePanelControls(m.id, m.contributes.panelControls));
         }
+        if (m.contributes?.pages || m.contributes?.panelTypes || m.contributes?.activities || m.contributes?.resourceEditors) {
+          pageCleanup = control.contributePagePlatform(m.id, {
+            pageTypes: m.contributes.pages,
+            panelTypes: m.contributes.panelTypes,
+            activities: m.contributes.activities,
+            resourceEditors: m.contributes.resourceEditors,
+          });
+        }
         const r = await m.setup?.(ctx);
         if (typeof r === 'function') cleanups.push(r);
-        if (cleanups.length === 0) return undefined;
+        if (cleanups.length === 0 && !pageCleanup) return undefined;
         return async () => {
+          // Controllers get the first say. If one vetoes/needs a user decision,
+          // no declarative or imperative contribution is torn down underneath it.
+          await pageCleanup?.();
           for (const c of cleanups.slice().reverse()) await c();
         };
       } finally {
@@ -109,6 +123,8 @@ export async function bootstrapAppHost(
     },
   });
 
+  const overrideIds = new Set((overrides.extensions ?? []).map((extension) => extension.id));
+  const catalogPageExtensions = await loadCatalogPageExtensions(overrideIds);
   const manifests = [
     foundationCommandsExtension,
     foundationBusExtension,
@@ -122,6 +138,7 @@ export async function bootstrapAppHost(
     workbenchClientExtension,
     observabilityExtension,
     trajectoryExtension,
+    ...catalogPageExtensions,
     ...(overrides.extensions ?? []),
   ].map(wrap);
 
@@ -146,7 +163,7 @@ export async function bootstrapAppHost(
 
   const dispose = async (): Promise<void> => {
     await loader.unload();
-    control.dispose();
+    await control.dispose();
   };
 
   return { host, control, dispose };

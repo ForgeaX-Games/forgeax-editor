@@ -135,7 +135,9 @@
       "empty": "无操作",
       "jumpToStep": "跳转到第 {{step}} 步",
       "originAi": "AI",
-      "originHuman": "人"
+      "originHuman": "人",
+      "diffApply": "应用",
+      "diffUndo": "撤销"
     },
     "inspector": {
       "batchTitle": "Inspector · 批量 ({{count}})",

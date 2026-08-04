@@ -1,0 +1,114 @@
+{
+  "$ref": "#/definitions/NpcDecisionWire",
+  "definitions": {
+    "NpcDecisionWire": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "type": "number",
+          "const": 1
+        },
+        "npcId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "intent": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "propertyNames": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              }
+            },
+            "ttlSec": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            }
+          },
+          "required": [
+            "action",
+            "ttlSec"
+          ],
+          "additionalProperties": false
+        },
+        "utterance": {
+          "type": "object",
+          "properties": {
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 48
+              },
+              "minItems": 1,
+              "maxItems": 3
+            }
+          },
+          "required": [
+            "lines"
+          ],
+          "additionalProperties": false
+        },
+        "emotion": {
+          "type": "object",
+          "properties": {
+            "mood": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "towards": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "propertyNames": {
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              }
+            }
+          },
+          "required": [
+            "mood"
+          ],
+          "additionalProperties": false
+        },
+        "fallback": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "v",
+        "npcId",
+        "seq"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

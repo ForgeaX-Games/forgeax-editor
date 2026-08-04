@@ -125,6 +125,11 @@ export {
   clearAssetSelection,
   onAssetSelectionChange,
 } from './asset-selection';
+export {
+  configureEditorPageNavigation,
+  getActiveEditorAsset,
+  useActiveEditorAsset,
+} from './page-navigation';
 export { registerAssetSelectAllHandler, triggerAssetSelectAll } from './asset-select-all';
 export type { SelectedAsset } from './asset-selection';
 

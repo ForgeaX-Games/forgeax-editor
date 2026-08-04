@@ -6,7 +6,7 @@
 // catalog-only; sidecars contribute source/indexing state and diagnostics.
 
 import { createAssetWorkspace, type AssetWorkspaceSnapshot, type AssetWorkspaceIssue } from '@forgeax/editor-product';
-import type { AssetAuthoringCapability } from '@forgeax/engine-types';
+import type { AssetAuthoringCapability, AssetRelation as ProducerAssetRelation } from '@forgeax/engine-types';
 
 export type { AssetAuthoringCapability } from '@forgeax/engine-types';
 
@@ -21,6 +21,8 @@ export interface AssetBrowserRegistryEntry {
   readonly name?: string;
   readonly packageUrl: string;
   readonly refs?: readonly string[];
+  /** Producer-owned graph facts; `refs` is retained only as a legacy fallback. */
+  readonly relations?: readonly ProducerAssetRelation[];
   readonly sourcePath?: string;
   readonly sourceKey?: string;
   readonly revision?: string;
@@ -178,6 +180,15 @@ function relativeToGamePath(path: string, resolvedRoot: string): string {
   if (normalized === root) return '';
   if (root && normalized.startsWith(`${root}/`)) return normalized.slice(root.length + 1);
   return normalized;
+}
+
+function producerRelationToWorkspaceRelation(relation: ProducerAssetRelation): AssetWorkspaceSnapshot['relations'][number] {
+  const kind = relation.type === 'contains' || relation.type === 'owns'
+    ? 'contains'
+    : relation.type === 'produces' || relation.type === 'materialized-as'
+      ? 'derived-from'
+      : 'depends-on';
+  return { kind, from: relation.from.id.toLowerCase(), to: relation.to.id.toLowerCase() };
 }
 
 function flattenTree(
@@ -369,6 +380,19 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       return metaPath === undefined ? asset : { ...asset, metaPath };
     });
 
+    const workspaceRelations = catalogRows.flatMap((row) => {
+      if (row.relations !== undefined && row.relations.length > 0) {
+        return row.relations.map(producerRelationToWorkspaceRelation);
+      }
+      return (row.refs ?? []).map((ref) => ({
+        kind: 'depends-on' as const,
+        from: row.guid.toLowerCase(),
+        to: ref.toLowerCase(),
+      }));
+    });
+    const uniqueWorkspaceRelations = [...new Map(
+      workspaceRelations.map((relation) => [`${relation.kind}:${relation.from}:${relation.to}`, relation]),
+    ).values()];
     const workspaceResult = workspace.reconcile({
       resourceRevision: `browser:${generation}`,
       logicalCommitId: `browser-refresh:${generation}`,
@@ -381,11 +405,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
         capabilities: { canImport: false, canMove: true, canDelete: true, canPreflight: true },
         name: asset.name,
       })),
-      relations: enrichedAssets.flatMap((asset) => asset.refs.map((ref) => ({
-        kind: 'depends-on' as const,
-        from: asset.guid,
-        to: ref,
-      }))),
+      relations: uniqueWorkspaceRelations,
       issues: sidecarDiagnostics.map<AssetWorkspaceIssue>((diagnostic) => ({
         code: 'malformed-package',
         severity: 'warning',

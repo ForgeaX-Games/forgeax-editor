@@ -2,10 +2,10 @@ import { useMemo } from 'react';
 import type { AssetWorkspaceSnapshot } from '@forgeax/editor-core';
 
 /**
- * Asset dependency graph (C2) — derived in-memory from the forward `refs`
- * edges the engine surfaces via `listCatalog().refs` (engine
- * refs-through-listCatalog). Nothing is persisted; the graph is a pure
- * projection of the current catalog, rebuilt whenever the asset list changes.
+ * Asset dependency graph (C2) — derived in-memory from the producer-owned
+ * relations projected into the workspace snapshot. Older rows use their
+ * `refs` compatibility projection in the core read model. Nothing is
+ * persisted; the graph is a pure projection of the current catalog.
  *
  * Per the content-browser data-ownership ruling (L2): keys and values are all
  * engine GUIDs (36-char UUID). Folders (which have no GUID) never enter the

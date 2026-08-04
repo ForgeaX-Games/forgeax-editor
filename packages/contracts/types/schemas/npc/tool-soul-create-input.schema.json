@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "soulId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "models": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      ]
+    }
+  },
+  "required": [
+    "soulId",
+    "name",
+    "identity"
+  ],
+  "additionalProperties": false
+}

@@ -255,6 +255,20 @@ export class EngineFacade {
    *  world (`allocSharedRef`, gated to this file by lint-unique-mutator) and the
    *  AssetRegistry (catalog read). Records the same 'world.allocSharedRef' leaf as
    *  a direct alloc. `target` is the shared<T> tag (e.g. 'AnimationClip'). */
+  /** Read-only catalog membership probe — the validation half of
+   *  resolveSharedGuid WITHOUT the handle mint (no allocSharedRef, no leaf).
+   *  Returns true/false when a registry is bound, or undefined in headless /
+   *  pre-boot envs so applier-side Fail Fast input validation (e.g.
+   *  createMaterial's baseColorTexture) can distinguish "known miss" from
+   *  "validation unavailable" and only reject on the former. */
+  isAssetCatalogued(guid: string): boolean | undefined {
+    if (!this._registry) return undefined;
+    const parsed = AssetGuid.parse(guid);
+    if (!parsed.ok) return false;
+    const key = AssetGuid.format(parsed.value).toLowerCase();
+    return this._registry.assetCatalog.get(key) !== undefined;
+  }
+
   resolveSharedGuid(
     target: string,
     guid: string,

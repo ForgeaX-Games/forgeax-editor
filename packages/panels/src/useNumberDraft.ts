@@ -35,6 +35,10 @@ export function useNumberDraft(display: number, fs: FieldSchema | undefined, onC
   // blur commit inside the same synchronous event, before React has re-run
   // this hook with a fresh `draft` closure.
   const abort = useRef(false);
+  // Focus seeds the draft with the displayed value. Track whether the caller
+  // actually accepted a valid change so an ignored invalid onChange cannot
+  // re-submit that seed as a no-op document operation on blur/Enter.
+  const changed = useRef(false);
   const arrowStep = fs?.step ?? 1;
 
   // A selection or World generation change invalidates the local draft. The
@@ -43,21 +47,30 @@ export function useNumberDraft(display: number, fs: FieldSchema | undefined, onC
   // inherit an edit from the old source.
   useEffect(() => {
     abort.current = false;
+    changed.current = false;
     setDraft(null);
   }, [generation]);
 
   function flush() {
     if (draft === null) return;
+    if (!changed.current) {
+      setDraft(null);
+      return;
+    }
     const n = Number(draft);
     if (Number.isFinite(n)) onCommit(clampToField(fs, n));
+    changed.current = false;
     setDraft(null);
   }
 
   return {
     value: draft !== null ? draft : String(display),
-    onFocus: () => setDraft(String(display)),
+    onFocus: () => { changed.current = false; setDraft(String(display)); },
     onChange: (e) => {
-      if (DRAFT_RE.test(e.target.value)) setDraft(e.target.value);
+      if (DRAFT_RE.test(e.target.value)) {
+        changed.current = true;
+        setDraft(e.target.value);
+      }
     },
     onBlur: () => {
       if (abort.current) {
@@ -74,6 +87,7 @@ export function useNumberDraft(display: number, fs: FieldSchema | undefined, onC
       } else if (e.key === 'Escape') {
         e.preventDefault();
         abort.current = true;
+        changed.current = false;
         (e.target as HTMLInputElement).blur();
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         // Compensate for the native type="number" spin-button/arrow-key step
@@ -83,6 +97,7 @@ export function useNumberDraft(display: number, fs: FieldSchema | undefined, onC
         const base = draft !== null && Number.isFinite(Number(draft)) ? Number(draft) : display;
         const dir = e.key === 'ArrowUp' ? 1 : -1;
         onCommit(clampToField(fs, base + dir * arrowStep * mult));
+        changed.current = false;
         setDraft(null);
       }
     },

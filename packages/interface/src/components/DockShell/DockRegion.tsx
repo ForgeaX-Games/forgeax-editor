@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { FloatingMenu } from '../ui/FloatingMenu';
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type SerializedDockview } from 'dockview';
@@ -39,6 +39,7 @@ import {
 } from '../../lib/workbenches';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { useHost } from '../../core/app-shell';
+import { pageLayoutStore, type PageLayoutIdentity } from '../../core/page-platform';
 import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
 import { buildDefault } from './builtinWorkbenches';
 import { shouldApplyHydratedWorkbenchLayout } from './workspace-hydration';
@@ -89,6 +90,16 @@ function stripUnknownPanels(
   const root = grid?.root ? stripGrid(grid.root) : grid?.root;
   if (!root) return null;
   return { ...layout, grid: { ...layout.grid, root }, panels: cleanPanels } as SerializedDockview;
+}
+
+/** A restored Page layout must still mount at least one placement owned by the
+ * active Page Type. Empty snapshots can be written during a failed/legacy
+ * rebuild and must not turn a valid Page into a permanent blank workspace. */
+export function hasMountedPagePlacement(
+  pagePanelIds: readonly string[],
+  mountedPanelIds: ReadonlySet<string>,
+): boolean {
+  return pagePanelIds.some((id) => mountedPanelIds.has(id));
 }
 
 /** Clear chrome collapse + rebuild this region's default dock layout. */
@@ -215,6 +226,26 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // stays as-is because Phase 1 only renders the 'DockShell' region.
   const panels = renderers.panels;
   const activeWorkbench = useActiveWorkbench();
+  const pageSession = useSyncExternalStore(host.pages.subscribe, host.pages.getSnapshot, host.pages.getSnapshot);
+  const activePageInstance = pageSession.instances.find((page) => page.encodedKey === pageSession.activeKey);
+  const activeResolvedPage = activePageInstance ? host.pageRegistry.get(activePageInstance.typeId) : undefined;
+  const activePageScope = useMemo(() => {
+    if (!activePageInstance || !activeResolvedPage || activeResolvedPage.status !== 'available' || !('grid' in activeResolvedPage.layout)) return null;
+    const identity: PageLayoutIdentity = {
+      pageTypeId: activePageInstance.typeId,
+      layoutVersion: activeResolvedPage.definition.layoutVersion ?? 1,
+    };
+    return {
+      layoutId: activePageInstance.typeId,
+      identity,
+      layout: activeResolvedPage.layout,
+      panelIds: activeResolvedPage.panels.map((placement) => placement.id),
+    };
+  }, [activePageInstance, activeResolvedPage]);
+  const pagePanelIds = useMemo(
+    () => activePageScope === null ? null : new Set(activePageScope.panelIds),
+    [activePageScope],
+  );
   const panelLocations = activeWorkbench?.panelLocations ?? {};
   const { moveTo, resetPanelLocations } = useWorkbenchActions();
   const isMember = useCallback((id: string): boolean => {
@@ -225,13 +256,17 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // ActivityRail), never inside the dock — dropped from every seeded layout by
     // filterLayoutByMembership, and closeStrayPanels evicts it from restores.
     if (id === 'chat') return false;
+    // A semantic editor document owns a closed panel domain. A mesh/material
+    // page cannot accumulate Level panels (or vice versa) through restore,
+    // reopen, drag, or the layout menu.
+    if (pagePanelIds !== null && !pagePanelIds.has(id)) return false;
     // No descriptor registered → treat non-editor panels as belonging to the
     // DockShell region (matches the pre-refactor behavior).
     const desc = panels?.[id];
     if (!desc) return region === 'DockShell';
     if (!(desc.when?.() ?? true)) return false;
     return resolveRegion(id, desc, panelLocations) === region;
-  }, [editorPanelIds, panels, panelLocations, region]);
+  }, [pagePanelIds, editorPanelIds, panels, panelLocations, region]);
   // Mirror isMember into a ref so callbacks registered with [] deps (onReady,
   // subscribeWorkbenchList, reset, openPanel handler) can read the latest predicate
   // without re-binding — descriptor/override changes propagate through the ref.
@@ -264,6 +299,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   useEffect(() => {
     builtinWorkbenchLayoutsRef.current = renderers.builtinWorkbenchLayouts;
   }, [renderers.builtinWorkbenchLayouts]);
+  const pageScopeRef = useRef(activePageScope);
+  useLayoutEffect(() => { pageScopeRef.current = activePageScope; }, [activePageScope]);
   const titleFor = useCallback((id: string): string => {
     const panelId = id.startsWith('ep:') ? id.slice(3) : id;
     // Locale-reactive tab title: resolve by the panel KEY at call time (module
@@ -293,6 +330,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     ),
     [],
   );
+  const pageLayoutKey = useCallback(
+    (layoutId: string): string => (
+      `forgeax:project:${getCurrentProject()}:page-layout:${layoutId}:${regionRef.current}`
+    ),
+    [],
+  );
   // Region-aware layout persistence — the write-side counterpart to the
   // region-scoped restore paths below. DockShell persists through
   // saveWorkbenchLayout (project-scoped `workbench-layout:<wsId>` slot, mirrored
@@ -301,6 +344,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // (layoutKey has [] deps) so once-bound callbacks can call it safely.
   const persistLayout = useCallback(
     (wsId: string, layout: SerializedDockview): void => {
+      const scope = pageScopeRef.current;
+      if (scope !== null) {
+        pageLayoutStore.save(pageLayoutKey(scope.layoutId), scope.identity, layout);
+        return;
+      }
       if (regionRef.current === 'DockShell') {
         saveWorkbenchLayout(wsId, layout);
         return;
@@ -309,7 +357,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         localStorage.setItem(layoutKey(wsId), JSON.stringify(layout));
       } catch { /* quota */ }
     },
-    [layoutKey],
+    [pageLayoutKey, layoutKey],
   );
   const apiRef = useRef<DockviewApi | null>(null);
   // Last app.dock.reset epoch this region has applied. Compared to
@@ -362,6 +410,29 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // panels + wb:* plugin renderers. The editor list is deliberately runtime
   // data so interface never carries an editor-business registry.
   const components = useMemo(() => ({
+    ...(activeResolvedPage?.status === 'available' && activePageInstance
+      ? Object.fromEntries(activeResolvedPage.panels.map((placement) => [
+          placement.id,
+          () => placement.panelType.runtime.kind === 'iframe'
+            ? (
+                <iframe
+                  src={placement.panelType.runtime.src}
+                  title={placement.id}
+                  data-page-instance={activePageInstance.encodedKey}
+                  style={{ width: '100%', height: '100%', border: 0 }}
+                />
+              )
+            : placement.panelType.runtime.render({
+                pageKey: activePageInstance.key,
+                placementId: placement.id,
+                pageContext: activePageInstance.context,
+                initialProps: placement.initialProps,
+              }),
+        ]))
+      : {}),
+    // Canonical shell/editor placements intentionally win when a Page reuses
+    // their stable ids (viewport, info, ep:*). Extension placements are unique
+    // and therefore retain the Page-owned runtime installed above.
     ...BASE_PANEL_COMPONENTS,
     ...buildEditorPanelComponents(editorPanelIds),
     ...Object.fromEntries(busExtensions.map((p) => [
@@ -374,7 +445,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         </RecoveryBoundary>
       ),
     ])),
-  }), [busExtensions, editorPanelIds]);
+  }), [activePageInstance, activeResolvedPage, busExtensions, editorPanelIds]);
   // Mirror the component keys into a ref so layout restore callbacks (registered
   // once with [] deps) can validate saved layouts against the CURRENT set.
   const componentKeysRef = useRef<ReadonlySet<string>>(new Set(Object.keys(components)));
@@ -384,6 +455,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // save its layout before switching. Lives outside onReady so useEffect cleanup
   // can unsubscribe correctly on HMR remounts.
   const prevWorkspaceIdRef = useRef(loadWorkbenchList().activeId);
+  const prevPageLayoutRef = useRef<{ readonly layoutId: string; readonly identity: PageLayoutIdentity } | null>(
+    pageScopeRef.current
+      ? { layoutId: pageScopeRef.current.layoutId, identity: pageScopeRef.current.identity }
+      : null,
+  );
   // Track the PROJECT id the dock last reconciled under. Layout localStorage keys
   // are project-scoped (`forgeax:project:<projId>:workbench-layout:<wsId>`), but
   // `currentProjectId` boots as the transient 'default' and only advances to the
@@ -484,10 +560,14 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       appliedResetEpochRef.current = resetEpoch;
       const activeId = loadWorkbenchList().activeId;
       prevWorkspaceIdRef.current = activeId;
+      const scope = pageScopeRef.current;
+      prevPageLayoutRef.current = scope
+        ? { layoutId: scope.layoutId, identity: scope.identity }
+        : null;
       rebuildRegionDefault(
         api,
         isMemberRef.current,
-        builtinWorkbenchLayoutsRef.current?.[activeId],
+        scope?.layout ?? builtinWorkbenchLayoutsRef.current?.[activeId],
         hideChatRef.current,
       );
     } else {
@@ -495,6 +575,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       // the viewport workspace on first migration, else build the workspace default.
       const { activeId } = loadWorkbenchList();
       prevWorkspaceIdRef.current = activeId;
+      const scope = pageScopeRef.current;
+      prevPageLayoutRef.current = scope
+        ? { layoutId: scope.layoutId, identity: scope.identity }
+        : null;
       let restored = false;
       // isValidLayout — checks the raw serialized JSON BEFORE giving it to dockview.
       // Rejects it early so we never briefly flash the wrong layout on screen.
@@ -521,7 +605,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           if (!isValidLayout(parsed, wsId)) {
             // Evict the bad layout so it doesn't come back on next load.
             try {
-              if (regionRef.current === 'DockShell') {
+              if (scope !== null) {
+                pageLayoutStore.remove(pageLayoutKey(scope.layoutId));
+              } else if (regionRef.current === 'DockShell') {
                 removeWorkbenchLayout(wsId);
               } else {
                 localStorage.removeItem(layoutKey(wsId));
@@ -548,7 +634,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         } catch { try { api.clear(); } catch { /* noop */ } return false; }
       };
       try {
-        if (regionRef.current === 'DockShell') {
+        if (scope !== null) {
+          const saved = pageLayoutStore.load(pageLayoutKey(scope.layoutId), scope.identity);
+          restored = saved ? tryRestore(JSON.stringify(saved), activeId) : false;
+        } else if (regionRef.current === 'DockShell') {
           const saved = loadWorkbenchLayout(activeId);
           restored = saved ? tryRestore(JSON.stringify(saved), activeId) : false;
           if (!restored && activeId === 'scene') {
@@ -564,7 +653,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           api,
           activeId,
           isMemberRef.current,
-          builtinWorkbenchLayoutsRef.current?.[activeId],
+          scope?.layout ?? builtinWorkbenchLayoutsRef.current?.[activeId],
         );
       }
 
@@ -664,9 +753,23 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // about to restore. onDidLayoutChange already persists every change
     // synchronously, so this save is redundant and safely skipped here.
     if (!projectChanged) {
-      persistLayout(prevWorkspaceIdRef.current, api.toJSON());
+      const previousWorkspaceId = prevWorkspaceIdRef.current;
+      const previousPageLayout = prevPageLayoutRef.current;
+      if (previousWorkspaceId === 'scene' && previousPageLayout !== null) {
+        pageLayoutStore.save(
+          pageLayoutKey(previousPageLayout.layoutId),
+          previousPageLayout.identity,
+          api.toJSON(),
+        );
+      } else {
+        persistLayout(previousWorkspaceId, api.toJSON());
+      }
     }
     prevWorkspaceIdRef.current = newId;
+    const scope = pageScopeRef.current;
+    prevPageLayoutRef.current = scope
+      ? { layoutId: scope.layoutId, identity: scope.identity }
+      : null;
     // The layout is being completely replaced — reset toggle-hidden tracking so
     // sidebar/chat collapse effects start fresh for the new workspace.
     hiddenByToggleRef.current.clear();
@@ -680,7 +783,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
       }
     };
-    const saved = loadWorkbenchLayout(newId);
+    let saved: SerializedDockview | null = null;
+    if (scope !== null) {
+      saved = pageLayoutStore.load(pageLayoutKey(scope.layoutId), scope.identity);
+    } else {
+      saved = loadWorkbenchLayout(newId);
+    }
     if (saved) {
       try {
         // Validate raw JSON before loading — avoids flashing the wrong layout.
@@ -694,7 +802,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           ));
         const missingMain = newId === 'ai' && !savedPanels['main'];
         if (hasStaleEpPanels || missingMain) {
-          try { removeWorkbenchLayout(newId); } catch { /* noop */ }
+          try {
+            if (scope !== null) pageLayoutStore.remove(pageLayoutKey(scope.layoutId));
+            else removeWorkbenchLayout(newId);
+          } catch { /* noop */ }
           // fall through to buildDefault
         } else {
           // Sanitize retired keys (edit/preview → viewport) and strip panels
@@ -702,15 +813,29 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           let sanitized: SerializedDockview | null = sanitizeRetiredDockLayout(saved);
           sanitized = stripUnknownPanels(sanitized, componentKeysRef.current);
           if (!sanitized) {
-            try { removeWorkbenchLayout(newId); } catch { /* noop */ }
+            try {
+              if (scope !== null) pageLayoutStore.remove(pageLayoutKey(scope.layoutId));
+              else removeWorkbenchLayout(newId);
+            } catch { /* noop */ }
             // fall through to buildDefault
           } else {
             api.fromJSON(sanitized);
             // Drop restored panels that no longer belong to THIS region.
             closeStrayPanels(api);
+            if (scope !== null) {
+              const mounted = new Set(api.panels.map((panel) => panel.id));
+              if (hasMountedPagePlacement(scope.panelIds, mounted)) {
+                syncTitles();
+                return;
+              }
+              try { pageLayoutStore.remove(pageLayoutKey(scope.layoutId)); } catch { /* noop */ }
+              try { api.clear(); } catch { /* noop */ }
+              // fall through to the Page Type default
+            } else {
             const anchor = newId === 'ai' ? 'main' : null;
             if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
             // anchor missing — fall through to buildDefault
+            }
           }
         }
       } catch { /* fall through */ }
@@ -720,7 +845,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       api,
       newId,
       isMemberRef.current,
-      builtinWorkbenchLayoutsRef.current?.[newId],
+      scope?.layout ?? builtinWorkbenchLayoutsRef.current?.[newId],
     );
     syncTitles();
     // No injected chat surface — re-apply chat closure on workspace switch
@@ -728,7 +853,57 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     if (hideChatRef.current) {
       try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
     }
-  }, [titleFor, closeStrayPanels, persistLayout]);
+  }, [titleFor, closeStrayPanels, pageLayoutKey, persistLayout]);
+
+  // Page instances are the only visible layout axis. Switching
+  // Level <-> asset replaces the dock with that document family's closed panel
+  // domain while leaving the active Workbench untouched.
+  const applyPageScope = useCallback((
+    api: DockviewApi,
+    scope: NonNullable<typeof activePageScope>,
+  ): void => {
+    const previousLayout = prevPageLayoutRef.current;
+    if (previousLayout?.layoutId === scope.layoutId) return;
+    if (previousLayout !== null) {
+      pageLayoutStore.save(
+        pageLayoutKey(previousLayout.layoutId),
+        previousLayout.identity,
+        api.toJSON(),
+      );
+    }
+    prevPageLayoutRef.current = { layoutId: scope.layoutId, identity: scope.identity };
+    hiddenByToggleRef.current.clear();
+
+    let restored = false;
+    try {
+      const parsed = pageLayoutStore.load(pageLayoutKey(scope.layoutId), scope.identity);
+      if (parsed) {
+        const cleaned = stripUnknownPanels(
+          sanitizeRetiredDockLayout(parsed),
+          componentKeysRef.current,
+        );
+        if (cleaned) {
+          api.fromJSON(cleaned);
+          closeStrayPanels(api);
+          restored = api.panels.length > 0;
+        }
+      }
+    } catch { restored = false; }
+
+    if (!restored) {
+      try { api.clear(); } catch { /* noop */ }
+      buildDefault(api, 'scene', isMemberRef.current, scope.layout);
+    }
+    const titleIds = new Set([
+      ...Object.keys(BASE_PANEL_TITLE),
+      ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
+      ...Object.keys(panelsRef.current ?? {}),
+    ]);
+    for (const id of titleIds) {
+      try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
+    }
+    pingAnchorRelayout();
+  }, [closeStrayPanels, pageLayoutKey, titleFor]);
 
   // Dock layout is a DERIVED view of the active workspace id (workbenches.ts is
   // the SSOT). Reconcile whenever that id changes — including when it changes
@@ -743,6 +918,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     const id = activeWorkbench?.id;
     if (id) applyWorkspace(api, id);
   }, [activeWorkbench?.id, applyWorkspace]);
+
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api || activePageScope === null) return;
+    applyPageScope(api, activePageScope);
+  }, [activePageScope, applyPageScope]);
 
   // Workspace switch subscription — the synchronous edge trigger (fires inside
   // notify() before React re-renders). Routes through the same applyWorkspace,
@@ -787,15 +968,19 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       if (appliedResetEpochRef.current >= epoch) return;
       appliedResetEpochRef.current = epoch;
       const activeId = loadWorkbenchList().activeId;
+      const scope = pageScopeRef.current;
+      if (scope !== null) {
+        pageLayoutStore.remove(pageLayoutKey(scope.layoutId));
+      }
       rebuildRegionDefault(
         api,
         isMemberRef.current,
-        builtinWorkbenchLayoutsRef.current?.[activeId],
+        scope?.layout ?? builtinWorkbenchLayoutsRef.current?.[activeId],
         hideChatRef.current,
       );
     };
     return host.bus.on('dock:reset', onReset);
-  }, [host]);
+  }, [pageLayoutKey, host]);
 
   // Open (or focus, if already open) an arbitrary dock panel by id — used by the
   // bottom HealthStatusBar peek to surface the Info panel. Reuses `reopen` (via
@@ -859,6 +1044,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       : !!localStorage.getItem(layoutKey(activeId));
     void initWorkbenchLayouts(new Set(editorPanelIds)).then(() => {
       if (cancelled) return;
+      // Scene document layouts have their own local slot and default. A server
+      // Workbench layout must never hydrate over the active Level/asset page.
+      if (pageScopeRef.current !== null) return;
       if (hadActiveLayout) return; // localStorage already had data — nothing to apply
       // Tour/layout reset already seeded the default — don't rehydrate a stale
       // project-scoped / server layout over it.

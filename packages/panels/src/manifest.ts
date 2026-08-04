@@ -17,7 +17,7 @@ import { HierarchyPanel } from './Hierarchy';
 import { HistoryPanel } from './History';
 import { InspectorPanel } from './Inspector';
 import { LauncherPanel } from './Launcher';
-import { AssetInspectorPanel } from './AssetInspector';
+import { AssetOverviewPanel, AssetPropertiesPanel, MeshSlotsPanel } from './AssetEditors';
 import { OperationCenter } from './operations/OperationCenter';
 
 // D5 (plan-strategy §2): renamed PANEL_COMPONENTS -> EDITOR_PANEL_COMPONENTS to
@@ -37,6 +37,8 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   history: HistoryPanel,
   capabilities: CapabilitiesPanel,
   launcher: LauncherPanel,
-  'asset-inspector': AssetInspectorPanel,
+  'asset-overview': AssetOverviewPanel,
+  'asset-properties': AssetPropertiesPanel,
+  'mesh-slots': MeshSlotsPanel,
   'operation-center': OperationCenter,
 };

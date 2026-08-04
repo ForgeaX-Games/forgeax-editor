@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { gateway } from '@forgeax/editor-core';
+import { gateway, type EditorOp, type HistoryDiff } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { OperationCenter } from './operations/OperationCenter';
 
@@ -18,6 +18,27 @@ function subscribeHistory(listener: () => void): () => void {
 
 function getHistoryRevision(): number {
   return historyRevision;
+}
+
+function formatOperation(op: EditorOp): string {
+  try {
+    const json = JSON.stringify(op);
+    return json.length > 240 ? `${json.slice(0, 237)}...` : json;
+  } catch {
+    return `{\"kind\":\"${op.kind}\"}`;
+  }
+}
+
+function HistoryDiffView({ diff }: { diff: HistoryDiff }) {
+  const { t } = useTranslation();
+  return (
+    <div className="hist-diff" data-testid={`hist-diff-${diff.index}`}>
+      <span className="hist-diff-label">{t('editor.history.diffApply')}</span>
+      <code>{formatOperation(diff.op)}</code>
+      <span className="hist-diff-label">{t('editor.history.diffUndo')}</span>
+      <code>{formatOperation(diff.inverse)}</code>
+    </div>
+  );
 }
 
 // History panel — the command timeline (design: AI Console / Undo history). Every
@@ -39,22 +60,27 @@ export function HistoryPanel() {
         {steps.length === 0 ? (
           <div className="muted" style={{ padding: '4px 10px' }}>{t('editor.history.empty')}</div>
         ) : (
-          steps.map((s, i) => (
-            <div
-              key={i}
-              className={`hist-row${s.future ? ' future' : ''}${i + 1 === head ? ' head' : ''}`}
-              data-testid={`hist-row-${i}`}
-              title={t('editor.history.jumpToStep', { step: i + 1 })}
-              onClick={() => {
-                gateway.jumpTo(i + 1);
-                if (typeof s.entity === 'number') gateway.dispatch({ kind: 'setSelection', id: s.entity });
-              }}
-            >
-              <span className={`hist-origin ${s.origin}`} title={s.origin === 'ai' ? t('editor.history.originAi') : t('editor.history.originHuman')}>{s.origin === 'ai' ? '✦' : '·'}</span>
-              <span className="hist-label">{s.label}</span>
-              {typeof s.entity === 'number' && <span className="hist-ent">#{s.entity}</span>}
-            </div>
-          ))
+          steps.map((s, i) => {
+            const diff = gateway.historyDiff(i + 1);
+            return (
+              <div key={i} className="hist-entry">
+                <div
+                  className={`hist-row${s.future ? ' future' : ''}${i + 1 === head ? ' head' : ''}`}
+                  data-testid={`hist-row-${i}`}
+                  title={t('editor.history.jumpToStep', { step: i + 1 })}
+                  onClick={() => {
+                    gateway.jumpTo(i + 1);
+                    if (typeof s.entity === 'number') gateway.dispatch({ kind: 'setSelection', id: s.entity });
+                  }}
+                >
+                  <span className={`hist-origin ${s.origin}`} title={s.origin === 'ai' ? t('editor.history.originAi') : t('editor.history.originHuman')}>{s.origin === 'ai' ? '✦' : '·'}</span>
+                  <span className="hist-label">{s.label}</span>
+                  {typeof s.entity === 'number' && <span className="hist-ent">#{s.entity}</span>}
+                </div>
+                {diff && <HistoryDiffView diff={diff} />}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

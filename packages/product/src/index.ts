@@ -59,7 +59,9 @@ export type {
 export {
   acceptedEvent,
   createOperationRun,
+  isOperationRun,
   isTerminalRunStatus,
+  OperationRunSchema,
   reduceOperationRun,
   OPERATION_RUN_SCHEMA_VERSION,
 } from './contracts/run';
@@ -70,6 +72,8 @@ export type {
   OperationRunEventInput,
   OperationRunReadResult,
   OperationRunRequest,
+  OperationRunSchemaContract,
+  OperationRunSchemaResult,
   OperationRunStatus,
   RunActor,
   RunProgress,

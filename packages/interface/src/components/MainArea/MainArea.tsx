@@ -1,6 +1,5 @@
 import { useActiveWorkbench } from '../../lib/useWorkbench';
 import { ViewportPanel } from './SurfacePanels';
-import { CenterExtensionLayer } from './CenterExtensionLayer';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import './MainArea.css';
 
@@ -26,11 +25,6 @@ export function MainArea() {
           <MainAreaBody />
         </div>
       ) : (activeId === 'scene' ? <ViewportPanel /> : null)}
-      {/* Always-mounted keep-alive overlay for standalone center plugins. Lives
-          here (above the mode/tab conditionals) so plugin iframes survive
-          viewport↔workbench and tab switches instead of cold-restarting. It
-          self-hides when no standalone plugin is expanded. */}
-      <CenterExtensionLayer />
     </main>
   );
 }

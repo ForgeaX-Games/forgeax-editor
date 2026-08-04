@@ -35,6 +35,7 @@
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -60,6 +61,14 @@ import {
   engineInstallEnv,
   runSupervisedCommand,
 } from './lib/setup-process.ts';
+import {
+  REGRESSION_MANIFEST_VERSION,
+  parseFixtureLayer,
+  selectRegressionChecks,
+  type FixtureLayer,
+  type RegressionCheck,
+  type RegressionProfile,
+} from './regression-manifest.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
@@ -832,48 +841,106 @@ function build(argv: string[]): void {
 }
 
 // ── ci ──────────────────────────────────────────────────────────────────────
-// Local projection of the required editor PR surface. Keep the command list in
-// the same order as .github/workflows/ci.yml's b2-self-boot, typecheck, and
-// smoke-play jobs. The workflow still owns runner provisioning and artifact
-// caching; a local checkout must have already completed `bun fx setup` so its
-// engine dist + wasm artefacts exist.
-type CiProfile = 'fast' | 'full';
-type CiStep = readonly [name: string, command: string, args: string[], journey: string, gate: string];
+// Local projection of the required editor PR surface. The command manifest is
+// shared by fast PR checks and the complete periodic run; the workflow still
+// owns runner provisioning and artifact caching. A local checkout must have
+// completed `bun fx setup` before these checks execute.
+type CiProfile = RegressionProfile;
+type CiOptions = { readonly profile: CiProfile; readonly fixtureLayer?: FixtureLayer; readonly reportPath?: string };
+type CiCheckResult = {
+  readonly id: string;
+  readonly name: string;
+  readonly roadmapId: string;
+  readonly journey: string;
+  readonly gate: string;
+  readonly fixtureLayer: FixtureLayer;
+  readonly status: 'passed' | 'failed';
+  readonly durationMs: number;
+  readonly exitCode: number;
+};
+type CiReport = {
+  readonly schemaVersion: typeof REGRESSION_MANIFEST_VERSION;
+  readonly profile: CiProfile;
+  readonly fixtureLayer: FixtureLayer | 'all';
+  readonly editorCommit: string;
+  readonly status: 'passed' | 'failed';
+  readonly checks: readonly CiCheckResult[];
+  readonly firstFailure?: {
+    readonly id: string;
+    readonly roadmapId: string;
+    readonly journey: string;
+    readonly gate: string;
+    readonly fixtureLayer: FixtureLayer;
+    readonly exitCode: number;
+  };
+};
 
-const CI_CONTEXT = 'epic=R0-08 work package=R0-08E gates=C1,C2,C3,C4,C5,C6,C7';
+const CI_CONTEXT = 'epic=R3-07 work package=R3-07E gates=C1,C2,C3,C4,C5,C6,C7';
 
-const CI_FAST_STEPS: readonly CiStep[] = [
-  ['platform-io unit tests', 'bun', ['-F', '@forgeax/platform-io', 'test'], 'J0/J1', 'C4/C6/C7'],
-  ['material pack shape', 'bun', ['scripts/validate-material-pack-shape.mjs'], 'J0', 'C4/C5/C6'],
-  ['standalone B2 self-boot', 'bun', ['scripts/selfcheck-standalone-b2.mjs'], 'J0', 'C4/C5/C6'],
-  ['editor lint', 'bun', ['run', 'lint'], 'J0/J1', 'C2/C3'],
-  ['dependency-cycle lint', 'bun', ['run', 'lint:dep'], 'J0/J1', 'C7'],
-  ['editor typecheck', 'bun', ['run', 'typecheck'], 'J0/J1', 'C2/C3/C7'],
-  ['editor-core unit tests', 'bun', ['-F', '@forgeax/editor-core', 'test'], 'J0/J1', 'C2/C4/C6'],
-  ['editor-product unit tests', 'bun', ['-F', '@forgeax/editor-product', 'test'], 'J0', 'C1/C3/C6'],
-  ['editor-panels unit tests', 'bun', ['-F', '@forgeax/editor-panels', 'test'], 'J0/J1', 'C3'],
-  ['edit-runtime unit tests', 'bun', ['-F', '@forgeax/editor-edit-runtime', 'test'], 'J0/J1', 'C5/C6'],
-  ['content-browser unit tests', 'bun', ['-F', '@forgeax/editor-content-browser', 'test'], 'J1', 'C1/C3/C4'],
-];
-
-const CI_COMPLETE_STEPS: readonly CiStep[] = [
-  ...CI_FAST_STEPS,
-  ['J5 validation + static artifact browser smoke', 'bun', ['run', 'test:j5'], 'J5', 'C1/C4/C5/C6/C7'],
-  ['browser smoke + viewport Play + save terminal roundtrip', 'bun', ['run', 'test:e2e', 'e2e/smoke-boot-play.spec.ts', 'e2e/smoke-content-browser.spec.ts', 'e2e/save-operation-run.spec.ts', 'e2e/play-real-game-safety-net.spec.ts'], 'J0/J1', 'C4/C5/C6/C7'],
-];
-
-function ciRoute(profile: CiProfile, journey: string, gate: string): string {
-  return `profile=${profile} ${CI_CONTEXT} journey=${journey} gate=${gate}`;
+function ciRoute(profile: CiProfile, check?: Pick<RegressionCheck, 'roadmapId' | 'fixtureLayer' | 'journey' | 'gate'>): string {
+  const route = check ?? { roadmapId: 'R3-07E', fixtureLayer: 'R0' as const, journey: 'J0/J1/J2/J3/J4/J5', gate: 'C1-C7' };
+  return `profile=${profile} ${CI_CONTEXT} roadmap=${route.roadmapId} fixtureLayer=${route.fixtureLayer} journey=${route.journey} gate=${route.gate}`;
 }
 
-function parseCiProfile(argv: string[]): CiProfile {
-  if (argv.length === 0 || argv[0] === '--full') return 'full';
-  if (argv[0] === '--fast') return 'fast';
-  die(`unknown ci flag(s): ${argv.join(' ')}`);
+function parseCiOptions(argv: string[]): CiOptions {
+  let profile: CiProfile = 'full';
+  let fixtureLayer: FixtureLayer | undefined;
+  let reportPath: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--fast') profile = 'fast';
+    else if (arg === '--full') profile = 'full';
+    else if (arg === '--layer' || arg === '--fixture-layer') {
+      const value = argv[++index];
+      if (!value) die(`${arg} needs R0, R1, or R2`);
+      try {
+        fixtureLayer = parseFixtureLayer(value);
+      } catch (error) {
+        die(error instanceof Error ? error.message : String(error));
+      }
+    } else if (arg === '--report') {
+      reportPath = argv[++index];
+      if (!reportPath) die('--report needs a file path');
+    } else {
+      die(`unknown ci flag '${arg}'; expected --fast, --full, --layer R0|R1|R2, or --report <path>`);
+    }
+  }
+  return { profile, fixtureLayer, reportPath };
+}
+
+function defaultCiReportPath(profile: CiProfile, editorCommit: string): string {
+  return join(ROOT, '.forgeax-harness', 'ci-reports', `r3-07-${profile}-${editorCommit.slice(0, 12)}.json`);
+}
+
+function writeCiReport(path: string, report: CiReport): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`[fx] regression report: ${path}`);
+}
+
+function runCiCheck(check: RegressionCheck): CiCheckResult {
+  const started = Date.now();
+  const result = spawnSync(check.command, [...check.args], {
+    stdio: 'inherit',
+    shell: IS_WIN,
+    cwd: ROOT,
+    env: process.env,
+  });
+  return {
+    id: check.id,
+    name: check.name,
+    roadmapId: check.roadmapId,
+    journey: check.journey,
+    gate: check.gate,
+    fixtureLayer: check.fixtureLayer,
+    status: result.status === 0 ? 'passed' : 'failed',
+    durationMs: Date.now() - started,
+    exitCode: result.status ?? 1,
+  };
 }
 
 function verifyFreshFrozenInstall(profile: CiProfile): void {
-  const route = ciRoute(profile, 'J0/J1', 'C7');
+  const route = ciRoute(profile);
   const branch = gitOut(['branch', '--show-current']);
   const head = gitOut(['rev-parse', 'HEAD']);
   if (!head) die(`CI failure: ${route} stage=commit — could not resolve the editor commit to verify.`);
@@ -914,8 +981,13 @@ function verifyFreshFrozenInstall(profile: CiProfile): void {
 }
 
 function ci(argv: string[]): void {
-  const profile = parseCiProfile(argv);
-  const route = ciRoute(profile, 'J0/J1', 'C1-C7');
+  const options = parseCiOptions(argv);
+  const profile = options.profile;
+  const checks = selectRegressionChecks(profile, options.fixtureLayer);
+  const route = ciRoute(profile, checks[0]);
+  if (checks.length === 0) {
+    die(`${route} has no checks; fast profile only contains R0, while R1/R2 require --full`);
+  }
   const requiredArtifacts = [
     join(ENGINE_DIR, 'packages', 'vite-plugin-shader', 'dist', 'index.mjs'),
     join(ENGINE_DIR, 'packages', 'wgpu-wasm', 'pkg', 'wgpu_wasm_bg.wasm'),
@@ -925,17 +997,47 @@ function ci(argv: string[]): void {
   }
   requireFreshEngineDist(`CI failure: ${route} stage=engine-dist`);
 
-  const steps = profile === 'fast' ? CI_FAST_STEPS : CI_COMPLETE_STEPS;
+  const editorCommit = gitOut(['rev-parse', 'HEAD']);
+  const reportPath = options.reportPath ?? defaultCiReportPath(profile, editorCommit);
+  const results: CiCheckResult[] = [];
   step(`CI: ${route} stage=fresh-clone ...`);
   verifyFreshFrozenInstall(profile);
-  for (const [name, command, args, journey, gate] of steps) {
-    const stepRoute = ciRoute(profile, journey, gate);
-    step(`CI: ${stepRoute} stage=${name} ...`);
-    sh(command, [...args], {
-      failureMessage: `CI failure: ${stepRoute} stage=${name} command=${command} ${args.join(' ')}`,
-    });
+  for (const check of checks) {
+    const stepRoute = ciRoute(profile, check);
+    step(`CI: ${stepRoute} stage=${check.name} ...`);
+    const result = runCiCheck(check);
+    results.push(result);
+    if (result.status === 'failed') {
+      const report: CiReport = {
+        schemaVersion: REGRESSION_MANIFEST_VERSION,
+        profile,
+        fixtureLayer: options.fixtureLayer ?? 'all',
+        editorCommit,
+        status: 'failed',
+        checks: results,
+        firstFailure: {
+          id: check.id,
+          roadmapId: check.roadmapId,
+          journey: check.journey,
+          gate: check.gate,
+          fixtureLayer: check.fixtureLayer,
+          exitCode: result.exitCode,
+        },
+      };
+      writeCiReport(reportPath, report);
+      die(`CI failure: ${stepRoute} stage=${check.name} command=${check.command} ${check.args.join(' ')} report=${reportPath}`);
+    }
   }
-  ok(`local CI passed: ${route}`);
+  const report: CiReport = {
+    schemaVersion: REGRESSION_MANIFEST_VERSION,
+    profile,
+    fixtureLayer: options.fixtureLayer ?? 'all',
+    editorCommit,
+    status: 'passed',
+    checks: results,
+  };
+  writeCiReport(reportPath, report);
+  ok(`local CI passed: ${route} checks=${results.length} report=${reportPath}`);
 }
 
 function usage(): void {
@@ -972,10 +1074,11 @@ Repo maintenance:
                                 submodules (scrubs regenerable artefacts; keeps the
                                 toolchain-gated engine wasm pkg dirs). --deep also
                                 wipes root node_modules/dist/wasm. Keeps .forgeax-harness.
-  ci [--fast|--full]            run the local CI surface with stable
-                                epic/work-package/journey/C1-C7 routing labels.
-                                --fast is the build/unit subset (no browser smoke);
-                                --full adds browser smoke and remains the default.
+  ci [--fast|--full] [--layer R0|R1|R2] [--report PATH]
+                                run the tiered R0–R2 regression manifest with
+                                stable Roadmap/journey/C1-C7 routing labels.
+                                --fast is the R0 PR subset; --full is the
+                                complete periodic set; --layer narrows it.
   ci:fast / ci:full             package-script aliases for the two profiles;
                                 both require bun fx setup; --full also needs
                                 installed Playwright Chromium.

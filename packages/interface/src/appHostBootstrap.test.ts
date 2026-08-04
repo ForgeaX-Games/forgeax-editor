@@ -8,6 +8,7 @@ import { describe, expect, it } from 'bun:test';
 import type React from 'react';
 import { bootstrapAppHost } from './appHostBootstrap';
 import type { AppExtension } from './core/app-shell';
+import { qualifyContributionId } from '@forgeax/types';
 
 const C = (() => null) as React.ComponentType;
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
@@ -81,5 +82,31 @@ describe('appHostBootstrap × contribution registry (M2)', () => {
     await r.dispose();
     expect(r.host.panels.overlays?.Dashboard).toBeUndefined();
     expect(r.host.panels.chrome?.StatusFeeds).toBeUndefined();
+  });
+
+  it('activates and unloads declarative page + panel contributions as one bundle', async () => {
+    const owner = '@forgeax-plugin/bootstrap-page';
+    const pageId = qualifyContributionId(owner, 'page', 'main');
+    const panelId = qualifyContributionId(owner, 'panel', 'main');
+    const ext: AppExtension = {
+      id: owner,
+      version: '1.0.0',
+      contributes: {
+        panelTypes: [{ id: panelId, runtime: { kind: 'inline', render: () => null } }],
+        pages: [{
+          id: pageId,
+          title: 'Main',
+          cardinality: 'singleton',
+          layout: { version: 1, root: { kind: 'tabs', placements: ['main'] } },
+          panels: [{ id: 'main', panelTypeId: panelId }],
+        }],
+      },
+    };
+    const r = await bootstrapAppHost({ extensions: [ext] });
+    expect(r.host.pageRegistry.get(pageId)?.status).toBe('available');
+    await r.host.pages.open({ typeId: pageId });
+    await r.dispose();
+    expect(r.host.pageRegistry.get(pageId)).toBeUndefined();
+    expect(r.host.pages.getSnapshot().instances).toHaveLength(0);
   });
 });

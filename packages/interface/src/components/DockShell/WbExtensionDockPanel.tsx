@@ -5,11 +5,11 @@
 //   2. Renders StandaloneExtensionIframe for standalone plugins, or a minimal info
 //      card for non-standalone ones.
 //   3. Panel unmounts → removeDockedExtension so Sidebar can host it again.
-import { useEffect, lazy, Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useExtensionManifest } from '../../lib/use-extension-manifest';
-import { extensionRendersInSidebarLeftPane } from '../MainArea/WorkbenchExtensionHost';
+import type { ExtensionInfo } from '../../lib/extension-api';
 import { getWindowManager, type SurfaceDescriptor } from '../../lib/platform';
 import { useShellStore } from '../../store';
 import { pickLang } from '../../lib/extension-api';
@@ -28,19 +28,16 @@ interface Props {
   extensionId: string;
 }
 
+function extensionRendersInSidebarLeftPane(extensionInfo?: ExtensionInfo | null): boolean {
+  return Boolean(extensionInfo?.entry?.standalone);
+}
+
 export function WbExtensionDockPanel({ extensionId }: Props) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const addDockedExtension = useShellStore((s) => s.addDockedExtension);
-  const removeDockedExtension = useShellStore((s) => s.removeDockedExtension);
   const detachSurface = useShellStore((s) => s.detachSurface);
   const manifest = useExtensionManifest(extensionId);
   const { workbenchPanels } = usePanelRenderers();
-
-  useEffect(() => {
-    addDockedExtension(extensionId);
-    return () => removeDockedExtension(extensionId);
-  }, [extensionId, addDockedExtension, removeDockedExtension]);
 
   const InlinePanel = workbenchPanels?.[extensionId];
   if (InlinePanel) {

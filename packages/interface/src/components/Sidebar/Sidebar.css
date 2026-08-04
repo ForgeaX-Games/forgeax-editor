@@ -7,90 +7,10 @@
   min-height: 0;
 }
 
-/* === Sidebar top toolbar === */
-.sb-toolbar {
-  height: 36px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--color-border-default);
-}
-/* Nav moved to the shell-level ActivityRail; the Tools panel toolbar now holds
-   only the collapse button, right-aligned. */
-.sb-toolbar--end {
-  justify-content: flex-end;
-}
 .sb-nav-icons-h {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.sb-icon-btn {
-  padding: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: var(--color-text-tertiary);
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-.sb-icon-btn:hover {
-  color: var(--color-text-primary);
-  background: var(--color-interaction-hover);
-}
-.sb-icon-btn.active {
-  color: var(--color-text-primary);
-  background: var(--color-interaction-selected-neutral);
-}
-.sb-icon-btn:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.55);
-  outline-offset: -1px;
-  border-radius: 4px;
-}
-/* === Icon button tooltip (data-tip) === */
-.sb-icon-btn[data-tip] {
-  position: relative;
-}
-.sb-icon-btn[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: calc(100% + 8px);
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--color-background-overlay, #1e2124);
-  color: var(--color-text-primary);
-  font-size: 11px;
-  font-weight: 500;
-  padding: 4px 8px;
-  border-radius: 5px;
-  white-space: nowrap;
-  pointer-events: none;
-  border: 1px solid var(--color-border-default);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-  opacity: 0;
-  transition: opacity 0.12s ease;
-  transition-delay: 0.6s;
-  z-index: 100;
-}
-.sb-icon-btn[data-tip]:hover::after {
-  opacity: 1;
-}
-
-/* === Collapsed sidebar (36px strip) === */
-.sidebar.sidebar-collapsed {
-  min-width: 36px;
-  border-right: 1px solid var(--color-border-default);
-}
-.sb-toolbar-collapsed {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 6px 8px;
 }
 .sb-nav-divider {
   height: 12px;

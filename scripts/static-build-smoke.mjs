@@ -32,6 +32,11 @@ const mime = {
 const server = createServer(async (req, res) => {
   try {
     const requestPath = decodeURIComponent((req.url ?? '/').split('?')[0] ?? '/');
+    if (requestPath === '/favicon.ico') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
     if (!requestPath.startsWith('/preview')) {
       res.statusCode = 404;
       res.end('not mounted');
@@ -81,13 +86,21 @@ if (statuses.some((row) => row.status !== 200)) {
   process.exit(1);
 }
 
-const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-webgpu'] });
+const browserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--enable-unsafe-webgpu'],
+  ...(browserChannel ? { channel: browserChannel } : {}),
+});
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const failures = [];
 const requests = [];
 page.on('pageerror', (error) => failures.push(`pageerror: ${error.message}`));
 page.on('console', (message) => {
-  if (message.type() === 'error') failures.push(`console: ${message.text()}`);
+  if (message.type() === 'error') {
+    const location = message.location();
+    failures.push(`console: ${message.text()}${location.url ? ` (${location.url})` : ''}`);
+  }
 });
 page.on('request', (request) => requests.push(request.url()));
 await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });

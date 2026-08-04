@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useSyncExternalStore, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useSyncExternalStore, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Box,
   ChevronDown,
@@ -27,7 +28,7 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSceneReadModel, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import {
@@ -360,6 +361,44 @@ function useStableIds(ids: readonly EntityHandle[]): readonly EntityHandle[] {
   return ref.current;
 }
 
+interface HierarchyVisibleRow {
+  readonly id: EntityHandle;
+  readonly depth: number;
+}
+
+/**
+ * Flatten the visible tree for the viewport without changing the authored
+ * hierarchy. The old recursive renderer created one Row fiber for every
+ * expanded entity; the flat projection is the input to the row virtualizer.
+ */
+function flattenVisibleRows(
+  roots: readonly EntityHandle[],
+  collapsed: ReadonlySet<EntityHandle>,
+  world: NonNullable<typeof gateway.activeWorld>,
+  projection?: HierarchyStructureProjection,
+): HierarchyVisibleRow[] {
+  const childrenById = projection
+    ? new Map(projection.rows.map((row) => [row.id, row.childIds] as const))
+    : undefined;
+  const childrenOfId = (id: EntityHandle): readonly EntityHandle[] =>
+    childrenById?.get(id) ?? childrenOf(world, id);
+  const pending: HierarchyVisibleRow[] = [];
+  for (let i = roots.length - 1; i >= 0; i -= 1) {
+    pending.push({ id: roots[i]!, depth: 1 });
+  }
+  const rows: HierarchyVisibleRow[] = [];
+  while (pending.length > 0) {
+    const row = pending.pop()!;
+    rows.push(row);
+    if (collapsed.has(row.id)) continue;
+    const children = childrenOfId(row.id);
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+      pending.push({ id: children[i]!, depth: row.depth + 1 });
+    }
+  }
+  return rows;
+}
+
 function useHierarchyStructureProjection(): HierarchyStructureProjection | undefined {
   const graph = getActiveRuntimeUiGraph();
   const holder = useRef<{ graph: unknown; generation: number; selector: ReturnType<typeof createHierarchyStructureSelector>; mounted: ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']> } | null>(null);
@@ -400,6 +439,7 @@ const Row = memo(function Row({
   depth,
   onMenu,
   flat,
+  virtualized,
   toggleCollapse,
   highlight,
   readOnly,
@@ -410,6 +450,7 @@ const Row = memo(function Row({
   depth: number;
   onMenu: (m: Menu) => void;
   flat?: boolean | undefined;
+  virtualized?: boolean | undefined;
   toggleCollapse?: ((id: EntityHandle) => void) | undefined;
   highlight?: string | undefined;
   readOnly?: boolean | undefined;
@@ -439,7 +480,9 @@ const Row = memo(function Row({
   // still re-render — the snapshot reports exists:false and we bail (AC-01).
   if (!vm.exists) return null;
   const { name: nodeName, typeId, hidden: nodeHidden, mobilityKey } = vm;
-  const kids = flat ? EMPTY_IDS : vm.childIds;
+  const children = vm.childIds;
+  const kids = flat ? EMPTY_IDS : children;
+  const renderedKids = virtualized ? EMPTY_IDS : kids;
   const typeLabel = componentTypeLabel(typeId, t);
   const typeToken = hierarchyTypeToken(typeId);
   const mobilityLabel = mobilityKey ? t(`editor.hierarchy.mobility.${mobilityKey}`) : '';
@@ -594,7 +637,7 @@ const Row = memo(function Row({
         {columns.id && <span className="cell id col-id" title={`Entity #${id}`}>{id}</span>}
       </div>
       {!isCollapsed &&
-        kids.map((k) => (
+        renderedKids.map((k) => (
           <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} projection={projection} />
         ))}
     </>
@@ -640,6 +683,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
   childrenIds,
   visibilityIds,
   filtered,
+  renderChildren = true,
   highlight,
   onMenu,
   onBlankMenu,
@@ -651,6 +695,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
   childrenIds: readonly EntityHandle[];
   visibilityIds?: readonly EntityHandle[] | undefined;
   filtered?: boolean | undefined;
+  renderChildren?: boolean | undefined;
   highlight?: string | undefined;
   onMenu: (m: Menu) => void;
   onBlankMenu: (x: number, y: number) => void;
@@ -737,7 +782,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
         {columns.mobility && <span className="cell mob col-mob" />}
         {columns.id && <span className="cell id col-id" />}
       </div>
-      {!isCollapsed && childrenIds.map((id) => (
+      {!isCollapsed && renderChildren && childrenIds.map((id) => (
         <Row
           key={id}
           id={id}
@@ -754,6 +799,79 @@ const SceneFolderRow = memo(function SceneFolderRow({
     </>
   );
 });
+
+const HIERARCHY_ROW_HEIGHT = 25;
+
+function VirtualizedRows({
+  rows,
+  scrollRef,
+  flat,
+  highlight,
+  onMenu,
+  toggleCollapse,
+  readOnly,
+  columns,
+  projection,
+}: {
+  rows: readonly HierarchyVisibleRow[];
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  flat?: boolean | undefined;
+  highlight?: string | undefined;
+  onMenu: (m: Menu) => void;
+  toggleCollapse: (id: EntityHandle) => void;
+  readOnly: boolean;
+  columns: HierarchyColumns;
+  projection?: HierarchyStructureProjection | undefined;
+}) {
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => HIERARCHY_ROW_HEIGHT,
+    overscan: 12,
+  });
+  const selectedId = useSelection();
+  const selectedIndex = selectedId === null ? -1 : rows.findIndex((row) => row.id === selectedId);
+  useEffect(() => {
+    if (selectedIndex >= 0) rowVirtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
+  }, [rowVirtualizer, selectedIndex]);
+  return (
+    <div
+      data-testid="hierarchy-virtual-rows"
+      style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}
+    >
+      {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+        const row = rows[virtualRow.index]!;
+        return (
+          <div
+            key={virtualRow.key}
+            ref={rowVirtualizer.measureElement}
+            data-index={virtualRow.index}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+          >
+            <Row
+              id={row.id}
+              depth={row.depth}
+              onMenu={onMenu}
+              flat={flat}
+              virtualized
+              toggleCollapse={toggleCollapse}
+              highlight={highlight}
+              readOnly={readOnly}
+              columns={columns}
+              projection={projection}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function HierarchyPanel() {
   const { t } = useTranslation();
@@ -798,27 +916,44 @@ export function HierarchyPanel() {
   const readOnly = gateway.mode === 'play';
   const activeWorld = gateway.activeWorld;
   const worldReady = activeWorld != null;
-  if (worldReady) pruneDisplayOrder(worldEntityHandles(activeWorld));
+  const hierarchyBodyRef = useRef<HTMLDivElement>(null);
+  const worldEntityIds = worldReady ? worldEntityHandles(activeWorld) : EMPTY_IDS;
+  // The runtime projection is the cheap structural read model, but a freshly
+  // dispatched public transaction can land before its runtime graph publish.
+  // Never let that transient lag hide authored entities: when its cardinality
+  // disagrees with the active world, use the same world's value-stable row VM
+  // until the projection catches up.
+  const usableProjection = projection && projection.rows.length === worldEntityIds.length
+    ? projection
+    : undefined;
+  if (worldReady) pruneDisplayOrder(worldEntityIds);
   // Root order derives from the doc. `docVersion` is referenced so the panel
   // re-derives roots when the document mutates (incl. the per-frame Play mirror),
   // but useStableIds collapses value-equal results to the SAME array reference,
   // so the SceneFolderRow memo (and therefore the rows) stay put across a 60fps
   // churn. Each Row otherwise self-subscribes to its own structural snapshot —
   // no whole-tree component index is threaded down anymore.
-  const projectedRoots = projection
-    ? projection.rows.filter((row) => !projection.rows.some((candidate) => candidate.childIds.includes(row.id))).map((row) => row.id)
+  const projectedChildIds = usableProjection
+    ? new Set(usableProjection.rows.flatMap((row) => row.childIds))
+    : undefined;
+  const projectedRoots = usableProjection
+    ? usableProjection.rows.filter((row) => !projectedChildIds!.has(row.id)).map((row) => row.id)
     : worldReady ? childrenOf(activeWorld, null) : EMPTY_IDS;
   const roots = useStableIds(worldReady ? stableDisplayOrder(projectedRoots) : EMPTY_IDS);
+  const visibleRows = useMemo(() => {
+    if (!activeWorld || view.collapsed.has(HIERARCHY_SCENE_FOLDER_ID)) return [];
+    return flattenVisibleRows(roots, view.collapsed, activeWorld, usableProjection);
+  }, [activeWorld, roots, usableProjection, view.collapsed]);
   useEffect(() => {
     console.info(`[placement-diag] hierarchy.snapshot ${JSON.stringify({
       gatewayRev: gateway.rev,
       mode: gateway.mode,
       worldReady,
-      projectionRows: projection?.rows.length ?? null,
+      projectionRows: usableProjection?.rows.length ?? null,
       visibleRoots: roots,
-      worldEntityCount: worldReady ? worldEntityHandles(activeWorld).length : 0,
+      worldEntityCount: worldEntityIds.length,
     })}`);
-  }, [activeWorld, projection?.rows.length, roots, worldReady]);
+  }, [activeWorld, roots, usableProjection?.rows.length, worldEntityIds.length, worldReady]);
   const toggleCollapse = useCallback((id: EntityHandle) => toggleHierarchyCollapsed(id), []);
   const spawnEntity = () => {
     if (readOnly) return;
@@ -931,7 +1066,10 @@ export function HierarchyPanel() {
   // M7 / AC-15: entity list + name/components come from world (SSOT) via
   // entity-state; doc.order/doc.entities deleted.
   const filtering = hasHierarchyViewFilter();
-  const matches = filtering && worldReady ? stableDisplayOrder(getHierarchyVisibleMatches()) : [];
+  const matches = useMemo(
+    () => filtering && worldReady ? stableDisplayOrder(getHierarchyVisibleMatches()) : [],
+    [filtering, view.filters, view.searchQuery, worldReady, activeWorld],
+  );
 
   // Cross-game switch gap: show a quiet placeholder until createApp reinjects doc.world.
   if (!worldReady) {
@@ -979,6 +1117,7 @@ export function HierarchyPanel() {
         <div
           className="ol-body"
           data-testid="hier-filtered"
+          ref={hierarchyBodyRef}
           style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
           onClick={(e) => {
             if ((e.target as HTMLElement).closest('.tn')) return;
@@ -1004,9 +1143,23 @@ export function HierarchyPanel() {
               onMenu={openMenu}
               onBlankMenu={openBlankMenu}
               toggleCollapse={toggleCollapse}
+              renderChildren={false}
               readOnly={readOnly}
               columns={view.columns}
-              projection={projection}
+              projection={usableProjection}
+            />
+          )}
+          {matches.length > 0 && (
+            <VirtualizedRows
+              rows={matches.map((id) => ({ id, depth: 1 }))}
+              scrollRef={hierarchyBodyRef}
+              flat
+              highlight={view.searchQuery.trim()}
+              onMenu={openMenu}
+              toggleCollapse={toggleCollapse}
+              readOnly={readOnly}
+              columns={view.columns}
+              projection={usableProjection}
             />
           )}
         </div>
@@ -1014,6 +1167,7 @@ export function HierarchyPanel() {
         <div
           className="ol-body"
           data-testid="hier-root-dropzone"
+          ref={hierarchyBodyRef}
           style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
           onDragOver={(e) => {
             if (draggingId !== null && !readOnly) e.preventDefault();
@@ -1047,9 +1201,19 @@ export function HierarchyPanel() {
             onMenu={openMenu}
             onBlankMenu={openBlankMenu}
             toggleCollapse={toggleCollapse}
+            renderChildren={false}
             readOnly={readOnly}
             columns={view.columns}
-            projection={projection}
+            projection={usableProjection}
+          />
+          <VirtualizedRows
+            rows={visibleRows}
+            scrollRef={hierarchyBodyRef}
+            onMenu={openMenu}
+            toggleCollapse={toggleCollapse}
+            readOnly={readOnly}
+            columns={view.columns}
+            projection={usableProjection}
           />
         </div>
       )}

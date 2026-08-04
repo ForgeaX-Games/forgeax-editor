@@ -1,0 +1,310 @@
+{
+  "$ref": "#/definitions/PerceptionSnapshot",
+  "definitions": {
+    "PerceptionSnapshot": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "type": "number",
+          "const": 1
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "game": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "npcId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "t": {
+          "type": "number",
+          "minimum": 0
+        },
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "player_message",
+            "event",
+            "heartbeat",
+            "attach",
+            "spotlight"
+          ]
+        },
+        "playerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "self": {
+          "type": "object",
+          "properties": {
+            "pos": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ],
+              "additionalProperties": false
+            },
+            "activity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "mood": {
+              "type": "string",
+              "maxLength": 40
+            }
+          },
+          "required": [
+            "pos",
+            "activity"
+          ],
+          "additionalProperties": false
+        },
+        "nearby": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              },
+              "pos": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              "facts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "maxItems": 16
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "pos",
+              "facts"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 64
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "maxItems": 32
+        },
+        "affordances": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+              },
+              "params": {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "enum"
+                        },
+                        "source": {
+                          "type": "string",
+                          "const": "waypoint"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "enum"
+                        },
+                        "source": {
+                          "type": "string",
+                          "const": "nearby.id"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "enum"
+                        },
+                        "source": {
+                          "type": "string",
+                          "const": "literal"
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "minItems": 1,
+                          "maxItems": 32
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "source",
+                        "values"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+                }
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 64
+        },
+        "recentEvents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "maxItems": 24
+        },
+        "scene": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        },
+        "visibilityGroup": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "v",
+        "eventId",
+        "game",
+        "npcId",
+        "t",
+        "trigger",
+        "self",
+        "nearby",
+        "events",
+        "affordances"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

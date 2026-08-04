@@ -25,9 +25,8 @@ describe('splitter: CSS-variable isolation contract', () => {
   });
 
   it('nested content-browser flex regions may shrink inside a short dock panel', () => {
-    // The scene-entry bar can wrap to several rows. Without an explicit zero
-    // minimum, flex items retain their content height and the grid spills into
-    // the next Dockview panel, making visible cards impossible to click.
+    // Without an explicit zero minimum, flex items retain their content height
+    // and the grid spills into the next Dockview panel, making cards unclickable.
     for (const selector of ['.cb-root', '.cb-split', '.cb-asset-view', '.cb-grid-view']) {
       const start = css.indexOf(selector);
       const end = css.indexOf('}', start);

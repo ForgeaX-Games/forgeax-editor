@@ -6,12 +6,20 @@
 
 export { EditGateway } from '../io/gateway';
 export type {
+  AssetImpactAsset,
+  AssetImpactEdge,
+  AssetImpactResult,
+  AssetMutationPreviewOperation,
+  AssetMutationPreviewRequest,
+} from '../io/asset-impact';
+export type {
   ApplierCtx,
   AssetSummary,
   AssetSummaryResult,
   BusListener,
   CommandOrigin,
   DispatchResult,
+  HistoryDiff,
   HistoryStep,
   OpHandle,
 } from '../io/gateway';
