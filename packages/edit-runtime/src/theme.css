@@ -81,6 +81,10 @@
 }
 .tn.sel .nm { color: var(--fg); }
 .tn.dim .nm, .tn.dim .ico, .tn.dim .cell { opacity: 0.42; }
+/* UE-parity recursive hide: a strict ancestor is hidden, so this row is only
+   EFFECTIVELY hidden — dim it lighter than own-hidden (.dim) and keep the eye
+   on, signalling "visible by itself, culled by parent". */
+.tn.pdim .nm, .tn.pdim .ico, .tn.pdim .cell { opacity: 0.58; }
 .tn.drop { box-shadow: inset 0 0 0 1px var(--lime); background: rgba(212, 255, 72, 0.08); }
 /* Sibling insertion indicators (P0-6): a lime line at the top/bottom edge shows
    the dragged node will land before/after this row rather than inside it. */

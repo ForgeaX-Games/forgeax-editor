@@ -16,7 +16,9 @@ import {
   entExists,
   entParent,
   entName,
+  worldEntityHandles,
 } from '../store/entity-state';
+import { EditorHidden } from '../components/EditorHidden';
 import { Transform } from '@forgeax/engine-scene';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
@@ -188,6 +190,76 @@ export function deleteManyCascade(handles: EntityHandle[]): void {
     gateway.dispatch({ kind: 'transaction', label: `delete x${roots.length}`, commands });
   }
   gateway.dispatch({ kind: 'setSelection', id: null });
+}
+
+// ── Hide operations (UE parity §1 — docs 2026-08-04-editor-hide-ue-parity-plan) ──
+// All three gestures route through the same `setHidden` document op (one gateway
+// door, AI-equal); multi-entity gestures are ONE transaction = ONE undo step,
+// matching deleteManyCascade. Panels and the keyboard router share these —
+// no UI-layer reimplementation (north-star §3.2).
+
+function isHiddenEnt(world: World, h: EntityHandle): boolean {
+  return world.get(h, EditorHidden).ok;
+}
+
+/** Set EditorHidden to `hidden` on every handle whose state differs, as ONE
+ *  transaction (one undo step). Shared by the Hierarchy eye toggle, the scene
+ *  folder eye, and H/Ctrl+H — no UI-layer reimplementation (north-star §3.2). */
+export function setHiddenMany(handles: readonly EntityHandle[], hidden: boolean): void {
+  const world = gateway.activeWorld;
+  const targets = handles.filter((h) => entExists(world, h) && isHiddenEnt(world, h) !== hidden);
+  if (targets.length === 0) return;
+  if (targets.length === 1) {
+    gateway.dispatch({ kind: 'setHidden', entity: targets[0]!, hidden });
+    return;
+  }
+  const commands: EditorOp[] = targets.map((e) => ({ kind: 'setHidden', entity: e, hidden }));
+  gateway.dispatch({ kind: 'transaction', label: `${hidden ? 'hide' : 'show'} x${targets.length}`, commands });
+}
+
+/** H — hide the given entities (skips already-hidden). */
+export function hideMany(handles: readonly EntityHandle[]): void {
+  setHiddenMany(handles, true);
+}
+
+/** Ctrl+H — show every entity carrying EditorHidden. */
+export function showAllHidden(): void {
+  const world = gateway.activeWorld;
+  const hidden = worldEntityHandles(world).filter((h) => isHiddenEnt(world, h));
+  if (hidden.length === 0) return;
+  if (hidden.length === 1) {
+    gateway.dispatch({ kind: 'setHidden', entity: hidden[0]!, hidden: false });
+    return;
+  }
+  const commands: EditorOp[] = hidden.map((e) => ({ kind: 'setHidden', entity: e, hidden: false }));
+  gateway.dispatch({ kind: 'transaction', label: `show all hidden x${hidden.length}`, commands });
+}
+
+/** Shift+H — hide everything NOT selected (isolate the selection). Ancestors of
+ *  a selected entity are kept visible: recursively hiding them would take the
+ *  selection down with them (UE isolate keeps the isolated subtree visible). */
+export function hideUnselected(selection: ReadonlySet<EntityHandle>): void {
+  const world = gateway.activeWorld;
+  const sel = new Set<number>([...selection] as number[]);
+  if (sel.size === 0) return;
+  const targets = worldEntityHandles(world).filter((h) => {
+    if (sel.has(h as number) || isHiddenEnt(world, h)) return false;
+    for (const s of sel) {
+      // Keep the selected entity's ancestors visible: recursively hiding a
+      // parent would take the isolated child down with it.
+      if (isSelfOrDescendant(world, h, s as EntityHandle)) return false;
+      // …and keep the selected subtree itself visible.
+      if (isSelfOrDescendant(world, s as EntityHandle, h)) return false;
+    }
+    return true;
+  });
+  if (targets.length === 0) return;
+  if (targets.length === 1) {
+    gateway.dispatch({ kind: 'setHidden', entity: targets[0]!, hidden: true });
+    return;
+  }
+  const commands: EditorOp[] = targets.map((e) => ({ kind: 'setHidden', entity: e, hidden: true }));
+  gateway.dispatch({ kind: 'transaction', label: `isolate selection (hide x${targets.length})`, commands });
 }
 
 // Group selected entities under a fresh empty parent (single undo step). The

@@ -25,6 +25,7 @@
       "switchingGame": "正在切换游戏…",
       "noMatch": "无匹配",
       "childCount": "{{count}} 个子节点",
+      "hiddenByAncestor": "已被父级隐藏",
       "searchPlaceholder": "搜索名称 / 类型…",
       "searchAria": "按名称或类型搜索层级",
       "clearSearch": "清空搜索",

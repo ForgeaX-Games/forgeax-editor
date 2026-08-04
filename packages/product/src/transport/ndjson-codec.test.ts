@@ -8,8 +8,8 @@ import {
 
 test('NDJSON codec preserves one typed message per line', () => {
   const messages = [
-    { jsonrpc: '2.0', version: 'editor-transport/v1', id: '1', correlationId: 'c1', method: 'discover', params: {} },
-    { jsonrpc: '2.0', version: 'editor-transport/v1', id: '2', correlationId: 'c2', method: 'run.wait', params: { runId: 'run-1' } },
+    { jsonrpc: '2.0', version: 'editor-transport/v1', id: '1', correlationId: 'c1', scope: 'game:demo', method: 'discover', params: {} },
+    { jsonrpc: '2.0', version: 'editor-transport/v1', id: '2', correlationId: 'c2', scope: 'game:demo', method: 'run.wait', params: { runId: 'run-1' } },
   ];
   const encoded = messages.map((message) => encodeNdjson(message as Parameters<typeof encodeNdjson>[0])).join('');
   expect(encoded.endsWith('\n')).toBe(true);

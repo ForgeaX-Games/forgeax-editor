@@ -53,6 +53,10 @@ export interface WorkbenchAgentsResponse {
   activeSlug?: string | null;
 }
 
+export interface ActiveGameSelection {
+  activeSlug: string | null;
+}
+
 // 服务端语义:ok = targets.every(t => !t.existed || t.removed)。任何"存在但未
 // 移除"都会同时置 error 字段——所以 "!ok" 与 "targets.some(t => t.error)" 等价。
 // 契约省略 ok 字段(client throws on !r.ok),消费方需要该判断时读 targets 上的 error。
@@ -69,11 +73,12 @@ export interface CleanPackageResult {
 
 export interface WorkbenchClient {
   listAgents(opts?: { lang?: 'zh' | 'en' }): Promise<WorkbenchAgentsResponse>;
-  getActiveSlug(): Promise<{ activeSlug: string | null }>;
+  getActiveGame(): Promise<ActiveGameSelection>;
+  setActiveGame(slug: string): Promise<ActiveGameSelection>;
+  subscribeActiveGame(listener: (selection: ActiveGameSelection) => void): () => void;
   listGames(): Promise<{ games: GameRow[]; activeSlug: string | null }>;
   createGame(input: { slug: string; name: string; brief: string }): Promise<{ ok: boolean; error?: string }>;
   deleteGame(slug: string): Promise<void>;
-  activateGame(slug: string): Promise<void>;
   packageGame(slug: string, options?: PackageGameOptions): Promise<{ jobId?: string; async?: boolean; ok?: boolean; [key: string]: unknown }>;
   pollPackageJob(jobId: string): Promise<PackageJobStatus>;
   getEngineRoots(): Promise<{ roots: EngineRootCandidate[] }>;

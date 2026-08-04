@@ -52,6 +52,14 @@ describe('R0-03D array edit planning', () => {
     });
   });
 
+  it('initialises serializer-omitted empty array columns on first bind', () => {
+    const plan = planGroupedArrayPatch(
+      { component: 'MeshRenderer', field: 'materials', value: [42] },
+      {},
+    );
+    expect(plan).toEqual({ ok: true, patch: { materials: [42] } });
+  });
+
   it('replaces all bound clips while retaining and defaulting sibling columns', () => {
     const plan = planGroupedArrayPatch(
       { component: 'AnimationPlayer', field: 'clips', value: [20, 30] },

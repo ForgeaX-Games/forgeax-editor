@@ -91,6 +91,10 @@ const enginePreset = engineVitePreset({ base: '/', gameDirAbs: GAME_DIR, preserv
 // World is invisible to the other. Derive aliases from edit-runtime's complete
 // engine workspace link set so every engine package resolves to this checkout.
 const ENGINE_LINK_DIR = resolve(PACKAGE_DIR, 'packages/edit-runtime/node_modules/@forgeax');
+// The standalone host executes engine-ui's CSS authoring path in the browser.
+// Anchor its third-party parser to the exact dependency owned by engine-ui so
+// Vite does not pick a second copy from Bun's root store.
+const CSS_TREE_DIR = realpathSync(resolve(ENGINE_LINK_DIR, 'engine-ui/node_modules/css-tree'));
 const engineWorktreeSubpathAliases: Record<string, string> = {};
 const engineWorktreeRootAliases: Record<string, string> = {};
 for (const id of enginePreset.resolve.dedupe) {
@@ -152,9 +156,16 @@ const DESIGN_DIR = resolve(INTERFACE_DIR, 'packages/design');
 const STUDIO_ROOT = resolve(PACKAGE_DIR, '../..');
 const HOST_SDK = resolve(STUDIO_ROOT, 'packages/host-sdk/src/index.ts');
 const TYPES_SRC = resolve(STUDIO_ROOT, 'packages/contracts/types/src/index.ts');
+const VENDORED_TYPES_SRC = resolve(PACKAGE_DIR, 'packages/contracts/types/src/index.ts');
 const studioLayerAlias: Record<string, string> = {};
 if (existsSync(HOST_SDK)) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
-if (existsSync(TYPES_SRC)) studioLayerAlias['@forgeax/types'] = TYPES_SRC;
+if (existsSync(TYPES_SRC)) {
+  studioLayerAlias['@forgeax/types'] = TYPES_SRC;
+} else if (existsSync(VENDORED_TYPES_SRC)) {
+  // Standalone editor clones vendor contracts as a submodule instead of
+  // sharing the studio checkout's packages/contracts path.
+  studioLayerAlias['@forgeax/types'] = VENDORED_TYPES_SRC;
+}
 
 // Keep the standalone host's optimizer boundary limited to dependencies that
 // are installed from this checkout's root. Interface dependencies are owned by
@@ -165,6 +176,10 @@ const STANDALONE_OPTIMIZE_DEPS = [
   'react',
   'react-dom',
   'react-dom/client',
+  // engine-ui is served as native workspace ESM, but css-tree's browser ESM
+  // imports source-map-js through a CommonJS file. Pre-bundle the parser at
+  // the host boundary so the browser never receives raw CommonJS code.
+  'css-tree',
 ] as const;
 
 export default defineConfig({
@@ -209,6 +224,7 @@ export default defineConfig({
       // add them here: Vite's prefix aliasing would turn
       // `engine-render/internal/construct-renderer` into
       // `dist/internal.mjs/construct-renderer`.
+      'css-tree': CSS_TREE_DIR,
       '@/': `${resolve(INTERFACE_DIR, 'src')}/`,
       // @forgeax/interface package.json's exports map covers `./*: ./src/*.ts`
       // and `./styles/*.css`, but does NOT cover the `.tsx` files we deep-

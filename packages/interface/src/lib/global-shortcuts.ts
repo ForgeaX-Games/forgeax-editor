@@ -12,7 +12,8 @@
  *   Ctrl+Shift+0  open Settings → Plugins (was Ctrl+Shift+3 before P3.5 —
  *                 relocated so 1..9 are free for workbench switching)
  *   Ctrl+/        focus chat composer
- *   Ctrl+H        open Settings → Changelog
+ *   Ctrl+Shift+H  open Settings → Changelog (was Ctrl+H before 2026-08-04 —
+ *                 UE-parity editor hide claimed Ctrl+H for "show all hidden")
  *   Esc           stop viewport Play; otherwise close current overlay
  *                 (Settings → Dashboard → Fullscreen)
  *
@@ -134,6 +135,12 @@ export interface KeyboardRouterDeps {
   deleteEntities: (ids: number[]) => void;
   /** Entity: duplicate the given handles. */
   duplicateEntities: (ids: number[]) => void;
+  /** Entity: hide the given handles (H — UE parity; one transaction, one undo). */
+  hideEntities: (ids: number[]) => void;
+  /** Entity: show every hidden entity (Ctrl+H — UE parity). */
+  showAllHidden: () => void;
+  /** Entity: hide everything not selected (Shift+H — isolate selection). */
+  hideUnselected: () => void;
   /** Entity: open rename for the given handle. */
   renameEntity: (id: number) => void;
   /** Entity: select all entities. */
@@ -244,6 +251,28 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
     else deps.selectAllEntities();
     return true;
   };
+  // UE-parity editor hide (docs 2026-08-04-editor-hide-ue-parity-plan M2):
+  // H hides the selection, Ctrl+H shows every hidden entity, Shift+H hides
+  // the unselected (isolate). Entity-domain only; under Play the game keeps
+  // its keys (same guard as entity Delete).
+  const routeH = (): boolean => {
+    if (deps.isPlayMode()) return false;
+    const ids = deps.getEntitySelection();
+    if (ids.length === 0) return false;
+    deps.hideEntities(ids);
+    return true;
+  };
+  const routeShiftH = (): boolean => {
+    if (deps.isPlayMode()) return false;
+    if (deps.getEntitySelection().length === 0) return false;
+    deps.hideUnselected();
+    return true;
+  };
+  const routeCtrlH = (): boolean => {
+    if (deps.isPlayMode()) return false;
+    deps.showAllHidden();
+    return true;
+  };
   // Viewport Game View toggle. Plain G is editor-only while not playing so a
   // running game retains its gameplay binding; Shift+G remains the explicit
   // Play shortcut and is also available in Edit Viewport.
@@ -293,6 +322,27 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       match: (e) => mod(e) && !e.shiftKey && !e.altKey
         && (e.code === 'KeyA' || e.key.toLowerCase() === 'a'),
       run: routeCtrlA,
+    },
+    {
+      combo: 'H',
+      group: 'edit',
+      label: t('shortcuts.hideSelected'),
+      match: (e) => !mod(e) && !e.shiftKey && !e.altKey && e.code === 'KeyH',
+      run: routeH,
+    },
+    {
+      combo: 'Shift+H',
+      group: 'edit',
+      label: t('shortcuts.hideUnselected'),
+      match: (e) => !mod(e) && e.shiftKey && !e.altKey && e.code === 'KeyH',
+      run: routeShiftH,
+    },
+    {
+      combo: 'Ctrl+H',
+      group: 'edit',
+      label: t('shortcuts.showAllHidden'),
+      match: (e) => mod(e) && !e.shiftKey && !e.altKey && e.code === 'KeyH',
+      run: routeCtrlH,
     },
     {
       combo: 'Shift+G',
@@ -429,10 +479,10 @@ export function buildShortcuts(): ShortcutDef[] {
       run: () => { const s = store(); s.activeOverlay === 'settings' ? s.closeOverlay() : s.openOverlay('settings'); return true; },
     },
     {
-      combo: 'Ctrl+H',
+      combo: 'Ctrl+Shift+H',
       group: 'overlay',
       label: t('shortcuts.openChangelog'),
-      match: (e) => mod(e) && !e.shiftKey && e.code === 'KeyH',
+      match: (e) => mod(e) && e.shiftKey && e.code === 'KeyH',
       run: () => { store().openOverlay('settings', 'changelog'); return true; },
     },
     {

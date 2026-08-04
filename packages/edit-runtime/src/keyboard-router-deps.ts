@@ -32,6 +32,9 @@ import {
   getPathSelectionList,
   deleteManyCascade,
   duplicateEntity,
+  hideMany,
+  hideUnselected,
+  showAllHidden,
   worldRootHandles,
   childrenOf,
   triggerAssetSelectAll,
@@ -71,6 +74,9 @@ export interface KeyboardRouterDepsShape {
   getInputTarget: () => InputTarget;
   deleteEntities: (ids: number[]) => void;
   duplicateEntities: (ids: number[]) => void;
+  hideEntities: (ids: number[]) => void;
+  showAllHidden: () => void;
+  hideUnselected: () => void;
   renameEntity: (id: number) => void;
   selectAllEntities: () => void;
   deleteAssets: (assets: RouterAsset[]) => void;
@@ -119,6 +125,12 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
     getInputTarget: () => getInputTarget(),
     deleteEntities: (ids: number[]) => deleteManyCascade(ids as never),
     duplicateEntities: (ids: number[]) => ids.forEach((id) => duplicateEntity(id as never)),
+    // UE-parity editor hide (docs 2026-08-04-editor-hide-ue-parity-plan M2) —
+    // the shared core ops dispatch the same setHidden op a panel or AI would,
+    // multi-entity gestures wrapped as ONE transaction (one undo step).
+    hideEntities: (ids: number[]) => hideMany(ids as never),
+    showAllHidden: () => showAllHidden(),
+    hideUnselected: () => hideUnselected(getSelectionList() as never),
     renameEntity: (id: number) => gateway.dispatch({ kind: 'requestRename', entity: id } as never),
     selectAllEntities: () => {
       const world = gateway.doc.world;
@@ -144,13 +156,13 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
         ).then((ok) => {
           if (!ok) return;
           for (const a of assets) {
-            gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
+            gateway.dispatch({ kind: 'destroyAsset', guid: a.guid } as never, 'human');
           }
         });
         return;
       }
       for (const a of assets) {
-        gateway.dispatch({ kind: 'destroyAsset', packPath: a.packPath, guid: a.guid } as never, 'human');
+        gateway.dispatch({ kind: 'destroyAsset', guid: a.guid } as never, 'human');
       }
     },
     // Both asset mutations route through the ONE gateway door (G-4): duplicate and

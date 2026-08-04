@@ -18,7 +18,7 @@
 //   plan-strategy §7 M5 acceptanceCheck: pack schema validation, no editor-only fields
 
 import { describe, expect, it } from 'bun:test';
-import { World, defineComponent } from '@forgeax/engine-ecs';
+import { Disabled, World, defineComponent } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import {
   rootsToSceneAsset,
@@ -230,6 +230,33 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     const packJson = JSON.stringify(packR.value);
     expect(packJson).not.toContain('EditorHidden');
     expect(packJson).not.toContain('"hidden"');
+  });
+
+  // (c2) UE-parity M1: the engine `Disabled` marker (derived render-state synced
+  // by applySetHidden) must never reach a scene pack either — it re-derives from
+  // EditorHidden at load, so persisting it would double-author the same fact and
+  // leak editor state into the game payload (north-star derive discipline).
+  it('(c2) Disabled engine marker is stripped alongside EditorHidden', () => {
+    const world = new World();
+    const registry = makeRegistry();
+
+    const hidden = spawnRoot(world, 'Hidden');
+    expect(world.addComponent(hidden, { component: EditorHidden, data: {} }).ok).toBe(true);
+    expect(world.addComponent(hidden, { component: Disabled, data: {} }).ok).toBe(true);
+
+    const collected = rootsToSceneAsset(registry, world, [hidden]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+
+    const stripped = stripEditorHiddenMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
+    expect(stripped.entities.length).toBe(1);
+    for (const e of stripped.entities) {
+      expect('EditorHidden' in e.components).toBe(false);
+      expect('Disabled' in e.components).toBe(false);
+    }
+    const packJson = JSON.stringify(stripped);
+    expect(packJson).not.toContain('EditorHidden');
+    expect(packJson).not.toContain('Disabled');
   });
 
   // (d) Placeholder for sessionToPack grep check at commit time.

@@ -57,7 +57,7 @@ function formatRelative(ts: number | undefined): string {
 export function SessionSwitcher() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
+  const activeGameSlug = useShellStore((s) => s.activeGameSlug);
   const activeSid = useShellStore((s) => s.activeSid);
   const tabs = useShellStore((s) => s.tabs);
   const busyByAgentBySid = useShellStore((s) => s.busyByAgentBySid);
@@ -66,12 +66,12 @@ export function SessionSwitcher() {
   const closeSession = useShellStore((s) => s.closeSession);
   const refreshSessions = useShellStore((s) => s.refreshSessions);
 
-  // Dropdown open / pinnedSlug 变化时刷新一次 server list（防止外部进程直接
+  // Dropdown open / active game 变化时刷新一次 server list（防止外部进程直接
   // 改了 ~/.forgeax/sessions/ 后 UI 看不到）。
   useEffect(() => {
     if (!open) return;
     void refreshSessions();
-  }, [open, pinnedSlug, refreshSessions]);
+  }, [open, activeGameSlug, refreshSessions]);
 
   const onDelete = async (sid: string) => {
     if (!(await confirmDialog({ body: t('sessionSwitcher.deleteConfirm'), danger: true }))) return;
@@ -84,7 +84,7 @@ export function SessionSwitcher() {
   };
 
   const onNew = async () => {
-    const r = await createNewSession({ defaultDir: pinnedSlug ?? undefined });
+    const r = await createNewSession({ scope: activeGameSlug ?? undefined });
     if (r) setOpen(false);
   };
 
@@ -139,7 +139,7 @@ export function SessionSwitcher() {
           >
             <Plus size={12} style={{ marginRight: 4 }} />
             <span className="tb-game-name">{t('sessionSwitcher.newSession')}</span>
-            <span className="tb-game-meta">{pinnedSlug ? t('sessionSwitcher.projectBound', { slug: pinnedSlug }) : t('sessionSwitcher.projectUnbound')}</span>
+            <span className="tb-game-meta">{activeGameSlug ? t('sessionSwitcher.projectBound', { slug: activeGameSlug }) : t('sessionSwitcher.projectUnbound')}</span>
           </button>
           {sortedTabs.length === 0 && (
             <div className="tb-game-empty">{t('sessionSwitcher.empty')}</div>
@@ -180,4 +180,3 @@ export function SessionSwitcher() {
     </Popover>
   );
 }
-

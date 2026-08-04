@@ -449,7 +449,7 @@ export function registerBuiltinActions(): void {
     capability: 'read',
     surface: 'both',
     run: async () => {
-      const rows = await getSessionClient().fetchSessionList(st().pinnedSlug ?? undefined);
+      const rows = await getSessionClient().fetchSessionList(st().activeGameSlug ?? undefined);
       return {
         status: 'completed',
         stateDigest: rows.map((s) => ({ sid: s.sid, displayName: s.displayName ?? null })),
@@ -460,7 +460,7 @@ export function registerBuiltinActions(): void {
   registerAction({
     id: 'game.switch',
     title: '切换游戏',
-    description: 'Switch the pinned game (project) to the given slug. Sessions and preview re-scope to it.',
+    description: 'Select the active game (project) by slug. Every open Studio page follows the server authority.',
     schema: { type: 'object', properties: { slug: { type: 'string' } }, required: ['slug'] },
     capability: 'write',
     firstClass: true, // P1-9:高频 action 派生一等 ToolSpec(ui_act_*)
@@ -475,8 +475,8 @@ export function registerBuiltinActions(): void {
       },
     },
     run: async (args) => {
-      await st().switchGame(args.slug as string);
-      return { status: 'completed', stateDigest: { pinnedSlug: st().pinnedSlug } };
+      await st().setActiveGame(args.slug as string);
+      return { status: 'completed', stateDigest: { activeGameSlug: st().activeGameSlug } };
     },
   });
 
@@ -509,23 +509,22 @@ export function registerBuiltinActions(): void {
           ...(typeof args.brief === 'string' ? { brief: args.brief } : {}),
         }),
       });
-      const data = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string; slug?: string };
+      const data = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        slug?: string;
+        session?: { sid: string };
+      };
       if (!r.ok || data.ok === false) {
         return { status: 'rejected', reason: data.error ?? `create game failed (HTTP ${r.status})` };
       }
-      // 「一 session 一游戏」:给新游戏建**它自己**的一条 session(defaultDir=slug),但
-      // **不切前端 WS/会话**。⚠️ 关键:本 action 常由 AI 在其会话内经 ui_invoke 触发;若
-      // 当场 switchGame(切走 WS)会掐断 AI 自己的 ui_invoke 通道 → AI 反复重试 → UI 反复
-      // 乱切 + 历史错乱(实测)。createSession 只 POST /api/sessions、不连 WS,所以安全:
-      // 新游戏拥有独立会话,用户从顶栏 GameSwitcher 一键切过去(那是干净的非-AI-turn 切换,
-      // switchGame 会落到这条已存在的会话)。
-      let newSid: string | null = null;
-      try {
-        newSid = (await getSessionClient().createSession({ defaultDir: slug, autoStart: true })).sid;
-      } catch { /* 建会话失败不影响游戏已创建;切换时 switchGame 会兜底建一条 */ }
       return {
         status: 'completed',
-        stateDigest: { slug, session: newSid, hint: '新游戏已建好并配了独立会话;从顶栏游戏切换器切过去即可开始做' },
+        stateDigest: {
+          slug,
+          session: data.session?.sid ?? null,
+          hint: '新游戏已建好并配了独立会话;从顶栏游戏切换器切过去即可开始做',
+        },
       };
     },
   });
@@ -536,7 +535,7 @@ export function registerBuiltinActions(): void {
     sidebarCollapsed: st().sidebarCollapsed,
     chatpanelCollapsed: st().chatpanelCollapsed,
   }));
-  registerStateSlice('game.pinned', () => st().pinnedSlug);
+  registerStateSlice('game.active', () => st().activeGameSlug);
   registerStateSlice('session.active', () => st().activeSid);
   registerStateSlice('session.tabs', () =>
     st().tabs.slice(0, 20).map((t) => ({ sid: t.sid, label: tabLabel(t) })),

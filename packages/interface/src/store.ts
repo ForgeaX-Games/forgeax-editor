@@ -21,6 +21,7 @@ import { STORAGE_KEYS } from './lib/storageKeys';
 import { getLastModel } from './lib/model-prefs';
 import { resolveKernelForAgent } from './lib/agent-cli-provider';
 import { waitForEngineSettled } from './lib/game-reload';
+import { setCurrentProject } from './lib/workbenches';
 
 export { configureSessionClient, type SessionClient } from './store-parts/session-client';
 export {
@@ -36,6 +37,7 @@ export {
   type PackageJobStatus,
   type HistoryRecord,
   type CleanPackageResult,
+  type ActiveGameSelection,
 } from './store-parts/workbench-client';
 
 // ③ PreviewFile 已移到 @forgeax/ai-workbench/file-preview（interface foundation 不再持有文件预览态）。
@@ -255,8 +257,8 @@ export interface ChatMessage {
  *    DOM key、`_abortByTab` key、WS routing key —— 单一标识。
  *    - `id / threadId / sessionId / title` 字段全部下线。
  *    - boot 时不再造任何"无 sid scratch tab"。tabs 完全等于 GET /api/sessions
- *      的派生 view；空 → store action `initSessions` 自动建一条；CRUD 全部
- *      走后端 REST（POST/DELETE /api/sessions）。
+ *      的派生 view；空 → store action `initSessions` 通过幂等 ensure 自动建一条；
+ *      CRUD 全部走后端 REST（POST /api/sessions/ensure、POST/DELETE /api/sessions）。
  *    - localStorage 只缓存 `forgeax.activeSid`，不再持久化 tabs 数组本身。
  *      老 key (`forgeax.tabs`/`forgeax.activeTabId`) 启动一次性 cleanup。
  */
@@ -343,9 +345,11 @@ export interface AppState {
   // openFiles/activeFilePath/openFile/activateFile/closeFile/updatePreviewContent/savePreviewFile
   // 不再进 interface store。壳侧打开文件走 bus 命令 'workbench:open-file'（见 workbench/file-preview.ts）。
 
-  // ── Pinned active game (user's explicit selection; null = auto-detect) ──
-  pinnedSlug: string | null;
-  setPinnedSlug: (s: string | null) => void;
+  // ── Active game projection. The server binding is authoritative. ──
+  activeGameSlug: string | null;
+  activeGameResolved: boolean;
+  initActiveGame: () => Promise<void>;
+  applyActiveGame: (slug: string | null) => Promise<void>;
 
   // ── Current chat session id (bug #2 fix). null = let server auto-generate
   //    a fresh `sess-<timestamp>` for the next message. Set when we receive
@@ -420,16 +424,16 @@ export interface AppState {
   /** 当前活跃的 sid。tabs 至少有一个时，必落在 tabs.map(t=>t.sid) 里。
    *  null 仅在 boot 中间态 / server 端 sessions 真为空 + auto-create 失败时出现。 */
   activeSid: string | null;
-  /** boot-time 初始化：拉 GET /api/sessions → 列表非空就用 [activeSid 或 [0]]；
-   *  列表为空就 POST /api/sessions { autoStart: true } 建一条（不传 displayName /
-   *  defaultDir，让 server 端缺省决定）。完成后调 connectForgeaXWs 把 WS 连上
-   *  active sid。可重入 —— 多次调只跑一次（_initSessionsPending 内部 dedupe）。 */
+  /** boot-time 初始化：先同步 active-game projection，再按 scope 拉 GET /api/sessions；
+   *  列表为空就 POST /api/sessions/ensure { scope, autoStart: true } 幂等建一条。
+   *  完成后调 connectForgeaXWs 把 WS 连上 active sid。可重入 —— 多次调只跑一次
+   *  （_initSessionsPending 内部 dedupe，server ensure 负责跨页面 dedupe）。 */
   initSessions: () => Promise<void>;
   /** 新建 session = POST /api/sessions → push 进 tabs → 切过去。`displayName` 不
    *  传时让 server 端落 undefined（UI 走 tabLabel 占位规则）。失败返回 null。 */
   createNewSession: (opts?: {
     displayName?: string;
-    defaultDir?: string;
+    scope?: string;
     providerOverride?: string | null;
   }) => Promise<{ sid: string } | null>;
   /** 切到指定 sid。tab 必须已存在（不存在就先 refreshSessions 拉一下）。
@@ -442,10 +446,8 @@ export interface AppState {
   /** 重新拉一遍 server sessions 列表，merge 进 tabs（保留本地 messages / 各 tab
    *  in-flight 状态）。手动刷新 / 切换后兜底用。 */
   refreshSessions: () => Promise<void>;
-  /** 切换当前 game（GameSwitcher.onPick 与新建 game 共用）：pin → 设为 server active
-   *  game（使新建 session 绑对）→ 按该 game 收口刷新 session 列表 → 落到最近活跃的一条；
-   *  该 game 0 条 session 时自动新建一条（"新建 game 必带 session"）。 */
-  switchGame: (slug: string) => Promise<void>;
+  /** 唯一 active-game 写入口。Server 更新权威绑定，所有页面从变更通知重建投影。 */
+  setActiveGame: (slug: string) => Promise<void>;
   renameTab: (sid: string, displayName: string) => void;
   /** Product-assembly sub-agent switcher (P6d step d). For tabs with a server-side thread,
    *  PATCH /api/threads/:id { activeEmitterId } so the next /api/chat turn
@@ -603,6 +605,10 @@ function patchTabField(
  *  会跑两次，避免对 server 发两次重复 POST。promise 完成后清回 null，下次有需要
  *  可重新初始化（手动 reset 等）。 */
 let _initSessionsPending: Promise<void> | null = null;
+let _sessionsInitialized = false;
+let _activeGameUnsubscribe: (() => void) | null = null;
+let _activeGameTransition: { slug: string | null; promise: Promise<void> } | null = null;
+let _activeGameTransitionRevision = 0;
 const _busyMutationVersionBySid = new Map<string, number>();
 const _runningSyncGenerationBySid = new Map<string, number>();
 
@@ -823,12 +829,58 @@ export const useShellStore = create<AppState>((set, get) => ({
     };
   }),
 
-  pinnedSlug: (() => {
-    try { return localStorage.getItem('forgeax.pinnedSlug') || null; } catch { return null; }
-  })(),
-  setPinnedSlug: (s) => {
-    try { if (s) localStorage.setItem('forgeax.pinnedSlug', s); else localStorage.removeItem('forgeax.pinnedSlug'); } catch { /* ignore */ }
-    set({ pinnedSlug: s });
+  activeGameSlug: null,
+  activeGameResolved: false,
+  initActiveGame: async () => {
+    if (!hasWorkbenchClient()) {
+      set({ activeGameResolved: true });
+      return;
+    }
+    const client = getWorkbenchClient();
+    if (!_activeGameUnsubscribe) {
+      _activeGameUnsubscribe = client.subscribeActiveGame((selection) => {
+        void get().applyActiveGame(selection.activeSlug);
+      });
+    }
+    const selection = await client.getActiveGame();
+    if (!get().activeGameResolved) {
+      set({ activeGameSlug: selection.activeSlug, activeGameResolved: true });
+      setCurrentProject(selection.activeSlug ?? 'default');
+      try { localStorage.removeItem('forgeax.pinnedSlug'); } catch { /* legacy cleanup */ }
+      return;
+    }
+    await get().applyActiveGame(selection.activeSlug);
+  },
+  applyActiveGame: async (slug) => {
+    if (get().activeGameResolved && get().activeGameSlug === slug) return;
+    if (_activeGameTransition?.slug === slug) return _activeGameTransition.promise;
+    const revision = ++_activeGameTransitionRevision;
+    const promise = (async () => {
+      if (get().activeGameResolved) await waitForEngineSettled(slug ?? undefined);
+      if (revision !== _activeGameTransitionRevision) return;
+      set({ activeGameSlug: slug, activeGameResolved: true });
+      setCurrentProject(slug ?? 'default');
+      if (!_sessionsInitialized) return;
+      await get().refreshSessions();
+      if (revision !== _activeGameTransitionRevision || !slug) return;
+      const tabs = get().tabs;
+      if (tabs.length === 0) {
+        // Observers project authority; they never manufacture downstream state.
+        // The server-side active-game transition ensures the default session
+        // before publishing its change event, so an empty result is a real
+        // degraded state rather than permission for every open page to race.
+        getSessionClient().connectForgeaXWs(null);
+        return;
+      }
+      const recent = mostRecentSid(tabs);
+      if (recent) await get().switchToSession(recent);
+    })();
+    _activeGameTransition = { slug, promise };
+    try {
+      await promise;
+    } finally {
+      if (_activeGameTransition?.promise === promise) _activeGameTransition = null;
+    }
   },
 
   // ③ 文件预览态实现整体移到 @forgeax/ai-workbench/file-preview(走 bus 'workbench:files')。
@@ -849,41 +901,15 @@ export const useShellStore = create<AppState>((set, get) => ({
   initSessions: async () => {
     if (_initSessionsPending) return _initSessionsPending;
     _initSessionsPending = (async () => {
-      const { fetchSessionList, createSession, connectForgeaXWs } = getSessionClient();
+      const { fetchSessionList, ensureSession, connectForgeaXWs } = getSessionClient();
       try {
-        // The server active game is the durable startup binding. A local pin is
-        // only a client-side cache of the last selection; if the server was
-        // started with a different active-game.json, keeping the stale pin
-        // silently opens the wrong project (often an old untitled game).
-        let scope = get().pinnedSlug ?? undefined;
-        if (hasWorkbenchClient()) {
-          const activeSlug = await getWorkbenchClient().getActiveSlug()
-            .then((r) => r.activeSlug)
-            .catch(() => null);
-          if (activeSlug && activeSlug !== scope) {
-            get().setPinnedSlug(activeSlug);
-            scope = activeSlug;
-          }
-        }
+        await get().initActiveGame();
+        const scope = get().activeGameSlug ?? undefined;
         let metas = await fetchSessionList(scope);
-        if (metas.length === 0 && scope && hasWorkbenchClient()) {
-          // 收口为空且带着本地 pin —— pin 可能已陈旧（game 被删/改名后 localStorage
-          // 残留）。server 的 active game 才是 SSOT：先纠偏再重查。否则下面的真空
-          // 兜底会新建一条 session（server 端绑到 active game，跟这里的 scope 并不
-          // 一致），用户看到的就是"刷新后历史消失、聊天变成全新空会话"。
-          const activeSlug = await getWorkbenchClient().getActiveSlug()
-            .then((r) => r.activeSlug)
-            .catch(() => null);
-          if (activeSlug && activeSlug !== scope) {
-            get().setPinnedSlug(activeSlug);
-            scope = activeSlug;
-            metas = await fetchSessionList(scope);
-          }
-        }
         if (metas.length === 0) {
-          // 真空态：兜底建一条。**不**传 displayName / defaultDir —— 让 server 端
-          // 缺省决定，UI 走 tabLabel 占位规则反映"无名"真值，不再硬塞 default。
-          const { sid } = await createSession({ autoStart: true });
+          // 真空态：调用 server 的幂等 ensure；多个页面同时启动也只会建一条。
+          // 不传 displayName，让 UI 用 tabLabel 占位规则反映"无名"真值。
+          const { sid } = await ensureSession({ scope, autoStart: true });
           metas = await fetchSessionList(scope);
           // 兜底：如果 list 里居然没看到刚建的（应该不会，但 fs-watcher race 等
           // 极端情况），手动补一条 meta 进去保证 UI 有 tab。
@@ -910,6 +936,8 @@ export const useShellStore = create<AppState>((set, get) => ({
         persistActiveSid(active);
         connectForgeaXWs(active);
         void _syncActiveAgentRunning(active);
+        _sessionsInitialized = true;
+        if ((get().activeGameSlug ?? undefined) !== scope) await get().refreshSessions();
       } catch (e) {
         console.error('[initSessions] failed', e);
         // boot 失败：UI 维持空 tabs，ChatPanel 渲染空态 + 让用户手点"重试 / 新建"。
@@ -922,8 +950,7 @@ export const useShellStore = create<AppState>((set, get) => ({
   refreshSessions: async () => {
     const { fetchSessionList } = getSessionClient();
     try {
-      // 同 initSessions：按当前 game 收口（pinnedSlug；null → server 回落 active game）。
-      const metas = await fetchSessionList(get().pinnedSlug ?? undefined);
+      const metas = await fetchSessionList(get().activeGameSlug ?? undefined);
       set((s) => {
         const byOldSid = new Map(s.tabs.map((t) => [t.sid, t] as const));
         const merged: ChatTab[] = metas.map((m) => {
@@ -961,32 +988,17 @@ export const useShellStore = create<AppState>((set, get) => ({
     }
   },
 
-  switchGame: async (slug) => {
-    // Activate the game on the server FIRST (triggers engine Vite restart),
-    // then wait for the engine to settle BEFORE updating pinnedSlug. This
-    // prevents EditRealm from remounting ViewportComponent while the engine
-    // is still mid-restart (which causes 502 on pack-index / asset fetches).
+  setActiveGame: async (slug) => {
     try {
-      await getWorkbenchClient().activateGame(slug);
+      const selection = await getWorkbenchClient().setActiveGame(slug);
+      await get().applyActiveGame(selection.activeSlug);
     } catch (e) {
       void alertDialog({
         title: t('gameSwitcher.activateFailedTitle'),
         body: t('gameSwitcher.activateFailedBody', { slug, message: (e as Error).message }),
       });
+      throw e;
     }
-    await waitForEngineSettled(slug);
-    get().setPinnedSlug(slug);
-    await get().refreshSessions();
-    const tabs = get().tabs;
-    if (tabs.length === 0) {
-      // 该 game 还没有 session(新建 game / 从未用过)→ 自动建一条,保证总有可用 session。
-      await get().createNewSession();
-      return;
-    }
-    // D1:落到最近活跃的一条（规则见 session-pick.ts）。switchToSession 会重连
-    // WS,故无条件调(refreshSessions 只改 tabs/activeSid,不重连 WS)。
-    const recent = mostRecentSid(tabs);
-    if (recent) await get().switchToSession(recent);
   },
 
   createNewSession: async (opts) => {
@@ -999,8 +1011,7 @@ export const useShellStore = create<AppState>((set, get) => ({
         // 用户主动在 UI 里建 session（点 + 新建），可以传一个语义化的 displayName。
         // 不传时让 server 端落 undefined（UI 自己用 tabLabel 占位反映"无名"）。
         displayName: opts?.displayName,
-        // pinnedSlug 是用户主动选的 game-project，作为新 session 的 game 默认值合理。
-        defaultDir: opts?.defaultDir ?? (get().pinnedSlug ?? undefined),
+        scope: opts?.scope ?? (get().activeGameSlug ?? undefined),
         autoStart: true,
         // 用户在 Settings → Agents 里指定的「新 session 默认 agent」。null 时让
         // server 走 DEFAULT_BOOTSTRAP_AGENT='root'。是 marketplace persona id

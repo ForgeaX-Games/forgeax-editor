@@ -18,13 +18,22 @@
   transition: background 120ms ease;
   cursor: default;
 }
-.sb-chip.is-link {
+/* Any clickable chip — an explicit link, a command button, or any <button>
+   rendered as a chip (StripPopover trigger, is-button status items) — gets the
+   pointer affordance + hover. Non-interactive text chips (<span>) stay default. */
+.sb-chip.is-link,
+.sb-chip.is-button,
+button.sb-chip {
   cursor: pointer;
 }
-.sb-chip.is-link:hover {
+.sb-chip.is-link:hover,
+.sb-chip.is-button:hover,
+button.sb-chip:hover {
   background: var(--color-interaction-hover);
 }
-.sb-chip.is-link:focus-visible {
+.sb-chip.is-link:focus-visible,
+.sb-chip.is-button:focus-visible,
+button.sb-chip:focus-visible {
   outline: 1px solid var(--color-border-strong);
   outline-offset: -1px;
 }

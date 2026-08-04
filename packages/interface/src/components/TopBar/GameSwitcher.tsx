@@ -32,18 +32,15 @@ export function GameModalHost() {
   const gameModalOpen = useShellStore((s) => s.gameModalOpen);
   const closeGameModal = useShellStore((s) => s.closeGameModal);
   const [games, setGames] = useState<GameRow[]>([]);
-  const [activeSlug, setActiveSlug] = useState<string | null>(null);
-  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
-  const setPinnedSlug = useShellStore((s) => s.setPinnedSlug);
-  const switchGame = useShellStore((s) => s.switchGame);
+  const activeGameSlug = useShellStore((s) => s.activeGameSlug);
+  const setActiveGame = useShellStore((s) => s.setActiveGame);
 
-  const currentSlug = pinnedSlug ?? activeSlug;
+  const currentSlug = activeGameSlug;
 
   const reload = async () => {
     try {
       const j = await getWorkbenchClient().listGames();
       setGames((j.games as unknown as GameRow[]) ?? []);
-      setActiveSlug(j.activeSlug ?? null);
     } catch { /* ignore */ }
   };
 
@@ -51,20 +48,16 @@ export function GameModalHost() {
   // always-on switcher; now on-demand since the list only shows in the modal).
   useEffect(() => { if (listOpen) void reload(); }, [listOpen]);
 
-  // Picking a game goes through store.switchGame — one mechanism shared with 新建
-  // game: it pins the game client-side (preview / agents scoping), tells the
-  // server to make it the active game, re-scopes the session list and lands on
-  // its most-recent session (creating one when the game has none).
+  // Picking a game goes through the one authoritative active-game mutation.
   const onPick = async (slug: string) => {
     setListOpen(false);
-    await switchGame(slug);
+    await setActiveGame(slug);
   };
 
   const onDelete = async (slug: string) => {
     if (!(await confirmDialog({ body: t('gameSwitcher.deleteConfirm', { slug }), danger: true }))) return;
     try {
       await getWorkbenchClient().deleteGame(slug);
-      if (pinnedSlug === slug) setPinnedSlug(null);
       await reload();
     } catch (e) {
       void alertDialog({ title: t('gameSwitcher.deleteFailedTitle'), body: (e as Error).message });
@@ -104,11 +97,6 @@ export function GameModalHost() {
                   </button>
                 </div>
               ))}
-              {pinnedSlug && (
-                <button className="tb-game-row reset" onClick={() => { setPinnedSlug(null); setListOpen(false); }}>
-                  <span style={{ flex: 1, textAlign: 'left' }}>{t('gameSwitcher.unpin')}</span>
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -135,7 +123,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   const [brief, setBrief] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const switchGame = useShellStore((s) => s.switchGame);
+  const setActiveGame = useShellStore((s) => s.setActiveGame);
 
   const submit = async () => {
     const cleaned = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
@@ -152,11 +140,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
         setBusy(false);
         return;
       }
-      // Server already marked games/<slug>/ as the active game. switchGame pins it
-      // client-side AND — since a brand-new game has no sessions — auto-creates one
-      // bound to it ("新建 game 必带 session"), landing the user on a fresh session
-      // scoped to the new game before the kickoff message goes out.
-      await switchGame(cleaned);
+      await setActiveGame(cleaned);
       onClose();
       // Kick Forge with the brief so the design pipeline starts immediately.
       // Emit straight onto the new session's EventBus (server reflects

@@ -68,7 +68,7 @@ export const builtinMenusExtension: AppExtension = {
         // Dynamic submenu: recent games (mtime-desc). Label uses the raw game
         // name as the i18n key — `t()` falls back to the key when unmatched, so
         // the display name shows as-is (same fallback the top-menu titles rely
-        // on). Clicking dispatches game.pick with the slug (→ store.switchGame).
+        // on). Clicking dispatches game.pick with the slug (→ store.setActiveGame).
         dynamicChildren: () => getRecentGames().map((g): MenuItemDef => ({
           id: `file.openRecent.${g.slug}`,
           menu: 'file', group: 'recent', order: 0,

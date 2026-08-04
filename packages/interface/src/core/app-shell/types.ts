@@ -6,7 +6,7 @@ import type { CommandsRegistry, CommandDescriptor } from '../extension-foundatio
 import type { ContextKeysApi } from '../extension-foundation/context-keys';
 import type { StorageApi } from '../extension-foundation/storage';
 import type { PanelRenderers } from '../../components/DockShell/panelRenderers';
-import type { PanelActionContribution, PanelActionsApi, PanelControlContribution, PanelControlsApi } from '../panels';
+import type { PanelActionContribution, PanelActionsApi, PanelControlContribution, PanelControlsApi, StatusItemContribution } from '../panels';
 import type {
   PagePlatformContribution,
   PagePort,
@@ -72,6 +72,13 @@ export interface AppHostBase {
   readonly resourceEditors: ResourceEditorResolver;
   readonly capabilities: ReadonlySet<HostCapability>;
   extend<K extends HostCapability>(capability: K, api: unknown): void;
+  /** ADR-0030 §2.2 — imperative, RUNTIME status-item registration. The
+   *  single-truth successor to the retired module-level statusBarStore: writes
+   *  through the same panels contribution registry (host.panels.stripItems),
+   *  so it is owner-neutral yet reversible via the returned Cleanup. Use for
+   *  chips whose existence is decided at runtime; boot-time-known chips should
+   *  prefer declarative `contributes.panels.stripItems`. */
+  contributeStatusItem(item: StatusItemContribution): Cleanup;
 }
 
 /** Consumers narrow optional fields with `if (host.session) {...}`. */

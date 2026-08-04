@@ -29,7 +29,7 @@ export const allowedApiRules: ApiCallRule[] = [
   { pattern: /^\/api\/telemetry$/ },
   { pattern: /^\/api\/threads\/\$\{[^}]+\}$/ },
   { pattern: /^\/api\/tools(?:\/call|\/confirm)?$/ },
-  { pattern: /^\/api\/version$/ },
+  { pattern: /^\/api\/version(?:\/tags)?$/ },
   { pattern: /^\/api\/workbench\/games$/ },
   { pattern: /^\/api\/workbench\/games\/link$/ },
   { pattern: /^\/api\/workbench\/templates$/ },

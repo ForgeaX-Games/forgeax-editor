@@ -3,12 +3,13 @@
 // Thin shell: builds an AppHost via bootstrapAppHost() (which loads the
 // built-in plugin list + any studio-injected overrides), mounts <HostProvider>,
 // and renders the fixed chrome (TopBar / DockShell / SurfaceKeepAliveLayer /
-// GlobalStatusBar / overlays / modals). All side effects — postMessage
+// StripHostView status bar / overlays / modals). All side effects — postMessage
 // listeners, editor-ref pills, focus-panel routing, builtin actions — live in
 // plugins now (see core/extensions/*). This file only owns:
 //   - global shortcut binding (reads store; not a plugin concern)
 //   - reading store flags for shell chrome data-attrs
-//   - overlays / status-feeds slot rendering (via host.panels)
+//   - overlays slot rendering (via host.panels); footer chips are strip
+//     contributions rendered by StripHostView (ADR-0030)
 //   - triggering bootStageAppMounted() AFTER host boot completes
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -21,8 +22,8 @@ import { ChatColumn } from './components/ChatColumn/ChatColumn';
 import { DockRegion } from './components/DockShell/DockRegion';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS } from './components/DockShell/panelRenderers';
 import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
-import { GlobalStatusBar } from './components/StatusBar/GlobalStatusBar';
-import { HealthIndicator } from './components/StatusBar/HealthIndicator';
+import { StripHostView } from './components/StatusBar/StripHostView';
+import { DrawerHostView } from './components/Drawer/DrawerHostView';
 import { ContextMenu } from './components/ContextMenu/ContextMenu';
 import { CommandPalette } from './components/CommandPalette/CommandPalette';
 import { OnboardingController, ConnectModelPrompt } from './components/Onboarding';
@@ -100,7 +101,6 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
   if (!boot) return null;
   const host = boot.host;
 
-  const StatusFeeds = renderers.chrome?.StatusFeeds;
   const Dashboard   = renderers.overlays?.Dashboard;
   const Settings    = renderers.overlays?.Settings;
 
@@ -143,9 +143,8 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
             <ActivityRail />
             <ChatColumn />
           </div>
-          {StatusFeeds && <div data-fx-slot="StatusFeeds" style={{ display: 'contents' }}><StatusFeeds /></div>}
-          <HealthIndicator />
-          <GlobalStatusBar />
+          <DrawerHostView />
+          <StripHostView />
           {Dashboard && <div data-fx-slot="Dashboard" style={{ display: 'contents' }}><Dashboard /></div>}
           {Settings && <div data-fx-slot="Settings" style={{ display: 'contents' }}><Settings /></div>}
           <ContextMenu />

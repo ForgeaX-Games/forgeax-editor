@@ -4,48 +4,32 @@ import {
   CapabilityRegistry,
   createAssetWorkspace,
   createEditorProduct,
-  createRuntimeAvailability,
   createTransportSecurityPolicy,
   createTransportService,
   TRANSPORT_PROTOCOL_VERSION,
-  type GameRuntimePort,
   type TransportRequest,
 } from '@forgeax/editor-product';
 
 function request(id: string, method: string, params: unknown): TransportRequest {
-  return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id, correlationId: `public-${id}`, method, params };
+  return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id, correlationId: `public-${id}`, scope: 'default', method, params };
 }
 
 const auth = { scope: 'default', actor: { id: 'public-test', kind: 'ai' }, sessionId: 'public-session', permission: 'execute' as const };
 
-function runtime(): GameRuntimePort {
-  const availability = createRuntimeAvailability({ host: 'bun', capabilities: { play: { available: true }, stop: { available: true } } });
-  return {
-    availability: () => availability,
-    async play() { return { ok: true as const, value: { worldId: 'play-1' } }; },
-    async stop() { return { ok: true as const, value: undefined }; },
-    async query() { return { ok: true as const, value: { worldId: 'play-1' } }; },
-    async fixedStep() { return { ok: true as const, value: undefined }; },
-    async dispose() { return { ok: true as const, value: undefined }; },
-    async capture() { return { ok: true as const, value: { captured: false } }; },
-    async reveal() { return { ok: true as const, value: undefined }; },
-  };
-}
-
-test('discover publishes product manifest and runtime availability', async () => {
+test('discover publishes the product capability manifest without parallel runtime methods', async () => {
   const registry = new CapabilityRegistry();
   registry.register({
     id: 'asset.rename', kind: 'operation', version: '1', subject: 'asset', verb: 'rename',
     inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, availability: { available: true },
     preconditions: [], recoveryActions: [], executor: { execute: (input) => input },
   });
-  const service = createTransportService({ product: createEditorProduct({ availability: { available: true, blocking: false, code: 'product-available' }, capabilityRegistry: registry }), runtime: runtime() });
+  const service = createTransportService({ product: createEditorProduct({ availability: { available: true, blocking: false, code: 'product-available' }, capabilityRegistry: registry }) });
   const response = await service.handle(request('discover', 'discover', {}));
   expect(response.result).toMatchObject({
     manifest: { productId: '@forgeax/editor-product', capabilitySource: 'registered-ssot' },
     capabilityManifest: { generatedFrom: 'capability-registry', capabilities: [{ id: 'asset.rename' }] },
     availability: { available: true, code: 'product-available' },
-    runtime: { host: 'bun', blocking: false },
+    methods: expect.not.arrayContaining(['runtime.play', 'runtime.stop']),
   });
 });
 
@@ -63,25 +47,39 @@ test('asset snapshot and preflight are callable through the typed service', asyn
   expect(preflight.result).toMatchObject({ ok: true, subjectRef: 'asset:one', confirmation: { required: true } });
 });
 
-test('dispatches runtime operations through GameRuntimePort when a product is composed', async () => {
+test('gameplay is advertised and delegated only when the live carrier supplies it', async () => {
+  const calls: unknown[] = [];
+  const service = createTransportService({ gameplay: (input) => { calls.push(input); return { ok: true, operation: 'query' }; } });
+  const discovered = await service.handle(request('discover-gameplay', 'discover', {}));
+  expect(discovered.result).toMatchObject({ methods: expect.arrayContaining(['gameplay']) });
+  const response = await service.handle(request('gameplay-query', 'gameplay', { version: 1, operation: 'query', query: '2048.snapshot' }));
+  expect(response.result).toEqual({ ok: true, operation: 'query' });
+  expect(calls).toEqual([{ version: 1, operation: 'query', query: '2048.snapshot' }]);
+
+  const unavailable = await createTransportService().handle(request('gameplay-unavailable', 'gameplay', {}));
+  expect(unavailable).toMatchObject({ error: { code: 'not-supported' } });
+});
+
+test('dispatches play only through the registered product operation', async () => {
   const registry = new CapabilityRegistry();
   registry.register({
-    id: 'document.edit', kind: 'operation', version: '1', subject: 'document', verb: 'edit',
+    id: 'editor.play', kind: 'operation', version: '1', subject: 'editor', verb: 'play',
     inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, availability: { available: true },
-    preconditions: [], recoveryActions: [], executor: { execute: (input) => input },
+    preconditions: [], recoveryActions: [], executor: { execute: () => ({ worldId: 'play-1' }) },
   });
   const service = createTransportService({
     product: createEditorProduct({ capabilityRegistry: registry }),
-    runtime: runtime(),
   });
-  const response = await service.handle(request('runtime', 'run.dispatch', {
-    operationId: 'runtime.play', input: {}, ...auth,
+  const response = await service.handle(request('play', 'run.dispatch', {
+    operationId: 'editor.play', input: {}, ...auth,
   }));
   expect(response).toMatchObject({ result: { status: 'succeeded' } });
   expect(service.getRun(response.runId!)).toMatchObject({
     ok: true,
     value: { status: 'succeeded', result: { worldId: 'play-1' } },
   });
+  const alias = await service.handle(request('runtime-alias', 'runtime.play', auth));
+  expect(alias).toMatchObject({ error: { code: 'not-supported' } });
 });
 
 test('async dispatch returns a running run before the executor resolves', async () => {
@@ -97,6 +95,16 @@ test('async dispatch returns a running run before the executor resolves', async 
   await Promise.resolve();
   const completed = await service.handle(request('async-get', 'run.get', { runId: accepted.runId }));
   expect(completed.result).toMatchObject({ status: 'succeeded', result: { renamed: true } });
+});
+
+test('run.dispatch applies the transport idempotency key', async () => {
+  let calls = 0;
+  const service = createTransportService({ dispatch: () => ({ call: ++calls }) });
+  const params = { operationId: 'asset.rename', input: { id: 'asset:one' }, ...auth, idempotencyKey: 'rename-once' };
+  const first = await service.handle(request('idempotent-1', 'run.dispatch', params));
+  const second = await service.handle(request('idempotent-2', 'run.dispatch', params));
+  expect(second.runId).toBe(first.runId);
+  expect(calls).toBe(1);
 });
 
 test('run list, event cursor, cancel, and retry are public operations', async () => {

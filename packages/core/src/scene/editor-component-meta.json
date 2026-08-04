@@ -2,6 +2,7 @@
   "Entity": { "hidden": true },
   "Children": { "hidden": true },
   "ChildOf": { "hidden": true },
+  "Disabled": { "hidden": true },
   "AnimationPlayer": {
     "bespoke": {
       "editorId": "animation-transport",

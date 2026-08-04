@@ -3,27 +3,12 @@
 // never depends on full ExtensionManifest fields server-side never exposes.
 import type { ExtensionManifestV2 } from '@forgeax/types';
 
-export interface ExtensionWorkbenchPaneInfo {
-  defaultWidth?: number;
-  minWidth?: number;
-  collapsible?: boolean;
-  minHeight?: number;
-  scrollable?: boolean;
-}
-
 export interface ExtensionWorkbenchInfo {
   id: string;
   icon?: string;
   position?: number;
   panelSize?: 'sm' | 'md' | 'lg';
   hidden?: boolean;
-  /** Doc 06 §panes — declared split-pane intent. Sidebar uses `panes.left` to
-   *  decide whether to mount an iframe with `?pane=left` instead of the legacy
-   *  ExtensionPlaceholder info card. Center pane is rendered by MainArea. */
-  panes?: {
-    left?: ExtensionWorkbenchPaneInfo;
-    center?: ExtensionWorkbenchPaneInfo;
-  };
   /** Soft hint — when this workbench is active, the corner agent picker
    *  defaults to this agent's plugin id. User can still pick any session
    *  agent from the dropdown. R1 untouched: this is just a string ref. */

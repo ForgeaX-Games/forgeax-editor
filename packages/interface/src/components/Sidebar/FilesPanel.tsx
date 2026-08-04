@@ -11,7 +11,7 @@ import {
   FileAudio,
   File as FileIcon,
 } from 'lucide-react';
-import { useShellStore, getWorkbenchClient } from '../../store';
+import { useShellStore } from '../../store';
 import { publish } from '../../lib/bus';
 import { useBusSnapshot } from '../../lib/use-bus-snapshot';
 import { useTranslation } from '@/i18n';
@@ -149,16 +149,14 @@ export function FilesPanel() {
   // ③ 文件预览态归 workbench（bus 'workbench:files'）—— 打开走命令，高亮读快照。
   const openFile = (path: string) => { publish('workbench:open-file', { path } as never); };
   const activeFilePath = (useBusSnapshot('workbench:files') as { activeFilePath?: string | null } | undefined)?.activeFilePath ?? null;
-  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
-  const [autoSlug, setAutoSlug] = useState<string | null>(null);
-  const activeSlug = pinnedSlug ?? autoSlug;
+  const activeSlug = useShellStore((s) => s.activeGameSlug);
   const [tree, setTree] = useState<Node | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-run when pinnedSlug changes — earlier version had [] deps + a
-  // setInterval that closed over the initial pinnedSlug, so switching
+  // Re-run when the authoritative active game projection changes. An earlier
+  // version closed over the initial slug, so switching
   // project left the tree stuck on the old slug until full reload.
   //
   // expanded init is keyed by `isFirstLoad`: only the first successful
@@ -174,15 +172,12 @@ export function FilesPanel() {
     setTree(null);
     const load = async () => {
       try {
-        const wb = await getWorkbenchClient().getActiveSlug();
-        if (cancelled) return;
-        const slug = pinnedSlug ?? wb.activeSlug ?? undefined;
+        const slug = activeSlug ?? undefined;
         if (!slug) {
           setError('no active game');
           setLoading(false);
           return;
         }
-        setAutoSlug(wb.activeSlug ?? null);
         const tr = await fetch(`/api/files/tree?root=.forgeax/games/${encodeURIComponent(slug)}`).then((r) => r.json()) as { tree?: Node; error?: string };
         if (cancelled) return;
         if (tr.error || !tr.tree) {
@@ -205,7 +200,7 @@ export function FilesPanel() {
     load();
     const t = setInterval(load, 5000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [pinnedSlug]);
+  }, [activeSlug]);
 
   return <FilesPanelView
     loading={loading}

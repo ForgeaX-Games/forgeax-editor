@@ -2,7 +2,8 @@
 //
 // Verifies the gateway-level invariants for the two new ops introduced by the
 // keyboard-router convergence:
-//   - destroyAsset / restoreAsset are DOCUMENT-domain (inverse → undo + ledger)
+//   - destroyAsset is the public DOCUMENT-domain operation; restoreAsset is an
+//     internal inverse, not a discoverable second entry.
 //     and the applier goes through ctx.assetIO (the asset write gate, G-5).
 //   - setDisplay is SESSION-domain: registered by edit-runtime at boot
 //     (D-11), so a headless core gateway returns UNKNOWN_OP for it — same shape
@@ -40,6 +41,11 @@ describe('destroyAsset / restoreAsset op contract (M2)', () => {
     }) as unknown as typeof fetch;
     const session: EditSession = createEditSession();
     session.world = {} as never;
+    session.registry = {
+      listCatalog: () => [{
+        guid: 'g1', kind: 'mesh', packageUrl: PACK, sourcePath: PACK,
+      }],
+    } as never;
     gw = new EditGateway(session);
   });
 
@@ -47,9 +53,9 @@ describe('destroyAsset / restoreAsset op contract (M2)', () => {
     (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
   });
 
-  it('destroyAsset + restoreAsset are registered + correctly classed', () => {
+  it('publishes destroyAsset while keeping its restore inverse internal', () => {
     expect(hasOp('destroyAsset')).toBe(true);
-    expect(hasOp('restoreAsset')).toBe(true);
+    expect(hasOp('restoreAsset')).toBe(false);
     expect(domainOf('destroyAsset')).toBe('document');
     expect(domainOf('restoreAsset')).toBe('document');
   });
@@ -57,14 +63,14 @@ describe('destroyAsset / restoreAsset op contract (M2)', () => {
   it('destroyAsset dispatches ok, enters undo + ledger, returns restoreAsset inverse', () => {
     const ledgerBefore = gw.ledger.length;
     const undoBefore = gw.appliedCount();
-    const r = gw.dispatch({ kind: 'destroyAsset', packPath: PACK, guid: 'g1' });
+    const r = gw.dispatch({ kind: 'destroyAsset', guid: 'g1' });
     expect(r.ok).toBe(true);
     // The document applier returns { ok: true } with NO inverse field — the inverse
     // is pushed onto the undo stack (the gateway is the single door; dispatch's
     // return type carries only ok/error). Assert the inverse shape via peekUndoInverse.
     const inverse = gw.peekUndoInverse();
     expect(inverse).toBeDefined();
-    expect(inverse).toMatchObject({ kind: 'restoreAsset', packPath: PACK, guid: 'g1' });
+    expect(inverse).toMatchObject({ kind: 'restoreAsset', _resolvedPackPath: PACK, guid: 'g1' });
     expect(gw.ledger.length).toBe(ledgerBefore + 1);
     expect(gw.appliedCount()).toBe(undoBefore + 1);
   });
@@ -74,6 +80,8 @@ describe('destroyAsset / restoreAsset op contract (M2)', () => {
     const da = ops.find((o) => o.id === 'destroyAsset');
     expect(da).toBeDefined();
     expect(da?.domain).toBe('document');
+    expect(da?.argsSchema?.required).toEqual(['guid']);
+    expect(da?.completion).toEqual({ kind: 'asset-write', guidField: 'guid' });
   });
 });
 

@@ -14,12 +14,12 @@
 //       createAuthoredAssetCatalogBarrier the ViewportComponent host registers)
 //     → awaitAuthoredMaterialReady(guid) resolves ok
 // and then asserts:
-//   1. scene.pack.json on "disk" contains the material in the Pack v2 envelope;
+//   1. materials.pack.json on "disk" contains the material in the Pack v2 envelope;
 //   2. the pack-index serves the material row (refreshCatalog sees it);
 //   3. registry.loadByGuid(materialGuid) succeeds DIRECTLY from the Pack v2 body;
 //   4. POST /__import/{materialGuid} was NEVER requested.
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
@@ -34,6 +34,7 @@ import {
   registerPostAssetWriteCatalogSync,
 } from '../session/pack-ops';
 import { createAuthoredAssetCatalogBarrier } from '../assets/authored-asset-barrier';
+import { setPathResolver } from '../util/path-resolver';
 
 /** Real ShaderRegistry over a dummy device: material loading consults
  *  findMaterialArtifact for texture-field discovery; unknown shaders degrade
@@ -52,8 +53,8 @@ function makeShaderRegistry(): ShaderRegistry {
   return new ShaderRegistry({ device, manifestUrl: undefined });
 }
 
-const PACK_PATH = 'sample/assets/scene.pack.json';
-const PACK_BODY_URL = '/packs/scene.pack.json';
+const PACK_PATH = 'sample/assets/materials.pack.json';
+const PACK_BODY_URL = '/packs/materials.pack.json';
 const PACK_INDEX_URL = '/pack-index.json';
 const TEXTURE_GUID = 'd1f2a3b4-c5d6-5e70-8901-234567890abc';
 
@@ -121,12 +122,14 @@ function makeFetchStub(): FetchStub {
 
 describe('authored material persistence (write → catalog → load, no /__import)', () => {
   let net: FetchStub;
+  beforeEach(() => setPathResolver((relativePath) => relativePath));
   afterEach(() => {
     net.restore();
     registerPostAssetWriteCatalogSync(null);
+    setPathResolver(null);
   });
 
-  it('createMaterial lands in scene.pack.json (Pack v2) and loadByGuid resolves it without /__import', async () => {
+  it('createMaterial lands in materials.pack.json (Pack v2) and loadByGuid resolves it without /__import', async () => {
     net = makeFetchStub();
     net.install();
     const world = new World();
@@ -174,7 +177,14 @@ describe('authored material persistence (write → catalog → load, no /__impor
     expect(stored).toBeDefined();
     const pack = JSON.parse(stored as string) as {
       schemaVersion: string;
-      assets: { guid: string; kind: string; name?: string; artifacts?: unknown; refs?: string[] }[];
+      assets: {
+        guid: string;
+        kind: string;
+        name?: string;
+        artifacts?: unknown;
+        refs?: string[];
+        payload?: { values?: Record<string, unknown> };
+      }[];
     };
     expect(pack.schemaVersion).toBe('2.0.0');
     const entry = pack.assets.find((a) => a.guid === materialGuid);
@@ -183,6 +193,8 @@ describe('authored material persistence (write → catalog → load, no /__impor
     expect(entry?.name).toBe('M_Wood');
     expect(entry?.artifacts).toBeDefined();
     expect(entry?.refs).toContain(TEXTURE_GUID);
+    expect(entry?.payload?.values?.baseColorTexture).toBe(0);
+    expect(entry?.payload?.values?.metallic).toBe(0);
 
     // (2) The pack-index row is visible after the barrier's refresh.
     const row = registry.packIndexCache?.get(materialGuid.toLowerCase());
@@ -238,7 +250,7 @@ describe('authored material persistence (write → catalog → load, no /__impor
       expect(ready.stage).toBe('write');
       expect(ready.hint).toContain('HTTP 500');
     }
-    // No phantom pack: the failed write must not leave a scene.pack.json.
+    // No phantom pack: the failed write must not leave a materials.pack.json.
     expect(net.fs.has(PACK_PATH)).toBe(false);
     expect(net.importCalls).toEqual([]);
   });

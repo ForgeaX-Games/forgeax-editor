@@ -66,6 +66,7 @@
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-font": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-graphics-extras": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-input": "workspace:*",

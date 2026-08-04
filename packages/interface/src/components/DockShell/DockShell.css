@@ -66,12 +66,20 @@
 .fx-dockshell .content-container { inset: 0; }
 
 /* Declarative single-tab strategies. Dockview owns tab counting and adds
-   `.dv-single-tab`; panel descriptors only declare the preferred presentation. */
+   `.dv-single-tab`; panel descriptors only declare the preferred presentation.
+   `data-fx-dock-title-state="visible"` is the user override used by the
+   restore affordance, while `hidden` is set by the tab context menu. */
 .fx-dockshell
-  .dv-groupview:has(.fx-panel[data-dock-single-tab="hideTitle"])
+  .dv-groupview:has(.fx-panel[data-dock-single-tab="hideTitle"]):not([data-fx-dock-title-state="visible"])
   > .dv-tabs-and-actions-container.dv-single-tab,
 .fx-dockshell
-  .groupview:has(.fx-panel[data-dock-single-tab="hideTitle"])
+  .groupview:has(.fx-panel[data-dock-single-tab="hideTitle"]):not([data-fx-dock-title-state="visible"])
+  > .dv-tabs-and-actions-container.dv-single-tab,
+.fx-dockshell
+  .dv-groupview[data-fx-dock-title-state="hidden"]
+  > .dv-tabs-and-actions-container.dv-single-tab,
+.fx-dockshell
+  .groupview[data-fx-dock-title-state="hidden"]
   > .dv-tabs-and-actions-container.dv-single-tab {
   height: 0 !important;
   min-height: 0 !important;
@@ -80,6 +88,53 @@
   opacity: 0;
   border: 0;
   pointer-events: none;
+}
+
+/* The triangle is a real button, so a title-less single-panel group remains
+   keyboard- and screen-reader-reachable. It is emitted for every panel but
+   only exposed when the current group is actually title-less. */
+.fx-dock-title-restore {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 14px !important;
+  height: 20px !important;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary, #778);
+  cursor: pointer;
+}
+
+.fx-dock-title-restore::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  align-self: flex-start;
+  background: var(--color-text-tertiary, #778);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+  transition: background 120ms ease;
+}
+
+.fx-dock-title-restore:hover::before,
+.fx-dock-title-restore:focus-visible::before {
+  background: var(--lime, #7ee04a);
+}
+
+.fx-dock-title-restore:focus-visible {
+  outline: none;
+}
+
+.fx-dockshell .dv-groupview[data-fx-dock-title-state="hidden"] .fx-dock-title-restore,
+.fx-dockshell .groupview[data-fx-dock-title-state="hidden"] .fx-dock-title-restore,
+.fx-dockshell .dv-groupview:has(.fx-panel[data-dock-single-tab="hideTitle"]):not([data-fx-dock-title-state="visible"]) .fx-dock-title-restore,
+.fx-dockshell .groupview:has(.fx-panel[data-dock-single-tab="hideTitle"]):not([data-fx-dock-title-state="visible"]) .fx-dock-title-restore {
+  display: inline-flex;
 }
 
 .fx-dockshell

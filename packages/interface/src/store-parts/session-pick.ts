@@ -1,4 +1,4 @@
-// 会话回落挑选规则（SSOT）—— initSessions / refreshSessions / switchGame 共用。
+// 会话回落挑选规则（SSOT）—— initSessions / refreshSessions / setActiveGame 共用。
 //
 // 历史与 game 绑定：刷新 / 切 game / 列表变更后，UI 应回到「上次明确停留的那条
 // 会话（persisted sid，若仍存在）」，否则回到「该 game 最近活跃的一条」。server

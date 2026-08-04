@@ -572,6 +572,7 @@ describe('AC-03 listOps() self-introspection output freeze (M3-w9)', () => {
         argsSchema: o.argsSchema ?? null,
         ...(o.title !== undefined ? { title: o.title } : {}),
         ...(o.operationRun !== undefined ? { operationRun: o.operationRun } : {}),
+        ...(o.completion !== undefined ? { completion: o.completion } : {}),
       }))
       .sort((a, b) => a.id.localeCompare(b.id));
 

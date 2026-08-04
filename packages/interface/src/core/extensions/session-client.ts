@@ -24,21 +24,21 @@ export interface SessionCapability {
   readonly tabs: readonly ChatTab[];
   /** Snapshot of `useShellStore.getState().activeSid`. */
   readonly activeSid: string | null;
-  /** Snapshot of `useShellStore.getState().pinnedSlug`. */
-  readonly pinnedSlug: string | null;
+  /** Snapshot of the server-authoritative active game projection. */
+  readonly activeGameSlug: string | null;
 
   switchToSession(sid: string): Promise<void>;
   /** Wraps `useShellStore.getState().createNewSession`. Returns `null` on
    *  failure to mirror the store's contract. */
   createSession(opts?: {
     displayName?: string;
-    defaultDir?: string;
+    scope?: string;
     providerOverride?: string | null;
   }): Promise<{ sid: string } | null>;
   closeSession(sid: string): Promise<void>;
   renameTab(sid: string, displayName: string): void;
   refreshSessions(): Promise<void>;
-  switchGame(slug: string): Promise<void>;
+  setActiveGame(slug: string): Promise<void>;
 }
 
 export const sessionClientExtension: AppExtension = {
@@ -59,13 +59,13 @@ export const sessionClientExtension: AppExtension = {
       client,
       get tabs()       { return useShellStore.getState().tabs; },
       get activeSid()  { return useShellStore.getState().activeSid; },
-      get pinnedSlug() { return useShellStore.getState().pinnedSlug; },
+      get activeGameSlug() { return useShellStore.getState().activeGameSlug; },
       switchToSession: (sid)     => useShellStore.getState().switchToSession(sid),
       createSession:   (opts)    => useShellStore.getState().createNewSession(opts),
       closeSession:    (sid)     => useShellStore.getState().closeSession(sid),
       renameTab:       (sid, n)  => useShellStore.getState().renameTab(sid, n),
       refreshSessions: ()        => useShellStore.getState().refreshSessions(),
-      switchGame:      (slug)    => useShellStore.getState().switchGame(slug),
+      setActiveGame:   (slug)    => useShellStore.getState().setActiveGame(slug),
     };
     ctx.host.extend('session', cap);
   },

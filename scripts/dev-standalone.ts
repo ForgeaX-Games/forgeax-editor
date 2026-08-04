@@ -65,9 +65,8 @@ children.push(
   ),
 );
 
-// DEV-only live gateway bridge relay (:15296 by default). Lets a CLI drive THIS open
-// window in real time (skills/forgeax-editor-gateway/scripts/gateway-live.mjs) instead of a headless
-// playwright instance. Loopback-only; the page bridge (ViewportComponent, DEV
+// DEV-only Gateway bridge relay (:15296 by default). Lets gateway.mjs drive this
+// already-open window. Loopback-only; the page bridge (ViewportComponent, DEV
 // build) dials it. Opt out with FORGEAX_BRIDGE=0.
 if (bridgeEnabled) {
   console.log(`[dev-standalone] starting gateway bridge relay :${bridgePort} ...`);

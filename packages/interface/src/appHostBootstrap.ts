@@ -32,6 +32,8 @@ import { builtinMenusExtension } from './core/extensions/builtin-menus';
 import { editorCommandsExtension } from './core/extensions/editor-commands';
 import { panelsViewportExtension } from './core/extensions/panels-viewport';
 import { panelsChatExtension } from './core/extensions/panels-chat';
+import { chromeStatusBarExtension } from './core/extensions/chrome-statusbar';
+import { chromeDrawerExtension } from './core/extensions/chrome-drawer';
 import './core/extensions/session-client.d'; // side-effect: AppHost.session type augmentation
 import { sessionClientExtension } from './core/extensions/session-client';
 import './core/extensions/workbench-client.d'; // side-effect: AppHost.workbench type augmentation
@@ -134,6 +136,8 @@ export async function bootstrapAppHost(
     editorCommandsExtension,
     panelsViewportExtension,
     panelsChatExtension,
+    chromeStatusBarExtension,
+    chromeDrawerExtension,
     sessionClientExtension,
     workbenchClientExtension,
     observabilityExtension,

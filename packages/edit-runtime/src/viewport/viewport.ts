@@ -78,7 +78,7 @@ import {
 import { createGizmoPool } from './viewport-gizmo';
 import { createParamGizmo } from './viewport-param-gizmo';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
-import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, type EditorTransform } from './viewport-entity-read';
+import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, isEntEffectivelyHidden, type EditorTransform } from './viewport-entity-read';
 
 import type { OpHandle, EngineFacade } from '@forgeax/editor-core';
 import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-core';
@@ -371,18 +371,25 @@ export function createViewport({
    */
   function resolveEditorEntity(world: World, handle: EntityHandle): EntityHandle | null {
     let cur: EntityHandle | undefined = handle;
+    let candidate: EntityHandle | null = null;
     const seen = new Set<number>();
     while (cur !== undefined) {
       if (seen.has(cur as number)) break;
       seen.add(cur as number);
-      if (entExists(world, cur)) return isEntHidden(world, cur) ? null : cur;
+      if (entExists(world, cur)) {
+        // UE-parity recursive hide: an EditorHidden anywhere up the editor-level
+        // chain hides the whole subtree — the hit resolves to nothing, matching
+        // the Disabled-driven render exclusion.
+        if (isEntHidden(world, cur)) return null;
+        if (candidate === null) candidate = cur;
+      }
       // merge origin/main: main's ChildOf-walk read the raw `world`; the IoC
       // refactor removed that binding — reads go through the injected facade.
       const co = engine.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
       if (!co.ok) break;
       cur = (co.value as { parent: number }).parent as EntityHandle;
     }
-    return null;
+    return candidate;
   }
 
   /** Nearest visible world entity hit by the ray (or null).
@@ -431,7 +438,7 @@ export function createViewport({
     const { origin, dir } = rayAt(clientX, clientY);
     let best: EntityHandle | null = null, bestT = Infinity;
     for (const id of worldEntityHandles(activeWorld)) {
-      if (isEntHidden(activeWorld, id)) continue;
+      if (isEntEffectivelyHidden(activeWorld, id)) continue;
       const comps = entComponents(activeWorld, id);
       if (!('MeshFilter' in comps) || !('MeshRenderer' in comps)) continue;
       const t = readWorldTransform(activeWorld, id);

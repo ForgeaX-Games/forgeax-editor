@@ -69,7 +69,6 @@ import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
 import {
   awaitPostAssetWriteCatalogSync,
-  registerActiveScenePackResolver,
   registerAuthoredInlineAssetTracker,
   type AuthoredInlineAssetSnapshot,
 } from '../session/pack-ops';
@@ -962,11 +961,6 @@ export const scenePath = diskIo.scenePath;
 /** Read-only public projection for host consumers that must address the active
  * authored scene pack without reimplementing scene-list path policy. */
 export const getActiveScenePackPath = diskIo.scenePath;
-// Feed the active-scene-pack resolver seam so the createMaterial document applier
-// (session/pack-ops) can default a new material into the active scene's real pack
-// without a static import cycle (pack-ops <- ... <- scene-persistence). One-way:
-// scene-persistence imports pack-ops (already, for its appliers), never the reverse.
-registerActiveScenePackResolver(() => diskIo.scenePath());
 
 // ── Post-load authored inline assets (material persistence race fix) ─────────
 // createMaterial writes a material into the ACTIVE scene pack AFTER the load

@@ -93,6 +93,11 @@ export interface OpDescriptor {
   readonly sugar?: boolean;
   /** OperationRun lifecycle metadata projected by the owning Gateway. */
   readonly operationRun?: OperationRunDescriptor;
+  /** Product execution barrier derived from the operation's owning descriptor. */
+  readonly completion?: {
+    readonly kind: 'asset-visible' | 'asset-write';
+    readonly guidField: string;
+  };
   /** Whether the operation discards authored source overrides. */
   readonly destructive?: boolean;
   /** Canonical machine-readable recovery actions for the operation. */
@@ -320,6 +325,10 @@ const builtinOps: ReadonlyArray<{
    *  but flags sugar so callers learn the one canonical shape. */
   sugar?: boolean;
   operationRun?: OperationRunDescriptor;
+  completion?: {
+    readonly kind: 'asset-visible' | 'asset-write';
+    readonly guidField: string;
+  };
   destructive?: boolean;
   recoveryActions?: readonly string[];
 }> = [
@@ -541,27 +550,15 @@ const builtinOps: ReadonlyArray<{
   },
   {
     id: 'destroyAsset', domain: 'document',
+    completion: { kind: 'asset-write', guidField: 'guid' },
     argsSchema: {
       type: 'object',
-      // newGuidCacheKey is inverse-only (set when destroyAsset is the inverse of
-      // duplicateAsset) — optional, so direct destroyAsset callers omit it.
-      properties: { packPath: { type: 'string' }, guid: { type: 'string' }, newGuidCacheKey: { type: 'string' } },
-      required: ['packPath', 'guid'],
+      // Pack location is derived from the active game's catalog. Internal undo
+      // commands carry a resolved path outside this public schema.
+      properties: { guid: { type: 'string', description: 'Asset GUID in the active game catalog.' } },
+      required: ['guid'],
     },
     title: 'Destroy Asset',
-  },
-  {
-    id: 'restoreAsset', domain: 'document',
-    argsSchema: {
-      type: 'object',
-      properties: {
-        packPath: { type: 'string' },
-        guid: { type: 'string' },
-        cacheKey: { type: 'string' },
-      },
-      required: ['packPath', 'guid'],
-    },
-    title: 'Restore Asset',
   },
   {
     id: 'renameAsset', domain: 'document',
@@ -598,6 +595,7 @@ const builtinOps: ReadonlyArray<{
   // mesh's MeshRenderer.materials via bindAssetRef.
   {
     id: 'createMaterial', domain: 'document',
+    completion: { kind: 'asset-visible', guidField: 'guid' },
     argsSchema: {
       type: 'object',
       properties: {
@@ -608,12 +606,29 @@ const builtinOps: ReadonlyArray<{
         roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
         baseColorTexture: { type: 'string', description: 'Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format).' },
         alphaCutoff: { type: 'number', description: 'Optional alpha-cutoff 0..1 (UE-Masked equivalent): baseColorTexture alpha below the cutoff is discarded. Omit for a fully opaque material.' },
-        packPath: { type: 'string', description: 'Optional target pack path; defaults to the active game scene.pack.json (the same pack the scene saves into). An AI over the eval bridge normally omits this.' },
+        packPath: { type: 'string', description: 'Optional game-relative target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. An AI normally omits this.' },
         refs: { type: 'array', items: { type: 'string' } },
       },
       required: ['guid', 'name', 'baseColor'],
     },
     title: 'Create Material',
+  },
+  {
+    id: 'writeUi', domain: 'document',
+    completion: { kind: 'asset-visible', guidField: 'guid' },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', description: 'Stable caller-minted RFC 4122 asset GUID. The first write creates it; later writes replace that same asset.' },
+        name: { type: 'string', description: 'Human-readable UI asset name shown in the asset catalog.' },
+        html: { type: 'string', description: 'Declarative UiAsset markup. Dynamic values and event behavior remain game-code responsibilities.' },
+        css: { type: 'string', description: 'Styles scoped to the UiAsset ShadowRoot.' },
+        sourcePath: { type: 'string', description: 'Optional game-relative authoring source path used in structured validation diagnostics.' },
+        packPath: { type: 'string', description: 'Optional game-relative target pack path. Defaults to assets/ui.pack.json.' },
+      },
+      required: ['guid', 'name', 'html', 'css'],
+    },
+    title: 'Write UI Asset',
   },
   // updateMaterialParams (material-editor M1): update an existing MaterialAsset's
   // values. Document-domain (undoable). The sole "edit material params" op —

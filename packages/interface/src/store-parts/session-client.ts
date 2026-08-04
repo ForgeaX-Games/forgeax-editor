@@ -35,10 +35,15 @@ export interface SessionClient {
   fetchSessionList: (game?: string) => Promise<SessionMeta[]>;
   createSession: (opts?: {
     displayName?: string;
-    defaultDir?: string;
+    scope?: string;
     autoStart?: boolean;
     bootstrapAgent?: string | false | null;
   }) => Promise<{ sid: string; bootstrappedAgent: string | null }>;
+  ensureSession: (opts?: {
+    scope?: string;
+    autoStart?: boolean;
+    bootstrapAgent?: string | false | null;
+  }) => Promise<{ sid: string; bootstrappedAgent: string | null; created: boolean }>;
   deleteSession: (sid: string) => Promise<void>;
   emitForgeaXMessage: (
     sid: string,

@@ -40,6 +40,7 @@ function request(id: string, method: string, params: unknown): TransportRequest 
     version: TRANSPORT_PROTOCOL_VERSION,
     id,
     correlationId: `stdio-${id}`,
+    scope: 'default',
     method,
     params,
   };

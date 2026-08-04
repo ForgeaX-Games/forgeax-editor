@@ -52,6 +52,7 @@ import type { SceneAsset } from '@forgeax/engine-types';
 import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-facade';
 import type { ImportedPreviewSessionState } from '../../io/scene-authoring-session';
 import { normalizeAnimationPlayerSceneAsset } from '../../scene/animation-slot-sync';
+import { normalizeMaterialPackEntries } from '../../io/material-pack-refs';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -160,7 +161,10 @@ export interface DiskIo {
     readonly revision: string;
   }): Promise<ImportedPreviewSessionState | null>;
   instantiateSceneRefUnderWorld(sceneGuid: string, parentHandle: number): Promise<number | null>;
-  resolveAssetRefToHandle(guid: string, assetType: string): Promise<number | null>;
+  resolveAssetRefToHandle(guid: string, assetType: string): Promise<
+    | { ok: true; value: number }
+    | { ok: false; error: { code: string; hint: string; detail?: unknown } }
+  >;
   doLoadDocFromDisk(): Promise<boolean>;
   doSaveDocToDisk(options?: SaveDocToDiskOptions): Promise<SaveDocToDiskResult>;
   flushPendingSaveBeacon(): void;
@@ -169,7 +173,11 @@ export interface DiskIo {
 
 /** Remove the editor-only `EditorHidden` marker from a collected SceneAsset's
  *  entities so it never lands in the persisted pack (AC-04), while the entities
- *  themselves stay (AC-05). SceneAsset/entities are readonly, so rebuild.
+ *  themselves stay (AC-05). The derived engine `Disabled` marker (synced by
+ *  applySetHidden so hidden entities leave the viewport render) is stripped
+ *  alongside — hide state is editor-only; Play must show every entity (UE PIE
+ *  parity, docs 2026-08-04-editor-hide-ue-parity-plan §3.3).
+ *  SceneAsset/entities are readonly, so rebuild.
  *  Pure — no deps; exported standalone so scene-persistence re-exports it. */
 export function stripEditorHiddenMarker(asset: unknown): unknown {
   const a = asset as { kind: string; entities?: ReadonlyArray<{ localId: unknown; components: Record<string, unknown> }> };
@@ -177,8 +185,11 @@ export function stripEditorHiddenMarker(asset: unknown): unknown {
   return {
     ...a,
     entities: a.entities.map((e) => {
-      if (!e.components || !('EditorHidden' in e.components)) return e;
-      const { EditorHidden: _drop, ...rest } = e.components;
+      if (!e.components) return e;
+      const hasHidden = 'EditorHidden' in e.components;
+      const hasDisabled = 'Disabled' in e.components;
+      if (!hasHidden && !hasDisabled) return e;
+      const { EditorHidden: _dropH, Disabled: _dropD, ...rest } = e.components;
       return { ...e, components: rest };
     }),
   };
@@ -324,7 +335,17 @@ function appendInlineAssets(
       continue;
     }
     console.info(`[editor-core][diag]   ref=${refGuid} → INLINE (kind=${payload.kind}, pkg.path=${pkg?.path ?? 'null'}) → appending`);
-    assets.push({ guid: refGuid, kind: payload.kind, payload, refs: [], artifacts: {} });
+    const catalogRefs = reg.assetCatalog.get(key)?.refs;
+    assets.push({
+      guid: refGuid,
+      kind: payload.kind,
+      payload,
+      // The registry envelope can retain the refs that loaded this material.
+      // The material normalizer below converts AssetRef objects to wire strings
+      // and re-encodes any GUID-valued texture fields into indices.
+      refs: Array.isArray(catalogRefs) ? catalogRefs : [],
+      artifacts: {},
+    });
     already.add(key);
     appendedCount++;
   }
@@ -411,6 +432,11 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     // load snapshot so save cannot drop authored pack data below the floor.
     const orphanMerged = mergeLoadedInlineOrphans(packObj, ctx.loadedInlineAssets);
     const postAppendCount = (packObj.assets as Array<unknown>)?.length ?? 0;
+    const materialRefs = normalizeMaterialPackEntries(packObj);
+    if (!materialRefs.ok) {
+      console.warn('[editor-core][diag] worldToPack: material refs normalization refused save:', materialRefs.error);
+      return null;
+    }
     // The engine collector emits its historical v1 shell. Upgrade only at the
     // editor-owned persistence boundary; the engine runtime remains strict on
     // Pack v2 and does not need a legacy fallback.
@@ -599,25 +625,43 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    * u32 handle, or null on a bad GUID / load miss (caller surfaces it; NEVER
    * writes a 0). `assetType` is the engine asset-union tag allocSharedRef expects.
    */
-  async function resolveAssetRefToHandle(guid: string, assetType: string): Promise<number | null> {
+  async function resolveAssetRefToHandle(guid: string, assetType: string): Promise<
+    | { ok: true; value: number }
+    | { ok: false; error: { code: string; hint: string; detail?: unknown } }
+  > {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
-    if (!w || !reg) return null;
+    if (!w || !reg) return { ok: false, error: {
+      code: 'asset-registry-unavailable',
+      hint: 'The active editor world or asset registry is unavailable.',
+    } };
     try {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(guid);
-      if (!parsed.ok) { console.warn('[editor-core] resolveAssetRefToHandle: bad guid', guid); return null; }
+      if (!parsed.ok) return { ok: false, error: {
+        code: 'asset-guid-invalid',
+        hint: `Asset GUID ${guid} is not a valid RFC 4122 GUID.`,
+      } };
       const loadRes = await reg.loadByGuid(parsed.value);
-      if (!loadRes.ok) { console.warn('[editor-core] resolveAssetRefToHandle: loadByGuid failed:', { code: (loadRes.error as { code?: string })?.code, hint: (loadRes.error as { hint?: string })?.hint, detail: (loadRes.error as { detail?: unknown })?.detail, guid }); return null; }
+      if (!loadRes.ok) {
+        const cause = loadRes.error as { code?: string; hint?: string; detail?: unknown };
+        return { ok: false, error: {
+          code: cause.code ?? 'asset-load-failed',
+          hint: cause.hint ?? `Could not load asset ${guid}.`,
+          ...(cause.detail === undefined ? {} : { detail: cause.detail }),
+        } };
+      }
       // allocSharedRef is chrome handle-casting (mirrors drag-spawn-resolve's mesh/
       // material minting); the resulting handle rides the setComponent the op then
       // dispatches (which DOES go through the ledger). Cast to the u32 the component
       // shared<T> field stores.
       const handle = w.allocSharedRef(assetType as never, loadRes.value) as unknown as number;
-      return handle;
+      return { ok: true, value: handle };
     } catch (err) {
-      console.warn('[editor-core] resolveAssetRefToHandle: threw', err);
-      return null;
+      return { ok: false, error: {
+        code: 'asset-resolution-threw',
+        hint: err instanceof Error ? err.message : String(err),
+      } };
     }
   }
 
@@ -628,6 +672,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   async function doLoadDocFromDisk(): Promise<boolean> {
     const p = scenePath();
     if (!p) return false;
+    const reg = gateway.doc.registry;
     // Forget the previous scene's identity before loading a new one.
     ctx.currentSceneGuid = null;
     ctx.loadedInlineAssetFloor = null;
@@ -640,6 +685,38 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
         if (j.content) {
           const parsed = JSON.parse(j.content);
           if (isScenePack(parsed)) {
+            // Repair legacy material payloads before the engine reads the scene.
+            // This is deliberately persisted through the asset gate so a
+            // refresh cannot reintroduce the same malformed refs/metallic shape.
+            const materialRefs = normalizeMaterialPackEntries(parsed as unknown as Record<string, unknown>);
+            if (!materialRefs.ok) {
+              console.error('[editor-core][diag] doLoadDocFromDisk: unsafe material migration refused:', materialRefs.error);
+              return false;
+            }
+            if (materialRefs.changed) {
+              // Each entry is read-modify-written inside the asset gate. Do not
+              // replace the whole stale load snapshot: a concurrent create
+              // operation may have appended another authored asset meanwhile.
+              for (const entry of materialRefs.changedEntries) {
+                const migrated = await assetIO.writePackEntry(p, entry as never);
+                if (!migrated) {
+                  console.error('[editor-core][diag] doLoadDocFromDisk: material migration could not be persisted');
+                  return false;
+                }
+              }
+              console.info(
+                `[editor-core][diag] doLoadDocFromDisk: persisted material refs migration for ${materialRefs.changedEntries.length} asset(s)`,
+              );
+              // A refresh can arrive with the old scene/material payloads
+              // already ready in the registry. Invalidate the changed entries
+              // and the scene root before loadByGuid, otherwise its ready
+              // fast-path would bypass the repaired pack bytes.
+              for (const entry of materialRefs.changedEntries) {
+                if (typeof entry.guid === 'string') reg?.invalidate(entry.guid);
+              }
+              const migratedSceneGuid = parsed.assets.find((asset) => asset.kind === 'scene')?.guid;
+              if (typeof migratedSceneGuid === 'string') reg?.invalidate(migratedSceneGuid);
+            }
             // Capture the inline-asset floor from the pack AS LOADED, so a later
             // save that would drop materials below this is refused (see the guard
             // in doSaveDocToDisk / flushPendingSaveBeacon). Baseline the on-disk

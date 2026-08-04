@@ -13,14 +13,19 @@
  */
 import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { ManifestSchema, parseManifest, type ExtensionManifest } from '../src/manifest';
+import {
+  AnyManifestSchema,
+  ManifestSchema,
+  parseAnyManifest,
+  type AnyExtensionManifest,
+} from '../src/manifest';
 
 interface Finding {
   path: string;
   ok: boolean;
   errors?: string[];
   warnings?: string[];
-  manifest?: ExtensionManifest;
+  manifest?: AnyExtensionManifest;
 }
 
 function findRepoRoot(start: string): string {
@@ -72,7 +77,7 @@ function validate(file: string): Finding {
   try { json = JSON.parse(raw); } catch (e) {
     return { path: file, ok: false, errors: [`invalid JSON: ${(e as Error).message}`] };
   }
-  const r = parseManifest(json);
+  const r = parseAnyManifest(json);
   if (!r.ok) {
     return {
       path: file,
@@ -99,7 +104,11 @@ function main(): number {
 
   for (const f of passed) {
     const id = f.manifest?.id ?? '?';
-    const kind = f.manifest?.kind ?? '?';
+    const kind = f.manifest
+      ? 'kind' in f.manifest
+        ? f.manifest.kind
+        : f.manifest.categories?.join(',') ?? 'v2'
+      : '?';
     const warn = f.warnings?.length ? ` (warnings: ${f.warnings.length})` : '';
     console.log(`  ok  ${id.padEnd(40)} ${kind.padEnd(14)} ${f.path}${warn}`);
   }
@@ -121,4 +130,4 @@ if (import.meta.main) {
 }
 
 // Re-export for unit tests (bun test consumers)
-export { validate, listManifests, findRepoRoot, ManifestSchema };
+export { validate, listManifests, findRepoRoot, AnyManifestSchema, ManifestSchema };

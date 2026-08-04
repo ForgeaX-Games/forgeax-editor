@@ -14,6 +14,7 @@ test('versioned JSON-RPC messages retain correlation and run identity', () => {
     version: TRANSPORT_PROTOCOL_VERSION,
     id: 'request-1',
     correlationId: 'corr-1',
+    scope: 'game:demo',
     method: 'run.get',
     params: { runId: 'run-1' },
   };
@@ -33,9 +34,10 @@ test('versioned JSON-RPC messages retain correlation and run identity', () => {
 
 test('invalid version, missing fields, wrong types, and malformed lines are protocol errors', () => {
   const invalidMessages: unknown[] = [
-    { jsonrpc: '2.0', version: 'old', id: '1', correlationId: 'c', method: 'run.get', params: {} },
-    { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: '1', method: 'run.get', params: {} },
-    { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: 1, correlationId: 'c', method: 'run.get', params: {} },
+    { jsonrpc: '2.0', version: 'old', id: '1', correlationId: 'c', scope: 'game:demo', method: 'run.get', params: {} },
+    { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: '1', scope: 'game:demo', method: 'run.get', params: {} },
+    { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: 1, correlationId: 'c', scope: 'game:demo', method: 'run.get', params: {} },
+    { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: '1', correlationId: 'c', method: 'run.get', params: {} },
     '{not-json',
   ];
 

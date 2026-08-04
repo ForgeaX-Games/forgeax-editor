@@ -1,22 +1,23 @@
 /**
- * HealthIndicator — the compact "latest health state" chip on the FAR RIGHT of
- * the GlobalStatusBar.
+ * HealthChip — the compact "latest health state" chip on the FAR RIGHT of the
+ * status bar (statusbar.center, flex-end aligned).
  *
  * Replaces the old full-width HealthStatusBar strip: that strip's "latest line"
  * job collapses to this one chip (severity icon + truncated latest message +
- * ✖N⚠N counts), and its "full list" job moves to the Info dock panel. Clicking
- * the chip opens / focuses that Info panel via the 'app.panel.open' command.
+ * ✖N⚠N counts), and its "full list" job moves to the Info bottom drawer.
+ * Clicking the chip toggles that Info drawer via the 'app.drawer.toggle' command.
  *
- * Data comes from the standalone healthStore (same source the Info panel reads),
- * registered onto the bar via useStatusBarItem — no new data flow.
+ * ADR-0030 §2.2 — this chip is contributed as a `custom` StatusItemContribution
+ * (`healthStatusItem`) through the single panels channel; it owns its own
+ * healthStore subscription (the `custom` in-process escape hatch).
  */
 
 import { useMemo } from 'react';
 import { Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useHealthStore, type HealthLevel } from './healthStore';
-import { useStatusBarItem } from './store';
 import { useCommand } from '../../core/app-shell';
+import type { StatusItemContribution } from '../../core/panels';
 import './HealthIndicator.css';
 
 const ICONS: Record<HealthLevel, typeof Info> = {
@@ -26,15 +27,15 @@ const ICONS: Record<HealthLevel, typeof Info> = {
   error: XCircle,
 };
 
-export function HealthIndicator() {
+export function HealthChip() {
   const { t } = useTranslation();
   const entries = useHealthStore((s) => s.entries);
   const latest = entries.length ? entries[entries.length - 1]! : null;
 
-  // Open (or focus) the standalone Info dock panel via the command bus. Same
-  // semantics as the previous APP_EVENTS.openPanel CustomEvent — 'app.panel.open'
-  // emits 'panel:open' on the host bus, DockRegion subscribes and reopens/focuses.
-  const openInfoPanel = useCommand<{ id: string }>('app.panel.open');
+  // Toggle the Info bottom drawer via the command bus (ADR-0030 §2.3): the Info
+  // feed now lives in the drawer, not a dock panel. 'app.drawer.toggle' expands
+  // it upward (or collapses if already open).
+  const toggleInfoDrawer = useCommand<{ id: string }>('app.drawer.toggle');
 
   const counts = useMemo(() => {
     let err = 0, warn = 0;
@@ -52,13 +53,13 @@ export function HealthIndicator() {
     ? t('healthIndicator.tooltipWithMsg', { source: latest.source, message: latest.message })
     : t('healthIndicator.tooltipEmpty');
 
-  const node = (
+  return (
     <button
       type="button"
       className={`sb-health sb-health--${level}`}
-      onClick={() => { void openInfoPanel({ id: 'info' }); }}
+      onClick={() => { void toggleInfoDrawer({ id: 'info' }); }}
       title={title}
-      aria-label="Latest health status — open Info panel"
+      aria-label="Latest health status — toggle Info drawer"
     >
       <Icon className="sb-health-icon" size={12} />
       <span className="sb-health-msg">{msg}</span>
@@ -70,17 +71,15 @@ export function HealthIndicator() {
       )}
     </button>
   );
-
-  useStatusBarItem({
-    id: 'health.latest',
-    // The 'center' slot is the bar's flex spacer (it grows to fill the gap
-    // between the left/right chip groups and the bar's right edge). We align
-    // its content flex-end (see GlobalStatusBar.css) so this single chip pins
-    // to the FAR RIGHT of the status bar.
-    slot: 'center',
-    priority: 10,
-    node,
-  });
-
-  return null;
 }
+
+/** ADR-0030 §2.2 — health chip as a `custom` status-item contribution. The
+ *  'statusbar.center' slot is the flex spacer (content flex-end aligned) so
+ *  this single chip pins to the far right of the status bar. */
+export const healthStatusItem: StatusItemContribution = {
+  kind: 'status-item',
+  id: 'health.latest',
+  location: 'statusbar.center',
+  priority: 10,
+  item: { type: 'custom', render: () => <HealthChip /> },
+};

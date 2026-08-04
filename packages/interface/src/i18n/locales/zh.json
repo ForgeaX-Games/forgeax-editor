@@ -1155,6 +1155,9 @@
     "toggleDashboard": "切换 Dashboard 总览面板",
     "toggleSettings": "打开 / 关闭 Settings 浮层",
     "openChangelog": "Settings → Changelog(版本迭代记录)",
+    "hideSelected": "隐藏选中实体(UE 对标 · 编辑器临时隐藏,不影响游戏)",
+    "hideUnselected": "隐藏未选中实体(孤立选择)",
+    "showAllHidden": "显示所有隐藏实体",
     "closeOverlay": "关闭当前浮层 · 浏览器全屏 → 游戏全屏 → Settings → Dashboard 依次撤回",
     "modePreview": "切到 Preview 模式",
     "modeWorkbench": "切到 Workbench 模式",
@@ -1194,6 +1197,11 @@
     "fullscreenTitle": "界面渲染崩溃",
     "fullscreenHint": "React 界面渲染时抛错。先试「重试」；不行再「重载此区域」；仍异常则「重新加载 Studio」。桌面 app 无地址栏，必须用下面的按钮恢复。"
   },
+  "footerPanel": {
+    "info": "信息",
+    "checkpoints": "检查点",
+    "events": "事件"
+  },
   "infoPanel": {
     "clickToCopy": "点击复制此条 / Click to copy",
     "repeatedTimes": "重复 {{count}} 次",
@@ -1228,6 +1236,8 @@
     "mainPanels": "主面板",
     "morePanels": "更多面板",
     "extensionPanels": "扩展面板",
+    "hidePanelTitle": "隐藏面板标题栏",
+    "showPanelTitle": "显示面板标题栏",
     "panelTitles": {
       "hierarchy": "场景树",
       "assets": "文件资源管理器",

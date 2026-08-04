@@ -83,9 +83,9 @@ function hideLoadingOverlay(): void {
 }
 
 // ── Resolve gameId + validate (needed BEFORE createApp now) ──
-// Game slug format (path c): lowercase alphanumeric + hyphens, 2-41 chars.
+// Game slug format (path c): lowercase alphanumeric + hyphens, 1-41 chars.
 // Used for the physics gate below + the per-game pack-index URLs further down.
-const GAME_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+const GAME_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
 declare const __FORGEAX_STATIC_BUILD__: boolean;
 declare const __FORGEAX_STATIC_GAME_ID__: string;
@@ -112,7 +112,7 @@ async function resolveManagedCarrierScope(): Promise<void> {
   try {
     const [healthResponse, activeGameResponse] = await Promise.all([
       fetch('/api/health', { cache: 'no-store' }),
-      fetch('/api/workbench/active-slug', { cache: 'no-store' }),
+      fetch('/api/workbench/active-game', { cache: 'no-store' }),
     ]);
     if (!healthResponse.ok || !activeGameResponse.ok) return;
     const health = await healthResponse.json() as { instanceRootAbs?: unknown };

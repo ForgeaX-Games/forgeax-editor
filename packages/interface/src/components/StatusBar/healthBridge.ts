@@ -153,8 +153,12 @@ export function installHealthBridge(): void {
   // Wrap console.* so shell-side logs are captured. ALL levels feed the full-fidelity
   // browserConsole ring buffer (read by console.read{source:'browser'}); error/warn
   // ALSO feed the health store (status bar) as before. Original behaviour preserved.
+  // JSON.stringify escapes real newlines (e.g. React's `componentStack`) into
+  // the two literal chars "\n" — which the INFO panel's pre-wrap can't fold and
+  // shows verbatim. Un-escape them back to real line breaks so multi-line object
+  // args (stacks, etc.) render as wrapped lines instead of backslash-n text.
   const fmtArgs = (args: unknown[]): string =>
-    args.map((a) => (a instanceof Error ? a.message : typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })())).join(' ');
+    args.map((a) => (a instanceof Error ? a.message : typeof a === 'string' ? a : (() => { try { return JSON.stringify(a)?.replace(/\\n/g, '\n') ?? String(a); } catch { return String(a); } })())).join(' ');
 
   const wrapConsole = (
     level: ConsoleLevel,

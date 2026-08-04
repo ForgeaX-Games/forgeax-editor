@@ -8,8 +8,6 @@ import {
   type TransportRequest,
   type TransportResponse,
 } from '../contracts/transport';
-import type { GameRuntimePort } from '../contracts/runtime';
-import type { RuntimeAvailability } from '../contracts/runtime';
 import type { AssetLifecycleAdapter } from '../assets/preflight';
 import type { AssetWorkspace, AssetWorkspaceInput, AssetWorkspaceObservation } from '../assets/workspace';
 import { preflightAssetMutation, type AssetMutationRequest } from '../assets/preflight';
@@ -147,7 +145,6 @@ export function isTerminalTransportNotification(_value: unknown): false {
 
 export interface TransportServiceOptions {
   readonly product?: EditorProduct;
-  readonly runtime?: GameRuntimePort;
   /** The canonical workspace read model; no asset graph is created here. */
   readonly assetWorkspace?: AssetWorkspace;
   /** The canonical asset lifecycle seam owned by the host/gateway. */
@@ -160,6 +157,8 @@ export interface TransportServiceOptions {
   readonly security?: TransportSecurityPolicy;
   readonly dispatch?: (operationId: string, input: unknown, request: TransportAuthorizationRequest, signal?: AbortSignal) => unknown | Promise<unknown>;
   readonly query?: (input: unknown) => unknown | Promise<unknown>;
+  /** Host-owned typed gameplay bridge for the same live Editor carrier. */
+  readonly gameplay?: (input: unknown) => unknown | Promise<unknown>;
   readonly workflowCoordinator?: WorkflowCoordinator;
   readonly workflowRecipes?: WorkflowRecipeRegistry;
 }
@@ -169,7 +168,6 @@ export interface TransportDiscoveryResult {
   readonly manifest: EditorProduct['manifest'] | null;
   readonly capabilityManifest: ReturnType<EditorProduct['discover']>['capabilityManifest'] | null;
   readonly availability: EditorProduct['availability'] | { readonly available: false; readonly blocking: true; readonly code: 'product-unavailable'; readonly hint: string; readonly issues: readonly string[] };
-  readonly runtime: RuntimeAvailability | null;
   readonly methods: readonly string[];
   readonly workflowRecipes: readonly { readonly id: string; readonly version: string }[];
 }
@@ -281,24 +279,6 @@ function failedResult(value: unknown): value is { readonly ok: false; readonly e
   return value !== null && typeof value === 'object' && (value as { readonly ok?: unknown }).ok === false;
 }
 
-function unavailableRuntime(): RuntimeAvailability {
-  const unavailable = (reason: string) => ({ available: false as const, blocking: true, code: 'runtime-unavailable', reason, resolution: 'Connect a GameRuntimePort before invoking runtime methods.' });
-  return {
-    version: 'game-runtime/v1',
-    host: 'transport',
-    blocking: true,
-    capabilities: {
-      play: unavailable('No GameRuntimePort is connected.'),
-      stop: unavailable('No GameRuntimePort is connected.'),
-      query: unavailable('No GameRuntimePort is connected.'),
-      fixedStep: unavailable('No GameRuntimePort is connected.'),
-      dispose: unavailable('No GameRuntimePort is connected.'),
-      capture: unavailable('No GameRuntimePort is connected.'),
-      reveal: unavailable('No GameRuntimePort is connected.'),
-    },
-  };
-}
-
 function productUnavailable(): TransportDiscoveryResult['availability'] {
   return {
     available: false,
@@ -314,7 +294,7 @@ function requestAuth(request: TransportRequest, params: unknown): TransportAutho
   return {
     version: request.version,
     method: request.method,
-    scope: typeof value.scope === 'string' ? value.scope : 'default',
+    scope: request.scope,
     actor: value.actor as TransportActor ?? { id: 'transport-client', kind: 'ai' },
     sessionId: typeof value.sessionId === 'string' ? value.sessionId : 'transport-session',
     permission: value.permission as TransportAuthorizationRequest['permission'],
@@ -338,7 +318,6 @@ function errorResponse(request: TransportRequest, error: CommandError, runId?: s
 export function createTransportService(options: TransportServiceOptions = {}): TransportService {
   const journal = options.journal ?? new RunJournal({ scope: 'default' });
   const security = options.security ?? createTransportSecurityPolicy({ version: TRANSPORT_PROTOCOL_VERSION, scopes: ['default'], permissions: {} });
-  const runtime = options.runtime;
 
   const active = new Map<string, RunExecutionState>();
   const activeWorkflows = new Map<string, Promise<unknown>>();
@@ -351,7 +330,12 @@ export function createTransportService(options: TransportServiceOptions = {}): T
     return result.ok ? terminalResponse(request, result.value, requestId) : errorResponse(request, result.error, requestId);
   }
 
-  async function dispatchSave(request: TransportRequest, input: unknown, authInput: unknown = input): Promise<TransportResponse> {
+  async function dispatchSave(
+    request: TransportRequest,
+    input: unknown,
+    authInput: unknown = input,
+    asynchronous = false,
+  ): Promise<TransportResponse> {
     const requestId = record(input).requestId;
     if (typeof requestId !== 'string' || requestId.trim() === '') {
       return errorResponse(request, securityError('invalid-request-id', 'save requires a non-empty requestId.', { recoveryActions: ['transport.describe'] }));
@@ -362,9 +346,12 @@ export function createTransportService(options: TransportServiceOptions = {}): T
     const port = options.operationRuns;
     if (port === undefined) return operationRunUnavailable(request);
     const accepted: OperationRunAcceptResult = port.dispatchSave(requestId, input, auth.actor);
-    return accepted.ok
-      ? terminalResponse(request, accepted.run, accepted.runId)
-      : errorResponse(request, accepted.error);
+    if (!accepted.ok) return errorResponse(request, accepted.error);
+    if (asynchronous) return terminalResponse(request, accepted.run, accepted.runId);
+    const completed = await port.wait(requestId);
+    return completed.ok
+      ? terminalResponse(request, completed.value, accepted.runId)
+      : errorResponse(request, completed.error, accepted.runId);
   }
 
   function discovery(): TransportDiscoveryResult {
@@ -374,13 +361,11 @@ export function createTransportService(options: TransportServiceOptions = {}): T
       manifest: product?.manifest ?? null,
       capabilityManifest: product?.capabilityManifest ?? null,
       availability: product?.availability ?? productUnavailable(),
-      runtime: runtime?.availability() ?? unavailableRuntime(),
       methods: Object.freeze([
-        'discover', 'transport.describe', 'query', 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
+        'discover', 'transport.describe', 'query', ...(options.gameplay === undefined ? [] : ['gameplay']), 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
         'run.list', 'run.listEvents', 'run.retry', 'run.cancel', 'run.reconcile',
         'workflow.start', 'workflow.get', 'workflow.recover', 'workflow.retry', 'workflow.listRecipes',
-        'save', 'reopen', 'runtime.play', 'runtime.stop', 'runtime.query', 'runtime.fixedStep', 'runtime.dispose',
-        'runtime.capture', 'runtime.reveal',
+        'save', 'reopen',
       ]),
       workflowRecipes: Object.freeze((options.workflowRecipes?.list() ?? []).map((recipe) => ({ id: recipe.id, version: recipe.version }))),
     };
@@ -397,19 +382,11 @@ export function createTransportService(options: TransportServiceOptions = {}): T
       if (options.dispatch !== undefined) value = await options.dispatch(operationId, input, auth, signal);
       else if (operationId === 'asset.mutate' && options.assetLifecycle !== undefined) value = await options.assetLifecycle.run(input as AssetMutationRequest);
       else if (operationId === 'asset.restore' && options.assetRestore !== undefined) value = await options.assetRestore(input, signal);
-      else if (runtime !== undefined && isRuntimeOperation(operationId)) {
-        const executed = await executeRuntime(runtime, operationId.startsWith('runtime.') ? operationId.slice('runtime.'.length) : operationId, input);
-        if (!executed.ok) return executed;
-        value = executed.value;
-      } else if (options.product !== undefined) {
+      else if (options.product !== undefined) {
         const executed = await options.product.capabilityRegistry.execute(operationId, input, { host: 'bun', signal });
         if (!executed.ok) return executed;
         value = executed.result;
-      } else {
-        const executed = await executeRuntime(runtime, operationId, input);
-        if (!executed.ok) return executed;
-        value = executed.value;
-      }
+      } else return { ok: false, error: securityError('executor-unavailable', 'no product executor is connected', { recoveryActions: ['editor.discover'] }) };
       if (failedResult(value)) {
         const error = commandError(value.error, securityError('operation-failed', 'The operation returned a structured failure.', { recoveryActions: ['run.retry'] }));
         return { ok: false, error };
@@ -463,7 +440,12 @@ export function createTransportService(options: TransportServiceOptions = {}): T
       retryable: true,
     });
     if (!accepted.ok) return errorResponse(request, accepted.error);
-    if (accepted.reused) return runStatus(request, accepted.runId);
+    if (accepted.reused) {
+      const reused = journal.getRunResult(accepted.runId);
+      return reused.ok && isTerminalRunStatus(reused.value.status)
+        ? terminalResponse(request, reused.value, accepted.runId)
+        : runStatus(request, accepted.runId);
+    }
     const running = journal.append({ type: 'running', runId: accepted.runId, at: Date.now() });
     if (!running.ok) return errorResponse(request, running.error, accepted.runId);
     const controller = new AbortController();
@@ -475,7 +457,10 @@ export function createTransportService(options: TransportServiceOptions = {}): T
     if (runOptions.asynchronous === true) return runStatus(request, accepted.runId);
     const result = await completion;
     if (!result.ok) return errorResponse(request, result.error, accepted.runId);
-    return runStatus(request, accepted.runId);
+    const terminal = journal.getRunResult(accepted.runId);
+    return terminal.ok
+      ? terminalResponse(request, terminal.value, accepted.runId)
+      : errorResponse(request, terminal.error, accepted.runId);
   }
 
   async function runRetry(request: TransportRequest, params: Record<string, unknown>): Promise<TransportResponse> {
@@ -537,13 +522,13 @@ export function createTransportService(options: TransportServiceOptions = {}): T
     return terminalResponse(request, { runId, snapshotRevision, events: page, ...(nextCursor === undefined ? {} : { nextCursor }) }, runId);
   }
 
-  function workflowRequest(params: Record<string, unknown>, runId: string): { runId: string; actor: TransportActor; sessionId: string; scope: string; input?: unknown; idempotencyKey?: string; attempt?: number; parentRunId?: string } {
+  function workflowRequest(params: Record<string, unknown>, runId: string, scope: string): { runId: string; actor: TransportActor; sessionId: string; scope: string; input?: unknown; idempotencyKey?: string; attempt?: number; parentRunId?: string } {
     const actor = params.actor as TransportActor | undefined;
     return {
       runId,
       actor: actor ?? { id: 'transport-client', kind: 'ai' },
       sessionId: typeof params.sessionId === 'string' ? params.sessionId : 'transport-session',
-      scope: typeof params.scope === 'string' ? params.scope : 'default',
+      scope,
       ...(Object.prototype.hasOwnProperty.call(params, 'input') ? { input: params.input } : {}),
       ...(typeof params.idempotencyKey === 'string' ? { idempotencyKey: params.idempotencyKey } : {}),
     };
@@ -555,7 +540,7 @@ export function createTransportService(options: TransportServiceOptions = {}): T
     const recipe = params.recipe as WorkflowRecipe | undefined ?? (typeof params.recipeId === 'string' ? options.workflowRecipes?.get(params.recipeId) : undefined);
     if (recipe === undefined) return errorResponse(request, securityError('workflow-recipe-unavailable', 'Provide a registered recipeId or an inline workflow recipe.', { recoveryActions: ['workflow.listRecipes'] }));
     const runId = typeof params.runId === 'string' ? params.runId : `workflow-${request.id}`;
-    const started = coordinator.startWorkflow(recipe, workflowRequest(params, runId));
+    const started = coordinator.startWorkflow(recipe, workflowRequest(params, runId, request.scope));
     if (!started.ok) return errorResponse(request, started.error, runId);
     const completion = started.completion.finally(() => activeWorkflows.delete(started.runId));
     activeWorkflows.set(started.runId, completion);
@@ -601,6 +586,14 @@ export function createTransportService(options: TransportServiceOptions = {}): T
 
   const service: TransportService = {
     async handle(request) {
+      const declaredScope = record(request.params).scope;
+      if (typeof declaredScope === 'string' && declaredScope !== request.scope) {
+        return errorResponse(request, securityError('scope-mismatch', 'params scope does not match the transport routing scope.', {
+          expected: { scope: request.scope },
+          scope: { requested: declaredScope, allowed: [request.scope] },
+          recoveryActions: ['transport.describe', 'scope.select'],
+        }));
+      }
       if (request.method === 'discover' || request.method === 'transport.describe') return terminalResponse(request, discovery());
       if (request.method === 'asset.snapshot') {
         const workspace = options.assetWorkspace;
@@ -715,6 +708,16 @@ export function createTransportService(options: TransportServiceOptions = {}): T
         const result = options.query === undefined ? { ok: true, value: undefined } : await options.query(request.params);
         return terminalResponse(request, result, undefined);
       }
+      if (request.method === 'gameplay') {
+        if (options.gameplay === undefined) return errorResponse(request, securityError('not-supported', 'No live gameplay bridge is connected.'));
+        // Gameplay owns a distinct versioned success/failure envelope. Preserve
+        // it as result data instead of reinterpreting ok:false as CommandError.
+        return {
+          jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION,
+          id: request.id, correlationId: request.correlationId,
+          result: await options.gameplay(request.params),
+        };
+      }
       if (request.method === 'save') {
         const input = record(request.params);
         return typeof input.requestId === 'string'
@@ -722,14 +725,16 @@ export function createTransportService(options: TransportServiceOptions = {}): T
           : runOperation(request, 'saveDocToDisk', request.params);
       }
       if (request.method === 'reopen') return runOperation(request, 'reopenDocument', request.params);
-      if (request.method.startsWith('runtime.')) return runOperation(request, request.method.slice(8), request.params);
       if (request.method === 'run.dispatch') {
         const params = record(request.params);
         const operationId = typeof params.operationId === 'string' ? params.operationId : 'unknown';
         const input = params.input;
         return operationId === 'saveDocToDisk' && typeof record(input).requestId === 'string'
-          ? dispatchSave(request, input, params)
-          : runOperation(request, operationId, input, params, { asynchronous: params.async === true });
+          ? dispatchSave(request, input, params, params.async === true)
+          : runOperation(request, operationId, input, params, {
+            asynchronous: params.async === true,
+            ...(typeof params.idempotencyKey === 'string' ? { idempotencyKey: params.idempotencyKey } : {}),
+          });
       }
       return errorResponse(request, securityError('not-supported', 'transport method is not registered'));
     },
@@ -745,27 +750,4 @@ export function createTransportService(options: TransportServiceOptions = {}): T
     listEvents(runId) { return journal.listEvents(runId); },
   };
   return service;
-}
-
-function isRuntimeOperation(operationId: string): boolean {
-  const normalized = operationId.startsWith('runtime.') ? operationId.slice('runtime.'.length) : operationId;
-  return normalized === 'play'
-    || normalized === 'stop'
-    || normalized === 'query'
-    || normalized === 'fixedStep'
-    || normalized === 'dispose'
-    || normalized === 'capture'
-    || normalized === 'reveal';
-}
-
-async function executeRuntime(runtime: GameRuntimePort | undefined, operationId: string, input: unknown): Promise<{ readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: CommandError }> {
-  if (runtime === undefined) return { ok: false, error: securityError('executor-unavailable', 'no product executor is connected', { recoveryActions: ['editor.discover'] }) };
-  if (operationId === 'play') return runtime.play();
-  if (operationId === 'stop') return runtime.stop();
-  if (operationId === 'query') return runtime.query(typeof input === 'string' ? input : undefined);
-  if (operationId === 'fixedStep') return runtime.fixedStep(typeof input === 'number' ? input : Number((input as { deltaMs?: unknown })?.deltaMs ?? 0));
-  if (operationId === 'dispose') return runtime.dispose();
-  if (operationId === 'capture') return runtime.capture();
-  if (operationId === 'reveal') return runtime.reveal(input);
-  return { ok: false, error: securityError('not-supported', 'runtime operation is not registered') };
 }

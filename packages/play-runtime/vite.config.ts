@@ -12,6 +12,7 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { buildPerGameCatalog } from './pack-catalog.js';
+import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -936,10 +937,7 @@ export default defineConfig({
       usePolling: true,
       interval: 300,
       ignored: [
-        '**/.forgeax/agenteam-state/**',
-        '**/.forgeax/cache/**',
-        '**/.forgeax/packs/**',
-        '**/node_modules/**',
+        ...PLAY_RUNTIME_STATIC_WATCH_IGNORES,
         // Game backup snapshots (`<slug>.bak-<ts>` / `<slug>.bak`) are NOT games;
         // ignore them so vite's tsconfig watcher won't force-reload on their
         // tsconfig.json and forgeaxGameRescan won't restart-loop (preview black

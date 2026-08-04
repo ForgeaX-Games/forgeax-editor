@@ -6,6 +6,49 @@
  * generation have been derived from the manifest registry.
  */
 import { z } from 'zod';
+import type { ToolCall } from './tool';
+
+/** Options supplied by an extension when it invokes a host capability. */
+export interface ExtensionCapabilityInvocationOptions {
+  readonly requestId?: string;
+}
+
+/** Host-owned scope attached to each extension capability invocation. */
+export interface ExtensionCapabilityInvocationContext {
+  readonly caller: ToolCall['caller'];
+  readonly toolId: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly cwd: string;
+  readonly projectRoot: string;
+  readonly game?: string;
+}
+
+/** A product-private implementation of a versioned host capability. */
+export interface ExtensionCapabilityProvider {
+  readonly capabilityId: string;
+  readonly version: number;
+  invoke(
+    input: unknown,
+    options: ExtensionCapabilityInvocationOptions,
+    context: ExtensionCapabilityInvocationContext,
+  ): Promise<unknown>;
+}
+
+/** Product composition seam used to register private capability providers. */
+export interface ExtensionCapabilityControl {
+  registerProvider(provider: ExtensionCapabilityProvider): void;
+}
+
+/** Extension-facing capability bridge already bound to the current tool scope. */
+export interface ScopedExtensionCapabilities {
+  has(capabilityId: string, version: number): boolean;
+  invoke(
+    capabilityId: string,
+    version: number,
+    input: unknown,
+    options?: ExtensionCapabilityInvocationOptions,
+  ): Promise<unknown>;
+}
 
 export const CapabilityKindSchema = z.enum([
   'skill',

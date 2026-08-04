@@ -20,7 +20,7 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, ungroupEntity } from '@forgeax/editor-core';
+import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, setHiddenMany, showAllHidden, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
 // setters (setSelection/setHoverEntity/toggleSelection) or the origin-less
@@ -278,11 +278,14 @@ interface HierarchyRowVM {
   readonly name: string;
   readonly typeId: string;
   readonly hidden: boolean;
+  /** UE-parity recursive hide: a strict ancestor carries EditorHidden, so this
+   *  row renders dimmed (lighter than own-hidden) even though its own eye is on. */
+  readonly ancestorHidden: boolean;
   readonly mobilityKey: ReturnType<typeof hierarchyMobility>;
   readonly childIds: readonly EntityHandle[];
 }
 const MISSING_ROW_VM: HierarchyRowVM = {
-  exists: false, name: '', typeId: '', hidden: false, mobilityKey: '', childIds: EMPTY_IDS,
+  exists: false, name: '', typeId: '', hidden: false, ancestorHidden: false, mobilityKey: '', childIds: EMPTY_IDS,
 };
 // One component-name index per doc change, rebuilt lazily the first time any row
 // reads a snapshot after a change (dirty flag) — so a 60fps churn rebuilds the
@@ -302,14 +305,34 @@ function rowVmEqual(a: HierarchyRowVM, b: HierarchyRowVM): boolean {
     && a.name === b.name
     && a.typeId === b.typeId
     && a.hidden === b.hidden
+    && a.ancestorHidden === b.ancestorHidden
     && a.mobilityKey === b.mobilityKey
     && idsEqual(a.childIds, b.childIds);
+}
+// Rebuilt alongside the component-name index: handles carrying EditorHidden, so
+// a row's ancestor-hidden lookup is a Set probe instead of a per-row query.
+let rowVmHiddenSet: ReadonlySet<EntityHandle> = new Set();
+function ancestorHiddenOf(world: NonNullable<typeof gateway.activeWorld>, id: EntityHandle): boolean {
+  const seen = new Set<number>();
+  let cur: EntityHandle | undefined = id;
+  for (;;) {
+    if (cur === undefined || seen.has(cur as number)) return false;
+    seen.add(cur as number);
+    const co = entComponent(world, cur, 'ChildOf');
+    if (!co.ok) return false;
+    const parent = (co.value as { parent: EntityHandle }).parent;
+    if (rowVmHiddenSet.has(parent)) return true;
+    cur = parent;
+  }
 }
 function rowVmSnapshot(id: EntityHandle): HierarchyRowVM {
   if (rowVmDirty) {
     rowVmDirty = false;
     const w = gateway.activeWorld;
     rowVmCompIndex = w ? worldComponentNames(w) : EMPTY_COMP_INDEX;
+    const hidden = new Set<EntityHandle>();
+    for (const [handle, compNames] of rowVmCompIndex) if (compNames.includes('EditorHidden')) hidden.add(handle);
+    rowVmHiddenSet = hidden;
   }
   const prev = rowVmCache.get(id);
   const world = gateway.activeWorld;
@@ -324,6 +347,7 @@ function rowVmSnapshot(id: EntityHandle): HierarchyRowVM {
     name: entName(world, id),
     typeId: getHierarchyEntityType(names, world, id).id,
     hidden: names.includes('EditorHidden'),
+    ancestorHidden: ancestorHiddenOf(world, id),
     mobilityKey: hierarchyMobility(entComponentsPresent(world, id, names)),
     childIds: childrenOf(world, id),
   };
@@ -427,6 +451,7 @@ function projectionRow(projection: HierarchyStructureProjection | undefined, id:
     name: row.name,
     typeId: row.typeId,
     hidden: row.hidden ?? false,
+    ancestorHidden: row.ancestorHidden ?? false,
     mobilityKey: row.mobility,
     childIds: row.childIds,
   };
@@ -479,7 +504,7 @@ const Row = memo(function Row({
   // Cross-game gap: activeWorld may be briefly undefined while old Row fibers
   // still re-render — the snapshot reports exists:false and we bail (AC-01).
   if (!vm.exists) return null;
-  const { name: nodeName, typeId, hidden: nodeHidden, mobilityKey } = vm;
+  const { name: nodeName, typeId, hidden: nodeHidden, ancestorHidden: nodeAncestorHidden, mobilityKey } = vm;
   const children = vm.childIds;
   const kids = flat ? EMPTY_IDS : children;
   const renderedKids = virtualized ? EMPTY_IDS : kids;
@@ -496,9 +521,9 @@ const Row = memo(function Row({
     <>
       <div
         ref={rowRef}
-        className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${isHovered ? ' hov' : ''}`}
+        className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : nodeAncestorHidden ? ' pdim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${isHovered ? ' hov' : ''}`}
         data-testid={`hier-row-${id}`}
-        title={`${nodeName} · #${id}`}
+        title={`${nodeName} · #${id}${!nodeHidden && nodeAncestorHidden ? ` · ${t('editor.hierarchy.hiddenByAncestor')}` : ''}`}
         onMouseEnter={() => gateway.dispatch({ kind: 'setHoverEntity', id })}
         onMouseLeave={() => gateway.dispatch({ kind: 'setHoverEntity', id: null })}
         onClick={(e) => {
@@ -559,15 +584,13 @@ const Row = memo(function Row({
             e.stopPropagation();
             if (readOnly) return;
             const newHidden = !nodeHidden;
-            gateway.dispatch({ kind: 'setHidden', entity: id, hidden: newHidden });
+            // Same-state selected siblings follow the click as ONE transaction
+            // (one undo step) via the shared core op (north-star §3.2).
             const sel = getSelectionList();
-            if (sel.has(id)) {
-              for (const sid of sel) {
-                if (sid === id) continue;
-                const sameState = entComponent(gateway.activeWorld, sid, 'EditorHidden').ok === nodeHidden;
-                if (sameState) gateway.dispatch({ kind: 'setHidden', entity: sid, hidden: newHidden });
-              }
-            }
+            const ids = sel.has(id)
+              ? [id, ...[...sel].filter((sid) => sid !== id && entComponent(gateway.activeWorld, sid, 'EditorHidden').ok === nodeHidden)]
+              : [id];
+            setHiddenMany(ids, newHidden);
           }}
         >
           {nodeHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
@@ -715,10 +738,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
     && visibilityTargets.every((id) => entComponent(gateway.activeWorld, id, 'EditorHidden').ok);
   const setFolderHidden = (hidden: boolean) => {
     if (readOnly) return;
-    for (const id of visibilityTargets) {
-      const currentlyHidden = entComponent(gateway.activeWorld, id, 'EditorHidden').ok;
-      if (currentlyHidden !== hidden) gateway.dispatch({ kind: 'setHidden', entity: id, hidden });
-    }
+    setHiddenMany(visibilityTargets, hidden);
   };
   return (
     <>
@@ -981,11 +1001,8 @@ export function HierarchyPanel() {
   };
   const showAll = () => {
     if (!gateway.activeWorld || readOnly) return;
-    for (const id of worldEntityHandles(gateway.activeWorld)) {
-      if (entComponent(gateway.activeWorld, id, 'EditorHidden').ok) {
-        gateway.dispatch({ kind: 'setHidden', entity: id, hidden: false });
-      }
-    }
+    // Same shared core op as Ctrl+H (one transaction, one undo step).
+    showAllHidden();
   };
   const clearViewFilters = () => {
     clearHierarchySearchQuery();
@@ -1034,7 +1051,7 @@ export function HierarchyPanel() {
     if (childrenOf(gateway.activeWorld, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), icon: 'layers', onClick: () => ungroupEntity(m.id) });
     const hidden = entComponent(gateway.activeWorld, m.id, 'EditorHidden').ok;
     items.push({ sep: true });
-    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', onClick: () => gateway.dispatch({ kind: 'setHidden', entity: m.id, hidden: !hidden }), disabled: readOnly });
+    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', shortcut: 'H', onClick: () => gateway.dispatch({ kind: 'setHidden', entity: m.id, hidden: !hidden }), disabled: readOnly });
     items.push({ label: t('editor.hierarchy.menu.focusViewport'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport });
     items.push({ label: t('editor.hierarchy.menu.lock'), icon: 'shield-check', disabled: true });
     items.push({ label: t('editor.hierarchy.menu.moveTo'), icon: 'folder', disabled: true });
@@ -1054,7 +1071,7 @@ export function HierarchyPanel() {
       { label: t('editor.hierarchy.menu.collapseAll'), icon: 'chevrons-down-up', onClick: collapseHierarchyAll },
       { label: t('editor.hierarchy.menu.clearSearchFilters'), icon: 'folder-search', onClick: clearViewFilters, disabled: !hasHierarchyViewFilter() },
       { sep: true },
-      { label: t('editor.hierarchy.menu.showAll'), icon: 'eye', onClick: showAll, disabled: readOnly },
+      { label: t('editor.hierarchy.menu.showAll'), icon: 'eye', shortcut: 'Ctrl+H', onClick: showAll, disabled: readOnly },
       { label: t('editor.hierarchy.menu.focusSelection'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport, disabled: getSelection() === null },
       { label: t('editor.hierarchy.menu.refreshOutliner'), icon: 'refresh-cw', disabled: true },
     ];

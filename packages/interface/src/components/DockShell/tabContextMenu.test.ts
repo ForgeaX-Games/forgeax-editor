@@ -30,4 +30,25 @@ describe('buildTabContextMenuItems', () => {
     const items = buildTabContextMenuItems('DockShell', 'chat', () => {});
     expect(items.slice(0, 3)).toEqual(['close', 'closeOthers', 'separator']);
   });
+
+  it('single-panel groups offer a title-bar hide action', () => {
+    let hidden = false;
+    const items = buildTabContextMenuItems('DockShell', 'chat', () => {}, {
+      groupPanelCount: 1,
+      onHideTitle: () => { hidden = true; },
+    });
+    const hide = items.find((x): x is { label: string; action: () => void } =>
+      typeof x === 'object' && x !== null && x.label === 'Hide Panel Title Bar');
+    expect(hide).toBeDefined();
+    hide?.action();
+    expect(hidden).toBe(true);
+  });
+
+  it('multi-panel groups do not offer a title-bar hide action', () => {
+    const items = buildTabContextMenuItems('DockShell', 'chat', () => {}, {
+      groupPanelCount: 2,
+      onHideTitle: () => {},
+    });
+    expect(items.some((x) => typeof x === 'object' && x.label === 'Hide Panel Title Bar')).toBe(false);
+  });
 });

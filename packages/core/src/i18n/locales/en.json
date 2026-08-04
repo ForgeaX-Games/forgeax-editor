@@ -25,6 +25,7 @@
       "switchingGame": "Switching game...",
       "noMatch": "no match",
       "childCount": "{{count}} child node(s)",
+      "hiddenByAncestor": "hidden by parent",
       "searchPlaceholder": "Search name / type...",
       "searchAria": "Search hierarchy by name or type",
       "clearSearch": "Clear search",

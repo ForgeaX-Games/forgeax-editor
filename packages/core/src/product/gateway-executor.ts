@@ -23,6 +23,7 @@ import { RunJournal } from '@forgeax/editor-product';
 import type { ArgsSchema, OpDescriptor } from '../io/catalog';
 import type { CommandOrigin } from '../io/gateway-history';
 import type { EditorOp } from '../types';
+import { awaitAssetWriteCompletion } from '../session/pack-ops';
 
 export interface GatewayDispatchResult {
   readonly ok: boolean;
@@ -87,15 +88,87 @@ function gatewayAvailability(
   };
 }
 
-function executeGatewayCommand(
+function operationRunFromGatewayResult(result: GatewayDispatchResult): OperationRun | undefined {
+  const nested = result.result !== null && typeof result.result === 'object'
+    ? result.result as Record<string, unknown>
+    : undefined;
+  const run = result.operationRun ?? nested?.operationRun;
+  return run !== null && typeof run === 'object' ? run as OperationRun : undefined;
+}
+
+function replaceGatewayOperationRun(
+  result: GatewayDispatchResult,
+  run: OperationRun,
+): GatewayDispatchResult {
+  const nested = result.result !== null && typeof result.result === 'object'
+    ? result.result as Record<string, unknown>
+    : undefined;
+  return nested === undefined
+    ? { ...result, operationRun: run }
+    : { ...result, result: { ...nested, operationRun: run } };
+}
+
+async function executeGatewayCommand(
   source: GatewayCapabilitySource,
   descriptor: OpDescriptor,
   input: unknown,
-): GatewayDispatchResult {
+): Promise<GatewayDispatchResult> {
   const args = input !== null && typeof input === 'object'
     ? input as Record<string, unknown>
     : { value: input };
-  return source.dispatch!({ kind: descriptor.id, ...args }, 'ai');
+  const result = source.dispatch!({ kind: descriptor.id, ...args }, 'ai');
+  if (!result.ok) return result;
+  const completionGuid = descriptor.completion === undefined
+    ? undefined
+    : args[descriptor.completion.guidField];
+  if (typeof completionGuid === 'string') {
+    try {
+      await awaitAssetWriteCompletion(completionGuid);
+    } catch (cause) {
+      return { ok: false, error: {
+        code: descriptor.completion?.kind === 'asset-visible'
+          ? 'asset-visibility-timeout'
+          : 'asset-write-failed',
+        hint: cause instanceof Error
+          ? cause.message
+          : `Created asset ${completionGuid} did not become visible in the live asset catalog.`,
+        retryable: true,
+        recoveryActions: descriptor.completion?.kind === 'asset-visible'
+          ? ['editor.requestReimport', 'request.retry']
+          : ['request.retry'],
+      } };
+    }
+  }
+  const accepted = operationRunFromGatewayResult(result);
+  if (accepted === undefined) return result;
+  if (accepted.status === 'succeeded') return result;
+  if (accepted.status === 'failed' || accepted.status === 'cancelled') {
+    return { ok: false, error: accepted.error ?? {
+      code: 'operation-failed',
+      hint: `Gateway operation "${descriptor.id}" ended ${accepted.status}.`,
+      retryable: accepted.retryable,
+      recoveryActions: accepted.recoveryActions,
+    } };
+  }
+  if (source.operationRuns === undefined || typeof accepted.requestId !== 'string') {
+    return { ok: false, error: {
+      code: 'operation-run-unavailable',
+      hint: `Gateway operation "${descriptor.id}" requires terminal run tracking.`,
+      retryable: true,
+      recoveryActions: ['run.wait', 'editor.discover'],
+    } };
+  }
+  const completed = await source.operationRuns.wait(accepted.requestId);
+  if (!completed.ok) return { ok: false, error: completed.error };
+  if (completed.value.status !== 'succeeded') {
+    return { ok: false, error: completed.value.error ?? {
+      code: 'operation-failed',
+      hint: `Gateway operation "${descriptor.id}" ended ${completed.value.status}.`,
+      retryable: completed.value.retryable,
+      recoveryActions: completed.value.recoveryActions,
+    } };
+  }
+  return replaceGatewayOperationRun(result, completed.value);
 }
 
 function unavailableRunResult<T = OperationRun>(): OperationRunReadResult<T> {
@@ -251,8 +324,10 @@ export function createGatewayCapabilityAdapter(
     const journal = journalFor(request.scope);
     const progress = journal.updateProgress(accepted.runId, { fraction: 1, stage: 'complete' });
     if (!progress.ok) return { ok: false, error: progress.error };
-    const descriptor = descriptors.get(operationId)!;
-    const result = executeGatewayCommand(source, descriptor, input);
+    const inputArgs = input !== null && typeof input === 'object'
+      ? input as Record<string, unknown>
+      : { value: input };
+    const result = source.dispatch!({ kind: operationId, ...inputArgs }, 'ai');
     if (result.ok === false) {
       const runError = (result.error as import('@forgeax/editor-product').CommandError | undefined) ?? {
         code: 'operation-failed',

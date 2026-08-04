@@ -543,6 +543,88 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes gu
   });
 });
 
+describe('doLoadDocFromDisk — legacy material refs migration', () => {
+  it('persists refs/index repairs and invalidates ready registry payloads before refresh load', async () => {
+    const sceneGuid = '11111111-2222-5333-8444-555555555555';
+    const materialGuid = 'aaaaaaaa-bbbb-4ccc-dddd-000000000001';
+    const textureGuid = '019fc6c4-b507-7a87-a87c-a803faf8baa7';
+    const pack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: sceneGuid,
+          kind: 'scene',
+          payload: { entities: [] },
+          refs: [materialGuid],
+        },
+        {
+          guid: materialGuid,
+          kind: 'material',
+          payload: {
+            kind: 'material',
+            values: {
+              metallic: textureGuid,
+              baseColorTexture: textureGuid,
+            },
+          },
+          refs: [],
+        },
+      ],
+    };
+    const invalidated: string[] = [];
+    const registry = {
+      assetCatalog: new Map(),
+      async loadByGuid() {
+        return { ok: true, value: { kind: 'scene', entities: [] } };
+      },
+      catalog(_guid: string, payload: unknown) {
+        return { ok: true, value: payload };
+      },
+      invalidate(guid: string) {
+        invalidated.push(guid);
+      },
+      instantiateFlat() {
+        return { ok: true, value: [] };
+      },
+    } as never;
+    const ctx = createScenePersistenceContext();
+    ctx.currentSceneId = 'shoot';
+    const net = makeNetSpies({
+      fetchTimeoutImpl: () => Promise.resolve(new Response(JSON.stringify({ content: JSON.stringify(pack) }), { status: 200 })),
+    });
+    const world = new World();
+    const gateway = makeFakeGateway({ world, registry }).gateway;
+    const { deps } = makeDeps({
+      ctx,
+      gateway,
+      fetch: net.fetch,
+      fetchWithTimeout: net.fetchWithTimeout,
+      resolveGamePath: () => '/games/g1/scene.pack.json',
+    });
+    const originalWritePackEntry = assetIO.writePackEntry;
+    const migratedEntries: unknown[] = [];
+    assetIO.writePackEntry = (async (_packPath: string, entry) => {
+      migratedEntries.push(entry);
+      return true;
+    }) as typeof assetIO.writePackEntry;
+
+    try {
+      expect(await createDiskIo(deps).doLoadDocFromDisk()).toBe(true);
+    } finally {
+      assetIO.writePackEntry = originalWritePackEntry;
+    }
+
+    const material = migratedEntries.find(
+      (entry) => (entry as { guid?: string }).guid === materialGuid,
+    ) as { refs: string[]; payload: { values?: Record<string, unknown> } } | undefined;
+    expect(material?.refs).toEqual([textureGuid]);
+    expect(material?.payload.values).toMatchObject({ metallic: 0, baseColorTexture: 0 });
+    expect(invalidated).toEqual([materialGuid, sceneGuid]);
+    expect(ctx.loadedInlineAssets?.[0]?.refs).toEqual([textureGuid]);
+  });
+});
+
 describe('loadSceneByGuid — headless world short-circuits (AC-02)', () => {
   it('returns false when gateway.doc has no world/registry', async () => {
     const { deps } = makeDeps();

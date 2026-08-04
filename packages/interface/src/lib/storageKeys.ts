@@ -39,8 +39,6 @@ export const STORAGE_KEYS = {
   activeSid: 'forgeax.activeSid',
   /** active tab id. */
   activeTabId: 'forgeax.activeTabId',
-  /** pinned game slug (preview/agents scoping). */
-  pinnedSlug: 'forgeax.pinnedSlug',
   /** first-run boot splash seen flag. */
   bootSplash: 'forgeax.boot.splash.v1',
   /** first-run onboarding state machine (welcome→project→home). Shape:

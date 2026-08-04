@@ -1,92 +1,33 @@
 /**
- * Bus-kind pulse chips — originally rendered in PreviewMode's pt-right
- * toolbar (P3.98 / P4.6 / P4.7 / P4.23-25). 2026-05-17 moved to the global
- * status bar so the same live BUS / MB / PROV / SKILL / TOOL / AGENT
- * indicators appear in one fixed location regardless of mode.
+ * Bus-kind pulse chips — the live MB / SKILL / TOOL / AGENT extension-registry
+ * counters (originally PreviewMode's pt-right toolbar, moved to the global
+ * status bar 2026-05-17). The former RES (system resource) chip was folded into
+ * the diagnostics popover, since server mem/uptime/WS is environment-diagnostic
+ * data, not a bus-kind count.
  *
- * Each `*Feed` polls its source (same cadence as the old impl), then renders
- * a `<StatusChip>` and pushes it onto the registry through `useStatusBarItem`.
- * The visual primitive is shared so the strip reads as a coherent unit; only
- * the `tone` color changes between kinds (the established kind palette:
- * lime/teal/amber/gold/orange/violet).
+ * Each `*Feed` polls its source, then renders a `<StatusChip>`. The visual
+ * primitive is shared so the strip reads as a coherent unit; only the `tone`
+ * color changes between kinds (teal/gold/orange/violet).
  */
 
 import { useEffect, useState } from 'react';
-import { Brain, Sparkles, Wrench, Bot, Gauge } from 'lucide-react';
+import { Brain, Sparkles, Wrench, Bot } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { useShellStore } from '../../../store';
 import { emitDeepLink } from '../../../lib/deep-link-bus';
 import { listExtensions } from '../../../lib/extension-api';
-import { dashApi } from '../../../lib/dashboard-api';
-import { useStatusBarItem } from '../store';
+import type { StatusItemContribution } from '../../../core/panels';
 import { StatusChip, type ChipState } from '../StatusChip';
 
-export function PulseFeeds() {
-  return (
-    <>
-      <ResourcePulseFeed />
-      <ModelBindingPulseFeed />
-      <SkillPulseFeed />
-      <ToolPulseFeed />
-      <AgentPulseFeed />
-    </>
-  );
-}
-
-// ─── RES · server resource usage (memory · uptime · WS clients) ───────────
-
-/** Compact uptime: "2h13m" / "13m" / "<1m". */
-function fmtUptime(s: number): string {
-  if (s < 60) return '<1m';
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}h${m}m` : `${m}m`;
-}
-
-function ResourcePulseFeed() {
-  const { t } = useTranslation();
-  const [state, setState] = useState<ChipState>('loading');
-  const [info, setInfo] = useState<{ rssMB: number; uptime: number; ws: number } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const h = await dashApi.health();
-        if (cancelled) return;
-        const rss = typeof h.mem?.rss === 'number' ? h.mem.rss : 0;
-        setInfo({ rssMB: Math.round(rss / (1024 * 1024)), uptime: h.uptime ?? 0, ws: h.wsClients ?? 0 });
-        setState('ok');
-      } catch { if (!cancelled) setState('down'); }
-    };
-    void tick();
-    const timer = setInterval(tick, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
-
-  const value = state === 'loading' ? '—' : state === 'down' ? '!' : `${info?.rssMB ?? 0}MB`;
-  const title =
-    state === 'ok' && info
-      ? t('pulse.res.title.ok', { mem: String(info.rssMB), uptime: fmtUptime(info.uptime), ws: String(info.ws) })
-      : state === 'down' ? t('pulse.res.title.down') : t('pulse.res.title.loading');
-
-  useStatusBarItem({
-    id: 'sys.res',
-    slot: 'right',
-    priority: 95,
-    node: (
-      <StatusChip
-        tone="lime"
-        state={state}
-        icon={Gauge}
-        label="RES"
-        value={value}
-        title={title}
-      />
-    ),
-  });
-  return null;
-}
+/** ADR-0030 §2.2 — the live MB/SKILL/TOOL/AGENT pulse chips as `custom`
+ *  status-item contributions. Each chip owns its own polling (the in-process
+ *  escape hatch); chrome-statusbar folds these into the footer's strip channel. */
+export const pulseStatusItems: readonly StatusItemContribution[] = [
+  { kind: 'status-item', id: 'bus.mb',    location: 'statusbar.right', priority: 90, item: { type: 'custom', render: () => <ModelBindingPulseFeed /> } },
+  { kind: 'status-item', id: 'bus.skill', location: 'statusbar.right', priority: 50, item: { type: 'custom', render: () => <SkillPulseFeed /> } },
+  { kind: 'status-item', id: 'bus.tool',  location: 'statusbar.right', priority: 45, item: { type: 'custom', render: () => <ToolPulseFeed /> } },
+  { kind: 'status-item', id: 'bus.agent', location: 'statusbar.right', priority: 40, item: { type: 'custom', render: () => <AgentPulseFeed /> } },
+];
 
 // ─── MB · model-binding kind count ────────────────────────────────────────
 
@@ -121,23 +62,17 @@ function ModelBindingPulseFeed() {
         : t('pulse.mb.title.none')
       : state === 'down' ? t('pulse.mb.title.down') : t('pulse.mb.title.loading');
 
-  useStatusBarItem({
-    id: 'bus.mb',
-    slot: 'right',
-    priority: 90,
-    node: (
-      <StatusChip
-        tone="teal"
-        state={state}
-        icon={Brain}
-        label="MB"
-        value={value}
-        title={title}
-        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'model-binding'); }}
-      />
-    ),
-  });
-  return null;
+  return (
+    <StatusChip
+      tone="teal"
+      state={state}
+      icon={Brain}
+      label="MB"
+      value={value}
+      title={title}
+      onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'model-binding'); }}
+    />
+  );
 }
 
 // ─── SKILL ────────────────────────────────────────────────────────────────
@@ -172,23 +107,17 @@ function SkillPulseFeed() {
         : t('pulse.skill.title.none')
       : state === 'down' ? t('pulse.skill.title.down') : t('pulse.skill.title.loading');
 
-  useStatusBarItem({
-    id: 'bus.skill',
-    slot: 'right',
-    priority: 50,
-    node: (
-      <StatusChip
-        tone="gold"
-        state={state}
-        icon={Sparkles}
-        label="SKILL"
-        value={value}
-        title={title}
-        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'skill'); }}
-      />
-    ),
-  });
-  return null;
+  return (
+    <StatusChip
+      tone="gold"
+      state={state}
+      icon={Sparkles}
+      label="SKILL"
+      value={value}
+      title={title}
+      onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'skill'); }}
+    />
+  );
 }
 
 // ─── TOOL ─────────────────────────────────────────────────────────────────
@@ -223,23 +152,17 @@ function ToolPulseFeed() {
         : t('pulse.tool.title.none')
       : state === 'down' ? t('pulse.tool.title.down') : t('pulse.tool.title.loading');
 
-  useStatusBarItem({
-    id: 'bus.tool',
-    slot: 'right',
-    priority: 45,
-    node: (
-      <StatusChip
-        tone="orange"
-        state={state}
-        icon={Wrench}
-        label="TOOL"
-        value={value}
-        title={title}
-        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'tool'); }}
-      />
-    ),
-  });
-  return null;
+  return (
+    <StatusChip
+      tone="orange"
+      state={state}
+      icon={Wrench}
+      label="TOOL"
+      value={value}
+      title={title}
+      onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'tool'); }}
+    />
+  );
 }
 
 // ─── AGENT ────────────────────────────────────────────────────────────────
@@ -274,21 +197,15 @@ function AgentPulseFeed() {
         : t('pulse.agent.title.none')
       : state === 'down' ? t('pulse.agent.title.down') : t('pulse.agent.title.loading');
 
-  useStatusBarItem({
-    id: 'bus.agent',
-    slot: 'right',
-    priority: 40,
-    node: (
-      <StatusChip
-        tone="violet"
-        state={state}
-        icon={Bot}
-        label="AGENT"
-        value={value}
-        title={title}
-        onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'agent'); }}
-      />
-    ),
-  });
-  return null;
+  return (
+    <StatusChip
+      tone="violet"
+      state={state}
+      icon={Bot}
+      label="AGENT"
+      value={value}
+      title={title}
+      onClick={() => { openOverlay('settings', 'plugins'); emitDeepLink('bus:filter-kind', 'agent'); }}
+    />
+  );
 }

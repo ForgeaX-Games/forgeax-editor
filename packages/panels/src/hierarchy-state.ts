@@ -37,6 +37,10 @@ export interface HierarchyEntitySummary {
   readonly name: string;
   readonly typeId: string;
   readonly hidden?: boolean;
+  /** UE-parity recursive hide: at least one strict ancestor carries EditorHidden.
+   *  The row dims (lighter than own-hidden) and the viewport already skips the
+   *  subtree — derived here so panels never walk ChildOf per render. */
+  readonly ancestorHidden?: boolean;
   readonly mobility: 'static' | 'movable' | 'stationary' | '';
   readonly childIds: readonly EntityHandle[];
 }
@@ -106,7 +110,39 @@ function readWorldStructure(world: unknown): HierarchyStructureProjection {
       childIds: childrenOf(typedWorld, id),
     };
   });
-  return { structureEpoch, rows: Object.freeze(rows) };
+  // Recursive-hide derivation (UE parity §1): parent map from childIds, then a
+  // memoized walk so each row knows whether an ANCESTOR hides it. One O(n) pass —
+  // cheaper than walking ChildOf per row per render.
+  const parentOf = new Map<EntityHandle, EntityHandle>();
+  const hiddenSet = new Set<EntityHandle>();
+  for (const row of rows) {
+    if (row.hidden) hiddenSet.add(row.id);
+    for (const child of row.childIds) parentOf.set(child, row.id);
+  }
+  const ancestorHiddenCache = new Map<EntityHandle, boolean>();
+  const visiting = new Set<EntityHandle>();
+  const isAncestorHidden = (id: EntityHandle): boolean => {
+    const cached = ancestorHiddenCache.get(id);
+    if (cached !== undefined) return cached;
+    const parent = parentOf.get(id);
+    if (parent === undefined) {
+      ancestorHiddenCache.set(id, false);
+      return false;
+    }
+    if (hiddenSet.has(parent) || visiting.has(parent)) {
+      ancestorHiddenCache.set(id, hiddenSet.has(parent));
+      return hiddenSet.has(parent);
+    }
+    visiting.add(id);
+    const result = isAncestorHidden(parent);
+    visiting.delete(id);
+    ancestorHiddenCache.set(id, result);
+    return result;
+  };
+  return {
+    structureEpoch,
+    rows: Object.freeze(rows.map((row) => ({ ...row, ancestorHidden: isAncestorHidden(row.id) }))),
+  };
 }
 
 export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: StructureReader = readWorldStructure): HierarchyStructureSelector {
@@ -121,6 +157,7 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
         structureEpoch: { kind: 'primitive' },
         rows: { kind: 'array', item: { kind: 'pod', fields: {
           id: { kind: 'primitive' }, name: { kind: 'primitive' }, typeId: { kind: 'primitive' }, hidden: { kind: 'primitive' },
+          ancestorHidden: { kind: 'primitive' },
           mobility: { kind: 'primitive' }, childIds: { kind: 'array', item: { kind: 'primitive' } },
         } } },
       },

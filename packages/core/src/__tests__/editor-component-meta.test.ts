@@ -53,13 +53,15 @@ describe('editor component meta overlay', () => {
 
   it('config SSOT marks exactly the internal components as hidden', () => {
     // The overlay grew past hiding with the animation-preview M1 contract
-    // (AnimationPlayer bespoke+animation keys); the HIDDEN set stays the three
-    // internal components — everything else is a non-hiding overlay entry.
+    // (AnimationPlayer bespoke+animation keys); the HIDDEN set stays the
+    // internal components plus the derived engine `Disabled` marker (synced by
+    // applySetHidden from EditorHidden intent — users must not edit it
+    // directly; docs 2026-08-04-editor-hide-ue-parity-plan).
     const hidden = Object.entries(EDITOR_COMPONENT_META)
       .filter(([, meta]) => meta.hidden === true)
       .map(([name]) => name)
       .sort();
-    expect(hidden).toEqual(['ChildOf', 'Children', 'Entity']);
+    expect(hidden).toEqual(['ChildOf', 'Children', 'Disabled', 'Entity']);
   });
 
   it('AnimationPlayer carries the bespoke + animation contract (M1)', () => {

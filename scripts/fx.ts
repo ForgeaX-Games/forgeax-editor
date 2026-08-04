@@ -662,7 +662,7 @@ async function run(argv: string[]): Promise<void> {
     ...(rhiDebug ? { FORGEAX_ENGINE_RHI_DEBUG: '1' } : {}),
   };
   if (rhiDebug) ok(`RHI-debug capture enabled → viewport capture button opens reviewer :${RHI_REVIEWER_PORT}`);
-  if (bridge) ok(`live gateway bridge enabled → relay :${bridgePort} (node skills/forgeax-editor-gateway/scripts/gateway-live.mjs). Opt out: FORGEAX_BRIDGE=0`);
+  if (bridge) ok(`gateway bridge enabled → relay :${bridgePort} (node skills/forgeax-editor-gateway/scripts/gateway.mjs). Opt out: FORGEAX_BRIDGE=0`);
 
   // preflight — point at setup if the engine build is missing.
   if (
@@ -815,7 +815,7 @@ function build(argv: string[]): void {
   const forgePath = join(gameDir, 'forge.json');
   if (!existsSync(forgePath)) die(`build game directory has no forge.json: ${gameDir}`);
   const gameId = gameDir.split(sep).pop() ?? '';
-  if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(gameId)) die(`build game directory name is not a valid game id: ${gameId}`);
+  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(gameId)) die(`build game directory name is not a valid game id: ${gameId}`);
 
   let manifest: { entry?: unknown };
   try {
@@ -1074,8 +1074,8 @@ Shipping:
                                 /preview/. Optional budgets: --max-bytes N,
                                 --max-entities N.
 
-  Live gateway bridge (:${editorBridgePort()} for this checkout) is ON so the forgeax-editor-gateway
-  skill's gateway-live.mjs can drive the open window; set FORGEAX_BRIDGE=0 to
+  Gateway bridge (:${editorBridgePort()} for this checkout) is ON so the forgeax-editor-gateway
+  skill's gateway.mjs can drive the open window; set FORGEAX_BRIDGE=0 to
   disable, FORGEAX_BRIDGE_PORT to move it.
 
 Repo maintenance:

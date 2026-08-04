@@ -88,10 +88,8 @@ if (detachedSurface) {
   // Boot splash is keyed off window.__forgeaxBoot; tell it we're done so the
   // splash fades out for the lightweight detached view.
   (window as unknown as { __forgeaxBoot?: { done?: () => void } }).__forgeaxBoot?.done?.();
-  // Detached windows still need the store + live streams: a popped-out plugin
-  // routes chat.post → store.sendMessage into the active session and reads
-  // pinnedSlug for per-game data. Each OS window is its own client; they stay
-  // consistent via the shared backend (/api · /ws). We deliberately skip the
+  // Detached windows still need the store + live streams. Each OS window stays
+  // consistent through the shared backend. We deliberately skip the
   // window-close→redock listener here (that's the main window's job).
   bootStore();
   createRoot(rootEl).render(

@@ -149,7 +149,7 @@ export function OnboardingController() {
   const { t } = useTranslation();
   const host = useHost();
   const openOverlay = useShellStore((s) => s.openOverlay);
-  const switchGame = useShellStore((s) => s.switchGame);
+  const setActiveGame = useShellStore((s) => s.setActiveGame);
 
   const [phase, setPhaseState] = useState<OnboardingPhase>(() => loadOnboarding().phase);
   const [lang, setLang] = useState<Locale>(() => getLocale());
@@ -383,15 +383,13 @@ export function OnboardingController() {
     return () => { cancelled = true; };
   }, []);
 
-  // After create/link the game is server-side active; switchGame pins it
-  // client-side + auto-creates a first session, then we enter home (shell mounts
-  // fresh and reads the active game — no full reload needed for the game step).
+  // Create/link materializes the game; selection uses the one active-game write.
   const enterHomeWith = useCallback(async (slug: string) => {
-    if (slug) { try { await switchGame(slug); } catch { /* pin best-effort */ } }
+    if (slug) { try { await setActiveGame(slug); } catch { /* store surfaced the error */ } }
     // Latch Scene + default layout intent before shell mounts (onReady race).
     if (!loadOnboarding().done.tour) latchTourShellDefaults();
     setPhase('home');
-  }, [switchGame, setPhase]);
+  }, [setActiveGame, setPhase]);
 
   // Open a game that already exists in the active root: no create, no link —
   // just pin + enter home. Reuses the 'open' busy label ("opening…").

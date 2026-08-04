@@ -75,7 +75,10 @@ const ConsumesSchema = z
 
 const PaneSchema = z.object({
   width: z.number().optional(),
+  defaultWidth: z.number().optional(),
+  minWidth: z.number().optional(),
   minHeight: z.number().optional(),
+  collapsible: z.boolean().optional(),
   scrollable: z.boolean().optional(),
 });
 
@@ -453,8 +456,53 @@ export function normalizeManifest(manifest: AnyExtensionManifest): ExtensionMani
   };
 
   if (manifest.kind === 'workbench') {
-    const localId = manifest.provides.workbench.id.replace(/^wb:/u, '').replace(/[^a-z0-9.-]+/gu, '-') || 'main';
+    const workbench = manifest.provides.workbench;
+    const localId = workbench.id.replace(/^wb:/u, '').replace(/[^a-z0-9.-]+/gu, '-') || 'main';
     const panelId = `${localId}.content`;
+    const declaredPanes = (['left', 'center'] as const).filter((pane) => workbench.panes?.[pane]);
+    const panes = declaredPanes.length > 0
+      ? declaredPanes
+      : workbench.surface === 'split'
+        ? (['left', 'center'] as const)
+        : [];
+    const placementId = (pane: 'left' | 'center'): 'sidebar' | 'workspace' =>
+      pane === 'left' ? 'sidebar' : 'workspace';
+    const placements = panes.length > 0
+      ? panes.map((pane) => ({
+          id: placementId(pane),
+          panelType: { extension: 'self' as const, id: panelId },
+          initialProps: {
+            pane,
+            ...(workbench.panes?.[pane] ?? {}),
+          },
+        }))
+      : [{ id: 'content', panelType: { extension: 'self' as const, id: panelId } }];
+    const paneSize = (pane: 'left' | 'center', fallback: number): number => {
+      const config = workbench.panes?.[pane];
+      return config?.defaultWidth ?? config?.width ?? config?.minWidth ?? fallback;
+    };
+    const layout = panes.length > 1
+      ? {
+          version: 2,
+          root: {
+            kind: 'split' as const,
+            direction: 'horizontal' as const,
+            sizes: panes.map((pane) => paneSize(pane, pane === 'left' ? 360 : 840)),
+            children: panes.map((pane) => ({
+              kind: 'tabs' as const,
+              placements: [placementId(pane)],
+              active: placementId(pane),
+            })),
+          },
+        }
+      : {
+          version: 2,
+          root: {
+            kind: 'tabs' as const,
+            placements: [placements[0]!.id],
+            active: placements[0]!.id,
+          },
+        };
     contributes.panelTypes = [{
       id: panelId,
       runtime: manifest.entry?.standalone ? 'iframe' : 'inline',
@@ -466,16 +514,18 @@ export function normalizeManifest(manifest: AnyExtensionManifest): ExtensionMani
       icon: manifest.provides.workbench.icon ?? manifest.icon,
       cardinality: 'singleton',
       restorePolicy: 'project',
-      layout: `legacy:${localId}`,
-      layoutVersion: 1,
-      panels: [{ id: 'content', panelType: { extension: 'self', id: panelId } }],
+      layout,
+      layoutVersion: 2,
+      panels: placements,
+      ...(workbench.matchProduces ? { matchProduces: workbench.matchProduces } : {}),
+      ...(workbench.preferredAgent ? { preferredAgent: workbench.preferredAgent } : {}),
     }];
-    if (!manifest.provides.workbench.hidden) {
+    if (!workbench.hidden) {
       contributes.activities = [{
         id: `${localId}.launcher`,
         title: manifest.displayName,
-        icon: manifest.provides.workbench.icon ?? manifest.icon,
-        order: manifest.provides.workbench.position,
+        icon: workbench.icon ?? manifest.icon,
+        order: workbench.position,
         category: 'workbench',
         pageType: { extension: 'self', id: localId },
       }];

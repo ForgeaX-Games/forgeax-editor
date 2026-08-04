@@ -18,6 +18,8 @@ import { validateAssetBasename, checkPathNotJailbreak } from './asset-basename';
 import { broadcastAssetsError } from '../store/assets-error-bus';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Materials } from '@forgeax/engine-render';
+import { classifyUiAuthoring } from '@forgeax/engine-ui/authoring';
+import { encodeMaterialPackRefs } from '../io/material-pack-refs';
 import {
   readPack, writePack, deleteFile, deleteAsset, generateAssetGuid,
   readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset,
@@ -53,26 +55,6 @@ function _ioFailHint(op: string, path: string | undefined, e: unknown): string {
     : `${op} failed: ${msg}`;
 }
 
-// ── Active-scene-pack resolver seam (breaks the pack-ops <-> scene-persistence
-// import cycle) ────────────────────────────────────────────────────────────────
-// createMaterial defaults a new material into the ACTIVE scene's real pack (the same
-// path disk-io saves the scene to). That path lives in scene-persistence (scenePath(),
-// which reads the sceneList off disk-io) — but scene-persistence transitively imports
-// the gateway/appliers chain that ends here in pack-ops, so a STATIC import of
-// scenePath would form a module-init cycle (TDZ: "Cannot access 'EditGateway' before
-// initialization"). Instead pack-ops depends on an ABSTRACTION (§2.5): a nullable
-// `() => string | null` resolver that scene-persistence registers at init. The import
-// then flows one way (scene-persistence -> pack-ops) and the applier reads the live
-// scene pack lazily at dispatch time. Null until registered (unit env / no host).
-let activeScenePackResolver: (() => string | null) | null = null;
-
-/** Host/store seam: scene-persistence registers its `scenePath` here at init so
- *  createMaterial can default a material into the active scene's pack without a
- *  static import cycle. Pass null to clear (tests). */
-export function registerActiveScenePackResolver(fn: (() => string | null) | null): void {
-  activeScenePackResolver = fn;
-}
-
 // ── Post-write catalog-sync seam (same one-way seam pattern as above) ────────
 // createMaterial's pack write lands on disk BEFORE the pack-index reflects it:
 // the vite-plugin-pack watcher rebuilds the served catalog asynchronously
@@ -87,6 +69,7 @@ export function registerActiveScenePackResolver(fn: (() => string | null) | null
 // applier awaits it BEFORE broadcasting. Null until registered (unit env /
 // no host): the applier then broadcasts immediately, as before.
 let postAssetWriteCatalogSync: ((guid: string) => Promise<void>) | null = null;
+const pendingAssetWrites = new Map<string, Promise<void>>();
 
 /** Host seam: edit-runtime registers a hook that waits for the pack-index row
  *  of a freshly written asset and catalogs its envelope, so the post-write
@@ -202,6 +185,115 @@ export function registerAuthoredInlineAssetTracker(
 ): void {
   authoredInlineAssetTracker = track;
   authoredInlineAssetUntracker = untrack ?? null;
+}
+
+/** Await the complete authored-asset commit: disk write, live catalog row, and
+ * payload load. Product operations use this barrier so synchronous success
+ * never means merely "the write was scheduled". */
+export async function awaitAssetWriteCompletion(guid: string): Promise<void> {
+  const pending = pendingAssetWrites.get(guid.toLowerCase());
+  if (!pending) throw new Error(`No authored-asset write is pending for GUID ${guid}.`);
+  await pending;
+}
+
+interface AuthoredAssetWrite {
+  readonly guid: string;
+  readonly kind: string;
+  readonly name: string;
+  readonly payload: unknown;
+  readonly refs?: string[];
+}
+
+const replacedAssetCache = new Map<string, AuthoredAssetWrite | null>();
+
+/**
+ * Commit one authored asset through the editor-owned write gate.
+ *
+ * Document appliers stay synchronous so they can return an undo inverse, while
+ * the product adapter awaits this shared completion barrier before declaring
+ * its outer OperationRun successful. Every authored asset kind therefore gets
+ * identical disk-write, live-catalog visibility, notification, and failure
+ * semantics without operation-name branching.
+ */
+function scheduleAuthoredAssetWrite(
+  ctx: DocApplierCtx,
+  targetPack: string,
+  asset: AuthoredAssetWrite,
+): ApplyResult {
+  const writeKey = asset.guid.toLowerCase();
+  const readiness: Promise<AuthoredMaterialReadiness> = (async () => {
+    const write = await ctx.assetIO.createAssetInPack({ packPath: targetPack, asset })
+      .catch((cause): { ok: false; reason: 'write-failed'; hint: string } => ({
+        ok: false,
+        reason: 'write-failed',
+        hint: cause instanceof Error ? cause.message : String(cause),
+      }));
+    if (!write.ok) {
+      const hint = `${write.reason}: ${write.hint}`;
+      broadcastAssetsError({
+        op: `create${asset.kind[0]?.toUpperCase() ?? ''}${asset.kind.slice(1)}`,
+        path: targetPack,
+        hint: `authored ${asset.kind} write failed (${hint})`,
+      });
+      return { ok: false, stage: 'write', hint };
+    }
+    try {
+      await awaitPostAssetWriteCatalogSync(asset.guid);
+    } catch (cause) {
+      const hint = cause instanceof Error ? cause.message : String(cause);
+      broadcastAssetsError({
+        op: `create${asset.kind[0]?.toUpperCase() ?? ''}${asset.kind.slice(1)}`,
+        path: targetPack,
+        hint: `authored ${asset.kind} catalog visibility failed: ${hint}`,
+      });
+      broadcastAssetsChanged();
+      return { ok: false, stage: 'catalog', hint };
+    }
+    broadcastAssetsChanged();
+    return { ok: true };
+  })();
+  if (asset.kind === 'material') trackAuthoredMaterialWrite(asset.guid, readiness);
+  const completion = readiness.then((result) => {
+    if (!result.ok) throw new Error(`${result.stage}: ${result.hint}`);
+  });
+  pendingAssetWrites.set(writeKey, completion);
+  void completion
+    .catch((error) => console.warn(`[editor-core] create ${asset.kind} asset commit failed:`, error))
+    .finally(() => {
+      if (pendingAssetWrites.get(writeKey) === completion) pendingAssetWrites.delete(writeKey);
+    });
+  return {
+    ok: true,
+    inverse: { kind: 'destroyAsset', _resolvedPackPath: targetPack, guid: asset.guid } as unknown as EditorOp,
+    created: [],
+  };
+}
+
+function scheduleUiAssetWrite(
+  ctx: DocApplierCtx,
+  targetPack: string,
+  asset: AuthoredAssetWrite,
+): ApplyResult {
+  const writeKey = asset.guid.toLowerCase();
+  const cacheKey = `${targetPack}#${writeKey}#${crypto.randomUUID()}`;
+  const completion = ctx.assetIO.upsertAssetInPack({ packPath: targetPack, asset })
+    .then(async ({ ok, previous }) => {
+      if (!ok) throw new Error(`Could not write ${asset.kind} asset ${asset.guid} to ${targetPack}.`);
+      replacedAssetCache.set(cacheKey, previous as AuthoredAssetWrite | null);
+      await postAssetWriteCatalogSync?.(asset.guid);
+      broadcastAssetsChanged();
+    });
+  pendingAssetWrites.set(writeKey, completion);
+  void completion
+    .catch((error) => console.warn(`[editor-core] write ${asset.kind} asset commit failed:`, error))
+    .finally(() => {
+      if (pendingAssetWrites.get(writeKey) === completion) pendingAssetWrites.delete(writeKey);
+    });
+  return {
+    ok: true,
+    inverse: { kind: 'restoreWrittenAsset', packPath: targetPack, guid: asset.guid, cacheKey } as unknown as EditorOp,
+    created: [],
+  };
 }
 
 // ── Dangling refs check ──────────────────────────────────────────────────────
@@ -512,9 +604,12 @@ function _cacheKey(packPath: string, guid: string): string {
 }
 
 export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { packPath, guid: rawGuid, newGuidCacheKey } = cmd as {
-    packPath: string; guid: string; newGuidCacheKey?: string;
+  const { _resolvedPackPath, guid: rawGuid, newGuidCacheKey } = cmd as {
+    _resolvedPackPath?: string; guid: string; newGuidCacheKey?: string;
   };
+  if (typeof _resolvedPackPath !== 'string' || _resolvedPackPath.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'destroyAsset requires a Gateway-derived storage path' } };
+  }
   // async-guid resolution: when this destroyAsset is the INVERSE of a
   // duplicateAsset (undo of a duplicate), the guid to destroy is the one the
   // clone allocated INSIDE the gate — unknowable when the inverse skeleton was
@@ -523,34 +618,41 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   // op's own guid (best-effort, matching the fire-and-forget contract). The entry
   // is left in the cache so a redo→undo cycle can resolve it again.
   const guid = (newGuidCacheKey ? duplicatedGuidCache.get(newGuidCacheKey) : undefined) ?? rawGuid;
-  const key = _cacheKey(packPath, guid);
+  const key = _cacheKey(_resolvedPackPath, guid);
   // Fire the async delete; stash the snapshot so undo can restore the full entry.
   // The document-applier contract is synchronous (returns inverse immediately);
   // the IO is fire-and-forget. A .catch guards against an unhandled rejection if
   // the pack write fails (network/disk) — the op already landed in undo/ledger,
   // so a failed write must not crash the host (D-1: the gateway is the only door).
-  void ctx.assetIO.deletePackEntry(packPath, guid).then((entry) => {
+  const completion = ctx.assetIO.deletePackEntry(_resolvedPackPath, guid).then((entry) => {
     deletedEntryCache.set(key, entry);
     // Symmetric with the createMaterial track seam: if this guid was a
     // post-load authored inline asset, the save baseline must drop it again
     // (a floor bump for a guid that no longer exists would refuse future saves).
     authoredInlineAssetUntracker?.(guid);
     broadcastAssetsChanged();
-  }).catch((e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e));
-  return { ok: true, inverse: { kind: 'restoreAsset', packPath, guid, cacheKey: key } as unknown as EditorOp, created: [] };
+  });
+  const writeKey = guid.toLowerCase();
+  pendingAssetWrites.set(writeKey, completion);
+  void completion
+    .catch((e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e))
+    .finally(() => {
+      if (pendingAssetWrites.get(writeKey) === completion) pendingAssetWrites.delete(writeKey);
+    });
+  return { ok: true, inverse: { kind: 'restoreAsset', _resolvedPackPath, guid, cacheKey: key } as unknown as EditorOp, created: [] };
 }
 
 export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { packPath, guid, cacheKey } = cmd as { packPath: string; guid: string; cacheKey?: string };
-  const key = cacheKey ?? _cacheKey(packPath, guid);
+  const { _resolvedPackPath, guid, cacheKey } = cmd as { _resolvedPackPath: string; guid: string; cacheKey?: string };
+  const key = cacheKey ?? _cacheKey(_resolvedPackPath, guid);
   const entry = deletedEntryCache.get(key);
   if (entry) {
-    void ctx.assetIO.writePackEntry(packPath, entry as never)
+    void ctx.assetIO.writePackEntry(_resolvedPackPath, entry as never)
       .then(() => broadcastAssetsChanged())
       .catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
     deletedEntryCache.delete(key);
   }
-  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp, created: [] };
+  return { ok: true, inverse: { kind: 'destroyAsset', _resolvedPackPath, guid } as unknown as EditorOp, created: [] };
 }
 
 // Seed the two document appliers (symmetric inverse pair). Registered into the
@@ -605,7 +707,7 @@ function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       console.warn('[editor-core] createAsset IO failed:', e);
       broadcastAssetsError({ op: 'createAsset', path: packPath, hint: _ioFailHint('createAsset', packPath, e) });
     });
-  return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp, created: [] };
+  return { ok: true, inverse: { kind: 'destroyAsset', _resolvedPackPath: packPath, guid } as unknown as EditorOp, created: [] };
 }
 
 registerApplier('document', 'createAsset', applyCreateAsset as unknown as ApplierFn);
@@ -668,29 +770,19 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
       return { ok: false, error: { code: 'INVALID_ARGS', hint: `createMaterial baseColorTexture ${baseColorTexture} is not in the live asset catalog — the texture may have been deleted or its import failed; re-import it before authoring the material` } };
     }
   }
-  // Default to the ACTIVE scene's real pack path — the SAME path disk-io saves the
-  // scene to (via the registered scenePath resolver), so an authored material lands in
-  // the same pack the scene round-trips through (Edit=Play) and an AI need not know the
-  // game's disk layout. NOT resolveGamePath('scene.pack.json') — a game's scene pack
-  // may live under a subdir (the sample's is assets/scene.pack.json), which that naive
-  // default misses. A caller MAY still target another pack explicitly via packPath.
-  // The resolver can be unregistered (unit env) or return null (no scene bound, e.g.
-  // the 'default' demo shell) — turn both into a STRUCTURED error rather than a
-  // partial/failed write (Fail Fast §5; the executor does not catch applier throws).
+  // Materials have their own pack writer. Appending them to the scene pack violates
+  // single-writer ownership: the scene serializer later rewrites that pack from the
+  // World snapshot and can erase a newly-authored, not-yet-bound material.
+  // Caller paths stay game-relative; only the host resolver knows the disk root.
   let targetPack: string;
-  if (typeof packPath === 'string' && packPath.length > 0) {
-    targetPack = packPath;
-  } else {
-    let resolved: string | null = null;
-    try {
-      resolved = activeScenePackResolver ? activeScenePackResolver() : null;
-    } catch {
-      resolved = null;
-    }
-    if (!resolved) {
-      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial: no `packPath` given and no active scene pack resolvable (no scene bound / default shell) — pass an explicit packPath (game-relative, e.g. "sample/assets/scene.pack.json")' } };
-    }
-    targetPack = resolved;
+  try {
+    targetPack = resolveGamePath(
+      typeof packPath === 'string' && packPath.length > 0
+        ? packPath
+        : 'assets/materials.pack.json',
+    );
+  } catch {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires an active game path resolver; select a game before authoring a material' } };
   }
   // Canonical PBR POD from the engine builder (SSOT — no hand-rolled passes).
   const payload = Materials.standard({
@@ -700,54 +792,102 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
     ...(alphaCutoff !== undefined ? { alphaCutoff } : {}),
   }) as unknown as Record<string, unknown>;
 
-  // Texture GUID → pack refs index chain (engine disk format SSOT).
-  // In pack format, texture params are stored as refs[] indices (integers).
-  // The materialLoader resolves indices back to GUID strings at load time.
-  const assetRefs: string[] = refs ? [...refs] : [];
-  if (baseColorTexture) {
-    const texRefIndex = assetRefs.length;
-    assetRefs.push(baseColorTexture);
-    (payload.values as Record<string, unknown>).baseColorTexture = texRefIndex;
+  // The editor-owned material wire-format boundary is shared with save,
+  // migration, and updateMaterialParams. Keep the authoring API in GUID form;
+  // only the pack payload uses refs[] indices.
+  if (baseColorTexture !== undefined) {
+    const values = (payload.values ?? {}) as Record<string, unknown>;
+    payload.values = { ...values, baseColorTexture };
   }
+  const encoded = encodeMaterialPackRefs(payload, refs);
+  if (!encoded.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: encoded.error.hint } };
+  }
+  const assetRefs = encoded.refs;
+  const encodedPayload = encoded.payload;
 
   // Fire-and-forget async IO through the asset gate (mirrors createAsset). The
   // document-applier contract is synchronous: return the inverse immediately; IO
-  // completes in background. The completion is TRACKED (awaitAuthoredMaterialReady)
-  // and staged:
-  //   write   — the pack write is the ONLY success criterion; a failed result
-  //             (or a refused clobber of an unreadable existing pack) is
-  //             broadcast as an assetsError and NO catalog wait/broadcast runs.
-  //   catalog — after a successful write, the scene-save baseline is bumped
-  //             (authoredInlineAssetTracker) and the host catalog barrier must
-  //             observe the GUID before assetsChanged fires.
-  const completion: Promise<AuthoredMaterialReadiness> = (async () => {
-    const write = await ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs: assetRefs } })
-      .catch((e): { ok: false; reason: 'write-failed'; hint: string } => ({
-        ok: false, reason: 'write-failed', hint: e instanceof Error ? e.message : String(e),
-      }));
-    if (!write.ok) {
-      console.error('[editor-core] createMaterial write failed:', { guid, targetPack, reason: write.reason, hint: write.hint });
-      broadcastAssetsError({ op: 'createMaterial', path: targetPack, hint: `createMaterial write failed (${write.reason}): ${write.hint}` });
-      return { ok: false as const, stage: 'write' as const, hint: `${write.reason}: ${write.hint}` };
-    }
-    authoredInlineAssetTracker?.({ guid, packPath: targetPack, kind: 'material', name, payload, refs: assetRefs });
-    try {
-      await awaitPostAssetWriteCatalogSync(guid);
-    } catch (e) {
-      const hint = e instanceof Error ? e.message : String(e);
-      console.warn('[editor-core] createMaterial catalog barrier failed:', { guid, targetPack, hint });
-      broadcastAssetsError({ op: 'createMaterial', path: targetPack, hint: `createMaterial catalog visibility failed: ${hint}` });
-      broadcastAssetsChanged();
-      return { ok: false as const, stage: 'catalog' as const, hint };
-    }
-    broadcastAssetsChanged();
-    return { ok: true as const };
-  })();
-  trackAuthoredMaterialWrite(guid, completion);
-  return { ok: true, inverse: { kind: 'destroyAsset', packPath: targetPack, guid } as unknown as EditorOp, created: [] };
+  // completes in background; broadcastAssetsChanged() refreshes the catalog.
+  // Before broadcasting, await the host's catalog-sync hook (if registered) so
+  // the pack-index row + payload envelope for the new GUID are actually live —
+  // otherwise the broadcast races the vite-plugin-pack watcher rebuild and a
+  // follow-up updateMaterialParams finds no envelope (see the seam above).
+  return scheduleAuthoredAssetWrite(ctx, targetPack, {
+    guid,
+    kind: 'material',
+    name,
+    payload: encodedPayload,
+    refs: assetRefs,
+  });
 }
 
 registerApplier('document', 'createMaterial', applyCreateMaterial as unknown as ApplierFn);
+
+export function applyWriteUi(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { guid, name, html, css, sourcePath, packPath } = cmd as {
+    guid: string; name: string; html: string; css: string; sourcePath?: string; packPath?: string;
+  };
+  if (typeof guid !== 'string' || guid.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires a non-empty caller-minted `guid`' } };
+  }
+  if (typeof name !== 'string' || name.length === 0) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires a non-empty `name`' } };
+  }
+  if (typeof html !== 'string' || html.length === 0 || typeof css !== 'string') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires non-empty `html` and string `css` fields' } };
+  }
+  const diagnosticPath = typeof sourcePath === 'string' && sourcePath.length > 0
+    ? sourcePath
+    : `${name}.ui.html`;
+  const classification = classifyUiAuthoring({ sourcePath: diagnosticPath, html, css });
+  if (classification.blocking) {
+    const issue = classification.diagnostics.find((entry) => entry.severity === 'error');
+    const location = issue?.sourceRange;
+    return { ok: false, error: {
+      code: 'INVALID_ARGS',
+      hint: issue === undefined
+        ? 'writeUi rejected invalid UI authoring input'
+        : `${issue.code} at ${issue.sourcePath}:${location?.line ?? 1}:${location?.column ?? 1}: ${issue.hint}`,
+      ...(issue?.expected === undefined ? {} : { expected: issue.expected }),
+      ...(issue?.actual === undefined ? {} : { current: issue.actual }),
+    } };
+  }
+  let targetPack: string;
+  try {
+    targetPack = resolveGamePath(
+      typeof packPath === 'string' && packPath.length > 0 ? packPath : 'assets/ui.pack.json',
+    );
+  } catch {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires an active game path resolver; select a game before authoring UI' } };
+  }
+  return scheduleUiAssetWrite(ctx, targetPack, {
+    guid,
+    kind: 'ui',
+    name,
+    payload: { guid, html, css },
+    refs: [],
+  });
+}
+
+registerApplier('document', 'writeUi', applyWriteUi as unknown as ApplierFn);
+
+export function applyRestoreWrittenAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+  const { packPath, guid, cacheKey } = cmd as { packPath: string; guid: string; cacheKey: string };
+  const previous = replacedAssetCache.get(cacheKey);
+  if (previous !== undefined) {
+    const mutation = previous === null
+      ? ctx.assetIO.deletePackEntry(packPath, guid).then(() => true)
+      : ctx.assetIO.writePackEntry(packPath, previous as never);
+    void mutation
+      .then(() => broadcastAssetsChanged())
+      .catch((error) => console.warn('[editor-core] restoreWrittenAsset IO failed:', error));
+    replacedAssetCache.delete(cacheKey);
+  }
+  return { ok: true, inverse: cmd, created: [] };
+}
+
+registerApplier('document', 'restoreWrittenAsset', applyRestoreWrittenAsset as unknown as ApplierFn);
 
 // ── Document appliers: renameAsset / duplicateAsset (G-4) ─────────────────────
 // Two MORE DOCUMENT-domain ops (undoable) added by the keyboard-router/context-menu
@@ -822,7 +962,7 @@ export function applyDuplicateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   return {
     ok: true,
     inverse: {
-      kind: 'destroyAsset', packPath, guid, newGuidCacheKey: key,
+      kind: 'destroyAsset', _resolvedPackPath: packPath, guid, newGuidCacheKey: key,
     } as unknown as EditorOp,
     created: [],
   };

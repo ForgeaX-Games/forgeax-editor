@@ -88,7 +88,7 @@ gateway.registerDirtyReadProvider(hasPendingDiskSave);
 /**
  * The active game a host wants the engine to boot. The host is the single source
  * of truth for "which game" — CLI `--game` (editor standalone), the server's
- * active-slug (studio) — and passes it here EXPLICITLY. `slug` is the scene/game
+ * active-game resource (studio) — and passes it here EXPLICITLY. `slug` is the scene/game
  * pointer (null / 'default' = no game, opens on an empty scene); `gameRoot`
  * is the host's game->disk layout root (editor-core is layout-agnostic and never
  * infers it). Both are plain values, not URL params: pre-single-realm this config

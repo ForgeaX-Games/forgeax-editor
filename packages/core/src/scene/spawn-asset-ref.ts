@@ -504,20 +504,23 @@ async function bindAssetRefBody(
   // (Fail Fast — never write a partial/zeroed ref).
   const handles: number[] = [];
   for (const g of guids) {
-    const h = await resolveAssetRefToHandle(g, assetType);
-    if (h === null) {
+    const resolved = await resolveAssetRefToHandle(g, assetType);
+    if (!resolved.ok) {
       return {
         ok: false,
         error: {
           code: 'ASSET_NOT_FOUND',
-          hint: `could not resolve catalogued asset GUID ${g} as ${assetType}; bind aborted before any write`,
-          current: { requestId, entity, component, field, assetType, guid: g, guidIndex: handles.length },
-          retryable: false,
-          recoveryActions: [],
+          hint: `could not resolve catalogued asset GUID ${g} as ${assetType}: ${resolved.error.hint}`,
+          current: {
+            requestId, entity, component, field, assetType, guid: g,
+            guidIndex: handles.length, cause: resolved.error,
+          },
+          retryable: true,
+          recoveryActions: ['refresh the asset catalog and retry the bind'],
         },
       };
     }
-    handles.push(h);
+    handles.push(resolved.value);
   }
 
   const compatibilityError = validateMaterialBinding(

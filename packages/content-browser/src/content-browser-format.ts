@@ -11,7 +11,7 @@ import {
   type CatalogLifecycle,
   type CatalogProjection,
 } from '@forgeax/engine-types';
-import { resolveGamePath } from '@forgeax/editor-core';
+import { catalogStoragePath, resolveGamePath } from '@forgeax/editor-core';
 import type { CBAsset, CBFileFamily, CBViewItem } from './types';
 
 // ── Internal types shared between ContentBrowser + its child components ─────
@@ -125,13 +125,6 @@ export function isAbsoluteHostPath(path: string): boolean {
 
 export function resolveCopyPath(path: string): string {
   return isAbsoluteHostPath(path) ? path : resolveGamePath(path);
-}
-
-/** Engine UI packages use `<name>.meta.json` beside `<name>.ui.html`. */
-export function metaPathForSource(sourcePath: string): string {
-  return /\.ui\.html$/i.test(sourcePath)
-    ? sourcePath.replace(/\.ui\.html$/i, '.meta.json')
-    : `${sourcePath}.meta.json`;
 }
 
 // ── File-family classification + label ──────────────────────────────────────
@@ -342,16 +335,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
   // that DDC URL in dev, so sourcePath owns the distinction: a `.pack.json`
   // source remains a pack CRUD target; an imported source uses its `.meta.json`
   // sidecar.
-  const sourcePath = e.sourcePath?.replace(/^\//, '');
-  const packPath = (e.packageUrl.includes('__forgeax-ddc'))
-    ? (sourcePath?.endsWith('.pack.json')
-      ? sourcePath
-      : sourcePath ? metaPathForSource(sourcePath) : e.packageUrl)
-    : e.packageUrl.endsWith('.pack.json')
-      ? (sourcePath ?? e.packageUrl)
-      : sourcePath
-        ? metaPathForSource(sourcePath)
-        : e.packageUrl;
+  const packPath = catalogStoragePath(e) ?? e.packageUrl;
   const lastKnownGood = e.lastKnownGood ?? e.projection?.lastKnownGood;
   return {
     type: 'asset',

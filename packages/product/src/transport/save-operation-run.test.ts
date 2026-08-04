@@ -15,6 +15,7 @@ function request(id: string, method: string, params: unknown): TransportRequest 
     version: TRANSPORT_PROTOCOL_VERSION,
     id,
     correlationId: `corr-${id}`,
+    scope: 'default',
     method,
     params,
   };
@@ -36,6 +37,16 @@ function run(requestId: string, runId = 'operation-run-1'): OperationRun {
   return Object.freeze({ ...created.value, status: 'running', sequence: 2, startedAt: 11 });
 }
 
+function succeededRun(current: OperationRun): OperationRun {
+  return Object.freeze({
+    ...current,
+    status: 'succeeded',
+    sequence: current.sequence + 1,
+    completedAt: 12,
+    result: { persisted: true },
+  });
+}
+
 const auth = {
   scope: 'default',
   actor: { id: 'transport-agent', kind: 'ai' as const },
@@ -43,8 +54,9 @@ const auth = {
   permission: 'execute' as const,
 };
 
-test('save transport delegates request-correlated reads and never promotes accepted to succeeded', async () => {
+test('synchronous save dispatch waits for the canonical terminal operation run', async () => {
   const current = run('save-transport-1');
+  const terminal = succeededRun(current);
   const calls: string[] = [];
   const port: SaveOperationRunPort = {
     dispatchSave: () => {
@@ -57,7 +69,7 @@ test('save transport delegates request-correlated reads and never promotes accep
     },
     wait: async () => {
       calls.push('wait');
-      return { ok: true, value: current };
+      return { ok: true, value: terminal };
     },
     retry: () => {
       calls.push('retry');
@@ -78,13 +90,35 @@ test('save transport delegates request-correlated reads and never promotes accep
     input: { requestId: 'save-transport-1' },
     ...auth,
   }));
-  expect(accepted).toMatchObject({ runId: current.runId, result: { requestId: 'save-transport-1', runId: current.runId, status: 'running' } });
+  expect(accepted).toMatchObject({ runId: current.runId, result: { requestId: 'save-transport-1', runId: current.runId, status: 'succeeded', result: { persisted: true } } });
 
   const fetched = await service.handle(request('get', 'run.get', { requestId: 'save-transport-1', ...auth }));
   const waited = await service.handle(request('wait', 'run.wait', { requestId: 'save-transport-1', ...auth }));
   expect(fetched.result).toEqual(current);
-  expect(waited.result).toEqual(current);
-  expect(calls).toEqual(['dispatch', 'get', 'wait']);
+  expect(waited.result).toEqual(terminal);
+  expect(calls).toEqual(['dispatch', 'wait', 'get', 'wait']);
+});
+
+test('explicitly asynchronous save dispatch returns the accepted operation run', async () => {
+  const current = run('save-async');
+  const port: SaveOperationRunPort = {
+    dispatchSave: () => ({ ok: true, runId: current.runId, reused: false, run: current }),
+    get: () => ({ ok: true, value: current }),
+    wait: async () => ({ ok: true, value: succeededRun(current) }),
+    retry: () => ({ ok: false, error: { code: 'run-not-retryable', hint: 'not retryable', retryable: false, recoveryActions: [] } }),
+    cancel: () => ({ ok: false, error: { code: 'run-not-cancellable', hint: 'not cancellable', retryable: false, recoveryActions: [] } }),
+  };
+  const service = createTransportService({
+    operationRuns: port,
+    security: createTransportSecurityPolicy({ version: TRANSPORT_PROTOCOL_VERSION, scopes: ['default'], permissions: {} }),
+  });
+
+  expect(await service.handle(request('async-save', 'run.dispatch', {
+    operationId: 'saveDocToDisk',
+    input: { requestId: 'save-async' },
+    ...auth,
+    async: true,
+  }))).toMatchObject({ runId: current.runId, result: { status: 'running' } });
 });
 
 test('save transport exposes structured unknown, expired, unavailable, retry, and cancel facts', async () => {

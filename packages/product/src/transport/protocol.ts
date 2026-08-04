@@ -25,7 +25,14 @@ function schema<T>(parse: (value: unknown) => T | undefined, issue: string): Tra
 
 function parseRequest(value: unknown): TransportRequest | undefined {
   if (!isRecord(value) || value.jsonrpc !== '2.0' || value.version !== TRANSPORT_PROTOCOL_VERSION) return undefined;
-  if (typeof value.id !== 'string' || typeof value.correlationId !== 'string' || typeof value.method !== 'string' || !('params' in value)) return undefined;
+  if (
+    typeof value.id !== 'string'
+    || typeof value.correlationId !== 'string'
+    || typeof value.scope !== 'string'
+    || value.scope.length === 0
+    || typeof value.method !== 'string'
+    || !('params' in value)
+  ) return undefined;
   return value as unknown as TransportRequest;
 }
 

@@ -34,6 +34,9 @@ type Calls = {
   renameAsset: Array<[string, string]>;
   selectAllEntities: number[];
   selectAllAssets: number[];
+  hideEntities: number[][];
+  showAllHidden: number[];
+  hideUnselected: number[];
 };
 
 function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & { calls: Calls } {
@@ -47,6 +50,9 @@ function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & 
     renameAsset: [],
     selectAllEntities: [],
     selectAllAssets: [],
+    hideEntities: [],
+    showAllHidden: [],
+    hideUnselected: [],
   };
   const base: KeyboardRouterDeps = {
     dispatch: (op, origin) => { calls.dispatch.push([op, origin]); },
@@ -58,6 +64,9 @@ function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & 
     getInputTarget: () => 'editor',
     deleteEntities: (ids) => { calls.deleteEntities.push(ids); },
     duplicateEntities: (ids) => { calls.duplicateEntities.push(ids); },
+    hideEntities: (ids) => { calls.hideEntities.push(ids); },
+    showAllHidden: () => { calls.showAllHidden.push(1); },
+    hideUnselected: () => { calls.hideUnselected.push(1); },
     renameEntity: (id) => { calls.renameEntity.push(id); },
     selectAllEntities: () => { calls.selectAllEntities.push(1); },
     deleteAssets: (assets) => { calls.deleteAssets.push(assets); },
@@ -127,6 +136,82 @@ describe('keyboard router — dual-domain Delete (AC-C2)', () => {
     const del2 = findByCombo(buildShortcuts(), 'Delete');
     expect(del2.run()).toBe(true);
     expect(deps2.calls.deleteAssets).toEqual([[asset]]);
+  });
+});
+
+describe('keyboard router — UE-parity editor hide (H / Ctrl+H / Shift+H)', () => {
+  const keyEvent = (init: { code: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean }): KeyboardEvent =>
+    ({ key: 'h', ...init } as KeyboardEvent);
+
+  it('H + entity selection → hideEntities (one gesture)', () => {
+    const deps = mockDeps({ getEntitySelection: () => [7, 8] });
+    registerKeyboardRouterDeps(deps);
+    const h = findByCombo(buildShortcuts(), 'H');
+    expect(h.match(keyEvent({ code: 'KeyH' }))).toBe(true);
+    expect(h.run()).toBe(true);
+    expect(deps.calls.hideEntities).toEqual([[7, 8]]);
+  });
+
+  it('H without selection → no-op (returns false, key falls through)', () => {
+    const deps = mockDeps({ getEntitySelection: () => [] });
+    registerKeyboardRouterDeps(deps);
+    const h = findByCombo(buildShortcuts(), 'H');
+    expect(h.run()).toBe(false);
+    expect(deps.calls.hideEntities).toEqual([]);
+  });
+
+  it('H under Play → early return (edit-rejected-in-play)', () => {
+    const deps = mockDeps({ getEntitySelection: () => [7], isPlayMode: () => true });
+    registerKeyboardRouterDeps(deps);
+    const h = findByCombo(buildShortcuts(), 'H');
+    expect(h.run()).toBe(false);
+    expect(deps.calls.hideEntities).toEqual([]);
+  });
+
+  it('Ctrl+H → showAllHidden', () => {
+    const deps = mockDeps({});
+    registerKeyboardRouterDeps(deps);
+    const ch = findByCombo(buildShortcuts(), 'Ctrl+H');
+    expect(ch.match(keyEvent({ code: 'KeyH', ctrlKey: true }))).toBe(true);
+    expect(ch.run()).toBe(true);
+    expect(deps.calls.showAllHidden).toEqual([1]);
+  });
+
+  it('Ctrl+H under Play → early return', () => {
+    const deps = mockDeps({ isPlayMode: () => true });
+    registerKeyboardRouterDeps(deps);
+    const ch = findByCombo(buildShortcuts(), 'Ctrl+H');
+    expect(ch.run()).toBe(false);
+    expect(deps.calls.showAllHidden).toEqual([]);
+  });
+
+  it('Shift+H + selection → hideUnselected (isolate)', () => {
+    const deps = mockDeps({ getEntitySelection: () => [3] });
+    registerKeyboardRouterDeps(deps);
+    const sh = findByCombo(buildShortcuts(), 'Shift+H');
+    expect(sh.match(keyEvent({ code: 'KeyH', shiftKey: true }))).toBe(true);
+    expect(sh.run()).toBe(true);
+    expect(deps.calls.hideUnselected).toEqual([1]);
+  });
+
+  it('Shift+H without selection → no-op', () => {
+    const deps = mockDeps({ getEntitySelection: () => [] });
+    registerKeyboardRouterDeps(deps);
+    const sh = findByCombo(buildShortcuts(), 'Shift+H');
+    expect(sh.run()).toBe(false);
+    expect(deps.calls.hideUnselected).toEqual([]);
+  });
+
+  it('Ctrl+Shift+H no longer routes to hide — it is the Changelog binding', () => {
+    const deps = mockDeps({});
+    registerKeyboardRouterDeps(deps);
+    const changelog = findByCombo(buildShortcuts(), 'Ctrl+Shift+H');
+    expect(changelog.match(keyEvent({ code: 'KeyH', ctrlKey: true, shiftKey: true }))).toBe(true);
+    // The edit-group hide shortcuts must NOT claim the chord.
+    const hide = findByCombo(buildShortcuts(), 'Ctrl+H');
+    expect(hide.match(keyEvent({ code: 'KeyH', ctrlKey: true, shiftKey: true }))).toBe(false);
+    const isolate = findByCombo(buildShortcuts(), 'Shift+H');
+    expect(isolate.match(keyEvent({ code: 'KeyH', ctrlKey: true, shiftKey: true }))).toBe(false);
   });
 });
 

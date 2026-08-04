@@ -16,7 +16,7 @@ import type { ReactElement } from 'react';
 import { EyeOff, Play } from 'lucide-react';
 import { listSurfaces, subscribeSurfaces, type SurfaceState, type SurfaceAction } from '../../lib/surface-store';
 import { SchemaForm, type JsonSchema } from '../SchemaForm/SchemaForm';
-import { useStatusBarItem } from '../StatusBar/store';
+import type { StatusItemContribution } from '../../core/panels';
 import { useTranslation } from '@/i18n';
 import './SurfaceOverlay.css';
 
@@ -41,6 +41,19 @@ export function SurfaceOverlay(): ReactElement | null {
   if (!import.meta.env.DEV) return null;
   return <SurfaceOverlayDev />;
 }
+
+/** ADR-0030 §2.2 — dev-only surface overlay entry as a `custom` status-item.
+ *  The chip toggles a fixed-position overlay; `when` gates it to DEV builds so
+ *  production omits the subtree. Low priority → joins the right-slot carousel
+ *  pool rather than anchoring. */
+export const surfaceOverlayStatusItem: StatusItemContribution = {
+  kind: 'status-item',
+  id: 'surface-overlay',
+  location: 'statusbar.right',
+  priority: 10,
+  when: () => import.meta.env.DEV,
+  item: { type: 'custom', render: () => <SurfaceOverlay /> },
+};
 
 function SurfaceOverlayDev(): ReactElement | null {
   const { t } = useTranslation();
@@ -74,29 +87,27 @@ function SurfaceOverlayDev(): ReactElement | null {
     return m;
   }, [tools]);
 
-  // Status-bar entry — low priority so it joins the right-slot carousel
-  // pool rather than anchoring; this is a dev-only debugging surface and
-  // shouldn't crowd out the always-visible state chips.
-  useStatusBarItem({
-    id: 'surface-overlay',
-    slot: 'right',
-    priority: 10,
-    node: (
-      <button
-        type="button"
-        className={`sb-chip fx-surf-chip${open ? ' fx-surf-chip-open' : ''}`}
-        onClick={() => setOpen((v) => !v)}
-        title={open ? t('surfaces.chip.close') : t('surfaces.chip.open')}
-      >
-        surfaces · {surfaces.length}
-      </button>
-    ),
-  });
+  // Chip lives inline in the strip slot; the overlay it toggles is a sibling
+  // fixed-position layer. Low priority so it joins the right-slot carousel
+  // pool rather than anchoring — a dev-only debugging surface shouldn't crowd
+  // out the always-visible state chips.
+  const chip = (
+    <button
+      type="button"
+      className={`sb-chip fx-surf-chip${open ? ' fx-surf-chip-open' : ''}`}
+      onClick={() => setOpen((v) => !v)}
+      title={open ? t('surfaces.chip.close') : t('surfaces.chip.open')}
+    >
+      surfaces · {surfaces.length}
+    </button>
+  );
 
-  if (!open) return null;
+  if (!open) return chip;
 
   return (
-    <div className="fx-surf-overlay" role="complementary" aria-label="surface overlay">
+    <>
+      {chip}
+      <div className="fx-surf-overlay" role="complementary" aria-label="surface overlay">
       <div className="fx-surf-overlay-head">
         <span className="fx-surf-overlay-title">surfaces · {surfaces.length}</span>
         <button
@@ -121,7 +132,8 @@ function SurfaceOverlayDev(): ReactElement | null {
           ))
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

@@ -68,20 +68,20 @@ describe('appHostBootstrap × contribution registry (M2)', () => {
   });
 
   it('imperative ctx.contributePanels still works and composes with contributes', async () => {
-    const Chrome = (() => null) as React.ComponentType;
+    const stripItem = { id: 'test.chip', location: 'statusbar.left' as const, item: { type: 'text' as const, text: 'hi' } };
     const ext: AppExtension = {
       id: 'test.mixed', version: '1.0.0',
       contributes: { panels: { overlays: { Dashboard: C } } },
       setup(ctx) {
-        return ctx.contributePanels({ chrome: { StatusFeeds: Chrome } });
+        return ctx.contributePanels({ stripItems: { 'test.chip': stripItem } });
       },
     };
     const r = await bootstrapAppHost({ extensions: [ext] });
     expect(r.host.panels.overlays?.Dashboard).toBe(C);
-    expect(r.host.panels.chrome?.StatusFeeds).toBe(Chrome);
+    expect(r.host.panels.stripItems?.['test.chip']).toBe(stripItem);
     await r.dispose();
     expect(r.host.panels.overlays?.Dashboard).toBeUndefined();
-    expect(r.host.panels.chrome?.StatusFeeds).toBeUndefined();
+    expect(r.host.panels.stripItems?.['test.chip']).toBeUndefined();
   });
 
   it('activates and unloads declarative page + panel contributions as one bundle', async () => {

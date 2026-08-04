@@ -35,6 +35,11 @@ export type PackAssetEntry = PackFile['assets'][number];
  *  path suffix; the snapshot cache holds whichever the delete produced. */
 export type AssetEntry = PackAssetEntry | MetaSubAsset;
 
+export interface UpsertAssetResult {
+  readonly ok: boolean;
+  readonly previous: PackAssetEntry | null;
+}
+
 export type SourceFileDeleteResult =
   | { ok: true }
   | { ok: false; error: CommandError };
@@ -439,6 +444,13 @@ export class AssetIOFacade {
       } else {
         pack = read.pack;
       }
+      if (pack.assets.some((entry) => entry.guid.toLowerCase() === opts.asset.guid.toLowerCase())) {
+        return {
+          ok: false as const,
+          reason: 'write-failed' as const,
+          hint: `asset ${opts.asset.guid} already exists in ${opts.packPath}`,
+        };
+      }
       pack.assets.push({
         guid: opts.asset.guid,
         kind: opts.asset.kind,
@@ -456,6 +468,32 @@ export class AssetIOFacade {
         ? { ok: true as const }
         : { ok: false as const, reason: 'write-failed' as const, hint: written.hint };
     });
+  }
+
+  /** Create or replace one authored pack asset by stable GUID. The pack on disk
+   *  is the SSOT for deciding which arm applies; live catalog state may be cold. */
+  async upsertAssetInPack(opts: {
+    packPath: string;
+    asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[] };
+  }): Promise<UpsertAssetResult> {
+    recordAssetLeaf('assetIO.createAssetInPack');
+    let pack = await readPack(opts.packPath);
+    if (!pack) pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
+    const index = pack.assets.findIndex(
+      (entry) => entry.guid.toLowerCase() === opts.asset.guid.toLowerCase(),
+    );
+    const previous = index < 0 ? null : structuredClone(pack.assets[index]!);
+    const next = {
+      guid: opts.asset.guid,
+      kind: opts.asset.kind,
+      name: opts.asset.name,
+      payload: opts.asset.payload as Record<string, unknown>,
+      refs: opts.asset.refs ?? [],
+    };
+    if (index < 0) pack.assets.push(next);
+    else pack.assets[index] = next;
+    pack = normalizePackForRuntime(pack as unknown as Record<string, unknown>) as PackFile;
+    return { ok: await writePack(opts.packPath, pack), previous };
   }
 
   /**

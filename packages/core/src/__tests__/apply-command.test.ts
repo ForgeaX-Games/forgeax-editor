@@ -23,7 +23,7 @@
 //   research F-WorldAPI: world.get/set/spawn/despawn/addComponent/removeComponent
 
 import { describe, expect, it } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
+import { Disabled, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
@@ -171,6 +171,66 @@ describe('applyCommand world assertions (GREEN)', () => {
     const r = applyCommand(session, { kind: 'setHidden', entity: s.legacyId, hidden: false });
     expect(r.ok).toBe(true);
     expect(session.world.get(s.engineHandle, EditorHidden).ok).toBe(false);
+  });
+
+  // ── 8b. UE-parity recursive hide — Disabled engine marker sync ─────────────
+  // docs 2026-08-04-editor-hide-ue-parity-plan M1: setHidden mirrors the
+  // EFFECTIVE hidden state (own EditorHidden OR any hidden ancestor) into the
+  // engine `Disabled` marker for the whole subtree, so ordinary ECS queries —
+  // the render extract included — skip the subtree without render-side code.
+
+  it('setHidden(true) on a parent recursively adds Disabled to the subtree', () => {
+    const session = createSession();
+    const parent = spawnEngineHandle(session, 'Parent');
+    const child = spawnEngineHandle(session, 'Child', parent.legacyId);
+    const grandchild = spawnEngineHandle(session, 'Grandchild', child.legacyId);
+    const r = applyCommand(session, { kind: 'setHidden', entity: parent.legacyId, hidden: true });
+    expect(r.ok).toBe(true);
+    expect(session.world.get(parent.engineHandle, Disabled).ok).toBe(true);
+    expect(session.world.get(child.engineHandle, Disabled).ok).toBe(true);
+    expect(session.world.get(grandchild.engineHandle, Disabled).ok).toBe(true);
+    // Only the parent carries the authored intent marker — descendants are
+    // hidden BY the parent, not by themselves (UE: unhiding the parent
+    // restores the child's individual state).
+    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(false);
+    expect(session.world.get(grandchild.engineHandle, EditorHidden).ok).toBe(false);
+  });
+
+  it('setHidden(false) on the parent clears Disabled for the whole subtree', () => {
+    const session = createSession();
+    const parent = spawnEngineHandle(session, 'Parent');
+    const child = spawnEngineHandle(session, 'Child', parent.legacyId);
+    applyCommand(session, { kind: 'setHidden', entity: parent.legacyId, hidden: true });
+    const r = applyCommand(session, { kind: 'setHidden', entity: parent.legacyId, hidden: false });
+    expect(r.ok).toBe(true);
+    expect(session.world.get(parent.engineHandle, Disabled).ok).toBe(false);
+    expect(session.world.get(child.engineHandle, Disabled).ok).toBe(false);
+  });
+
+  it('child individually hidden under a hidden parent keeps Disabled after the parent shows', () => {
+    const session = createSession();
+    const parent = spawnEngineHandle(session, 'Parent');
+    const child = spawnEngineHandle(session, 'Child', parent.legacyId);
+    applyCommand(session, { kind: 'setHidden', entity: child.legacyId, hidden: true });
+    applyCommand(session, { kind: 'setHidden', entity: parent.legacyId, hidden: true });
+    applyCommand(session, { kind: 'setHidden', entity: parent.legacyId, hidden: false });
+    // The child's own EditorHidden intent survives the parent's hide/show cycle.
+    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(true);
+    expect(session.world.get(child.engineHandle, Disabled).ok).toBe(true);
+    expect(session.world.get(parent.engineHandle, Disabled).ok).toBe(false);
+  });
+
+  it('unhiding a child under a still-hidden parent keeps it Disabled', () => {
+    const session = createSession();
+    const parent = spawnEngineHandle(session, 'Parent');
+    const child = spawnEngineHandle(session, 'Child', parent.legacyId);
+    applyCommand(session, { kind: 'setHidden', entity: parent.legacyId, hidden: true });
+    applyCommand(session, { kind: 'setHidden', entity: child.legacyId, hidden: true });
+    const r = applyCommand(session, { kind: 'setHidden', entity: child.legacyId, hidden: false });
+    expect(r.ok).toBe(true);
+    // Own intent is gone, but the parent still hides it (UE semantics).
+    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(false);
+    expect(session.world.get(child.engineHandle, Disabled).ok).toBe(true);
   });
 
   // ── 9. transaction ──────────────────────────────────────────────────────────

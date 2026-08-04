@@ -1155,6 +1155,9 @@
     "toggleDashboard": "Toggle Dashboard overview panel",
     "toggleSettings": "Open / close Settings overlay",
     "openChangelog": "Settings → Changelog (version history)",
+    "hideSelected": "Hide selected entities (UE parity · editor-only, never affects the game)",
+    "hideUnselected": "Hide unselected entities (isolate selection)",
+    "showAllHidden": "Show all hidden entities",
     "closeOverlay": "Close current overlay · browser fullscreen → game fullscreen → Settings → Dashboard in order",
     "modePreview": "Switch to Preview mode",
     "modeWorkbench": "Switch to Workbench mode",
@@ -1194,6 +1197,11 @@
     "fullscreenTitle": "UI render crashed",
     "fullscreenHint": "The React UI threw while rendering. Try \"Retry\" first; if that fails, \"Reload this region\"; if it still errors, \"Reload Studio\". The desktop app has no address bar, so you must recover with the buttons below."
   },
+  "footerPanel": {
+    "info": "Info",
+    "checkpoints": "Checkpoints",
+    "events": "Events"
+  },
   "infoPanel": {
     "clickToCopy": "Click to copy",
     "repeatedTimes": "Repeated {{count}} times",
@@ -1228,6 +1236,8 @@
     "mainPanels": "Main Panels",
     "morePanels": "More Panels",
     "extensionPanels": "Extension Panels",
+    "hidePanelTitle": "Hide Panel Title Bar",
+    "showPanelTitle": "Show Panel Title Bar",
     "panelTitles": {
       "hierarchy": "Hierarchy",
       "assets": "Content Browser",

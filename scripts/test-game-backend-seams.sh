@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test-game-backend-seams.sh -- curl-level assertion script for M3 game-backend seams
-# [w10] AC-08/AC-09: 7 assertions (a-g) covering hemostasis + version + health
+# [w10] AC-08/AC-09: 8 assertions (a-h) covering hemostasis + version + health + SSE
 #
 # Usage:
 #   FORGEAX_GAME_DIR=games/sample bash scripts/test-game-backend-seams.sh
 #
-# Starts game-backend.ts, runs 7 curl assertions, stops the process.
+# Starts game-backend.ts, runs 8 curl assertions, stops the process.
 # Exits 0 if all pass, exits 1 with details on first failure.
 
 set -euo pipefail
@@ -118,46 +118,61 @@ else
   fail "(d) ok (expected true, got '${OK_D}')"
 fi
 
-# --- (e) GET /api/files/... (mounted) -> behavior unchanged (not shadowed, boundary #4) ---
+# --- (e) GET /api/events/stream -> valid SSE transport, even when empty ---
 echo ""
-echo "--- (e) GET /api/files/tree (mounted) ---"
-RESP_E=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/files/tree" || echo "000")
-assert_status "(e) GET /api/files/tree (mounted, 2xx)" 200 "$RESP_E"
-
-# --- (f) GET /api/prefs/... (mounted) -> behavior unchanged ---
-echo ""
-echo "--- (f) GET /api/prefs/workspace-layout (mounted) ---"
-RESP_F=$(curl -s -o /tmp/w10_resp_f_body.txt -w "%{http_code}" "${BASE}/api/prefs/workspace-layout" || echo "000")
-BODY_F=$(cat /tmp/w10_resp_f_body.txt 2>/dev/null || echo "{}")
-UNAVAILABLE_F=$(echo "${BODY_F}" | jq -r '.unavailable // "ABSENT"' 2>/dev/null || echo "ABSENT")
-if [ "${UNAVAILABLE_F}" = "true" ]; then
-  fail "(f) /api/prefs/workspace-layout should NOT be shadowed by unavailable envelope"
+echo "--- (e) GET /api/events/stream (empty standalone SSE) ---"
+HEADERS_E=$(mktemp)
+RESP_E=$(curl -sS --max-time 1 -D "${HEADERS_E}" -o /dev/null -w "%{http_code}" \
+  "${BASE}/api/events/stream?topic=plugin.reloaded" || true)
+assert_status "(e) GET /api/events/stream" 200 "${RESP_E}"
+CONTENT_TYPE_E=$(awk 'tolower($0) ~ /^content-type:/ { sub(/^[^:]*:[[:space:]]*/, ""); sub(/[[:space:]]*\r$/, ""); print; exit }' "${HEADERS_E}")
+rm -f "${HEADERS_E}"
+if [[ "${CONTENT_TYPE_E}" == text/event-stream* ]]; then
+  pass "(e) content-type is text/event-stream"
 else
-  pass "(f) /api/prefs/workspace-layout (not shadowed by unavailable)"
+  fail "(e) content-type (expected text/event-stream, got '${CONTENT_TYPE_E}')"
 fi
 
-# --- (g) error path on mounted route -> original status code preserved (B2 selfcheck :183) ---
+# --- (f) GET /api/files/... (mounted) -> behavior unchanged (not shadowed, boundary #4) ---
 echo ""
-echo "--- (g) GET /api/files/nonexistent-slug/no-file (error path) ---"
-RESP_G=$(curl -s -o /tmp/w10_resp_g_body.txt -w "%{http_code}" "${BASE}/api/files/nonexistent-slug/no-file" || echo "000")
+echo "--- (f) GET /api/files/tree (mounted) ---"
+RESP_F=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/files/tree" || echo "000")
+assert_status "(f) GET /api/files/tree (mounted, 2xx)" 200 "$RESP_F"
+
+# --- (g) GET /api/prefs/... (mounted) -> behavior unchanged ---
+echo ""
+echo "--- (g) GET /api/prefs/workspace-layout (mounted) ---"
+RESP_G=$(curl -s -o /tmp/w10_resp_g_body.txt -w "%{http_code}" "${BASE}/api/prefs/workspace-layout" || echo "000")
 BODY_G=$(cat /tmp/w10_resp_g_body.txt 2>/dev/null || echo "{}")
+UNAVAILABLE_G=$(echo "${BODY_G}" | jq -r '.unavailable // "ABSENT"' 2>/dev/null || echo "ABSENT")
+if [ "${UNAVAILABLE_G}" = "true" ]; then
+  fail "(g) /api/prefs/workspace-layout should NOT be shadowed by unavailable envelope"
+else
+  pass "(g) /api/prefs/workspace-layout (not shadowed by unavailable)"
+fi
+
+# --- (h) error path on mounted route -> original status code preserved (B2 selfcheck :183) ---
+echo ""
+echo "--- (h) GET /api/files/nonexistent-slug/no-file (error path) ---"
+RESP_H=$(curl -s -o /tmp/w10_resp_h_body.txt -w "%{http_code}" "${BASE}/api/files/nonexistent-slug/no-file" || echo "000")
+BODY_H=$(cat /tmp/w10_resp_h_body.txt 2>/dev/null || echo "{}")
 # This MUST NOT be 200 with unavailable envelope (it's a mounted prefix but bad path)
-if [ "${RESP_G}" = "200" ]; then
-  UNAVAILABLE_G=$(echo "${BODY_G}" | jq -r '.unavailable // "ABSENT"' 2>/dev/null || echo "ABSENT")
-  if [ "${UNAVAILABLE_G}" = "true" ]; then
-    fail "(g) error path on mounted route was shadowed by 200 unavailable envelope (B2 selfcheck violation)"
+if [ "${RESP_H}" = "200" ]; then
+  UNAVAILABLE_H=$(echo "${BODY_H}" | jq -r '.unavailable // "ABSENT"' 2>/dev/null || echo "ABSENT")
+  if [ "${UNAVAILABLE_H}" = "true" ]; then
+    fail "(h) error path on mounted route was shadowed by 200 unavailable envelope (B2 selfcheck violation)"
   else
-    pass "(g) error path status=${RESP_G} (not shadowed by unavailable, original code preserved)"
+    pass "(h) error path status=${RESP_H} (not shadowed by unavailable, original code preserved)"
   fi
 else
-  pass "(g) error path status=${RESP_G} (original status preserved, not 200)"
+  pass "(h) error path status=${RESP_H} (original status preserved, not 200)"
 fi
 
 # --- summary ---
 echo ""
 echo "=== w10 results ==="
 if [ "$FAILURES" -eq 0 ]; then
-  echo "ALL 7 assertions PASSED"
+  echo "ALL 8 assertions PASSED"
   exit 0
 else
   echo "${FAILURES} assertion(s) FAILED (expected in TDD red phase before w11)"

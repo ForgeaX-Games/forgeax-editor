@@ -222,6 +222,8 @@ export type { ReloadTier, SchemaSource } from './util/hot-reload';
 // ── Module discoverer (game systems into the single edit world) ──
 export { discoverModules } from './assets/discoverer';
 export type { DiscoveredModule, DiscoverResult } from './assets/discoverer';
+export { catalogStoragePath } from './assets/catalog-storage-path';
+export type { CatalogStorageLocator } from './assets/catalog-storage-path';
 
 // ── Schema ──
 export {
@@ -427,6 +429,10 @@ export {
   deleteManyCascade,
   duplicateEntity,
   groupSelected,
+  hideMany,
+  hideUnselected,
+  setHiddenMany,
+  showAllHidden,
   ungroupEntity,
   reparentEntity,
   reparentMany,

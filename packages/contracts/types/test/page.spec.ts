@@ -24,8 +24,19 @@ describe('page contribution contracts', () => {
           title: { en: 'Asset editor' },
           cardinality: 'resource',
           restorePolicy: 'project',
-          layout: './layouts/asset-editor.page.json',
-          layoutVersion: 1,
+          layout: {
+            version: 2,
+            root: {
+              kind: 'split',
+              direction: 'horizontal',
+              sizes: [360, 840],
+              children: [
+                { kind: 'tabs', placements: ['preview'], active: 'preview' },
+                { kind: 'tabs', placements: ['inspector'], active: 'inspector' },
+              ],
+            },
+          },
+          layoutVersion: 2,
           panels: [
             { id: 'preview', panelType: { extension: 'self', id: 'preview' } },
             {

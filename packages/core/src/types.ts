@@ -69,8 +69,8 @@ export type BuiltinEditorOp =
   | { kind: 'duplicateEntity'; entity: EntityId; parent?: EntityId | null; name?: string; posOffset?: [number, number, number]; label?: string; /** Gateway-filled replay snapshot */ _asset?: SceneAsset }
   | { kind: 'applyVisualQualityPreset'; preset: 'draft' | 'balanced' | 'cinematic' }
   | { kind: 'transaction'; label: string; commands: EditorOp[] }
-  | { kind: 'destroyAsset'; packPath: string; guid: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
-  | { kind: 'restoreAsset'; packPath: string; guid: string; cacheKey?: string }
+  | { kind: 'destroyAsset'; guid: string; /** internal IO location derived by Gateway or the producing inverse */ _resolvedPackPath?: string; /** inverse-of-duplicateAsset: resolves the async clone guid from duplicatedGuidCache */ newGuidCacheKey?: string }
+  | { kind: 'restoreAsset'; guid: string; _resolvedPackPath: string; cacheKey?: string }
   | { kind: 'createAsset'; packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[] }
   // createMaterial (solo round-12 / P5 rendering-authoring): mint a NEW PBR
   // MaterialAsset from params (sRGB baseColor; linear metallic/roughness) into a pack, so an AI
@@ -83,6 +83,8 @@ export type BuiltinEditorOp =
   // the caller reuses the same guid for the follow-up bindAssetRef). `packPath`
   // optional — defaults to the active game's scene.pack.json in the applier.
   | { kind: 'createMaterial'; guid: string; name: string; baseColor: [number, number, number, number]; metallic?: number; roughness?: number; baseColorTexture?: string; alphaCutoff?: number; packPath?: string; refs?: string[] }
+  | { kind: 'writeUi'; guid: string; name: string; html: string; css: string; sourcePath?: string; packPath?: string }
+  | { kind: 'restoreWrittenAsset'; packPath: string; guid: string; cacheKey: string }
   | { kind: 'renameAsset'; packPath: string; guid: string; newName: string; /** optional UI-known old name; the applier prefers the disk SSOT via renameCacheKey */ oldName?: string; /** inverse resolution key into renamedNameCache */ renameCacheKey?: string }
   | { kind: 'duplicateAsset'; packPath: string; guid: string }
   // updateMaterialParams (material-editor M1): update an existing MaterialAsset's

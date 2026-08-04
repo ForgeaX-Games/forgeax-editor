@@ -110,6 +110,32 @@ async function casResponse(
   return undefined;
 }
 
+/**
+ * Standalone has no studio event producer, but the shared interface still
+ * opens the event stream for optional live chrome (confirmations and plugin
+ * reloads). Returning the normal unavailable JSON envelope here makes the
+ * browser's EventSource reject the response and report a console error. Keep
+ * the transport contract valid instead: an empty SSE stream is harmless and
+ * leaves the optional live features inactive until a standalone producer
+ * exists.
+ */
+function emptyEventStream(): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(': standalone event stream has no producers\n\n'));
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
+}
+
 const server = Bun.serve({
   port,
   hostname: '127.0.0.1',
@@ -128,6 +154,9 @@ const server = Bun.serve({
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
+    }
+    if (url.pathname === '/api/events/stream') {
+      return emptyEventStream();
     }
 
     for (const { prefix, router, isFiles } of PREFIXES) {
@@ -186,7 +215,7 @@ const server = Bun.serve({
     return new Response(JSON.stringify({
       unavailable: true,
       reason: 'standalone',
-      hint: 'studio-only endpoint; standalone mounts /api/files /api/prefs /api/version /api/health',
+      hint: 'studio-only endpoint; standalone mounts /api/files /api/prefs /api/version /api/health /api/events/stream',
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

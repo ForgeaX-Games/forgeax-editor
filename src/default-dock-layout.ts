@@ -52,7 +52,7 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
               // History is a peer tab here rather than a dedicated strip.
               size: 312,
               data: {
-                views: ['ep:assets', 'info', 'ep:history', 'ep:capabilities'],
+                views: ['ep:assets', 'ep:history', 'ep:capabilities'],
                 activeView: 'ep:assets',
                 id: 'g-content-browser',
               },
@@ -74,7 +74,6 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
     'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
-    info: { id: 'info', contentComponent: 'info', title: 'Info' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
   },
   activeGroup: 'g-chat',

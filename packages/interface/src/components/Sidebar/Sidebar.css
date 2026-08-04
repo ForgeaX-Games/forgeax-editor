@@ -315,21 +315,6 @@ button.bus-chip.is-link:hover .bus-chip-listeners { opacity: 0.78; }
   }
 }
 
-
-/* Doc 06 §panes — when a bus plugin renders its declared `panes.left` iframe
- * inside the Sidebar, give it the full remaining sidebar height. The wrap
- * itself takes flex space; the iframe inside is already 100%/100%. */
-.ws-pane-iframe-wrap {
-  flex: 1 1 auto;
-  display: flex;
-  min-height: 0;
-}
-.ws-pane-iframe-wrap .wb-plugin-iframe-wrap {
-  flex: 1 1 auto;
-  display: flex;
-  min-height: 0;
-}
-
 /* AgentsPanel — agent 列表 */
 .agents-panel {
   display: flex; flex-direction: column; gap: 4px;

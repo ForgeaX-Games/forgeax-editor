@@ -143,6 +143,12 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
       caps.add(capability);
       bus.emit('capability:added', { capability: String(capability), provider: activeSetup.id });
     },
+    contributeStatusItem(item) {
+      // Runtime imperative registration routed through the ONE panels channel
+      // (owner '(runtime)' is never batch-removed by removeExtensionsByOwner;
+      // lifecycle is the returned Cleanup — unmount/dispose removes this entry).
+      return panelsRegistry.contribute('(runtime)', { stripItems: { [item.id]: item } });
+    },
   };
 
   const host = new Proxy(base as unknown as AppHost, {

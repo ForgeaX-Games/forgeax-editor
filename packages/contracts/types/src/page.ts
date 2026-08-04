@@ -138,9 +138,11 @@ export const PageTypeContributionSchema = z
     icon: z.string().min(1).optional(),
     cardinality: PageCardinalitySchema,
     restorePolicy: z.enum(['never', 'session', 'project']).optional(),
-    layout: z.string().min(1),
+    layout: PageLayoutEnvelopeSchema,
     layoutVersion: z.number().int().nonnegative(),
     panels: z.array(PanelPlacementContributionSchema).optional(),
+    matchProduces: z.array(z.string()).optional(),
+    preferredAgent: z.string().min(1).optional(),
   })
   .strict();
 

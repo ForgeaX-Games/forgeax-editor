@@ -18,6 +18,8 @@ import type {
   PanelActionContribution,
   PanelContentDefinition,
   PanelHeaderDefinition,
+  StatusItemContribution,
+  DrawerPanelContribution,
 } from '../../core/panels';
 
 // Structural host-SDK boundary. Interface receives these factories from the
@@ -221,12 +223,18 @@ export interface PanelRenderers {
      * external store and swaps panel domains without changing Workbench. */
   };
 
-  /** Fixed shell chrome regions (outside dockview). */
-  chrome?: {
-    /** Items injected into the bottom StatusBar (pulse feeds, version badge). */
-    StatusFeeds?: ComponentType;
-    /** Host-owned semantic document tab strip, rendered between TopBar and dock. */
-  };
+  /** ADR-0030 §2.3 — bottom-drawer panel contributions (kind:'drawer'). Keyed
+   *  by id so the derive fold sub-merges per key. Each entry registers a
+   *  launcher tab at the bottom that expands upward into a resizable,
+   *  single-active panel (DrawerHostView). */
+  drawerPanels?: Record<string, DrawerPanelContribution>;
+
+  /** ADR-0030 §2.2 — status-bar (strip) item contributions. Keyed by id so the
+   *  derive fold sub-merges per key (later contributor wins per id, siblings
+   *  preserved). This is the footer's `kind:'strip'` registration surface: the
+   *  StripHostView renders these text/button/custom chips. Replaces the legacy
+   *  module-level statusBarStore (a parallel registration truth). */
+  stripItems?: Record<string, StatusItemContribution>;
 
   /** Bodies of DETACHED OS-windows (Tauri or `window.open`) keyed by surface id.
    *  Rendered inside <DetachedSurface> when a panel/surface is popped out.

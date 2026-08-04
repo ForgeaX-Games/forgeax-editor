@@ -34,6 +34,9 @@ export const GameplayPointerInputSchema = z.object({
   type: z.literal('pointer'),
   x: z.number().finite(),
   y: z.number().finite(),
+  phase: z.enum(['down', 'move', 'up', 'cancel']).optional(),
+  pointerId: z.number().int().nonnegative().optional(),
+  pointerType: z.enum(['mouse', 'touch', 'pen']).optional(),
   button: z.enum(['left', 'middle', 'right']).optional(),
 }).strict();
 
@@ -47,19 +50,17 @@ export const GameplayCaptureProvenanceSchema = GameplayIdentitySchema;
 export type GameplayCaptureProvenance = GameplayIdentity;
 
 export const GameplayCaptureArtifactSchema = z.object({
-  dataUrl: z.string().min(1).startsWith('data:image/'),
+  dataUrl: z.string().min(1).startsWith('data:image/png;base64,'),
   bytes: z.number().int().positive(),
   provenance: GameplayCaptureProvenanceSchema,
 }).strict();
 export type GameplayCaptureArtifact = z.infer<typeof GameplayCaptureArtifactSchema>;
 
 export const GameplayOperationNameSchema = z.enum([
-  'play',
-  'gameplayStop',
+  'describe',
   'input',
   'query',
   'capture',
-  'reveal',
 ]);
 export type GameplayOperationName = z.infer<typeof GameplayOperationNameSchema>;
 
@@ -77,19 +78,36 @@ export const GAMEPLAY_OPERATION_MANIFEST: readonly GameplayOperationManifestEntr
 );
 
 export const GameplayOperationRequestSchema = z.discriminatedUnion('operation', [
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('play') }).strict(),
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('gameplayStop') }).strict(),
+  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('describe') }).strict(),
   z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('input'), action: GameplayInputSchema }).strict(),
   z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('query'), query: z.string() }).strict(),
   z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('capture') }).strict(),
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('reveal'), artifact: GameplayCaptureArtifactSchema }).strict(),
 ]);
 export type GameplayOperationRequest = z.infer<typeof GameplayOperationRequestSchema>;
+
+/** Human- and AI-readable help co-owned with the schemas it demonstrates. */
+export const GAMEPLAY_CONTRACT_DESCRIPTION = Object.freeze({
+  version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
+  operations: Object.freeze([
+    { operation: 'describe', purpose: 'Read this live contract.', request: { version: 1, operation: 'describe' } },
+    { operation: 'query', purpose: 'Read a game-published state projection.', request: { version: 1, operation: 'query', query: '<read-id>' } },
+    { operation: 'capture', purpose: 'Capture the authoritative live canvas.', request: { version: 1, operation: 'capture' } },
+    { operation: 'input', purpose: 'Send a key transition.', request: { version: 1, operation: 'input', action: { type: 'key', key: 'ArrowLeft', phase: 'down' } } },
+    {
+      operation: 'input',
+      purpose: 'Send pointer transitions as a gesture with one pointerId.',
+      requestSequence: [
+        { version: 1, operation: 'input', action: { type: 'pointer', x: 120, y: 240, phase: 'down', pointerId: 1, pointerType: 'touch', button: 'left' } },
+        { version: 1, operation: 'input', action: { type: 'pointer', x: 320, y: 240, phase: 'up', pointerId: 1, pointerType: 'touch', button: 'left' } },
+      ],
+    },
+  ]),
+});
 
 export const GameplayErrorSchema = z.object({
   owner: z.string().min(1),
   code: z.string().min(1),
-  phase: z.enum(['contract', 'identity', 'producer', 'capture', 'reveal']),
+  phase: z.enum(['contract', 'identity', 'producer', 'capture']),
   retryable: z.boolean(),
   hint: z.string().min(1),
   details: z.record(z.string(), z.unknown()).optional(),

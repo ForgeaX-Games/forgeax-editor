@@ -37,6 +37,8 @@ export {
   createGameplayCaptureGateway,
   createGameplayCarrierBridge,
   createGameplayOperations,
+  executeLiveGameplay,
+  registerLiveGameplayBridge,
 } from '../io/gameplay-operations';
 export type {
   GameplayCaptureGateway,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import { test } from 'bun:test';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const skillPath = join(here, '..', 'SKILL.md');
@@ -15,8 +15,8 @@ test('Gateway skill indexes the asset source workflow in executable order', asyn
   const text = await skillText();
   const headings = [
     '## Asset source workflow (M5)',
-    '## Core API Quick Reference',
-    '### Save terminal contract',
+    '## Connect and discover',
+    '## Execute safely',
   ];
   for (const heading of headings) assert.notEqual(text.indexOf(heading), -1, `missing heading: ${heading}`);
   const order = [
@@ -43,5 +43,5 @@ test('Gateway skill indexes schema, terminal, and structured error facts', async
   for (const action of ['asset.preflight', 'run.get', 'run.wait', 'run.retry', 'catalog.reconcile']) {
     assert.notEqual(text.indexOf(action), -1, `missing recovery action: ${action}`);
   }
-  assert.match(text, /never parse.*hint|do not parse.*hint/);
+  assert.match(text, /never parse.*hint|do not parse.*hint/i);
 });

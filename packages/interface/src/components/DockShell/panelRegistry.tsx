@@ -15,12 +15,12 @@ import { MainArea } from '../MainArea/MainArea';
 import { FilesPanel } from '../Sidebar/FilesPanel';
 import { ConsolePanel } from '../MainArea/ConsolePanel';
 import { TelemetryViewer } from '../MainArea/TelemetryViewer';
-import { InfoPanel } from '../StatusBar/InfoPanel';
 import { RecoveryBoundary } from '../ErrorBoundary';
 // Editor panel bodies resolve through the runtime PanelRenderers context so
 // interface stays editor-agnostic (no `@forgeax/editor*` import).
 import { usePanelRenderers } from './panelRenderers';
 import { DockPanelHost } from './DockPanelHost';
+import { withDockTitleRestore } from './dockTitle';
 
 // Agents panel body — injected by studio from `@forgeax/ai-workbench`.
 // When absent (interface-alone / standalone editor) render a neutral placeholder
@@ -89,9 +89,9 @@ export const OPTIONAL_PANELS: PanelDef[] = [
   // unified store.telemetry slice (node WS `{type:'telemetry'}` + iframe
   // `VAG_TELEMETRY`). See MainArea/TelemetryViewer.tsx.
   { id: 'telemetry', title: 'Telemetry', group: 'optional', canPopOut: true, render: () => <TelemetryViewer /> },
-  // Blender-INFO-style health/log feed — the same store the bottom HealthStatusBar
-  // peeks at, full-height with click-to-copy + repeat-fold (×N).
-  { id: 'info', title: 'Info', group: 'optional', canPopOut: true, render: () => <InfoPanel /> },
+  // 'info' (Blender-INFO-style health/log feed) moved to the bottom drawer
+  // (ADR-0030 §2.3) — see core/extensions/chrome-drawer.tsx. It is no longer a
+  // dock panel: it registers a launcher tab at the bottom that expands upward.
 ];
 
 // ── derived lookup maps (DockShell consumes these; never edit by hand) ────────
@@ -141,7 +141,7 @@ function tourWrap(tourId: string | undefined, render: () => ReactNode): () => Re
 export const BASE_PANEL_COMPONENTS: Record<string, (props: IDockviewPanelProps) => ReactNode> =
   Object.fromEntries(ALL_PANELS.map((p) => [
     p.id,
-    withBoundary(`panel:${p.id}`, tourWrap(p.tourId, p.render)),
+    withDockTitleRestore(withBoundary(`panel:${p.id}`, tourWrap(p.tourId, p.render))),
   ]));
 
 /** Static titles for interface-owned panels only. */
@@ -155,7 +155,7 @@ export function buildEditorPanelComponents(
 ): Record<string, (props: IDockviewPanelProps) => ReactNode> {
   return Object.fromEntries(editorPanelIds.map((id) => [
     `ep:${id}`,
-    withBoundary(`ep:${id}`, tourWrap(EP_TOUR_IDS[id], () => <DockPanelHost id={id} />)),
+    withDockTitleRestore(withBoundary(`ep:${id}`, tourWrap(EP_TOUR_IDS[id], () => <DockPanelHost id={id} />))),
   ]));
 }
 

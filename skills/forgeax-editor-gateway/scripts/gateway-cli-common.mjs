@@ -1,15 +1,15 @@
-// gateway-cli-common.mjs — SSOT for the shared plumbing of the two gateway CLI
-// drivers (gateway-eval.mjs = headless playwright boot; gateway-live.mjs = POST to
-// the live bridge relay). Both used to re-implement arg parsing, snippet reading,
+// gateway-cli-common.mjs — SSOT for shared plumbing across the Gateway CLI and
+// fresh-page verification driver (gateway.mjs attaches through a carrier;
+// gateway-fresh-page.mjs boots Playwright). Both used to re-implement arg parsing, snippet reading,
 // and the {ok,value|error} print + exit-code convention, and had DRIFTED:
 //
-//   - eval parsed flags with a per-flag switch; live did
+//   - fresh-page parsed flags with a per-flag switch; attached eval did
 //     `argv.filter(a => !a.startsWith('--')).join(' ')`, which silently swallowed
 //     unknown flags but kept their bare VALUES as code. `--settle 0 "expr"` (a
-//     eval-only flag) sent to live became `code = "0 expr"` → a cascade of bogus
+//     fresh-page-only flag) sent to attached eval became `code = "0 expr"` → bogus
 //     SCRIPT_SYNTAX_ERROR / "0 is not a function". parseArgs() below is strict:
 //     an undeclared flag fails loudly (exit 2) instead of masquerading as code.
-//   - eval used `process.exitCode = ...`; live used `process.exit(...)`. Same
+//   - fresh-page used `process.exitCode = ...`; attached eval used `process.exit(...)`. Same
 //     intent, two spellings. printResult() below is the one convention.
 //
 // Keep context-specific logic (browser boot vs relay POST, in-browser async
@@ -93,8 +93,8 @@ export function printResult(result) {
  * backend", bootViewport aborts BEFORE mounting __forgeaxEval, and readiness waits
  * time out at 30s. These flags turn on a usable GPU backend (ANGLE-over-Metal on
  * macOS + unsafe/Vulkan WebGPU) so the editor actually boots headless. Kept here
- * (one place) so this hard-won knowledge is not re-lost. Only gateway-eval.mjs
- * (the headless driver) uses it today.
+ * (one place) so this hard-won knowledge is not re-lost. Only
+ * gateway-fresh-page.mjs (the fresh-page driver) uses it today.
  */
 export const GATEWAY_GPU_ARGS = [
   '--use-angle=metal',

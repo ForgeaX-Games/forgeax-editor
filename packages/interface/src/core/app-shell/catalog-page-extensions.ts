@@ -4,7 +4,7 @@ import {
   resolveContributionRef,
 } from '@forgeax/types';
 import { listExtensions, type ExtensionInfo } from '../../lib/extension-api';
-import { WbExtensionDockPanel } from '../../components/DockShell/WbExtensionDockPanel';
+import { WorkbenchExtensionPanel } from '../../components/DockShell/WorkbenchExtensionPanel';
 import type { AppExtension } from './types';
 import type {
   ActivityRegistration,
@@ -23,37 +23,11 @@ export function catalogExtensionItems(payload: unknown): readonly ExtensionInfo[
   return Array.isArray(items) ? items as ExtensionInfo[] : [];
 }
 
-/** Dockview's serialized transport always requires a branch root, including
- * the common one-group Page shape produced from normalized catalog manifests. */
-export function catalogPageLayout(
-  pageId: string,
-  pageTitle: string,
-  placements: readonly { readonly id: string }[],
-): PageTypeRegistration['layout'] {
-  const views = placements.map((placement) => placement.id);
-  const groupId = `page-${pageId}`;
-  return {
-    grid: {
-      height: 800,
-      width: 1200,
-      orientation: 'HORIZONTAL',
-      root: {
-        type: 'branch',
-        size: 800,
-        data: [{
-          type: 'leaf',
-          size: 1200,
-          data: { views, activeView: views[0], id: groupId },
-        }],
-      },
-    },
-    panels: Object.fromEntries(placements.map((placement) => [placement.id, {
-      id: placement.id,
-      contentComponent: placement.id,
-      title: placements.length === 1 ? pageTitle : placement.id,
-    }])),
-    activeGroup: groupId,
-  } as PageTypeRegistration['layout'];
+type WorkbenchPane = 'left' | 'center';
+
+export function workbenchPane(initialProps?: Readonly<Record<string, unknown>>): WorkbenchPane | undefined {
+  const pane = initialProps?.pane;
+  return pane === 'left' || pane === 'center' ? pane : undefined;
 }
 
 /** Browser-side activation of scanner-normalized page contributions. Hosts may
@@ -72,13 +46,17 @@ export async function loadCatalogPageExtensions(
       id: qualifyContributionId(item.id, 'panel', panel.id) as PanelTypeRegistration['id'],
       runtime: {
         kind: 'inline',
-        render: () => createElement(WbExtensionDockPanel, { extensionId: item.id }),
+        render: (context) => createElement(WorkbenchExtensionPanel, {
+          extensionId: item.id,
+          pane: workbenchPane(context.initialProps),
+        }),
       },
     }));
     const pages: PageTypeRegistration[] = contributes.pages.map((page) => {
       const placements = (page.panels ?? []).map((placement) => ({
         id: placement.id,
         panelTypeId: resolveContributionRef(item.id, 'panel', placement.panelType) as PanelTypeRegistration['id'],
+        title: placement.title ? title(placement.title) : undefined,
         optional: placement.optional,
         initialProps: placement.initialProps,
       }));
@@ -89,7 +67,7 @@ export async function loadCatalogPageExtensions(
         restorePolicy: page.restorePolicy,
         layoutVersion: page.layoutVersion,
         panels: placements,
-        layout: catalogPageLayout(page.id, title(page.title), placements),
+        layout: page.layout,
       };
     });
     const activities: ActivityRegistration[] = (contributes.activities ?? []).map((activity) => ({

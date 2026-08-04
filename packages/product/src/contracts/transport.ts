@@ -12,6 +12,8 @@ export interface TransportRequest {
   readonly version: typeof TRANSPORT_PROTOCOL_VERSION;
   readonly id: string;
   readonly correlationId: string;
+  /** Carrier routing identity; method params must not be inspected to choose a page. */
+  readonly scope: string;
   readonly method: string;
   readonly params: unknown;
 }

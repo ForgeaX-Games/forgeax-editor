@@ -47,4 +47,19 @@ describe("agnostic API policy", () => {
       ),
     ).toContain("unallowlisted API endpoint");
   });
+
+  test("allows the project version endpoints", () => {
+    expect(
+      validateApiCall(
+        "/api/version",
+        "src/components/StatusBar/footer/ProjectVersionPopover.tsx",
+      ),
+    ).toBeNull();
+    expect(
+      validateApiCall(
+        "/api/version/tags",
+        "src/components/StatusBar/footer/ProjectVersionPopover.tsx",
+      ),
+    ).toBeNull();
+  });
 });

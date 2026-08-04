@@ -17,6 +17,7 @@ import { broadcastAssetsChanged } from '../store/assets-changed';
 import { broadcastAssetsError } from '../store/assets-error-bus';
 import type { DocApplierCtx } from './document';
 import type { ApplyResult, EditorOp } from '../types';
+import { encodeMaterialPackRefs } from '../io/material-pack-refs';
 
 interface UpdateMaterialParamsOp {
   kind: 'updateMaterialParams';
@@ -41,29 +42,18 @@ function _ioFailHint(op: string, path: string, e: unknown): string {
   return `${op}("${path}") background IO failed: ${e instanceof Error ? e.message : String(e)}`;
 }
 
-/** Encode texture GUIDs into the refs array and update values indices.
- *  For each entry in textureGuids:
- *  - non-null GUID: ensure it exists in refs[], write its index into nextParams[key]
- *  - null: delete the key from nextParams (clear the texture binding) */
-function encodeTextureRefs(
-  currentRefs: string[],
-  textureGuids: Record<string, string | null>,
-  nextParams: Record<string, unknown>,
-): { refs: string[] } {
-  const refs = [...currentRefs];
-  for (const [key, guid] of Object.entries(textureGuids)) {
-    if (guid === null) {
-      delete nextParams[key];
-    } else {
-      let idx = refs.indexOf(guid);
-      if (idx === -1) { refs.push(guid); idx = refs.length - 1; }
-      nextParams[key] = idx;
-    }
+/** Build inverse textureGuids from old refs + old values. */
+function materialRefGuid(value: unknown, refs: readonly string[]): string | undefined {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isInteger(value)) return refs[value];
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const texture = (value as { texture?: unknown }).texture;
+    if (typeof texture === 'string') return texture;
+    if (typeof texture === 'number' && Number.isInteger(texture)) return refs[texture];
   }
-  return { refs };
+  return undefined;
 }
 
-/** Build inverse textureGuids from old refs + old values. */
 function invertTextureGuids(
   oldRefs: string[],
   textureGuids: Record<string, string | null>,
@@ -71,12 +61,7 @@ function invertTextureGuids(
 ): Record<string, string | null> {
   const inv: Record<string, string | null> = {};
   for (const key of Object.keys(textureGuids)) {
-    const oldVal = oldParamValues[key];
-    if (typeof oldVal === 'number' && oldRefs[oldVal]) {
-      inv[key] = oldRefs[oldVal]!;
-    } else {
-      inv[key] = null;
-    }
+    inv[key] = materialRefGuid(oldParamValues[key], oldRefs) ?? null;
   }
   return inv;
 }
@@ -104,17 +89,25 @@ export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): A
   }
 
   const beforeRefs = _oldRefs ? [..._oldRefs] : [];
-  let nextRefs = beforeRefs;
   if (textureGuids) {
-    const res = encodeTextureRefs(beforeRefs, textureGuids, nextParams);
-    nextRefs = res.refs;
+    for (const [key, textureGuid] of Object.entries(textureGuids)) {
+      if (textureGuid === null) delete nextParams[key];
+      else nextParams[key] = textureGuid;
+    }
   }
 
   const currentEntry = _oldEntry as PackAssetEntry;
+  const encoded = encodeMaterialPackRefs(
+    { ...(currentEntry.payload as Record<string, unknown>), values: nextParams },
+    beforeRefs,
+  );
+  if (!encoded.ok) {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: encoded.error.hint } };
+  }
   const nextEntry: PackAssetEntry = {
     ...currentEntry,
-    payload: { ...(currentEntry.payload as Record<string, unknown>), values: nextParams },
-    refs: nextRefs,
+    payload: encoded.payload,
+    refs: encoded.refs,
   };
 
   // Build the IN-MEMORY values for the live catalogue/sharedRef payload.
@@ -123,12 +116,6 @@ export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): A
   // that here from textureGuids. Scalars (baseColor/metallic/roughness) are
   // identical in both forms.
   const liveParams: Record<string, unknown> = { ...nextParams };
-  if (textureGuids) {
-    for (const [key, texGuid] of Object.entries(textureGuids)) {
-      if (texGuid === null) delete liveParams[key];
-      else liveParams[key] = texGuid;
-    }
-  }
 
   const engine = ctx.engine;
   void ctx.assetIO.writePackEntry(packPath, nextEntry as never)

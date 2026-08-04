@@ -336,7 +336,7 @@ export function ContentBrowser() {
 
       for (const asset of current) {
         if (asset.kind !== 'scene') {
-          const result = gateway.dispatch({ kind: 'destroyAsset', packPath: asset.packPath, guid: asset.guid }, 'human');
+          const result = gateway.dispatch({ kind: 'destroyAsset', guid: asset.guid }, 'human');
           if (!result.ok) {
             setDeleteError(result.error.hint);
             return;

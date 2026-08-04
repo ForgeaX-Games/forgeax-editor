@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useStatusBarItem } from './store';
+import type { StatusItemContribution } from '../../core/panels';
 
 interface VersionInfo {
   version: string;
@@ -34,7 +34,7 @@ const FALLBACK: VersionInfo = {
   branch: '?',
 };
 
-export function VersionBadge() {
+export function VersionChip() {
   const [info, setInfo] = useState<VersionInfo>(FALLBACK);
 
   useEffect(() => {
@@ -67,7 +67,7 @@ export function VersionBadge() {
   const dirty = info.version.endsWith('+dirty');
   const display = dirty ? info.version : info.version;
 
-  const chip = (
+  return (
     <a
       className="sb-chip sb-version is-link"
       href="/CHANGELOG.md"
@@ -89,15 +89,15 @@ export function VersionBadge() {
       {display}
     </a>
   );
-
-  useStatusBarItem({
-    id: 'forgeax-version',
-    slot: 'left',
-    // Pin as the leftmost permanent chip — higher than FPS / slug / agent
-    // (those are in the ~50-200 range). Carousel rotation can never replace it.
-    priority: 1000,
-    node: chip,
-  });
-
-  return null;
 }
+
+/** ADR-0030 §2.2 — version badge as a `custom` status-item. Pinned as the
+ *  leftmost permanent chip (priority 1000 > FPS/slug/agent's ~50-200), so the
+ *  carousel rotation can never replace it. */
+export const versionStatusItem: StatusItemContribution = {
+  kind: 'status-item',
+  id: 'forgeax-version',
+  location: 'statusbar.left',
+  priority: 1000,
+  item: { type: 'custom', render: () => <VersionChip /> },
+};

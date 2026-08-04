@@ -56,6 +56,7 @@ import {
   createGameplayCaptureGateway,
   createGameplayCarrierBridge,
   createGameplayOperations,
+  registerLiveGameplayBridge,
   installSourceAuthoringOps,
   type CommandOrigin,
   type DispatchResult,
@@ -78,6 +79,7 @@ import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
+import { captureGameplayViewport } from './gameplay-capture';
 // M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
 // bridges moved to viewport-runtime-bridges.ts (decoupled from the createApp
 // hotspot, AC-10). bootViewport keeps only the call sites.
@@ -148,9 +150,9 @@ async function installManagedCarrierHealth(
   gameId: string | null,
 ): Promise<ManagedCarrierHealth> {
   const params = new URLSearchParams(window.location.search);
-  const runtimeId = params.get('runtimeId')?.trim() || null;
+  const managedRuntimeId = params.get('runtimeId')?.trim() || null;
   const challengeResponse = params.get('ownershipChallenge')?.trim() || null;
-  if (!runtimeId || !challengeResponse) return { getIdentity: () => null, dispose: () => {} };
+  const managed = managedRuntimeId !== null && challengeResponse !== null;
 
   const healthResponse = await fetch('/api/health', { cache: 'no-store' });
   if (!healthResponse.ok) throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
@@ -161,6 +163,7 @@ async function installManagedCarrierHealth(
   const instanceRootAbs = health.instanceRootAbs;
 
   const pageNonce = crypto.randomUUID();
+  const runtimeId = managedRuntimeId ?? `visible-${pageNonce}`;
   const pageIdentity = `${window.location.origin}${window.location.pathname}`;
   const canvasIdentity = `canvas-${pageNonce}`;
   const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
@@ -187,7 +190,7 @@ async function installManagedCarrierHealth(
   const payload = () => ({
     version: VAG_CARRIER_PROTOCOL_VERSION,
     runtimeId,
-    challengeResponse,
+    challengeResponse: challengeResponse ?? '',
     scope,
     pageNonce,
     pageIdentity,
@@ -209,14 +212,16 @@ async function installManagedCarrierHealth(
     sentinel += 1;
     sendVagMessage(window.parent, VagCarrierHeartbeatSchema, publish());
   };
-  sendHandshake();
-  if (failure) sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
-  const heartbeat = window.setInterval(sendHeartbeat, 100);
+  if (managed) {
+    sendHandshake();
+    if (failure) sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
+  }
+  const heartbeat = managed ? window.setInterval(sendHeartbeat, 100) : undefined;
   void renderer.ready.then((result) => {
     if (result.ok && readRendererGeneration(renderer) !== null) {
       failure = null;
       renderReadiness = 'ready';
-      sendHeartbeat();
+      if (managed) sendHeartbeat();
       return;
     }
     renderReadiness = 'unavailable';
@@ -225,12 +230,12 @@ async function installManagedCarrierHealth(
       hint: result.ok ? 'The renderer must publish a numeric generation before gameplay is available.' : result.error?.hint ?? 'Inspect the renderer error, then ensure the carrier again.',
       at: new Date().toISOString(), message: result.error?.message,
     };
-    sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
+    if (managed) sendVagMessage(window.parent, VagCarrierFailureSchema, publish() as never);
   });
   return {
     getIdentity,
     dispose: () => {
-      window.clearInterval(heartbeat);
+      if (heartbeat !== undefined) window.clearInterval(heartbeat);
       if (canvas.dataset.forgeaxCarrierCanvas === canvasIdentity) delete canvas.dataset.forgeaxCarrierCanvas;
     },
   };
@@ -284,7 +289,7 @@ interface BootFns {
 /**
  * The active game the host wants this viewport to boot. The host is the single
  * source of truth for "which game" (editor standalone: CLI `--game`; studio: the
- * server active-slug) and passes it as props — NOT via `?scene=`/`?gameRoot=` URL
+ * server active-game resource) and passes it as props — NOT via `?scene=`/`?gameRoot=` URL
  * params. The single-realm collapse removed the editor iframe that URL params used
  * to address, so hosts inject the game directly. Omitted / { slug: null } = no
  * game (opens on an empty scene).
@@ -298,6 +303,22 @@ export interface ViewportComponentProps {
   readonly packIndexUrl?: string;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
+}
+
+/** Resolve the asset catalog from the host-owned game identity. Scene ids are
+ * intentionally absent: switching level inside one game must not switch asset
+ * roots or fall through to the global catalog. */
+export function resolveViewportPackIndexUrl(input: {
+  readonly gameSlug: string | null;
+  readonly injectedUrl?: string;
+  readonly selfHostPack: boolean;
+  readonly base: string;
+}): string {
+  if (input.injectedUrl !== undefined) return input.injectedUrl;
+  if (!input.selfHostPack && input.gameSlug && input.gameSlug !== 'default') {
+    return `/preview/pack-index/${input.gameSlug}.json`;
+  }
+  return `${input.base}/pack-index.json`;
 }
 
 /**
@@ -551,13 +572,13 @@ async function bootViewport(
   // registry uses for every catalog entry, which keeps Studio dev asset traffic
   // on the play-engine origin without a global fetch patch. Standalone hosts that
   // do not inject a URL retain their local pack-index convention.
-  const sceneSlug = getSceneId();
   const selfHostPack = typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && !!__FORGEAX_GAME_DIR_ABS__;
-  const resolvedPackIndexUrl = gameSession.packIndexUrl ?? (
-    (!selfHostPack && sceneSlug && sceneSlug !== 'default')
-      ? `/preview/pack-index/${sceneSlug}.json`
-      : `${BASE}/pack-index.json`
-  );
+  const resolvedPackIndexUrl = resolveViewportPackIndexUrl({
+    gameSlug: gameSession.slug,
+    ...(gameSession.packIndexUrl === undefined ? {} : { injectedUrl: gameSession.packIndexUrl }),
+    selfHostPack,
+    base: BASE,
+  });
   renderer.assets.configurePackIndex(resolvedPackIndexUrl);
   const catalogClient = createCatalogClient(
     async () => {
@@ -1098,13 +1119,14 @@ async function bootViewport(
       registerTeardown(health.dispose);
       const capture = createGameplayCaptureGateway({
         canvas,
+        captureImage: () => captureGameplayViewport(container, canvas),
         getProvenance: health.getIdentity,
-        focus: () => canvas.focus({ preventScroll: true }),
       });
       const bridge = createGameplayCarrierBridge(
         createGameplayOperations(gateway, capture),
         health.getIdentity,
       );
+      registerTeardown(registerLiveGameplayBridge(bridge));
       const host = globalThis as typeof globalThis & { __forgeax_editor_gameplay?: unknown };
       host.__forgeax_editor_gameplay = bridge;
       registerTeardown(() => {

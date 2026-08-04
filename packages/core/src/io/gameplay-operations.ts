@@ -1,6 +1,7 @@
-import type { EditGateway, DispatchResult } from './gateway';
+import type { EditGateway } from './gateway';
 import {
   GAMEPLAY_CARRIER_CONTRACT_VERSION,
+  GAMEPLAY_CONTRACT_DESCRIPTION,
   GameplayCaptureArtifactSchema,
   GameplayCaptureProvenanceSchema,
   GameplayOperationRequestSchema,
@@ -20,13 +21,22 @@ export type { GameplayCaptureArtifact, GameplayCaptureProvenance, GameplayInput 
 type GameplayProducerResult = { ok: true; state?: 'running' | 'stopped'; data?: unknown } | { ok: false; error: unknown };
 export type GameplayCaptureSurface = {
   canvas: HTMLCanvasElement;
+  captureImage?: () => string | Promise<string>;
   getProvenance: () => GameplayCaptureProvenance | null;
-  focus: () => void;
 };
 export type GameplayCaptureGateway = {
-  captureGameplayFrame(): { ok: true; value: GameplayCaptureArtifact } | { ok: false; error: unknown };
-  revealGameplayFrame(artifact: GameplayCaptureArtifact): { ok: true } | { ok: false; error: unknown };
+  captureGameplayFrame(): Promise<{ ok: true; value: GameplayCaptureArtifact } | { ok: false; error: unknown }>;
 };
+
+function decodedPngBytes(dataUrl: string): number | null {
+  const prefix = 'data:image/png;base64,';
+  if (!dataUrl.startsWith(prefix)) return null;
+  try {
+    return globalThis.atob(dataUrl.slice(prefix.length)).length;
+  } catch {
+    return null;
+  }
+}
 
 function readSurfaceProvenance(surface: GameplayCaptureSurface): GameplayCaptureProvenance | null {
   const candidate = surface.getProvenance();
@@ -36,80 +46,61 @@ function readSurfaceProvenance(surface: GameplayCaptureSurface): GameplayCapture
 
 export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): GameplayCaptureGateway {
   return {
-    captureGameplayFrame() {
+    async captureGameplayFrame() {
       const provenance = readSurfaceProvenance(surface);
       if (!provenance) return { ok: false, error: { code: 'renderer-generation-unavailable', hint: 'live renderer did not publish a numeric generation' } };
       let dataUrl: string;
       try {
-        dataUrl = surface.canvas.toDataURL('image/png');
+        dataUrl = await (surface.captureImage?.() ?? surface.canvas.toDataURL('image/png'));
       } catch (error) {
         return { ok: false, error: { code: 'capture-failed', hint: error instanceof Error ? error.message : String(error) } };
       }
-      if (!dataUrl || !dataUrl.startsWith('data:image/')) return { ok: false, error: { code: 'surface-unavailable', hint: 'live canvas produced no readable artifact' } };
-      const artifact = GameplayCaptureArtifactSchema.safeParse({ dataUrl, bytes: dataUrl.length, provenance });
+      const bytes = decodedPngBytes(dataUrl);
+      if (bytes === null || bytes === 0) return { ok: false, error: { code: 'surface-unavailable', hint: 'live canvas produced no readable PNG artifact' } };
+      const artifact = GameplayCaptureArtifactSchema.safeParse({ dataUrl, bytes, provenance });
       if (!artifact.success) return { ok: false, error: { code: 'capture-invalid', hint: 'live canvas produced an invalid gameplay artifact', details: { issues: artifact.error.issues } } };
       return { ok: true, value: artifact.data };
     },
-    revealGameplayFrame(artifact) {
-      const parsedArtifact = GameplayCaptureArtifactSchema.safeParse(artifact);
-      if (!parsedArtifact.success) return { ok: false, error: { code: 'invalid-capture-artifact', hint: 'capture a fresh valid gameplay artifact', details: { issues: parsedArtifact.error.issues } } };
-      const current = readSurfaceProvenance(surface);
-      if (!current) return { ok: false, error: { code: 'renderer-generation-unavailable', hint: 'live renderer did not publish a numeric generation' } };
-      const match = sameGameplayIdentity(current, parsedArtifact.data.provenance);
-      if (!match.matches) return { ok: false, error: { code: 'identity-mismatch', hint: 'capture again', details: match } };
-      try {
-        surface.focus();
-      } catch (error) {
-        return { ok: false, error: { code: 'reveal-failed', hint: error instanceof Error ? error.message : String(error) } };
-      }
-      return { ok: true };
-    },
   };
 }
 
-type GameplayGateway = Pick<EditGateway, 'dispatch' | 'invokeGameAction' | 'readGameState'> & {
+type GameplayGateway = Pick<EditGateway, 'invokeGameAction' | 'readGameState'> & {
   readonly playPhase: EditGateway['playPhase'];
-  readonly lastPlayError?: { code?: unknown; hint?: unknown } | null;
 };
-
-const PLAY_READY_TIMEOUT_MS = 15_000;
 
 const unavailable = (hint: string): GameplayProducerResult => ({ ok: false, error: { code: 'surface-unavailable', hint } });
 
-function dispatchResult(result: DispatchResult): GameplayProducerResult {
-  return result.ok ? { ok: true } : result;
-}
-
-async function waitForPlayTerminal(gateway: GameplayGateway): Promise<GameplayProducerResult> {
-  const deadline = Date.now() + PLAY_READY_TIMEOUT_MS;
-  while (gateway.playPhase === 'starting' && Date.now() < deadline) {
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 25));
-  }
-  if (gateway.playPhase === 'play') return { ok: true, state: 'running' };
-  const failure = gateway.lastPlayError;
-  return {
-    ok: false,
-    error: {
-      code: typeof failure?.code === 'string' && failure.code.length > 0 ? failure.code : 'play-not-ready',
-      hint: typeof failure?.hint === 'string' && failure.hint.length > 0
-        ? failure.hint
-        : 'the live Play projection did not become ready before the bounded wait expired',
-    },
-  };
-}
-
 export interface GameplayOperations {
-  play(): Promise<GameplayProducerResult>;
-  gameplayStop(): Promise<GameplayProducerResult>;
   input(action: GameplayInput): Promise<GameplayProducerResult>;
   query(query: string): Promise<GameplayProducerResult>;
   capture(): Promise<GameplayProducerResult>;
-  reveal(artifact: GameplayCaptureArtifact): Promise<GameplayProducerResult>;
 }
 
 export interface GameplayCarrierBridge {
   readonly version: typeof GAMEPLAY_CARRIER_CONTRACT_VERSION;
   execute(request: unknown): Promise<GameplayCarrierOperationResult>;
+}
+
+let liveGameplayBridge: GameplayCarrierBridge | undefined;
+
+/** Publish the one bridge owned by the mounted viewport in this Editor realm. */
+export function registerLiveGameplayBridge(bridge: GameplayCarrierBridge): () => void {
+  liveGameplayBridge = bridge;
+  return () => {
+    if (liveGameplayBridge === bridge) liveGameplayBridge = undefined;
+  };
+}
+
+/** Execute through the currently mounted viewport without creating another runtime. */
+export function executeLiveGameplay(input: unknown): Promise<GameplayCarrierOperationResult> {
+  if (liveGameplayBridge !== undefined) return liveGameplayBridge.execute(input);
+  return Promise.resolve(bridgeFailure(null, {
+    owner: 'editor-gameplay-carrier',
+    code: 'surface-unavailable',
+    phase: 'producer',
+    retryable: true,
+    hint: 'wait for the visible Editor viewport to finish mounting',
+  }));
 }
 
 function normalizeGameplayError(error: unknown, phase: GameplayError['phase']): GameplayError {
@@ -159,6 +150,14 @@ export function createGameplayCarrierBridge(
         return contractFailure(null, 'invalid-request', 'send a version 1 gameplay operation request', { issues: parsedRequest.error.issues });
       }
       const request: GameplayOperationRequest = parsedRequest.data;
+      if (request.operation === 'describe') {
+        return {
+          version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
+          operation: request.operation,
+          ok: true,
+          data: GAMEPLAY_CONTRACT_DESCRIPTION,
+        };
+      }
       const before = getIdentity();
       if (!before) {
         return bridgeFailure(request.operation, {
@@ -173,18 +172,15 @@ export function createGameplayCarrierBridge(
       let result: GameplayProducerResult;
       try {
         switch (request.operation) {
-          case 'play': result = await operations.play(); break;
-          case 'gameplayStop': result = await operations.gameplayStop(); break;
           case 'input': result = await operations.input(request.action); break;
           case 'query': result = await operations.query(request.query); break;
           case 'capture': result = await operations.capture(); break;
-          case 'reveal': result = await operations.reveal(request.artifact); break;
         }
       } catch (error) {
-        return bridgeFailure(request.operation, normalizeGameplayError(error, request.operation === 'capture' ? 'capture' : request.operation === 'reveal' ? 'reveal' : 'producer'));
+        return bridgeFailure(request.operation, normalizeGameplayError(error, request.operation === 'capture' ? 'capture' : 'producer'));
       }
 
-      if (!result.ok) return bridgeFailure(request.operation, normalizeGameplayError(result.error, request.operation === 'capture' ? 'capture' : request.operation === 'reveal' ? 'reveal' : 'producer'));
+      if (!result.ok) return bridgeFailure(request.operation, normalizeGameplayError(result.error, request.operation === 'capture' ? 'capture' : 'producer'));
       const after = getIdentity();
       if (!after) {
         return bridgeFailure(request.operation, {
@@ -219,16 +215,6 @@ export function createGameplayCarrierBridge(
 /** The typed producer for the already-connected live Gateway projection. */
 export function createGameplayOperations(gateway: GameplayGateway, capture?: GameplayCaptureGateway): GameplayOperations {
   return {
-    async play() {
-      if (gateway.playPhase === 'play') return { ok: true, state: 'running' };
-      const dispatched = dispatchResult(gateway.dispatch({ kind: 'play' }));
-      return dispatched.ok ? waitForPlayTerminal(gateway) : dispatched;
-    },
-    async gameplayStop() {
-      if (gateway.playPhase !== 'play') return { ok: true, state: 'stopped' };
-      const result = dispatchResult(gateway.dispatch({ kind: 'stop' }));
-      return result.ok ? { ok: true, state: 'stopped' } : result;
-    },
     async input(action) {
       if (gateway.playPhase !== 'play') return unavailable('input requires an active live Play projection');
       const result = await gateway.invokeGameAction('input', action);
@@ -242,14 +228,8 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
     async capture() {
       if (gateway.playPhase !== 'play') return unavailable('capture requires an active live Play projection');
       if (!capture) return unavailable('capture requires a live canvas capture surface');
-      const result = capture.captureGameplayFrame();
+      const result = await capture.captureGameplayFrame();
       return result.ok ? { ok: true, data: result.value } : result;
-    },
-    async reveal(artifact) {
-      if (gateway.playPhase !== 'play') return unavailable('reveal requires an active live Play projection');
-      if (!capture) return unavailable('reveal requires a live canvas capture surface');
-      const result = capture.revealGameplayFrame(artifact);
-      return result.ok ? { ok: true } : result;
     },
   };
 }

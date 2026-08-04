@@ -24,7 +24,7 @@ import type { SceneAsset } from '@forgeax/engine-types';
 
 import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { Disabled, getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditorHidden } from '../components/EditorHidden';
@@ -968,6 +968,58 @@ export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
 }
 
 // ── setHidden applier ─────────────────────────────────────────────────────────
+// Two markers, two roles (UE-parity editor hide, docs 2026-08-04-editor-hide-ue-
+// parity-plan §3.2):
+//   EditorHidden — authored per-entity intent. SSOT; persists with the scene file;
+//     stripped from packs (Play unaffected).
+//   engine Disabled — DERIVED "effectively hidden" (self or any ancestor carries
+//     EditorHidden). The render extract query auto-excludes Disabled, so toggling
+//     it is what removes the entity from the viewport; it never reaches packs
+//     (stripEditorHiddenMarker drops it too).
+// Hiding a parent recursively hides the subtree; unhiding restores each child's
+// OWN intent (UE Outliner semantics). The applier re-derives the subtree after
+// every toggle, so the single-op inverse restores the whole cascade in one undo.
+
+/** Walk the ChildOf chain: does any strict ancestor of `node` carry EditorHidden? */
+function ancestorEditorHidden(engine: EngineWriteProxy, node: EntityHandle): boolean {
+  const seen = new Set<number>();
+  let cur: EntityHandle = node;
+  for (;;) {
+    if (seen.has(cur as number)) return false;
+    seen.add(cur as number);
+    const co = engine.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
+    if (!co.ok) return false;
+    const parent = (co.value as { parent: number }).parent as EntityHandle;
+    if (engine.get(parent, EditorHidden).ok) return true;
+    cur = parent;
+  }
+}
+
+/** Re-derive Disabled for `node` and every descendant from EditorHidden intent. */
+function syncDisabledSubtree(
+  engine: EngineWriteProxy,
+  node: EntityHandle,
+  ancestorHidden: boolean,
+): { ok: true } | { ok: false; error: CommandError } {
+  const effective = ancestorHidden || engine.get(node, EditorHidden).ok;
+  const hasDisabled = engine.get(node, Disabled).ok;
+  if (effective && !hasDisabled) {
+    const r = engine.addComponent(node, { component: Disabled, data: {} });
+    if (!r.ok) return { ok: false, error: { code: 'HIDE_FAILED', hint: String(r.error) } };
+  } else if (!effective && hasDisabled) {
+    const r = engine.removeComponent(node, Disabled);
+    if (!r.ok) return { ok: false, error: { code: 'UNHIDE_FAILED', hint: String(r.error) } };
+  }
+  const ch = engine.get(node, Children) as { ok: true; value: { entities: number[] | Uint32Array } } | { ok: false };
+  if (!ch.ok) return { ok: true };
+  const raw = (ch.value as { entities: number[] | Uint32Array }).entities;
+  const arr: number[] = Array.isArray(raw) ? raw : Array.from(raw as Uint32Array);
+  for (const child of arr) {
+    const r = syncDisabledSubtree(engine, child as EntityHandle, effective);
+    if (!r.ok) return r;
+  }
+  return { ok: true };
+}
 
 export function applySetHidden(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -983,6 +1035,8 @@ export function applySetHidden(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult 
     const r = engine.removeComponent(eH, EditorHidden);
     if (!r.ok) return { ok: false, error: { code: 'UNHIDE_FAILED', hint: String(r.error) } };
   }
+  const sync = syncDisabledSubtree(engine, eH, ancestorEditorHidden(engine, eH));
+  if (!sync.ok) return { ok: false, error: sync.error };
   return { ok: true, inverse: { kind: 'setHidden', entity: cmd.entity, hidden: isHidden }, created: [] };
 }
 

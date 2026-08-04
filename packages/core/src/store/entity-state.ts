@@ -40,6 +40,7 @@ import {
   getRegisteredComponents,
   createQueryState,
   queryRun,
+  Disabled,
   Entity,
 } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
@@ -214,32 +215,54 @@ function checkHandle(
 
 // ── Entity enumeration (replaces entIds / entHandles / entRootHandles) ──────
 
+/** Run `queryRun` over every live entity carrying ALL of `withTokens` — INCLUDING
+ *  entities carrying the engine `Disabled` marker. The engine query auto-excludes
+ *  Disabled unless `Disabled` is explicitly in `with` (which then REQUIRES it), so
+ *  full coverage is the UNION of two passes: one ordinary (enabled entities) and
+ *  one with Disabled appended (hidden entities). Works on every engine pin — no
+ *  engine change required (editor-side answer to harness feedback
+ *  2026-08-04-ecs-query-needs-disabled-opt-out-for-editor-enumeration).
+ *  Editor enumeration MUST see hidden entities: the Hierarchy eye is the unhide
+ *  entry, and select-all / show-all / pack collection need the full set.
+ *  `Entity` must be among `withTokens` for `bundle.Entity.self` to populate. */
+export function queryEachIncludingDisabled(
+  world: World,
+  withTokens: ReadonlyArray<unknown>,
+  visit: (handle: number) => void,
+): void {
+  const alreadyDisabled = withTokens.includes(Disabled);
+  const passes: ReadonlyArray<ReadonlyArray<unknown>> = alreadyDisabled
+    ? [withTokens]
+    : [withTokens, [...withTokens, Disabled]];
+  type EntityColumn = { self?: { length: number; [i: number]: number } };
+  for (const withList of passes) {
+    // The engine query generics don't flow through a dynamic `with`, so the
+    // runtime shapes are erased to `unknown` and narrowed at the read site (the
+    // store/ AC-06 gate forbids the colon-any annotation, so none appear here).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = createQueryState({ with: withList as any[] } as any);
+    queryRun(
+      state as unknown as Parameters<typeof queryRun>[0],
+      world as unknown as Parameters<typeof queryRun>[1],
+      (bundle: unknown) => {
+        const entities = (bundle as { Entity?: EntityColumn }).Entity?.self;
+        if (!entities) return;
+        for (let i = 0; i < entities.length; i++) {
+          const h = entities[i];
+          if (h !== undefined) visit(h);
+        }
+      },
+    );
+  }
+}
+
 /** Every live entity handle in `world` — a Name query walk (Name is intrinsic,
- *  so this covers all live entities). Replaces the deleted enumeration helpers
- *  that iterated the legacy-map keyset. */
+ *  so this covers all live entities, hidden ones included). Replaces the
+ *  deleted enumeration helpers that iterated the legacy-map keyset. */
 export function worldEntityHandles(world: World): EntityHandle[] {
   if (!hasWorld(world)) return [];
   const out: EntityHandle[] = [];
-  // `Entity` must be in the query `with` for `bundle.Entity.self` (the row
-  // handle column) to be populated — same convention query-snapshot.ts uses.
-  // The engine query generics don't flow through a dynamic `with`, so the
-  // runtime shapes are erased to `unknown` and narrowed at the read site (the
-  // store/ AC-06 gate forbids the colon-any annotation, so none appear here).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const state = createQueryState({ with: [Name, Entity] as any[] });
-  type EntityColumn = { self?: { length: number; [i: number]: number } };
-  queryRun(
-    state as unknown as Parameters<typeof queryRun>[0],
-    world as unknown as Parameters<typeof queryRun>[1],
-    (bundle: unknown) => {
-      const entities = (bundle as { Entity?: EntityColumn }).Entity?.self;
-      if (!entities) return;
-      for (let i = 0; i < entities.length; i++) {
-        const h = entities[i];
-        if (h !== undefined) out.push(h as EntityHandle);
-      }
-    },
-  );
+  queryEachIncludingDisabled(world, [Name, Entity], (h) => out.push(h as EntityHandle));
   return out;
 }
 
@@ -387,26 +410,14 @@ export function worldComponentNames(world: World): Map<EntityHandle, string[]> {
   if (!hasWorld(world)) return map;
   type EntityColumn = { self?: { length: number; [i: number]: number } };
   for (const [name, token] of getRegisteredComponents()) {
-    // `Entity` must be in the query `with` for the row-handle column to populate
-    // (same convention as worldEntityHandles). Generics don't flow through a
-    // dynamic `with`, so shapes erase to unknown and narrow at the read site.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = createQueryState({ with: [token, Entity] as any[] });
-    queryRun(
-      state as unknown as Parameters<typeof queryRun>[0],
-      world as unknown as Parameters<typeof queryRun>[1],
-      (bundle: unknown) => {
-        const entities = (bundle as { Entity?: EntityColumn }).Entity?.self;
-        if (!entities) return;
-        for (let i = 0; i < entities.length; i++) {
-          const h = entities[i];
-          if (h === undefined) continue;
-          let names = map.get(h as EntityHandle);
-          if (names === undefined) { names = []; map.set(h as EntityHandle, names); }
-          names.push(name);
-        }
-      },
-    );
+    // `Entity` is in the query `with` so the row-handle column populates (same
+    // convention as worldEntityHandles). Hidden entities included via the same
+    // union walk — the Hierarchy hidden flag / type column must see them.
+    queryEachIncludingDisabled(world, [token, Entity], (h) => {
+      let names = map.get(h as EntityHandle);
+      if (names === undefined) { names = []; map.set(h as EntityHandle, names); }
+      names.push(name);
+    });
   }
   return map;
 }

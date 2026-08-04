@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { metaPathForSource, registryEntryToCBAsset, fileFamilyOf, fileFamilyOfWithAssets } from './content-browser-format';
+import { registryEntryToCBAsset, fileFamilyOf, fileFamilyOfWithAssets } from './content-browser-format';
 import { getImportFormat, isImportable } from './import-registry';
 
 describe('UI asset Content Browser support', () => {
@@ -10,7 +10,6 @@ describe('UI asset Content Browser support', () => {
   });
 
   it('keeps the engine UI sidecar convention and source location distinct', () => {
-    expect(metaPathForSource('assets/ui/hud.ui.html')).toBe('assets/ui/hud.meta.json');
     const asset = registryEntryToCBAsset({
       guid: 'ui-guid',
       kind: 'ui',
@@ -19,7 +18,7 @@ describe('UI asset Content Browser support', () => {
       sourcePath: 'assets/ui/hud.ui.html',
     }, 0);
     expect(asset.sourcePath).toBe('assets/ui/hud.ui.html');
-    expect(asset.packPath).toBe('assets/ui/hud.meta.json');
+    expect(asset.packPath).toBe('assets/ui/hud.ui.html.meta.json');
   });
 
   it('keeps authored packs writable when dev projects them through a DDC URL', () => {
@@ -46,6 +45,6 @@ describe('UI asset Content Browser support', () => {
   it('keeps authoring sources and sidecars separate from UI asset cards', () => {
     expect(fileFamilyOf('hud.ui.html')).toBe('code');
     expect(fileFamilyOf('hud.ui.css')).toBe('code');
-    expect(fileFamilyOfWithAssets('hud.meta.json', [{ kind: 'ui' }])).toBe('meta');
+    expect(fileFamilyOfWithAssets('hud.ui.html.meta.json', [{ kind: 'ui' }])).toBe('meta');
   });
 });

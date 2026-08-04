@@ -19,6 +19,8 @@ export {
   createGameplayCaptureGateway,
   createGameplayCarrierBridge,
   createGameplayOperations,
+  executeLiveGameplay,
+  registerLiveGameplayBridge,
   sameGameplayIdentity,
 } from '@forgeax/editor-core';
 export type {

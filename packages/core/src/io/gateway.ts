@@ -29,6 +29,7 @@ import {
   type SceneAuthoringSessionReadModel,
 } from './scene-authoring-session';
 import { describeSceneActivation } from '../assets/scene-activation';
+import { catalogStoragePath } from '../assets/catalog-storage-path';
 // gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
 // reader binding). None of them route a command or decide a domain.
@@ -969,6 +970,27 @@ export class EditGateway {
    * redo never re-collects a source that may have changed or been deleted.
    */
   private _prepareDocumentCommand(cmd: EditorOp): { ok: true } | { ok: false; error: CommandError } {
+    if (cmd.kind === 'destroyAsset') {
+      const destroy = cmd as Extract<EditorOp, { kind: 'destroyAsset' }>;
+      if (destroy._resolvedPackPath !== undefined) return { ok: true };
+      const row = this.assetCatalog().find(
+        (entry) => entry.guid.toLowerCase() === destroy.guid.toLowerCase(),
+      );
+      const storagePath = row === undefined ? null : catalogStoragePath(row);
+      if (storagePath === null) {
+        return {
+          ok: false,
+          error: {
+            code: 'ASSET_NOT_FOUND',
+            hint: `destroyAsset could not derive writable storage for catalog GUID ${destroy.guid}. Refresh the active game catalog before retrying.`,
+            current: row ?? null,
+            recoveryActions: ['editor.requestReimport', 'request.retry'],
+          },
+        };
+      }
+      destroy._resolvedPackPath = storagePath;
+      return { ok: true };
+    }
     if (cmd.kind !== 'duplicateEntity') return { ok: true };
 
     const duplicate = cmd as Extract<EditorOp, { kind: 'duplicateEntity' }>;
@@ -1172,6 +1194,8 @@ export class EditGateway {
           error: {
             code: 'edit-rejected-in-play',
             hint: 'stop play mode before editing; play data is a read-only simulation view',
+            retryable: true,
+            recoveryActions: ['stop', 'run.retry'],
           },
         };
       }

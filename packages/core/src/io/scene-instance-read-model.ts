@@ -6,8 +6,10 @@
 // consumed by the Gateway/UI; it does not introduce an editor-side identity or
 // persistence model.
 
-import { Entity, createQueryState, queryRun } from '@forgeax/engine-ecs';
+import { Entity } from '@forgeax/engine-ecs';
 import { SceneInstance } from '@forgeax/engine-render';
+import { queryEachIncludingDisabled } from '../store/entity-state';
+import type { World } from '@forgeax/engine-ecs';
 import type { CommandError } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 
@@ -47,23 +49,12 @@ export type SceneInstanceReadResult =
   | { readonly ok: false; readonly error: CommandError };
 
 /** Enumerate SceneInstance roots directly from the component, including the
- * synthetic root which intentionally has no Name component. */
+ * synthetic root which intentionally has no Name component. Editor-hidden
+ * roots (Disabled marker) are included: hiding is a viewport affordance, not
+ * a structural removal — the read model must still project the instance. */
 export function sceneInstanceRoots(world: unknown): EntityHandle[] {
   const roots: EntityHandle[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const state = createQueryState({ with: [SceneInstance, Entity] as any[] });
-  queryRun(
-    state as unknown as Parameters<typeof queryRun>[0],
-    world as Parameters<typeof queryRun>[1],
-    (bundle: unknown) => {
-      const entities = (bundle as { Entity?: { self?: ArrayLike<number> } }).Entity?.self;
-      if (entities === undefined) return;
-      for (let index = 0; index < entities.length; index += 1) {
-        const entity = entities[index];
-        if (entity !== undefined) roots.push(entity as EntityHandle);
-      }
-    },
-  );
+  queryEachIncludingDisabled(world as World, [SceneInstance, Entity], (h) => roots.push(h as EntityHandle));
   return roots;
 }
 

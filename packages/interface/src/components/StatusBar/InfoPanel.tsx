@@ -1,10 +1,10 @@
 /**
- * InfoPanel — a standalone, dockable Blender-INFO-editor-style log panel.
+ * InfoPanel — a Blender-INFO-editor-style log panel.
  *
- * Registered as an OPTIONAL dock panel (id 'info' in panelRegistry.tsx) so the
- * user can open / dock / pop it out like Preview / Edit / Console. Content is
- * the same health feed the bottom HealthStatusBar peeks at, but full-height and
- * with the affordances Blender's INFO editor has:
+ * Registered as the bottom-drawer 'info' panel (ADR-0030 §2.3, see
+ * core/extensions/chrome-drawer.tsx): a launcher tab at the bottom expands it
+ * upward. Content is the same health feed the bottom status HealthChip peeks
+ * at, but full-height and with the affordances Blender's INFO editor has:
  *
  *   - one row per entry: severity icon + time + source badge + message, newest
  *     at the bottom, auto-scrolled to the latest;

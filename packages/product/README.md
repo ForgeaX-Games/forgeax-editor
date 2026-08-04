@@ -135,12 +135,16 @@ shape is used by the Bun carrier and the editor bridge:
 
 ```json
 {"jsonrpc":"2.0","version":"editor-transport/v1","id":"req-1","correlationId":"trace-1","method":"discover","params":{}}
-{"jsonrpc":"2.0","version":"editor-transport/v1","id":"req-1","correlationId":"trace-1","result":{"protocolVersion":"editor-transport/v1","manifest":{"productId":"@forgeax/editor-product"},"capabilityManifest":{"generatedFrom":"capability-registry"},"availability":{"available":true},"runtime":{"blocking":false},"methods":["discover","transport.describe","query","asset.snapshot","asset.observe","asset.reconcile","asset.preflight","asset.mutate","asset.restore","run.dispatch","run.get","run.wait","run.list","run.listEvents","run.retry","run.cancel","run.reconcile","workflow.start","workflow.get","workflow.recover","workflow.retry","workflow.listRecipes","save","reopen","runtime.play","runtime.stop","runtime.query","runtime.fixedStep","runtime.dispose","runtime.capture","runtime.reveal"]}}
+{"jsonrpc":"2.0","version":"editor-transport/v1","id":"req-1","correlationId":"trace-1","result":{"protocolVersion":"editor-transport/v1","manifest":{"productId":"@forgeax/editor-product"},"capabilityManifest":{"generatedFrom":"capability-registry"},"availability":{"available":true},"methods":["discover","transport.describe","query","asset.snapshot","asset.observe","asset.reconcile","asset.preflight","asset.mutate","asset.restore","run.dispatch","run.get","run.wait","run.list","run.listEvents","run.retry","run.cancel","run.reconcile","workflow.start","workflow.get","workflow.recover","workflow.retry","workflow.listRecipes","save","reopen"]}}
 ```
 
 For a mutating call, send the operation through `run.dispatch` only after
 discovery and preflight. Every response is either `result` or structured
 `error`; never parse the human-readable `hint` as a protocol field.
+
+Play and Stop are the Gateway operations `play` and `stop`. The transport does
+not publish `runtime.play` or any other runtime-prefixed alias; callers discover
+the Gateway catalog and dispatch its canonical operation id.
 
 ## Recovery decision table
 

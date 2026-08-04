@@ -13,6 +13,7 @@ function request(id: string, params: unknown): TransportRequest {
     version: TRANSPORT_PROTOCOL_VERSION,
     id,
     correlationId: `corr-${id}`,
+    scope: 'default',
     method: 'run.dispatch',
     params,
   };

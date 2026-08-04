@@ -21,6 +21,7 @@
 //              nested entities lag by tens of units and end up mispositioned.
 
 import type { World, EntityHandle } from '@forgeax/engine-ecs';
+import { ChildOf } from '@forgeax/engine-scene';
 import type { Quat } from '@forgeax/engine-math';
 import { mat4, vec3, quat as quatMath } from '@forgeax/engine-math';
 import { entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
@@ -116,4 +117,22 @@ export function readWorldQuat(world: World, handle: EntityHandle): [number, numb
  *  from the active world. */
 export function isEntHidden(world: World, handle: EntityHandle): boolean {
   return 'EditorHidden' in entComponents(world, handle);
+}
+
+/** UE-parity effective hide: the entity itself OR any strict ancestor carries
+ *  EditorHidden (hiding a parent recursively hides the subtree). This is the
+ *  same derivation applySetHidden materializes onto the engine Disabled marker
+ *  for the render extract; picking must match what the user sees. */
+export function isEntEffectivelyHidden(world: World, handle: EntityHandle): boolean {
+  const seen = new Set<number>();
+  let cur: EntityHandle | undefined = handle;
+  while (cur !== undefined) {
+    if (seen.has(cur as number)) return false;
+    seen.add(cur as number);
+    if (isEntHidden(world, cur)) return true;
+    const co = world.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
+    if (!co.ok) return false;
+    cur = (co.value as { parent: number }).parent as EntityHandle;
+  }
+  return false;
 }

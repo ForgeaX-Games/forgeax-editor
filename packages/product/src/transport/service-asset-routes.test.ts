@@ -8,7 +8,7 @@ import {
 } from '@forgeax/editor-product';
 
 function request(id: string, method: string, params: unknown): TransportRequest {
-  return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id, correlationId: `asset-${id}`, method, params };
+  return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id, correlationId: `asset-${id}`, scope: 'default', method, params };
 }
 
 test('discovery publishes the typed asset and workflow recovery methods', async () => {

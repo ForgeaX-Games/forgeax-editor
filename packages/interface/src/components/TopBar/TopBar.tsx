@@ -308,7 +308,7 @@ export function TopBar() {
   const { t } = useTranslation();
   const hasChatSurface = Boolean(usePanelRenderers().panels?.chat);
   const openOverlay = useShellStore((s) => s.openOverlay);
-  const pinnedSlug = useShellStore((s) => s.pinnedSlug);
+  const activeGameSlug = useShellStore((s) => s.activeGameSlug);
   // Route the LayoutGrid button through the command bus so keyboard / palette /
   // iframe all share one entry (was: window.dispatchEvent(APP_EVENTS.dockLayoutToggle)).
   const dockLayoutToggle = useCommand<{ rect?: { top: number; bottom: number; left: number; right: number } }>('app.dock.layoutToggle');
@@ -363,12 +363,12 @@ export function TopBar() {
     return () => { cancelled = true; };
   }, []);
 
-  // Resolve the game slug to package: the pinned one, else the active game.
+  // Package the server-authoritative active game.
   const resolvePackageSlug = async (): Promise<string | null> => {
-    let slug = pinnedSlug;
+    let slug = activeGameSlug;
     if (!slug) {
       try {
-        const j = await getWorkbenchClient().getActiveSlug();
+        const j = await getWorkbenchClient().getActiveGame();
         slug = j.activeSlug ?? null;
       } catch { /* fall through */ }
     }
@@ -1102,4 +1102,3 @@ function DashboardToggle() {
     </button>
   );
 }
-

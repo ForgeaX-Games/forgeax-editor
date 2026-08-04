@@ -32,6 +32,7 @@ export interface PanelTypeRegistration {
 export interface PagePanelPlacement {
   readonly id: string;
   readonly panelTypeId: QualifiedPanelTypeId;
+  readonly title?: string;
   readonly optional?: boolean;
   readonly initialProps?: Readonly<Record<string, unknown>>;
 }

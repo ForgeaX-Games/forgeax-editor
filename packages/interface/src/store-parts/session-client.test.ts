@@ -9,6 +9,7 @@ function makeClient(): SessionClient {
   return {
     fetchSessionList: async () => [],
     createSession: async () => ({ sid: 'sess-test', bootstrappedAgent: null }),
+    ensureSession: async () => ({ sid: 'sess-test', bootstrappedAgent: null, created: false }),
     deleteSession: async () => {},
     emitForgeaXMessage: async () => ({ ok: true }),
     listSessionAgents: async () => [],

@@ -57,6 +57,7 @@ describe('w7 — play-mode document-domain write gate (D-5)', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe('edit-rejected-in-play');
+    expect(r.error).toMatchObject({ retryable: true, recoveryActions: ['stop', 'run.retry'] });
     expect(typeof r.error.hint).toBe('string');
     expect(r.error.hint.length).toBeGreaterThan(0);
   });

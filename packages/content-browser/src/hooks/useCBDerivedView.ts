@@ -68,8 +68,8 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     for (const a of allAssets) {
       // External/imported assets belong to their engine-owned sidecar. The
       // author source remains a sibling file; for UI this is especially
-      // important: `hud.meta.json` owns the UI asset while `.ui.html/.ui.css`
-      // are only authoring inputs.
+      // important: `hud.ui.html.meta.json` owns the UI asset while
+      // `.ui.html/.ui.css` are only authoring inputs.
       const rel = catalogPathToRoot(a.kind === 'ui' ? a.packPath : (a.sourcePath ?? a.packPath), gameSlug, catalogAssetRoots);
       if (!rel) continue;
       out.push({ asset: a, rel });

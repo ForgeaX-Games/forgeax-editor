@@ -74,7 +74,7 @@ export function AssetOverviewPanel(): ReactElement {
   }, [asset]);
 
   const handleDelete = useCallback(() => {
-    if (asset) gateway.dispatch({ kind: 'destroyAsset', packPath: asset.packPath, guid: asset.guid }, 'human');
+    if (asset) gateway.dispatch({ kind: 'destroyAsset', guid: asset.guid }, 'human');
   }, [asset]);
 
   const handleShowInCB = useCallback(() => {

@@ -19,15 +19,19 @@
 // live-drive verify step in the round REPORT proves that end-to-end); this unit pins
 // the front-door contract the friction was about.
 
-import { describe, expect, it, beforeEach } from 'bun:test';
+import { afterEach, describe, expect, it, beforeEach } from 'bun:test';
 import { EditGateway } from '../io/gateway';
 import { AssetIOFacade } from '../io/asset-io-facade';
 import { createEditSession } from '../session/document';
 import { hasOp, getOp, listOps } from '../io/catalog';
+import { setPathResolver } from '../util/path-resolver';
 // Importing the barrel loads pack-ops' side-effect (document applier registration),
 // exactly as the app boot does.
 import '../index';
 import type { EditSession } from '../types';
+
+beforeEach(() => setPathResolver((relativePath) => relativePath));
+afterEach(() => setPathResolver(null));
 
 describe('createMaterial op registration (catalog SSOT)', () => {
   it('createMaterial is a cataloged DOCUMENT op (AI-discoverable)', () => {
@@ -80,21 +84,31 @@ describe('createMaterial dispatch (document applier — validation)', () => {
     if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
   });
 
-  it('valid args are accepted (fire-and-forget; the pack write runs detached)', () => {
+  it('valid args are accepted while the document applier commits asynchronously', async () => {
     // The applier returns synchronously {ok:true}; the async IO (a detached fetch to
     // the file server) no-ops in the unit env and is caught — the intended contract.
     // Pass an explicit packPath so the unit does not depend on a host path resolver
     // (an eval AI omits packPath and the applier defaults it via resolveGamePath).
-    const r = gw.dispatch({
-      kind: 'createMaterial',
-      guid: '019f56f2-0ac0-776a-9d28-50eaf795daed',
-      name: 'Matte Red Plastic',
-      baseColor: [0.8, 0.1, 0.1, 1],
-      metallic: 0,
-      roughness: 0.9,
-      packPath: 'games/sample/assets/scene.pack.json',
-    });
-    expect(r.ok).toBe(true);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? new Response('{}', { status: 200 })
+        : new Response(null, { status: 404 })) as typeof fetch;
+    try {
+      const r = gw.dispatch({
+        kind: 'createMaterial',
+        guid: '019f56f2-0ac0-776a-9d28-50eaf795daed',
+        name: 'Matte Red Plastic',
+        baseColor: [0.8, 0.1, 0.1, 1],
+        metallic: 0,
+        roughness: 0.9,
+        packPath: 'games/sample/assets/scene.pack.json',
+      });
+      expect(r.ok).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('an out-of-range alphaCutoff fails fast with a STRUCTURED error', () => {
@@ -111,6 +125,7 @@ describe('createMaterial dispatch (document applier — validation)', () => {
   });
 
   it('no packPath + no resolver fails fast with a STRUCTURED error (not a throw)', () => {
+    setPathResolver(null);
     // In the unit env no host path resolver is installed; omitting packPath must
     // return INVALID_ARGS, never let resolveGamePath throw out of dispatch.
     const r = gw.dispatch({
@@ -327,6 +342,34 @@ describe('AssetIOFacade authored pack version', () => {
       const writtenBody = posted as unknown as { content: string };
       expect(writtenBody.content).toContain('"schemaVersion": "2.0.0"');
       expect(writtenBody.content).toContain('"artifacts": {}');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('rejects a duplicate GUID instead of corrupting the pack', async () => {
+    const originalFetch = globalThis.fetch;
+    let writes = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        writes += 1;
+        return new Response('{}', { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        content: JSON.stringify({
+          schemaVersion: '2.0.0', kind: 'internal-text-package',
+          assets: [{ guid: 'same-guid', kind: 'material', name: 'Existing', payload: {}, refs: [], artifacts: {} }],
+        }),
+      }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await new AssetIOFacade().createAssetInPack({
+        packPath: 'sample/assets/materials.pack.json',
+        asset: { guid: 'same-guid', kind: 'material', name: 'Duplicate', payload: {}, refs: [] },
+      });
+      expect(result).toMatchObject({ ok: false, reason: 'write-failed' });
+      expect(result.ok ? '' : result.hint).toContain('already exists');
+      expect(writes).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
     }

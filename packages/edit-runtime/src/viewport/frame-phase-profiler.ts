@@ -6,7 +6,6 @@
 import type {
 	ProfileCapture,
 	Profiler,
-	RecorderPhaseCatalog,
 	RecorderSession,
 } from "@forgeax/engine-profiler";
 
@@ -26,7 +25,9 @@ type OpenPhase = {
 	readonly phase: string;
 };
 
-function partialCapture(phaseCatalog: RecorderPhaseCatalog): ProfileCapture {
+type PhaseCatalog = ProfileCapture["phaseCatalog"];
+
+function partialCapture(phaseCatalog: PhaseCatalog): ProfileCapture {
 	return {
 		schemaVersion: "1.0",
 		captureId: CAPTURE_ID,
@@ -64,7 +65,7 @@ export function createFramePhaseProfiler(): Profiler | undefined {
 		return undefined;
 	}
 
-	let phaseCatalog: RecorderPhaseCatalog = { app: [], render: [] };
+	let phaseCatalog: PhaseCatalog = { app: [], render: [] };
 	let frameId: number | undefined;
 	let active = true;
 	let latest: ProfileCapture | undefined;

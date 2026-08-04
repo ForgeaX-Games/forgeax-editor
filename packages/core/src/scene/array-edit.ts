@@ -107,7 +107,11 @@ export function planGroupedArrayPatch(
     candidate.arrayMeta !== undefined && (group === undefined ? candidate.key === field.key : candidate.arrayGroup === group));
   const arrays = new Map<string, unknown[]>();
   for (const candidate of fields) {
-    const items = toItems(data[candidate.key]);
+    // ECS serializers omit zero-length columns, so an absent array field is
+    // the canonical empty state after add/save/reload. Initialise that state
+    // here; still reject an explicitly present non-array value as corruption.
+    const raw = data[candidate.key];
+    const items = raw === undefined ? [] : toItems(raw);
     if (items === null) {
       return {
         ok: false,
