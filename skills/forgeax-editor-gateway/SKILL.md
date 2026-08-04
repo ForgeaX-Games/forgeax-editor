@@ -17,6 +17,30 @@ description: >-
 > `gateway.listOps()` before invoking capabilities, and `query({ with: [...] })` for ECS reads.
 > The same operation payload is used by human UI and AI callers.
 
+## Asset source workflow (M5)
+
+The shortest source-authoring path is deliberately observable and one-door:
+
+1. **Discover** with `gateway.listOps()` and select the canonical operation id.
+2. **Preview** with `previewAssetSourceMutation` using `guid`, `scope.sourceKey`, `expectedRevision`, and `requestId`.
+3. **Submit** `saveAssetSourceOverride` or `reimportAsset`; destructive discard uses `discardSourceOverridesAndReimport` plus the preflight `confirmationToken`.
+4. **Wait** with `getOperationRun` / `waitOperationRun` / `subscribeOperationRun`; only `succeeded`, `failed`, or `cancelled` are terminal.
+5. **Recover** from stable `error.code`, `expected`, `actual`, `retryable`, and `recoveryActions`; retry with a new `requestId`, or reconcile the Catalog before reading again.
+
+The Catalog remains the immutable read SSOT. `sourceKey` and Meta `expectedRevision` are identity and
+concurrency facts; they are never inferred from a path, output index, UI label, or error message. The
+operation descriptors expose accepted/terminal statuses, run retention, confirmation, destructive
+policy, and the recovery index: `asset.preflight`, `run.get`, `run.wait`, `run.retry`,
+`catalog.reconcile`. No UI handler, file CRUD, direct DDC access, second Catalog, or transport-specific
+AI registry belongs in this path.
+
+| Stable error family | First recovery action |
+|:--|:--|
+| `asset-source-key-*`, `asset-meta-revision-conflict`, `asset-confirmation-*` | `asset.preflight` |
+| `asset-validation-failed`, `asset-cook-failed`, `run-cancelled-before-cas` | `run.retry` with a new request id |
+| `asset-publish-observation-timeout`, `asset-catalog-subscription-gap` | `catalog.reconcile`, then `run.get` |
+| `asset-operation-cas-committed` | `run.get` / `run.wait`; do not submit a duplicate mutation |
+
 > [!IMPORTANT]
 > This file is the call surface. The gateway-specific rationale lives in `DESIGN.md`; play/stop
 > world-fork semantics live in `docs/skills/forgeax-editor-gateway.md`.

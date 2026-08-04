@@ -56,13 +56,17 @@ import {
   createGameplayCaptureGateway,
   createGameplayCarrierBridge,
   createGameplayOperations,
+  installSourceAuthoringOps,
   type CommandOrigin,
   type DispatchResult,
   type GameplayIdentity,
   type PlayDirtyPolicy,
   registerPostAssetWriteCatalogSync,
+  createAuthoredAssetCatalogBarrier,
 } from '@forgeax/editor-core';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { createSourceAuthoringRuntime, installCatalogReconcileProvider } from '../runtime/source-authoring-runtime';
+import { createCatalogSource } from '@forgeax/engine-assets-runtime';
+import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
 import {
   sendVagMessage,
   VagCarrierHandshakeSchema,
@@ -82,6 +86,7 @@ import {
   installConsoleBridge,
   installNetworkBridge,
   installAssetCatalogRefresh,
+  installSourcePublicationObserver,
   installVisibilityPause,
   installErrorOverlay,
   paintDiagnosticMessage,
@@ -554,6 +559,19 @@ async function bootViewport(
       : `${BASE}/pack-index.json`
   );
   renderer.assets.configurePackIndex(resolvedPackIndexUrl);
+  const catalogClient = createCatalogClient(
+    async () => {
+      const response = await fetch(resolvedPackIndexUrl);
+      if (!response.ok) throw new Error(`catalog request failed: ${response.status}`);
+      return (await response.json()) as readonly import('@forgeax/engine-types').CatalogEntry[];
+    },
+    import.meta.hot,
+  );
+  renderer.assets.setCatalogSource(createCatalogSource({
+    url: resolvedPackIndexUrl,
+    subscribe: catalogClient.subscribe,
+  }));
+  await renderer.assets.enumerateCatalog();
 
   // Inject the engine World + AssetRegistry into the editor session (was :410).
   // The createApp world IS the sceneWorld (authored content, save's only source —
@@ -567,6 +585,9 @@ async function bootViewport(
   // shape that D-7 replaces with structural registration-surface removal.
   gateway.doc.world = world;
   gateway.doc.registry = renderer.assets;
+  registerTeardown(installCatalogReconcileProvider(renderer.assets));
+  registerTeardown(installSourcePublicationObserver());
+  registerTeardown(installSourceAuthoringOps(createSourceAuthoringRuntime()));
   // Post-write catalog-sync seam (editor-core pack-ops): createMaterial's pack
   // write resolves BEFORE the vite-plugin-pack watcher rebuilds the served
   // pack-index (~150 ms debounce), so an immediate broadcastAssetsChanged()
@@ -577,27 +598,9 @@ async function bootViewport(
   registerPostAssetWriteCatalogSync(async (guid: string) => {
     const reg = gateway.doc.registry;
     if (!reg) return;
-    const key = guid.toLowerCase();
-    const deadline = Date.now() + 5000;
-    let visible = false;
-    while (Date.now() < deadline) {
-      await reg.refreshCatalog?.().catch(() => false);
-      if (reg.packIndexCache?.has(key)) {
-        visible = true;
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!visible) {
-      throw new Error(`Asset catalog did not expose imported GUID ${guid} before the visibility deadline.`);
-    }
-    const parsed = AssetGuid.parse(guid);
-    if (parsed.ok) {
-      const loaded = await reg.loadByGuid(parsed.value);
-      if (!loaded.ok) {
-        throw new Error(`Asset catalog row ${guid} was visible but could not be loaded.`);
-      }
-    }
+    // Canonical three-phase barrier (row → body → load) — editor-core owns the
+    // implementation so the integration test drives the identical code path.
+    await createAuthoredAssetCatalogBarrier(reg)(guid);
   });
   registerTeardown(() => registerPostAssetWriteCatalogSync(null));
   // Registry binding is a document-state change, even though no authored world

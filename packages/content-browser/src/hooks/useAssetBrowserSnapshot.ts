@@ -3,6 +3,7 @@
 // join semantics remain in editor-core.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { CatalogDelta } from '@forgeax/engine-types';
 import {
   createAssetBrowserReadModel,
   gateway,
@@ -24,6 +25,55 @@ export interface UseAssetBrowserSnapshotResult {
   snapshot: AssetBrowserSnapshot;
   loading: boolean;
   reload: () => void;
+  reconcile: () => void;
+}
+
+export interface AssetBrowserDeltaState<Row extends { readonly guid: string }> {
+  readonly rows: readonly Row[];
+  readonly selection: unknown;
+  readonly expandedTree: unknown;
+  readonly filter: unknown;
+  readonly sort: unknown;
+  readonly panelRealm: object;
+  readonly stale: boolean;
+  readonly reconcileRequired: boolean;
+  readonly rowRenderCounts?: ReadonlyMap<string, number>;
+}
+
+/** Fold one Catalog delta without rebuilding unrelated browser rows or UI context. */
+export function applyAssetBrowserDelta<Row extends { readonly guid: string }>(
+  state: AssetBrowserDeltaState<Row>,
+  delta: CatalogDelta,
+): AssetBrowserDeltaState<Row> {
+  const degraded = delta.authority === 'degraded';
+  if (degraded) return { ...state, stale: true, reconcileRequired: true };
+  if (delta.added.length === 0 && delta.changed.length === 0 && delta.removed.length === 0) return state;
+  const byGuid = new Map(state.rows.map((row) => [row.guid.toLowerCase(), row]));
+  const changedGuids = new Set<string>();
+  for (const row of [...delta.added, ...delta.changed]) {
+    const guid = row.guid.toLowerCase();
+    byGuid.set(guid, row as unknown as Row);
+    changedGuids.add(guid);
+  }
+  for (const guid of delta.removed) {
+    byGuid.delete(guid.toLowerCase());
+    changedGuids.add(guid.toLowerCase());
+  }
+  const originalGuids = new Set(state.rows.map((row) => row.guid.toLowerCase()));
+  const rows = state.rows
+    .filter((row) => byGuid.has(row.guid.toLowerCase()))
+    .map((row) => byGuid.get(row.guid.toLowerCase()) ?? row);
+  for (const row of byGuid.values()) if (!originalGuids.has(row.guid.toLowerCase())) rows.push(row);
+  const rowRenderCounts = state.rowRenderCounts === undefined
+    ? undefined
+    : new Map([...state.rowRenderCounts].map(([guid, count]) => [guid, count + (changedGuids.has(guid.toLowerCase()) ? 1 : 0)]));
+  return {
+    ...state,
+    rows,
+    stale: false,
+    reconcileRequired: false,
+    ...(rowRenderCounts === undefined ? {} : { rowRenderCounts }),
+  };
 }
 
 export function useAssetBrowserSnapshot(
@@ -48,6 +98,12 @@ export function useAssetBrowserSnapshot(
     if (!model) return;
     setLoading(true);
     void model.refresh().finally(() => setLoading(false));
+  }, [model]);
+
+  const reconcile = useCallback(() => {
+    if (!model) return;
+    setLoading(true);
+    void model.reconcile().finally(() => setLoading(false));
   }, [model]);
 
   useEffect(() => {
@@ -82,5 +138,5 @@ export function useAssetBrowserSnapshot(
     };
   }, [model, reload]);
 
-  return { snapshot, loading, reload };
+  return { snapshot, loading, reload, reconcile };
 }

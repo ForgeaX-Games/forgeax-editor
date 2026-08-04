@@ -4,6 +4,7 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
   gateway, getSelection, entComponent, validateAssetBasename,
+  awaitAuthoredMaterialReady, broadcastAssetsError,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
@@ -45,18 +46,44 @@ function assignAssetToEntity(kind: string, guid: string, name: string, entity: E
       gateway.dispatch({ kind: 'addComponent', entity, component: 'MeshRenderer', value: { materials: [] } }, 'human');
     }
     const materialGuid = crypto.randomUUID();
-    gateway.dispatch({
+    const r1 = gateway.dispatch({
       kind: 'createMaterial',
       guid: materialGuid,
       name: `mat_${name}`,
       baseColor: [1, 1, 1, 1],
       baseColorTexture: guid,
     }, 'human');
-    gateway.dispatch({
-      kind: 'bindAssetRef', entity,
-      component: 'MeshRenderer', field: 'materials',
-      assetType: 'MaterialAsset', guids: [materialGuid], requestId: crypto.randomUUID(),
-    }, 'human');
+    if (!r1.ok) {
+      broadcastAssetsError({
+        op: 'createMaterial',
+        hint: `could not author material for '${name}': ${r1.error.hint}`,
+      });
+      return true;
+    }
+    // Same completion contract as the viewport drop path: the bind waits until
+    // the material's pack write landed AND the catalog barrier observed the
+    // GUID. Dispatching bindAssetRef immediately raced the async write —
+    // loadByGuid missed and fell back to `/__import/{materialGuid}` (404 for
+    // internal materials), leaving the entity permanently gray.
+    void (async () => {
+      const ready = await awaitAuthoredMaterialReady(materialGuid);
+      if (!ready.ok) {
+        // The applier already broadcast the staged assetsError — log only.
+        console.error('[CBContextMenu] authored material never became ready; bind aborted', { materialGuid, stage: ready.stage, hint: ready.hint });
+        return;
+      }
+      const r2 = gateway.dispatch({
+        kind: 'bindAssetRef', entity,
+        component: 'MeshRenderer', field: 'materials',
+        assetType: 'MaterialAsset', guids: [materialGuid], requestId: crypto.randomUUID(),
+      }, 'human');
+      if (!r2.ok) {
+        broadcastAssetsError({
+          op: 'bindAssetRef',
+          hint: `could not bind material for '${name}': ${r2.error.hint}`,
+        });
+      }
+    })();
     return true;
   }
   return false;
@@ -79,12 +106,13 @@ function getAssetsInSelection(selection: CBSelection): CBAsset[] {
 }
 
 export function dispatchReimportAsset(asset: CBAsset): void {
-  if (!asset.sourcePath) return;
-  const sourceName = asset.sourcePath.slice(asset.sourcePath.lastIndexOf('/') + 1);
+  const expectedRevision = asset.metaRevision ?? asset.revision;
+  if (!asset.sourceKey || !expectedRevision) return;
   const result = gateway.dispatch({
     kind: 'reimportAsset',
-    destPath: asset.sourcePath,
-    sourceName,
+    guid: asset.guid,
+    scope: { sourceKey: asset.sourceKey },
+    expectedRevision,
     requestId: crypto.randomUUID(),
   }, 'human');
   if (!result.ok) console.warn('[content-browser] reimport dispatch rejected', result.error);
@@ -109,6 +137,7 @@ export interface CRUDCallbacks {
    * no editor-ui confirm fallback.
    */
   onDeleteFolder?: (folder: { path: string; name: string }) => void;
+  onSourceMutation?: (asset: CBAsset) => void;
 }
 
 export function buildAssetContextMenu(
@@ -155,7 +184,10 @@ export function buildAssetContextMenu(
       callbacks?.onSubjectAction?.({ operation: 'replace', asset });
     }},
     { id: 'reimport', label: 'Reimport asset', disabled: asset.sourcePath === undefined, action: () => {
-      dispatchReimportAsset(asset);
+      callbacks?.onSourceMutation?.(asset);
+    }},
+    { id: 'source-mutation', label: 'Source lifecycle', disabled: asset.sourceKey === undefined, action: () => {
+      callbacks?.onSourceMutation?.(asset);
     }},
     { id: 'duplicate', label: tr('editor.contentBrowser.contextMenu.duplicate'), shortcut: 'Ctrl+D', action: () => {
       for (const a of targets) {

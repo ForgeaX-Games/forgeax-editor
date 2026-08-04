@@ -96,11 +96,112 @@ export function registerPostAssetWriteCatalogSync(fn: ((guid: string) => Promise
   postAssetWriteCatalogSync = fn;
 }
 
+/** In-flight dedupe for the catalog barrier: two callers racing the same GUID
+ *  (e.g. the createMaterial applier's own continuation AND a second barrier
+ *  from the drop resolver) must share ONE host-hook invocation — otherwise the
+ *  host runs duplicate refresh/load cycles and doubles any `/__import`
+ *  fallback attempts. Resolved entries are dropped so a LATER write of the same
+ *  guid (delete → re-create) runs a fresh barrier. */
+const catalogBarrierInflight = new Map<string, Promise<void>>();
+
 /** Await the host-owned catalog visibility barrier for a newly written asset or
  * scene pack. The producer remains the owner of the write; the host owns the
- * pack-index/catalog visibility barrier before a navigation/load can consume it. */
-export async function awaitPostAssetWriteCatalogSync(guid: string): Promise<void> {
-  await postAssetWriteCatalogSync?.(guid);
+ * pack-index/catalog visibility barrier before a navigation/load can consume it.
+ * Concurrent waits for the same guid share a single host-hook invocation. */
+export function awaitPostAssetWriteCatalogSync(guid: string): Promise<void> {
+  if (!postAssetWriteCatalogSync) return Promise.resolve();
+  const inflight = catalogBarrierInflight.get(guid);
+  if (inflight) return inflight;
+  const p = postAssetWriteCatalogSync(guid);
+  const tracked = p.then(
+    () => { if (catalogBarrierInflight.get(guid) === tracked) catalogBarrierInflight.delete(guid); },
+    (e) => { if (catalogBarrierInflight.get(guid) === tracked) catalogBarrierInflight.delete(guid); throw e; },
+  );
+  catalogBarrierInflight.set(guid, tracked);
+  return tracked;
+}
+
+// ── Authored-material completion contract ─────────────────────────────────────
+// "createMaterial is DONE" is not the synchronous dispatch (that only commits
+// the undo ledger) — it is: pack write landed on disk AND the catalog barrier
+// observed the new GUID. Callers that follow createMaterial with bindAssetRef
+// (viewport drop resolver, content-browser context menu) MUST await
+// awaitAuthoredMaterialReady(guid) and abort the bind when it is not ok —
+// otherwise a failed/clobbered write surfaces as a permanently gray material
+// whose bind falls back to `/__import/{guid}` 404s.
+export type AuthoredMaterialWriteStage = 'write' | 'catalog';
+
+export type AuthoredMaterialReadiness =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly stage: AuthoredMaterialWriteStage; readonly hint: string };
+
+/** Bounded FIFO map (evict oldest) — createMaterial completions are awaited
+ *  shortly after dispatch; 256 concurrent in-flight materials is far beyond
+ *  any realistic burst, and the bound prevents unbounded growth if a caller
+ *  never awaits. */
+const TRACKED_WRITES_LIMIT = 256;
+const authoredMaterialWrites = new Map<string, Promise<AuthoredMaterialReadiness>>();
+
+function trackAuthoredMaterialWrite(guid: string, completion: Promise<AuthoredMaterialReadiness>): void {
+  if (authoredMaterialWrites.size >= TRACKED_WRITES_LIMIT) {
+    const oldest = authoredMaterialWrites.keys().next().value;
+    if (oldest !== undefined) authoredMaterialWrites.delete(oldest);
+  }
+  authoredMaterialWrites.set(guid, completion);
+}
+
+/** Bare barrier wrapped as a readiness result — the fallback for GUIDs the
+ *  tracking map does not know (unit envs, or an op applied before this module
+ *  version tracked it). */
+async function bareCatalogBarrier(guid: string): Promise<AuthoredMaterialReadiness> {
+  try {
+    await awaitPostAssetWriteCatalogSync(guid);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, stage: 'catalog', hint: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The single "authored material is consumable" contract. Resolves the
+ *  tracked write+catalog completion when this module applied the createMaterial
+ *  op; otherwise degrades to the bare catalog barrier. Callers MUST branch on
+ *  the result and abort the follow-up bind when `!ok`. */
+export function awaitAuthoredMaterialReady(guid: string): Promise<AuthoredMaterialReadiness> {
+  return authoredMaterialWrites.get(guid) ?? bareCatalogBarrier(guid);
+}
+
+// ── Authored-inline-asset tracker seam (scene-save protection) ────────────────
+// A material created AFTER the scene was loaded is not covered by the save
+// path's loadedInlineAssetFloor / loadedInlineAssets baseline (captured at
+// load). Without this seam a concurrent scene save can persist a pack body
+// that DROPS the freshly authored material. scene-persistence registers
+// track/untrack hooks here; the createMaterial applier calls track after a
+// successful write, and destroyAsset calls untrack after a successful delete
+// (symmetric — undo/delete must not leave a stale floor bump protecting a
+// guid that no longer exists on disk).
+export interface AuthoredInlineAssetSnapshot {
+  readonly guid: string;
+  readonly packPath: string;
+  readonly kind: string;
+  readonly name?: string;
+  /** Full pack-entry body (payload + refs) so the save path's orphan-merge can
+   *  re-append the asset verbatim if a save lands before any entity refs it. */
+  readonly payload?: unknown;
+  readonly refs?: readonly string[];
+}
+
+let authoredInlineAssetTracker: ((snapshot: AuthoredInlineAssetSnapshot) => void) | null = null;
+let authoredInlineAssetUntracker: ((guid: string) => void) | null = null;
+
+/** Host seam: scene-persistence registers hooks that keep the save path's
+ *  inline-asset baseline in sync with post-load authored material writes.
+ *  Pass null to clear (tests / realm teardown). */
+export function registerAuthoredInlineAssetTracker(
+  track: ((snapshot: AuthoredInlineAssetSnapshot) => void) | null,
+  untrack?: ((guid: string) => void) | null,
+): void {
+  authoredInlineAssetTracker = track;
+  authoredInlineAssetUntracker = untrack ?? null;
 }
 
 // ── Dangling refs check ──────────────────────────────────────────────────────
@@ -430,6 +531,10 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
   // so a failed write must not crash the host (D-1: the gateway is the only door).
   void ctx.assetIO.deletePackEntry(packPath, guid).then((entry) => {
     deletedEntryCache.set(key, entry);
+    // Symmetric with the createMaterial track seam: if this guid was a
+    // post-load authored inline asset, the save baseline must drop it again
+    // (a floor bump for a guid that no longer exists would refuse future saves).
+    authoredInlineAssetUntracker?.(guid);
     broadcastAssetsChanged();
   }).catch((e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e));
   return { ok: true, inverse: { kind: 'restoreAsset', packPath, guid, cacheKey: key } as unknown as EditorOp, created: [] };
@@ -483,11 +588,23 @@ function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   const payload = defaultPayloadFor(assetKind);
   // Fire-and-forget async IO through the asset gate (symmetrical to destroyAsset).
   // The document-applier contract is synchronous: return inverse immediately,
-  // IO completes in background. On success the ledger entry is valid; on failure
-  // the op is still committed (same pattern as destroyAsset/createDirectory).
+  // IO completes in background. The write result is CHECKED — a failed write is
+  // broadcast as an assetsError so the UI does not show an asset that never
+  // reached disk (same discipline as createMaterial; no completion tracking
+  // here because nothing binds to a fresh blank scene asset).
   void ctx.assetIO.createAssetInPack({ packPath, asset: { guid, kind: assetKind, name, payload, refs } })
-    .then(() => broadcastAssetsChanged())
-    .catch((e) => console.warn('[editor-core] createAsset IO failed:', e));
+    .then((r) => {
+      if (!r.ok) {
+        console.error('[editor-core] createAsset write failed:', { guid, packPath, reason: r.reason, hint: r.hint });
+        broadcastAssetsError({ op: 'createAsset', path: packPath, hint: `createAsset write failed (${r.reason}): ${r.hint}` });
+        return;
+      }
+      broadcastAssetsChanged();
+    })
+    .catch((e) => {
+      console.warn('[editor-core] createAsset IO failed:', e);
+      broadcastAssetsError({ op: 'createAsset', path: packPath, hint: _ioFailHint('createAsset', packPath, e) });
+    });
   return { ok: true, inverse: { kind: 'destroyAsset', packPath, guid } as unknown as EditorOp, created: [] };
 }
 
@@ -595,21 +712,38 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
 
   // Fire-and-forget async IO through the asset gate (mirrors createAsset). The
   // document-applier contract is synchronous: return the inverse immediately; IO
-  // completes in background; broadcastAssetsChanged() refreshes the catalog.
-  // Before broadcasting, await the host's catalog-sync hook (if registered) so
-  // the pack-index row + payload envelope for the new GUID are actually live —
-  // otherwise the broadcast races the vite-plugin-pack watcher rebuild and a
-  // follow-up updateMaterialParams finds no envelope (see the seam above).
-  void ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs: assetRefs } })
-    .then(async () => {
-      try {
-        await postAssetWriteCatalogSync?.(guid);
-      } catch (e) {
-        console.warn('[editor-core] createMaterial catalog sync failed (non-fatal):', e);
-      }
+  // completes in background. The completion is TRACKED (awaitAuthoredMaterialReady)
+  // and staged:
+  //   write   — the pack write is the ONLY success criterion; a failed result
+  //             (or a refused clobber of an unreadable existing pack) is
+  //             broadcast as an assetsError and NO catalog wait/broadcast runs.
+  //   catalog — after a successful write, the scene-save baseline is bumped
+  //             (authoredInlineAssetTracker) and the host catalog barrier must
+  //             observe the GUID before assetsChanged fires.
+  const completion: Promise<AuthoredMaterialReadiness> = (async () => {
+    const write = await ctx.assetIO.createAssetInPack({ packPath: targetPack, asset: { guid, kind: 'material', name, payload, refs: assetRefs } })
+      .catch((e): { ok: false; reason: 'write-failed'; hint: string } => ({
+        ok: false, reason: 'write-failed', hint: e instanceof Error ? e.message : String(e),
+      }));
+    if (!write.ok) {
+      console.error('[editor-core] createMaterial write failed:', { guid, targetPack, reason: write.reason, hint: write.hint });
+      broadcastAssetsError({ op: 'createMaterial', path: targetPack, hint: `createMaterial write failed (${write.reason}): ${write.hint}` });
+      return { ok: false as const, stage: 'write' as const, hint: `${write.reason}: ${write.hint}` };
+    }
+    authoredInlineAssetTracker?.({ guid, packPath: targetPack, kind: 'material', name, payload, refs: assetRefs });
+    try {
+      await awaitPostAssetWriteCatalogSync(guid);
+    } catch (e) {
+      const hint = e instanceof Error ? e.message : String(e);
+      console.warn('[editor-core] createMaterial catalog barrier failed:', { guid, targetPack, hint });
+      broadcastAssetsError({ op: 'createMaterial', path: targetPack, hint: `createMaterial catalog visibility failed: ${hint}` });
       broadcastAssetsChanged();
-    })
-    .catch((e) => console.warn('[editor-core] createMaterial IO failed:', e));
+      return { ok: false as const, stage: 'catalog' as const, hint };
+    }
+    broadcastAssetsChanged();
+    return { ok: true as const };
+  })();
+  trackAuthoredMaterialWrite(guid, completion);
   return { ok: true, inverse: { kind: 'destroyAsset', packPath: targetPack, guid } as unknown as EditorOp, created: [] };
 }
 

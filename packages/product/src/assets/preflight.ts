@@ -1,6 +1,11 @@
 import type {
   AssetMutationOperation,
   AssetMutationRequest,
+  AssetSourceMutationConfirmation,
+  AssetSourceMutationIntent,
+  AssetSourceMutationRequest,
+  AssetSourceMutationScope,
+  AssetSourceMutationSnapshot,
   AssetSubject,
   AssetSubjectId,
   AssetWorkspaceSnapshot,
@@ -8,6 +13,13 @@ import type {
 import { getAssetSubjectCapability } from './subject-capability';
 
 export type { AssetMutationRequest } from '../contracts/asset-workspace';
+export type {
+  AssetSourceMutationConfirmation,
+  AssetSourceMutationIntent,
+  AssetSourceMutationRequest,
+  AssetSourceMutationScope,
+  AssetSourceMutationSnapshot,
+} from '../contracts/asset-workspace';
 
 export type AssetSubjectAction = 'import' | 'move' | 'delete';
 
@@ -75,6 +87,54 @@ export type AssetMutationResult =
       readonly playSnapshot: AssetWorkspaceSnapshot;
     };
 
+export type AssetSourceMutationErrorCode =
+  | 'asset-source-key-missing'
+  | 'asset-source-key-unknown'
+  | 'asset-source-key-ambiguous'
+  | 'asset-meta-revision-conflict'
+  | 'asset-confirmation-required'
+  | 'asset-confirmation-expired'
+  | 'asset-confirmation-mismatch';
+
+export interface AssetSourceMutationError {
+  readonly code: AssetSourceMutationErrorCode;
+  readonly hint: string;
+  readonly expected?: string;
+  readonly actual?: string;
+  readonly recoveryActions: readonly string[];
+  readonly retryable: boolean;
+}
+
+export interface AssetSourceMutationPreflightResult {
+  readonly ok: boolean;
+  readonly guid: string;
+  readonly scope: AssetSourceMutationScope;
+  readonly expectedRevision: string;
+  readonly sourceKeys: readonly string[];
+  readonly affectedGuids: readonly string[];
+  readonly referencerGuids: readonly string[];
+  readonly instanceGuids: readonly string[];
+  readonly risks: readonly string[];
+  readonly confirmation: AssetSourceMutationConfirmation;
+  readonly error?: AssetSourceMutationError;
+}
+
+export interface AssetSourceMutationPreflightOptions {
+  readonly now?: number;
+  readonly confirmationTtlMs?: number;
+  readonly intent?: AssetSourceMutationIntent;
+}
+
+export interface AssetSourceMutationAuthorizationRequest {
+  readonly intent: AssetSourceMutationIntent;
+  readonly confirmationToken?: string;
+  readonly now?: number;
+}
+
+export type AssetSourceMutationAuthorizationResult =
+  | { readonly ok: true; readonly confirmationRequired: boolean; readonly error?: never }
+  | { readonly ok: false; readonly confirmationRequired: boolean; readonly error: AssetSourceMutationError };
+
 export interface AssetLifecycleAdapter {
   readonly preflight: (request: AssetMutationRequest) => AssetPreflightResult;
   readonly run: (request: AssetMutationRequest) => Promise<AssetMutationResult>;
@@ -91,6 +151,182 @@ export function findAssetSubject(
   subjectId: AssetSubjectId,
 ): AssetSubject | undefined {
   return snapshot.subjects.find((subject) => subject.id === subjectId);
+}
+
+function sourceError(
+  code: AssetSourceMutationErrorCode,
+  hint: string,
+  fields: Partial<Pick<AssetSourceMutationError, 'expected' | 'actual' | 'retryable'>> = {},
+): AssetSourceMutationError {
+  return {
+    code,
+    hint,
+    recoveryActions: ['asset.preflight'],
+    retryable: false,
+    ...fields,
+  };
+}
+
+function sourceScopeKey(scope: AssetSourceMutationScope): string {
+  return scope.all === true ? 'all' : scope.sourceKey;
+}
+
+function sourceToken(
+  expectedRevision: string,
+  scope: AssetSourceMutationScope,
+  affectedGuids: readonly string[],
+  expiresAt: number,
+): string {
+  const value = JSON.stringify({ expectedRevision, scope, affectedGuids, expiresAt });
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `asset-source-confirmation:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function sourcePreflightBase(
+  snapshot: AssetSourceMutationSnapshot,
+  request: AssetSourceMutationRequest,
+): Omit<AssetSourceMutationPreflightResult, 'error'> {
+  return {
+    ok: true,
+    guid: request.guid,
+    scope: request.scope,
+    expectedRevision: snapshot.metaRevision,
+    sourceKeys: [],
+    affectedGuids: [],
+    referencerGuids: [],
+    instanceGuids: [],
+    risks: [],
+    confirmation: {
+      required: false,
+      scope: request.scope,
+      expectedRevision: snapshot.metaRevision,
+      affectedGuids: [],
+    },
+  };
+}
+
+function sourceImpact(selected: readonly AssetSourceMutationSnapshot['outputs'][number][]): {
+  readonly sourceKeys: readonly string[];
+  readonly affectedGuids: readonly string[];
+  readonly referencerGuids: readonly string[];
+  readonly instanceGuids: readonly string[];
+} {
+  return {
+    sourceKeys: [...new Set(selected.map((output) => output.sourceKey))].sort(),
+    affectedGuids: [...new Set(selected.map((output) => output.guid))].sort(),
+    referencerGuids: [...new Set(selected.flatMap((output) => output.referencerGuids))].sort(),
+    instanceGuids: [...new Set(selected.flatMap((output) => output.instanceGuids))].sort(),
+  };
+}
+
+export function preflightAssetSourceMutation(
+  snapshot: AssetSourceMutationSnapshot,
+  request: AssetSourceMutationRequest,
+  options: AssetSourceMutationPreflightOptions = {},
+): AssetSourceMutationPreflightResult {
+  const expectedRevision = snapshot.metaRevision;
+  const base = sourcePreflightBase(snapshot, request);
+
+  if (request.guid.trim() === '') {
+    return {
+      ...base,
+      ok: false,
+      error: sourceError('asset-source-key-missing', 'A stable imported output GUID is required for source mutation preflight.'),
+    };
+  }
+  if (request.scope.all !== true && request.scope.sourceKey.trim() === '') {
+    return {
+      ...base,
+      ok: false,
+      error: sourceError('asset-source-key-missing', 'An explicit sourceKey or all scope is required.'),
+    };
+  }
+  if (request.expectedRevision !== undefined && request.expectedRevision !== snapshot.metaRevision) {
+    return {
+      ...base,
+      ok: false,
+      error: sourceError('asset-meta-revision-conflict', 'The Meta revision changed after the source impact was observed.', {
+        expected: request.expectedRevision,
+        actual: snapshot.metaRevision,
+        retryable: true,
+      }),
+    };
+  }
+
+  const eligible = snapshot.outputs.filter((output) => output.promoted !== true);
+  const selected = request.scope.all === true
+    ? eligible
+    : eligible.filter((output) => output.sourceKey === request.scope.sourceKey);
+  if (selected.length === 0) {
+    return {
+      ...base,
+      ok: false,
+      error: sourceError('asset-source-key-unknown', `No imported output is registered for scope ${sourceScopeKey(request.scope)}.`),
+    };
+  }
+  if (!request.scope.all && !selected.some((output) => output.guid === request.guid)) {
+    return {
+      ...base,
+      ok: false,
+      error: sourceError('asset-source-key-ambiguous', 'The requested GUID does not belong to the selected sourceKey.'),
+    };
+  }
+
+  const impact = sourceImpact(selected);
+  const intent = options.intent ?? 'discard-source-overrides-and-reimport';
+  const destructive = intent === 'discard-source-overrides-and-reimport';
+  const now = options.now ?? Date.now();
+  const expiresAt = now + (options.confirmationTtlMs ?? 5 * 60 * 1000);
+  const confirmation: AssetSourceMutationConfirmation = {
+    required: destructive,
+    scope: request.scope,
+    expectedRevision,
+    affectedGuids: impact.affectedGuids,
+    ...(destructive ? { expiresAt, token: sourceToken(expectedRevision, request.scope, impact.affectedGuids, expiresAt) } : {}),
+  };
+  return {
+    ...base,
+    ...impact,
+    confirmation,
+  };
+}
+
+export function authorizeAssetSourceMutation(
+  preflight: AssetSourceMutationPreflightResult,
+  request: AssetSourceMutationAuthorizationRequest,
+): AssetSourceMutationAuthorizationResult {
+  const destructive = request.intent === 'discard-source-overrides-and-reimport';
+  if (!preflight.ok && preflight.error) {
+    return { ok: false, confirmationRequired: destructive, error: preflight.error };
+  }
+  if (!destructive) return { ok: true, confirmationRequired: false };
+  if (request.confirmationToken === undefined) {
+    return {
+      ok: false,
+      confirmationRequired: true,
+      error: sourceError('asset-confirmation-required', 'Discard requires a confirmation token from the current impact preview.'),
+    };
+  }
+  const expiresAt = preflight.confirmation.expiresAt;
+  if (expiresAt === undefined || (request.now ?? Date.now()) >= expiresAt) {
+    return {
+      ok: false,
+      confirmationRequired: true,
+      error: sourceError('asset-confirmation-expired', 'The source impact confirmation has expired; run preflight again.'),
+    };
+  }
+  if (request.confirmationToken !== preflight.confirmation.token) {
+    return {
+      ok: false,
+      confirmationRequired: true,
+      error: sourceError('asset-confirmation-mismatch', 'The confirmation token is bound to a different source scope or impact revision.'),
+    };
+  }
+  return { ok: true, confirmationRequired: true };
 }
 
 export function subjectSupports(

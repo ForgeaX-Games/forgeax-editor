@@ -398,3 +398,220 @@ describe('createMaterial post-write catalog-sync seam', () => {
     }
   });
 });
+
+// Material-persistence fix (gray-card root cause): the applier previously DROPPED
+// createAssetInPack's { ok } — a failed disk write still logged io.succeeded and
+// continued into barrier/bind, surfacing later as a /__import 404 for a material
+// that never reached scene.pack.json. These tests pin the staged failure
+// contract: write failures broadcast assetsError, are tracked as a FAILED
+// readiness (stage 'write'), and never reach the catalog barrier/broadcast.
+describe('createMaterial staged write failure (authoritative write result)', () => {
+  it('a failed pack write broadcasts assetsError and tracks a stage:write readiness failure', async () => {
+    const { applyCreateMaterial, registerPostAssetWriteCatalogSync, awaitAuthoredMaterialReady } = await import('../session/pack-ops');
+    const { panelBridge } = await import('../io/panel-bridge');
+    registerPostAssetWriteCatalogSync(null);
+
+    const errors: { op: string; hint: string }[] = [];
+    const changed: string[] = [];
+    const offErr = panelBridge.on('assetsError', (e) => { errors.push({ op: e.op, hint: e.hint }); });
+    const offChanged = panelBridge.on('assetsChanged', () => { changed.push('broadcast'); });
+    try {
+      const fakeCtx = {
+        assetIO: {
+          createAssetInPack() {
+            return Promise.resolve({ ok: false, reason: 'write-failed', hint: 'pack write failed (HTTP 500)' });
+          },
+        },
+      } as never;
+      const guid = '11111111-1111-4111-8111-111111111111';
+      const r = applyCreateMaterial(fakeCtx, {
+        kind: 'createMaterial',
+        guid,
+        name: 'Broken',
+        baseColor: [1, 1, 1, 1],
+        packPath: 'some/pack.pack.json',
+      } as never);
+      // The synchronous contract is unchanged (undo ledger committed).
+      expect(r.ok).toBe(true);
+      const ready = await awaitAuthoredMaterialReady(guid);
+      expect(ready.ok).toBe(false);
+      if (!ready.ok) {
+        expect(ready.stage).toBe('write');
+        expect(ready.hint).toContain('HTTP 500');
+      }
+      expect(errors.length).toBe(1);
+      expect(errors[0]?.op).toBe('createMaterial');
+      expect(errors[0]?.hint).toContain('write-failed');
+      // A failed write must NOT broadcast assetsChanged (nothing changed on disk).
+      expect(changed).toEqual([]);
+    } finally {
+      offErr();
+      offChanged();
+    }
+  });
+
+  it('a catalog-barrier failure after a successful write tracks a stage:catalog readiness failure', async () => {
+    const { applyCreateMaterial, registerPostAssetWriteCatalogSync, awaitAuthoredMaterialReady } = await import('../session/pack-ops');
+    const { panelBridge } = await import('../io/panel-bridge');
+
+    const errors: { op: string; hint: string }[] = [];
+    const offErr = panelBridge.on('assetsError', (e) => { errors.push({ op: e.op, hint: e.hint }); });
+    registerPostAssetWriteCatalogSync(async () => { throw new Error('visibility deadline exceeded'); });
+    try {
+      const fakeCtx = {
+        assetIO: { createAssetInPack() { return Promise.resolve({ ok: true }); } },
+      } as never;
+      const guid = '22222222-2222-4222-8222-222222222222';
+      const r = applyCreateMaterial(fakeCtx, {
+        kind: 'createMaterial',
+        guid,
+        name: 'Unseen',
+        baseColor: [1, 1, 1, 1],
+        packPath: 'some/pack.pack.json',
+      } as never);
+      expect(r.ok).toBe(true);
+      const ready = await awaitAuthoredMaterialReady(guid);
+      expect(ready.ok).toBe(false);
+      if (!ready.ok) {
+        expect(ready.stage).toBe('catalog');
+        expect(ready.hint).toContain('visibility deadline');
+      }
+      expect(errors.some((e) => e.op === 'createMaterial' && e.hint.includes('catalog visibility'))).toBe(true);
+    } finally {
+      registerPostAssetWriteCatalogSync(null);
+      offErr();
+    }
+  });
+
+  it('awaitPostAssetWriteCatalogSync dedupes concurrent waits into ONE host-hook invocation', async () => {
+    const { registerPostAssetWriteCatalogSync, awaitPostAssetWriteCatalogSync } = await import('../session/pack-ops');
+    let calls = 0;
+    registerPostAssetWriteCatalogSync(async () => {
+      calls++;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    try {
+      await Promise.all([
+        awaitPostAssetWriteCatalogSync('dedupe-guid'),
+        awaitPostAssetWriteCatalogSync('dedupe-guid'),
+        awaitPostAssetWriteCatalogSync('dedupe-guid'),
+      ]);
+      expect(calls).toBe(1);
+    } finally {
+      registerPostAssetWriteCatalogSync(null);
+    }
+  });
+});
+
+describe('AssetIOFacade createAssetInPack diagnosable failures', () => {
+  it('refuses to clobber an existing-but-invalid pack (read-failed, no POST)', async () => {
+    const originalFetch = globalThis.fetch;
+    let postCount = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST') {
+        postCount++;
+        return new Response('{}', { status: 200 });
+      }
+      if (url.startsWith('/api/files?')) {
+        // The pack EXISTS (HTTP 200) but its body is not a valid pack shell.
+        return new Response(JSON.stringify({ content: '{ "not": "a pack" }' }), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    try {
+      const result = await new AssetIOFacade().createAssetInPack({
+        packPath: 'sample/assets/scene.pack.json',
+        asset: {
+          guid: '33333333-3333-4333-8333-333333333333',
+          kind: 'material',
+          name: 'Should Not Land',
+          payload: { kind: 'material', values: {} },
+          refs: [],
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('read-failed');
+        expect(result.hint).toContain('refusing to overwrite');
+      }
+      // The whole point: NO write may touch the existing-but-unreadable pack.
+      expect(postCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reports write-failed with the HTTP status when the POST is rejected', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST') return new Response(null, { status: 500 });
+      if (url.startsWith('/api/files?')) return new Response(null, { status: 404 });
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    try {
+      const result = await new AssetIOFacade().createAssetInPack({
+        packPath: 'sample/assets/scene.pack.json',
+        asset: {
+          guid: '44444444-4444-4444-8444-444444444444',
+          kind: 'material',
+          name: 'No Disk',
+          payload: { kind: 'material', values: {} },
+          refs: [],
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('write-failed');
+        expect(result.hint).toContain('HTTP 500');
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('serializes concurrent read-modify-writes on the same pack (no lost update)', async () => {
+    const originalFetch = globalThis.fetch;
+    // In-memory FS: GET reads the store, POST writes it after a small delay so
+    // an UNSERIALIZED pair would interleave (both read empty → both write → the
+    // second write clobbers the first's asset).
+    let stored: string | null = null;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { content: string };
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        stored = body.content;
+        return new Response('{}', { status: 200 });
+      }
+      if (url.startsWith('/api/files?')) {
+        if (stored === null) return new Response(null, { status: 404 });
+        return new Response(JSON.stringify({ content: stored }), { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    try {
+      const io = new AssetIOFacade();
+      const [r1, r2] = await Promise.all([
+        io.createAssetInPack({
+          packPath: 'sample/assets/scene.pack.json',
+          asset: { guid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', kind: 'material', name: 'First', payload: { kind: 'material', values: {} }, refs: [] },
+        }),
+        io.createAssetInPack({
+          packPath: 'sample/assets/scene.pack.json',
+          asset: { guid: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', kind: 'material', name: 'Second', payload: { kind: 'material', values: {} }, refs: [] },
+        }),
+      ]);
+      expect(r1.ok).toBe(true);
+      expect(r2.ok).toBe(true);
+      const finalPack = JSON.parse(stored as unknown as string) as { assets: { guid: string }[] };
+      const guids = finalPack.assets.map((a) => a.guid);
+      expect(guids).toContain('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      expect(guids).toContain('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+      expect(finalPack.assets.length).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

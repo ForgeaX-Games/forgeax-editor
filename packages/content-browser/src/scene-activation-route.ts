@@ -18,25 +18,6 @@ export function sceneActivationToOp(
   };
 }
 
-/** Explicit source-edit route. Ordinary open/double-click always remains preview. */
-export function sceneSourceEditToOp(
-  descriptor: SceneActivationDescriptor,
-  requestId: string = globalThis.crypto.randomUUID(),
-): EditorOp {
-  if (!descriptor.canEditSource || descriptor.provenance !== 'imported-output') {
-    throw new Error(descriptor.unavailable?.editSource?.reason ?? 'Imported source editing is unavailable.');
-  }
-  if (!descriptor.metaPath) throw new Error('Imported source editing requires a catalog/workspace meta path.');
-  return {
-    kind: 'editImportedSource',
-    guid: descriptor.guid,
-    sourceKey: descriptor.sourceKey,
-    metaPath: descriptor.metaPath,
-    revision: descriptor.revision,
-    requestId,
-  };
-}
-
 export function scenePromoteToOp(
   descriptor: SceneActivationDescriptor,
   input: {

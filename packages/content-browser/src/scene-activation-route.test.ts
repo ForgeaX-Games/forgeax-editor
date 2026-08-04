@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { sceneActivationToOp, scenePromoteToOp, sceneSourceEditToOp } from './scene-activation-route';
+import { sceneActivationToOp, scenePromoteToOp } from './scene-activation-route';
 import type { SceneActivationDescriptor } from '@forgeax/editor-core';
 
 const base: SceneActivationDescriptor = {
@@ -12,7 +12,6 @@ const base: SceneActivationDescriptor = {
   canPreview: true,
   canMount: true,
   canEditInstance: true,
-  canEditSource: false,
   canPromote: true,
 };
 
@@ -37,12 +36,6 @@ describe('Content Browser scene activation route', () => {
     });
   });
 
-  it('does not manufacture a source-edit route when the producer capability is absent', () => {
-    expect(() => sceneSourceEditToOp({
-      ...base,
-      metaPath: 'assets/Fox.glb.meta.json',
-    }, 'denied')).toThrow();
-  });
 
   it('projects explicit Promote intent without inferring path or content policy', () => {
     expect(scenePromoteToOp(base, {

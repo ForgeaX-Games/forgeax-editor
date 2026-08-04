@@ -13,6 +13,7 @@ import type { SceneAsset } from '@forgeax/engine-types';
 import type { CommandErrorContext, ErrorSubjectRef } from '@forgeax/editor-product';
 import type { EntityHandle, EntityId, EntitySource } from './scene/scene-types';
 import type { SelectedAsset } from './store/asset-selection';
+import type { AssetSourceMutationScope } from '@forgeax/editor-product';
 
 // ── Operations ──────────────────────────────────────────────────────────────
 // Each op is a plain JSON object = it doubles as an AI tool-call payload.
@@ -21,13 +22,13 @@ import type { SelectedAsset } from './store/asset-selection';
 // to compute an inverse for free Undo.
 
 /** Asset kinds the editor can create from an empty template (Add button).
- *  ⚠️  NOT the engine `Asset['kind']` union (15 kinds) — most kinds are import-only
+ *  Warning: NOT the engine `Asset['kind']` union (15 kinds) — most kinds are import-only
  *  (mesh/texture/audio/…). This is the editor-side product decision of which
  *  kinds can be blank-created, SSOT in `packages/content-browser/src/creatable-asset-kinds.ts`.
  *
- *  扩展：加一条字面量 + 对应 spec 行 + applier switch case。*/
+ *  To extend: add one literal, its spec row, and the applier switch case. */
 export type CreatableAssetKind = 'scene' | 'material';
-// 未来扩展示例： 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
+// Future examples: 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
 
 /** Builtin editor ops — the closed discriminated union of all 25 editor primitives.
  *  Narrowable on `kind` for strong type inference at call sites. Custom ops
@@ -99,6 +100,11 @@ export type BuiltinEditorOp =
   | { kind: 'openAssetEditor'; asset: SelectedAsset }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
   | { kind: 'requestFrame' }
+  | { kind: 'cameraSetProjection'; projection: 'perspective' | 'orthographic' }
+  | { kind: 'cameraToggleProjection' }
+  | { kind: 'cameraAdjustFov'; delta: number }
+  | { kind: 'cameraZoom'; delta: number }
+  | { kind: 'cameraBookmark'; action: 'save' | 'recall' | 'clear'; slot: number }
   // captureFrame is a request-correlated session operation. The actual RHI
   // recorder lives in edit-runtime/engine; the gateway owns the invocation
   // door and the OperationRun result channel.
@@ -110,8 +116,10 @@ export type BuiltinEditorOp =
   // dispatch acceptance as a successful scene change.
   | { kind: 'switchSceneFile'; id: string; dirtyPolicy?: SceneSwitchDirtyPolicy; requestId: string; retryOfRequestId?: string }
   | { kind: 'previewImportedScene'; guid: string; sourceKey: string; sourcePath?: string; revision: string; requestId: string }
-  | { kind: 'editImportedSource'; guid: string; sourceKey: string; metaPath: string; revision: string; requestId: string }
-  | { kind: 'saveImportedSource'; requestId: string; retryOfRequestId?: string }
+  | { kind: 'asset.preflight'; guid: string; scope: AssetSourceMutationScope; requestId: string }
+  | { kind: 'previewAssetSourceMutation'; guid: string; scope: AssetSourceMutationScope; expectedRevision: string; requestId: string }
+  | { kind: 'saveAssetSourceOverride'; guid: string; scope: AssetSourceMutationScope; expectedRevision: string; override: Record<string, unknown>; requestId: string; retryOfRequestId?: string }
+  | { kind: 'discardSourceOverridesAndReimport'; guid: string; scope: AssetSourceMutationScope; expectedRevision: string; confirmationToken: string; requestId: string; retryOfRequestId?: string }
   | {
     kind: 'promoteImportedScene';
     importedGuid: string;
@@ -146,9 +154,12 @@ export type BuiltinEditorOp =
   // then dispatch with skipUpload; AI passes an on-disk path. destPath may be
   // game-relative (the applier resolves it via resolveGamePath).
   | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean; requestId: string }
+  // Catalog reconciliation is a read-only recovery projection. It invokes the
+  // existing replica seam and therefore never enters the authored ledger.
+  | { kind: 'catalog.reconcile'; requestId: string; retryOfRequestId?: string }
   // Reimport uses the existing source metadata as the producer-owned identity
   // and settings input; missing metadata is a structured terminal failure.
-  | { kind: 'reimportAsset'; destPath: string; sourceName?: string; requestId: string }
+  | { kind: 'reimportAsset'; guid: string; scope: AssetSourceMutationScope; expectedRevision: string; requestId: string; retryOfRequestId?: string }
   // addSceneAssetToScene (R0-05B): a catalogued scene sub-asset is placed by GUID.
   // SESSION-domain, ledger-only, request-correlated async — requestId is the
   // independent Gateway OperationRun identity, so concurrent mounts do not race
@@ -225,9 +236,19 @@ export type SceneSwitchDirtyPolicy = 'save' | 'discard' | 'cancel';
 
 // ── Error codes (plan-strategy §2 D-7) ──────────────────────────────────────
 
+export type SourceAuthoringPhase = 'entry' | 'cas' | 'cook' | 'validation' | 'publication' | 'gap';
+
+export interface SourceAuthoringSubjectRef extends ErrorSubjectRef {
+  readonly kind: 'asset-source';
+  readonly guid: string;
+  readonly sourceKey?: string;
+}
+
 export interface CommandError extends CommandErrorContext {
   /** Operation-specific structured validation details (for example fieldPath). */
   readonly details?: unknown;
+  readonly phase?: SourceAuthoringPhase;
+  readonly runId?: string;
   code:
     // ── Existing document-domain codes (NO CHANGE) ──
     | 'NO_SUCH_ENTITY'
@@ -285,6 +306,20 @@ export interface CommandError extends CommandErrorContext {
     | 'preview-rejected-dirty'
     | 'mount-member-operation-unsupported'
     | 'engine-source-authoring-unavailable'
+    | 'asset-source-key-missing'
+    | 'asset-source-key-unknown'
+    | 'asset-source-key-ambiguous'
+    | 'asset-meta-revision-conflict'
+    | 'asset-confirmation-required'
+    | 'asset-confirmation-expired'
+    | 'asset-confirmation-mismatch'
+    | 'asset-validation-failed'
+    | 'asset-cook-failed'
+    | 'asset-publish-observation-timeout'
+    | 'asset-catalog-subscription-gap'
+    | 'asset-operation-failed'
+    | 'asset-operation-cas-committed'
+    | 'run-cancelled-before-cas'
     | 'promote-capability-unavailable'
     | 'promote-session-mismatch'
     | 'promote-current-session-unavailable'
@@ -365,6 +400,9 @@ export interface CommandError extends CommandErrorContext {
     | 'save-already-running'
     | 'operation-request-id-conflict'
     | 'operation-not-retryable'
+    | 'asset-operation-cas-committed'
+    | 'run-cancelled-before-cas'
+    | 'asset-cook-failed'
     | 'run-not-cancellable'
     | 'run-not-found'
     | 'run-expired'
@@ -385,8 +423,9 @@ export interface CommandError extends CommandErrorContext {
     | 'save-unexpected-failure';
   hint: string;
   readonly expected?: unknown;
+  readonly actual?: unknown;
   readonly current?: unknown;
-  readonly subjectRef?: ErrorSubjectRef;
+  readonly subjectRef?: ErrorSubjectRef | SourceAuthoringSubjectRef;
   readonly retryable?: boolean;
   readonly recoveryActions?: readonly string[];
 }

@@ -43,6 +43,12 @@ export type { EngineFacade } from '../io/engine-facade';
 export { registerSessionApplier } from '../io/appliers';
 export type { SessionApplier, SessionApplierMeta } from '../io/appliers';
 export type { ArgsSchema, OpDescriptor } from '../io/catalog';
+export { createCatalogReconcileProvider } from '../io/catalog';
+export type {
+  CatalogReconcileProvider,
+  CatalogReconcileResult,
+  EngineCatalogReconcileProvider,
+} from '../io/catalog';
 export type { OperationRunDescriptor } from '../io/catalog';
 export { OperationRunRegistry } from '../io/operation-runs';
 export type {

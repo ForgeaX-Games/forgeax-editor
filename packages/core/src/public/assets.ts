@@ -37,6 +37,7 @@ export { createAssetBrowserReadModel } from '../assets/asset-browser-read-model'
 export type {
   AssetAuthoringCapability,
   AssetBrowserAsset,
+  AssetBrowserCatalogRelation,
   AssetBrowserCatalogRoot,
   AssetBrowserDiagnostic,
   AssetBrowserDirectory,
@@ -46,11 +47,68 @@ export type {
   AssetBrowserRegistryEntry,
   AssetBrowserSnapshot,
   AssetBrowserTreeNode,
+  AssetBrowserRelationKind,
   AssetSourcePhase,
   AssetSourceState,
   CreateAssetBrowserReadModelDeps,
 } from '../assets/asset-browser-read-model';
 export { assetWorkspaceSnapshotToBrowserSnapshot } from '../assets/asset-browser-read-model';
+export {
+  createSourceMutationPreflightCoordinator,
+  readAssetSourceFact,
+  preflightSourceMutation,
+} from '../assets/source-mutation-preflight';
+export { installSourceAuthoringOps } from '../session/source-authoring-ops';
+export type { SourceAuthoringRuntime } from '../session/source-authoring-ops';
+export type {
+  ActiveSceneSourceReference,
+  AssetIoSourceOutput,
+  AssetIoSourceSnapshot,
+  AssetSourceReadFact,
+  CoordinatedSourceMutationPreflightResult,
+  SourceMutationErrorSubjectRef,
+  SourceMutationOperationIdentity,
+  SourceMutationPreflightCommand,
+  SourceMutationPreflightCoordinator,
+  SourceMutationPreflightError,
+  SourceMutationPreflightInput,
+  SourceMutationPreflightResult,
+  SourceMutationProjectionError,
+} from '../assets/source-mutation-preflight';
+
+/**
+ * Public source-authoring error index. AI callers branch on `code` and the
+ * structured recovery fields below; `hint` is explanatory text only.
+ */
+export type AssetSourceAuthoringErrorCode =
+  | 'asset-source-key-missing'
+  | 'asset-source-key-unknown'
+  | 'asset-source-key-ambiguous'
+  | 'asset-meta-revision-conflict'
+  | 'asset-confirmation-required'
+  | 'asset-confirmation-expired'
+  | 'asset-confirmation-mismatch'
+  | 'asset-validation-failed'
+  | 'asset-cook-failed'
+  | 'asset-publish-observation-timeout'
+  | 'asset-catalog-subscription-gap'
+  | 'asset-operation-cas-committed'
+  | 'run-cancelled-before-cas';
+
+/** One Gateway-correlated failure fact from preflight through publication. */
+export interface AssetSourceAuthoringError {
+  readonly code: AssetSourceAuthoringErrorCode;
+  readonly phase: 'preflight' | 'entry' | 'cas' | 'cook' | 'validation' | 'publication' | 'gap';
+  readonly operationId: string;
+  readonly requestId: string;
+  readonly runId?: string;
+  readonly subjectRef: { readonly kind: 'asset-source'; readonly guid: string; readonly sourceKey?: string };
+  readonly hint: string;
+  readonly expected?: string;
+  readonly actual?: string;
+  readonly retryable: boolean;
+  readonly recoveryActions: readonly string[];
+}
 export { describeSceneActivation } from '../assets/scene-activation';
 export type {
   AuthoredSceneFact,
@@ -81,6 +139,8 @@ export type {
   AssetResourceRef,
   AssetResourceSnapshot,
   AssetResourceTransactionPort,
+  SourceOverrideCommitInput,
+  SourceOverrideCommitResult,
   SourceFileDeleteResult,
 } from '../io/asset-io-facade';
 export type { SourceFileDeleteStatus } from '../session/source-file-delete-status';
@@ -92,7 +152,15 @@ export {
   deleteDirectory,
   registerPostAssetWriteCatalogSync,
   awaitPostAssetWriteCatalogSync,
+  awaitAuthoredMaterialReady,
+  registerAuthoredInlineAssetTracker,
 } from '../session/pack-ops';
+export type {
+  AuthoredMaterialReadiness,
+  AuthoredMaterialWriteStage,
+  AuthoredInlineAssetSnapshot,
+} from '../session/pack-ops';
+export type { CreateAssetInPackResult } from '../io/asset-io-facade';
 export { createImportFailure, executeAssetImport } from '../session/import-ops';
 export type {
   AssetImportSpec,
@@ -107,6 +175,8 @@ export type {
 } from '../session/import-ops';
 export { installAssetHmrBridge } from '../assets/asset-hmr-bridge';
 export { ensureAssetCataloged } from '../assets/ensure-asset-cataloged';
+export { createAuthoredAssetCatalogBarrier } from '../assets/authored-asset-barrier';
+export type { AuthoredAssetCatalogBarrierOptions } from '../assets/authored-asset-barrier';
 export {
   createAssetMutationSafetyAdapter,
   createAssetProducerAdapter,

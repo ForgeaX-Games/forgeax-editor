@@ -13,14 +13,16 @@ import { beforeEach, describe, expect, it } from 'bun:test';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { err, ok, type Result } from '@forgeax/engine-rhi';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-runtime';
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import { AssetError, type CatalogDelta, type CatalogEntry, type MaterialAsset, type TextureAsset } from '@forgeax/engine-types';
 import { EditGateway } from '../io/gateway';
+import { createCatalogReconcileProvider } from '../public/gateway';
 import { childrenOf, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
@@ -29,10 +31,6 @@ void AnimationPlayer;
 
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
 const TEXTURE_GUID = 'd1f2a3b4-c5d6-5e70-8901-234567890abc';
-
-type SameType<Left, Right> =
-  (<Value>() => Value extends Left ? 1 : 2) extends
-  (<Value>() => Value extends Right ? 1 : 2) ? true : false;
 
 // A tiny 2×2 RGBA texture — small enough to keep the test cheap, but its `data`
 // buffer is exactly what describeAssetByGuid must NOT return (the friction that
@@ -312,6 +310,156 @@ describe('Gateway public capability matrix', () => {
   });
 });
 
+describe('Gateway catalog reconcile adapter', () => {
+  const entry = {
+    guid: '11111111-1111-4111-8111-111111111111',
+    kind: 'mesh',
+    sourcePath: 'assets/Fox.glb',
+    packageUrl: '/preview/packages/fox',
+    revision: { digest: 'sha256:current', observedAt: 7, rootId: 'root-fox' },
+  } as const satisfies CatalogEntry;
+
+  const gapDiagnostic = {
+    code: 'catalog-gap',
+    severity: 'blocking',
+    expected: 'a contiguous producer revision window',
+    hint: 'reconcile the catalog before consuming incremental changes',
+    authority: 'catalog',
+  } as const;
+
+  function catalogSource(failAfterBaseline = false) {
+    let listener: ((delta: CatalogDelta) => void) | undefined;
+    let enumerateCount = 0;
+    let metaWrites = 0;
+    return {
+      source: {
+        async enumerate(): Promise<Result<readonly CatalogEntry[], AssetError>> {
+          enumerateCount += 1;
+          return failAfterBaseline && enumerateCount > 1
+            ? err(new AssetError({
+              code: 'asset-fetch-failed',
+              expected: 'an authoritative catalog snapshot',
+              hint: 'restore the catalog source and retry reconciliation',
+            }))
+            : ok([entry]);
+        },
+        subscribe(next: (delta: CatalogDelta) => void) {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        writeMeta() {
+          metaWrites += 1;
+        },
+      },
+      publishGap() {
+        listener?.({
+          added: [],
+          changed: [],
+          removed: [],
+          authority: 'degraded',
+          diagnostics: [gapDiagnostic],
+        });
+      },
+      metaWrites: () => metaWrites,
+    };
+  }
+
+  it('maps the public Engine success Result through the canonical AI Gateway run', async () => {
+    const source = catalogSource();
+    const registry = new AssetRegistry(makeShaderRegistry());
+    registry.setCatalogSource(source.source);
+    await registry.enumerateCatalog();
+    source.publishGap();
+    expect(registry.catalogSnapshot()).toMatchObject({ stale: true });
+    let syntheticDeltas = 0;
+    const unsubscribe = registry.subscribeCatalog(() => {
+      syntheticDeltas += 1;
+    });
+
+    const gateway = new EditGateway();
+    const unregister = gateway.registerCatalogReconcile(createCatalogReconcileProvider(registry));
+    try {
+      const aiAccepted = gateway.dispatch(
+        { kind: 'catalog.reconcile', requestId: 'catalog-reconcile-ai' },
+        'ai',
+      );
+      expect(aiAccepted).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
+      await expect(gateway.waitOperationRun('catalog-reconcile-ai')).resolves.toMatchObject({
+        ok: true,
+        value: {
+          status: 'succeeded',
+          result: { revision: 0, stale: false, diagnostics: [] },
+        },
+      });
+      expect(registry.catalogSnapshot()?.entries).toEqual([entry]);
+      expect(syntheticDeltas).toBe(0);
+      expect(source.metaWrites()).toBe(0);
+    } finally {
+      unsubscribe();
+      unregister();
+    }
+  });
+
+  it('maps Engine errors for human retry without erasing stale diagnostics', async () => {
+    const source = catalogSource(true);
+    const registry = new AssetRegistry(makeShaderRegistry());
+    registry.setCatalogSource(source.source);
+    await registry.enumerateCatalog();
+    source.publishGap();
+
+    const gateway = new EditGateway();
+    const unregister = gateway.registerCatalogReconcile(createCatalogReconcileProvider(registry));
+    try {
+      gateway.dispatch({ kind: 'catalog.reconcile', requestId: 'catalog-reconcile-failed' }, 'human');
+      await expect(gateway.waitOperationRun('catalog-reconcile-failed')).resolves.toMatchObject({
+        ok: true,
+        value: {
+          status: 'failed',
+          retryable: true,
+          error: {
+            code: 'asset-catalog-subscription-gap',
+            phase: 'gap',
+            operationId: 'catalog.reconcile',
+            requestId: 'catalog-reconcile-failed',
+            owner: 'engine',
+            cause: { code: 'asset-fetch-failed', owner: 'engine' },
+            current: {
+              revision: 0,
+              stale: true,
+              diagnostics: [{ code: 'catalog-gap', severity: 'blocking' }],
+            },
+            recoveryActions: ['run.retry', 'catalog.reconcile', 'run.get', 'run.wait'],
+          },
+        },
+      });
+
+      const retry = gateway.dispatch({
+        kind: 'catalog.reconcile',
+        requestId: 'catalog-reconcile-retry',
+        retryOfRequestId: 'catalog-reconcile-failed',
+      }, 'human');
+      expect(retry).toMatchObject({
+        ok: true,
+        result: { operationRun: { parentRunId: 'operation-run-1', attempt: 2 } },
+      });
+      await expect(gateway.waitOperationRun('catalog-reconcile-retry')).resolves.toMatchObject({
+        ok: true,
+        value: {
+          status: 'failed',
+          parentRunId: 'operation-run-1',
+          attempt: 2,
+          error: { cause: { code: 'asset-fetch-failed' } },
+        },
+      });
+      expect(source.metaWrites()).toBe(0);
+    } finally {
+      unregister();
+    }
+  });
+});
+
 // Part 1 — the created channel: creating ops return their new roots on
 // result.created (single spawn = [handle]; transaction = all sub-ops' roots
 // flattened in op order; non-creating ops = []).
@@ -522,12 +670,7 @@ describe('Gateway asset read surface', () => {
       [MATERIAL_GUID, canonicalRow],
     ]);
 
-    const rows: ReturnType<AssetRegistry['listCatalog']> = gateway.assetCatalog();
-    const canonicalReturn: SameType<
-      ReturnType<EditGateway['assetCatalog']>,
-      ReturnType<AssetRegistry['listCatalog']>
-    > = true;
-    expect(canonicalReturn).toBe(true);
+    const rows = gateway.assetCatalog();
     expect(rows).toEqual([{ guid: MATERIAL_GUID, ...canonicalRow }]);
     expect(rows).toEqual(registry.listCatalog());
   });

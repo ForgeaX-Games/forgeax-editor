@@ -4,7 +4,7 @@
 //   [feat-20260705-editor-runtime-gates-and-backend-seams T7/q3; ideal-clean-architecture.md §5]
 //   editor-core reaches its backend via the injected ApiClient (R2). Standalone
 //   has no studio server, so this process IS the backend — and it must be the
-//   REAL @forgeax/platform-io 后L1 router, not a hand-written second backend.
+//   REAL @forgeax/platform-io file router, not a hand-written second backend.
 //   It can't live inside vite.config.ts: vite 8 loads its config through Node's
 //   ESM loader, which can't resolve platform-io's extensionless `.ts` barrel
 //   re-exports (bun can — which is why cli/server mount the same router fine).
@@ -26,6 +26,8 @@
 //   env FORGEAX_GAME_API_PORT overrides the port (default 15281).
 
 import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@forgeax/platform-io';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
@@ -67,15 +69,51 @@ try {
 //     `--game` path returns 404+json, which the client doesn't latch as
 //     "no backend" the way it does the no-game SPA-html fallback) — harmless
 //     console noise, but now the layout actually persists into the game.
+const filesBackend = singleGameFileBackend(gameDir);
+const filesRouter = createFilesRouter(filesBackend);
 const PREFIXES = [
-  { prefix: '/api/files', router: createFilesRouter(singleGameFileBackend(gameDir)) },
-  { prefix: '/api/prefs', router: createPrefsRouter(gameDir) },
-];
+  { prefix: '/api/files', router: filesRouter, isFiles: true },
+  { prefix: '/api/prefs', router: createPrefsRouter(gameDir), isFiles: false },
+] as const;
+
+/** Strong file revision used by AssetIO's source-sidecar CAS contract. */
+async function fileRevision(clientPath: string): Promise<string | null> {
+  const abs = filesBackend.resolveRead(clientPath);
+  if (abs === null) return null;
+  try {
+    const bytes = await readFile(abs);
+    return `"sha256:${createHash('sha256').update(bytes).digest('hex')}"`;
+  } catch {
+    return null;
+  }
+}
+
+async function casResponse(
+  request: Request,
+  clientPath: string,
+): Promise<Response | undefined> {
+  if (request.method !== 'POST' || clientPath !== '/') return undefined;
+  let body: { path?: unknown; expectedRevision?: unknown };
+  try {
+    body = await request.clone().json() as { path?: unknown; expectedRevision?: unknown };
+  } catch {
+    return undefined;
+  }
+  if (typeof body.path !== 'string' || typeof body.expectedRevision !== 'string') return undefined;
+  const currentRevision = await fileRevision(body.path);
+  if (currentRevision === null || currentRevision !== body.expectedRevision) {
+    return new Response(JSON.stringify({ currentRevision }), {
+      status: 409,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  return undefined;
+}
 
 const server = Bun.serve({
   port,
   hostname: '127.0.0.1',
-  fetch(req) {
+  async fetch(req) {
     const url = new URL(req.url);
 
     // AC-09: zero-dependency endpoints (before PREFIXES matching, before hemostasis fallback).
@@ -92,7 +130,7 @@ const server = Bun.serve({
       });
     }
 
-    for (const { prefix, router } of PREFIXES) {
+    for (const { prefix, router, isFiles } of PREFIXES) {
       if (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)) {
         // Re-root `<prefix>/...` -> `/...` for the router's own route table.
         url.pathname = url.pathname.slice(prefix.length) || '/';
@@ -102,6 +140,40 @@ const server = Bun.serve({
         for (const key of ['path', 'root'] as const) {
           const value = url.searchParams.get(key);
           if (value) url.searchParams.set(key, singleGameClientPath(value));
+        }
+        if (isFiles) {
+          const clientPath = url.searchParams.get('path') ?? '';
+          const cas = await casResponse(req, url.pathname);
+          if (cas !== undefined) return cas;
+          let writePath: string | undefined;
+          if (req.method === 'POST' && url.pathname === '/') {
+            try {
+              const body = await req.clone().json() as { path?: unknown };
+              if (typeof body.path === 'string') writePath = body.path;
+            } catch {
+              writePath = undefined;
+            }
+          }
+          const response = await filesRouter.fetch(new Request(url.href, req));
+          if (url.pathname === '/raw' && req.method === 'GET' && url.searchParams.get('revision') === '1') {
+            const revision = await fileRevision(clientPath);
+            if (revision !== null) {
+              const headers = new Headers(response.headers);
+              headers.set('etag', revision);
+              return new Response(response.body, { status: response.status, headers });
+            }
+          }
+          if (req.method === 'POST' && url.pathname === '/' && response.ok) {
+            const revision = writePath === undefined ? null : await fileRevision(writePath);
+            if (revision !== null) {
+              const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+              return new Response(JSON.stringify({ ...payload, revision }), {
+                status: response.status,
+                headers: { 'content-type': 'application/json' },
+              });
+            }
+          }
+          return response;
         }
         return router.fetch(new Request(url.href, req));
       }

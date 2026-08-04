@@ -51,6 +51,13 @@ export interface ImportRunRecord {
   run: OperationRun;
 }
 
+/** Retry policy projection: malformed producer input cannot become valid by rerunning it. */
+export function isRetryableImportRun(run: OperationRun): boolean {
+  return run.status === 'failed'
+    && run.retryable
+    && run.error?.code !== 'IMPORT_COOK_FAILED';
+}
+
 export type ImportProgressCallback = (progress: ImportProgress) => void;
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {

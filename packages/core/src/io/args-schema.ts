@@ -55,6 +55,23 @@ function _validate(
     }
   }
 
+  if (schema.oneOf !== undefined) {
+    const matches = schema.oneOf.filter((variant) => {
+      const variantErrors: ValidationError[] = [];
+      _validate(variant, value, path, variantErrors);
+      return variantErrors.length === 0;
+    });
+    if (matches.length !== 1) {
+      errors.push({
+        path: path || '(root)',
+        message: matches.length === 0
+          ? 'value must match exactly one schema variant'
+          : 'value matches more than one schema variant',
+      });
+    }
+    return;
+  }
+
   // ── content-validation (2026-07-23 args-schema-pattern follow-up) ────────
   // string length / regex checks; runs BEFORE the array/object branches so a
   // failing string doesn't fall through to the container walkers.
@@ -141,6 +158,15 @@ function _validate(
         if (key in obj && obj[key] !== undefined) {
           const propPath = path ? `${path}.${key}` : key;
           _validate(propSchema, obj[key], propPath, errors);
+        }
+      }
+    }
+
+    if (schema.additionalProperties === false && schema.properties) {
+      for (const key of Object.keys(obj)) {
+        if (!(key in schema.properties)) {
+          const propPath = path ? `${path}.${key}` : key;
+          errors.push({ path: propPath, message: 'additional properties are not allowed' });
         }
       }
     }

@@ -40,9 +40,15 @@
 //     Cross-realm play telemetry remains in editor-core protocol.ts; this file is
 //     the in-process edit-runtime bridge set.
 
-import { gateway, panelBridge, broadcastAssetsChanged } from '@forgeax/editor-core';
+import { gateway, panelBridge, broadcastAssetsChanged, type EditorOp } from '@forgeax/editor-core';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { Time, Update, type World } from '@forgeax/engine-ecs';
 import { setFps } from '../fps-store';
+import {
+  createSourcePublicationObserver,
+  type SourcePublicationCurrent,
+  type SourcePublicationObservation,
+} from '../runtime/source-publication-observer';
 
 // ── FPS report ────────────────────────────────────────────────────────────────
 export function installFpsReport(
@@ -203,6 +209,127 @@ export function installAssetCatalogRefresh(): () => void {
       });
     }
   });
+}
+
+let sourcePublicationBridge: {
+  readonly observe: (input: { readonly op: EditorOp; readonly signal: AbortSignal }) => Promise<void>;
+} | undefined;
+
+function revisionText(revision: unknown): string | undefined {
+  if (typeof revision === 'string') return revision;
+  if (!revision || typeof revision !== 'object') return undefined;
+  const digest = (revision as { readonly digest?: unknown }).digest;
+  return typeof digest === 'string' ? digest : undefined;
+}
+
+function catalogCurrent(guid: string): SourcePublicationCurrent | false {
+  const snapshot = gateway.doc.registry?.catalogSnapshot?.();
+  if (snapshot?.stale === true) {
+    return false;
+  }
+  const entry = snapshot?.entries.find((candidate) => candidate.guid.toLowerCase() === guid.toLowerCase());
+  const revision = revisionText(entry?.revision);
+  if (entry === undefined || revision === undefined) return false;
+  return { identity: entry.guid, revision };
+}
+
+/** Prove the runtime consumer can freshly resolve the GUID before reporting current. */
+export async function readRuntimeConsumedCurrent(
+  registry: Pick<AssetRegistry, 'invalidate' | 'parseGuid' | 'loadByGuid' | 'catalogSnapshot'>,
+  guid: string,
+): Promise<SourcePublicationCurrent | false> {
+  registry.invalidate(guid);
+  let parsed: ReturnType<AssetRegistry['parseGuid']> | undefined;
+  try {
+    const parseResult = registry.parseGuid(guid);
+    parsed = (parseResult !== null && typeof parseResult === 'object' && 'ok' in parseResult
+      ? (parseResult as { readonly ok: boolean; readonly value?: unknown }).value
+      : parseResult) as ReturnType<AssetRegistry['parseGuid']> | undefined;
+    if (parsed === undefined) return false;
+  } catch {
+    return false;
+  }
+  const loaded = await registry.loadByGuid(parsed);
+  if (loaded !== null && typeof loaded === 'object' && 'ok' in loaded
+    && (loaded as { readonly ok: boolean }).ok !== true) return false;
+  const snapshot = registry.catalogSnapshot();
+  if (snapshot === undefined || snapshot.stale) return false;
+  const entry = snapshot.entries.find((candidate) => candidate.guid.toLowerCase() === guid.toLowerCase());
+  const revision = revisionText(entry?.revision);
+  return entry === undefined || revision === undefined ? false : { identity: entry.guid, revision };
+}
+
+/** Wait for the host-installed Catalog/preview/runtime publication barrier. */
+export async function observeSourcePublication(input: { readonly op: EditorOp; readonly signal: AbortSignal }): Promise<void> {
+  if (sourcePublicationBridge === undefined) {
+    const error = new Error('source publication observer is not installed after AssetRegistry binding') as Error & { code?: string };
+    error.code = 'asset-publish-observation-timeout';
+    throw error;
+  }
+  await sourcePublicationBridge.observe(input);
+}
+
+/** Observe source publication through the Gateway-owned run and registry seams.
+ * This is deliberately independent of assetsChanged: the existing broadcast
+ * cutover remains notification-only, while Catalog/preview/runtime observations
+ * are read-only projections over the live registry. */
+export function installSourcePublicationObserver(): () => void {
+  const registry = gateway.doc.registry;
+  const observer = createSourcePublicationObserver({
+    timeoutMs: 1500,
+    probes: {
+      catalog: async (target) => {
+        // The producer cook and the served pack-index are separate async
+        // boundaries. Refresh the live registry here so a successful barrier
+        // proves the newly published Catalog projection, while a stalled
+        // pack-index produces the structured observation-timeout path.
+        await registry?.refreshCatalog?.();
+        const snapshot = registry?.catalogSnapshot?.();
+        if (snapshot?.stale === true) return false;
+        const entry = snapshot?.entries.find((candidate) => candidate.guid.toLowerCase() === target.guid.toLowerCase());
+        const revision = revisionText(entry?.revision);
+        if (entry === undefined || revision === undefined) return false;
+        return { identity: entry.guid, revision };
+      },
+      preview: async (target) => registry === undefined ? false : readRuntimeConsumedCurrent(registry, target.guid),
+      runtime: async (target) => registry === undefined ? false : readRuntimeConsumedCurrent(registry, target.guid),
+      reconcile: async () => {
+        await registry?.refreshCatalog?.();
+        gateway.reconcileOperationRuns();
+      },
+    },
+  });
+
+  const bridge = {
+    observe: async ({ op, signal }: { readonly op: EditorOp; readonly signal: AbortSignal }): Promise<void> => {
+      const source = op as { readonly guid?: unknown; readonly expectedRevision?: unknown; readonly requestId?: unknown };
+      if (typeof source.guid !== 'string' || typeof source.expectedRevision !== 'string' || typeof source.requestId !== 'string') {
+        throw new Error('source publication observation requires guid, expectedRevision, and requestId');
+      }
+      const guid = source.guid;
+      const expectedRevision = source.expectedRevision;
+      const requestId = source.requestId;
+      await gateway.doc.registry?.refreshCatalog?.();
+      const consumed = catalogCurrent(guid);
+      const current = consumed === false ? { identity: guid, revision: expectedRevision } : consumed;
+      const target: SourcePublicationObservation = {
+        runId: requestId,
+        guid,
+        desiredRevision: current.revision,
+        current,
+        ...(consumed === false ? {} : { lastKnownGood: consumed }),
+      };
+      const result = await observer.observe(target, signal);
+      if (result.status === 'succeeded') return;
+      const error = new Error(result.error.code) as Error & { code?: string };
+      error.code = result.error.code;
+      throw error;
+    },
+  };
+  sourcePublicationBridge = bridge;
+  return () => {
+    if (sourcePublicationBridge === bridge) sourcePublicationBridge = undefined;
+  };
 }
 
 // ── Visibility-driven pause (single-realm) ──────────────────────────────────

@@ -21,19 +21,10 @@ const IDENTITY = [
   '-c', 'user.name=forgeax-game-host',
   '-c', 'user.email=game-host@forgeax.local',
   '-c', 'commit.gpgsign=false',
-  '-c', 'tag.gpgSign=false',
-];
-
-// Game repos are committed by the product, not by an interactive user. Never
-// run hooks inherited from system/global/local Git config: besides making the
-// API depend on one machine's dotfiles, an unrelated hook can mutate the game,
-// scan an enclosing workspace, prompt, or reject an otherwise valid version.
-const DISABLE_EXTERNAL_HOOKS = [
-  '-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
 ];
 
 function git(dir: string, args: string[]): string {
-  return execFileSync('git', [...DISABLE_EXTERNAL_HOOKS, ...args], {
+  return execFileSync('git', args, {
     cwd: dir,
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],

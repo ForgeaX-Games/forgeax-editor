@@ -17,6 +17,7 @@ import {
   type RunJournalResult,
   type RunProgress,
 } from '@forgeax/editor-product';
+import type { CommandError as CoreCommandError } from '../types';
 
 export type { OperationRun } from '@forgeax/editor-product';
 
@@ -55,6 +56,97 @@ export interface OperationRunAcceptOptions {
   readonly retryable: boolean;
   readonly parentRunId?: string;
   readonly attempt?: number;
+}
+
+export interface SourceTerminalState {
+  readonly phase: 'accepted' | 'cas-committed' | 'published';
+  readonly terminal: 'succeeded' | 'failed' | 'cancelled' | null;
+  readonly error?: CoreCommandError;
+}
+
+export type SourceTerminalEvent =
+  | { readonly type: 'cas-committed' }
+  | { readonly type: 'cancel-requested' }
+  | { readonly type: 'publication-succeeded' }
+  | { readonly type: 'publication-failed'; readonly error: CoreCommandError };
+
+/** Pure reducer for the publication boundary; terminal facts are idempotent. */
+export function reduceSourceTerminal(state: SourceTerminalState, event: SourceTerminalEvent): SourceTerminalState {
+  if (state.terminal !== null) return state;
+  if (event.type === 'cancel-requested') {
+    if (state.phase === 'cas-committed') {
+      return {
+        ...state,
+        error: {
+          code: 'asset-operation-cas-committed',
+          hint: 'The Meta CAS already committed; recover the same run instead of cancelling.',
+          retryable: true,
+          recoveryActions: ['run.wait', 'run.retry'],
+        },
+      };
+    }
+    return { ...state, terminal: 'cancelled' };
+  }
+  if (event.type === 'cas-committed') return { ...state, phase: 'cas-committed' };
+  if (event.type === 'publication-succeeded') return { phase: 'published', terminal: 'succeeded' };
+  return { ...state, terminal: 'failed', error: event.error };
+}
+
+export interface SourcePublicationTerminalInput {
+  readonly timeoutMs: number;
+  readonly waitForCatalog: () => Promise<unknown>;
+  readonly waitForPreview: () => Promise<unknown>;
+  readonly waitForRuntime: () => Promise<unknown>;
+}
+
+export type SourcePublicationTerminalResult =
+  | {
+    readonly ok: true;
+    readonly terminal: 'succeeded';
+    readonly observations: { readonly catalog: true; readonly preview: true; readonly runtime: true };
+  }
+  | {
+    readonly ok: false;
+    readonly terminal: 'failed';
+    readonly error: { readonly code: 'asset-publish-observation-timeout'; readonly retryable: true; readonly recoveryActions: readonly string[] };
+  };
+
+async function withObservationTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('asset-publish-observation-timeout')), timeoutMs);
+  });
+  try {
+    return await Promise.race([task, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** Resolve only after all three publication observers have confirmed the same run. */
+export async function awaitSourcePublicationTerminal(
+  input: SourcePublicationTerminalInput,
+): Promise<SourcePublicationTerminalResult> {
+  try {
+    await withObservationTimeout(input.waitForCatalog(), input.timeoutMs);
+    await withObservationTimeout(input.waitForPreview(), input.timeoutMs);
+    await withObservationTimeout(input.waitForRuntime(), input.timeoutMs);
+    return {
+      ok: true,
+      terminal: 'succeeded',
+      observations: { catalog: true, preview: true, runtime: true },
+    };
+  } catch {
+    return {
+      ok: false,
+      terminal: 'failed',
+      error: {
+        code: 'asset-publish-observation-timeout',
+        retryable: true,
+        recoveryActions: ['run.retry', 'catalog.reconcile'],
+      },
+    };
+  }
 }
 
 function failure(
@@ -226,15 +318,16 @@ export class OperationRunRegistry {
 
   fail(runId: string, error: CommandError): OperationRunReadResult {
     const run = this.journal.getRun(runId);
-    const normalizedError = createCommandError({
+    const normalizedError = createCommandError(({
       ...error,
+      runId,
       ...(error.owner === undefined ? { owner: 'editor-core' as const } : {}),
       ...(error.category === undefined ? { category: 'unknown' as const } : {}),
       ...(error.operationId === undefined && run !== undefined ? { operationId: run.operationId } : {}),
       ...(error.requestId === undefined && run?.requestId !== undefined ? { requestId: run.requestId } : {}),
       retryable: error.retryable ?? false,
       recoveryActions: error.recoveryActions ?? [],
-    });
+    }) as Parameters<typeof createCommandError>[0]) as CommandError & { readonly runId: string };
     const result = this.journal.append({ type: 'failed', runId, at: this.now(), error: normalizedError });
     if (result.ok) {
       this.cancelHandlers.delete(runId);

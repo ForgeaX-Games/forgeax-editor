@@ -15,6 +15,8 @@ export interface CBDataResult {
   allAssets: CBAsset[];
   loading: boolean;
   reload: () => void;
+  reconcile: () => void;
+  catalogStale: boolean;
   diskTree: DiskTreeNode | null;
   fetchDiskDirs: () => Promise<void>;
   workspaceSnapshot: AssetWorkspaceSnapshot;
@@ -105,7 +107,7 @@ export function useCBData(
   gameSlug: string,
   catalogRoots: readonly AssetBrowserCatalogRoot[],
 ): CBDataResult {
-  const { snapshot, loading, reload } = useAssetBrowserSnapshot(gameSlug, catalogRoots);
+  const { snapshot, loading, reload, reconcile } = useAssetBrowserSnapshot(gameSlug, catalogRoots);
   const workspaceSnapshot = useWorkspaceSnapshot(snapshot);
   const allAssets = useMemo<CBAsset[]>(
     // The read model's sourcePath is intentionally projected for UI navigation
@@ -127,6 +129,8 @@ export function useCBData(
     allAssets,
     loading,
     reload,
+    reconcile,
+    catalogStale: snapshot.catalogStale === true || snapshot.reconcileRequired === true,
     diskTree,
     fetchDiskDirs: async () => { await reload(); },
     workspaceSnapshot,

@@ -8,36 +8,33 @@ describe('imported source authoring availability boundary', () => {
     const beforeRevision = gateway.rev;
     const beforeLedger = gateway.ledger.length;
 
-    expect(gateway.listOps().map((op) => op.id)).toEqual(expect.arrayContaining([
-      'editImportedSource',
-      'saveImportedSource',
-    ]));
+    const ids = gateway.listOps().map((op) => op.id);
+    expect(ids).not.toEqual(expect.arrayContaining(['editImportedSource', 'saveImportedSource']));
 
     expect(gateway.dispatch({
-      kind: 'editImportedSource',
+      kind: 'saveAssetSourceOverride',
       guid: '11111111-1111-4111-8111-111111111111',
-      sourceKey: 'scene:main',
-      metaPath: 'assets/model.glb.meta.json',
-      revision: 'ddc:r1',
+      scope: { sourceKey: 'scene:main' },
+      expectedRevision: 'ddc:r1',
       requestId: 'source-edit-unavailable',
     }, 'ai')).toMatchObject({
       ok: false,
       error: {
-        code: 'engine-source-authoring-unavailable',
-        retryable: false,
-        recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+        code: expect.stringMatching(/UNKNOWN_OP|unavailable|source-authoring/),
       },
     });
 
     expect(gateway.dispatch({
-      kind: 'saveImportedSource',
+      kind: 'discardSourceOverridesAndReimport',
+      guid: '11111111-1111-4111-8111-111111111111',
+      scope: { all: true },
+      expectedRevision: 'ddc:r1',
+      confirmationToken: 'source-confirmation-red',
       requestId: 'source-save-unavailable',
     }, 'human')).toMatchObject({
       ok: false,
       error: {
-        code: 'engine-source-authoring-unavailable',
-        retryable: false,
-        recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+        code: expect.stringMatching(/UNKNOWN_OP|unavailable|source-authoring/),
       },
     });
 

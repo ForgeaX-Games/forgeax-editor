@@ -1,4 +1,4 @@
-export type SceneActivationMode = 'open-authored' | 'preview-imported' | 'edit-imported-source' | 'promote-imported';
+export type SceneActivationMode = 'open-authored' | 'preview-imported' | 'promote-imported';
 
 export interface SceneActivationUnavailable {
   readonly reason: string;
@@ -10,14 +10,12 @@ export interface SceneActivationDescriptor {
   readonly provenance: 'authored-pack' | 'imported-output';
   readonly revision: string;
   readonly sourceKey: string;
-  readonly metaPath?: string;
   readonly guid: string;
   readonly mode: SceneActivationMode;
   readonly authoredSceneId?: string;
   readonly canPreview: boolean;
   readonly canMount: boolean;
   readonly canEditInstance: boolean;
-  readonly canEditSource: boolean;
   readonly canPromote: boolean;
   readonly unavailable?: Readonly<Record<string, SceneActivationUnavailable>>;
 }
@@ -64,7 +62,6 @@ export function describeSceneActivation(
       canPreview: true,
       canMount: false,
       canEditInstance: true,
-      canEditSource: false,
       canPromote: false,
       unavailable: {
         mount: { reason: 'Authored scenes open as documents.', recoveryActions: ['switchSceneFile'] },
@@ -78,22 +75,16 @@ export function describeSceneActivation(
     provenance: 'imported-output',
     revision: asset.revision ?? revision,
     sourceKey: asset.sourceKey ?? asset.guid,
-    ...(asset.metaPath === undefined ? {} : { metaPath: asset.metaPath }),
     guid: asset.guid,
     mode: 'preview-imported',
     canPreview: true,
     canMount,
     canEditInstance: canMount,
-    // The current Engine producer capability has no stable source-authoring
-    // contract. Keep this producer-derived and fail closed; never infer support
-    // from a source extension, importer, path, or sidecar presence.
-    canEditSource: false,
     canPromote: true,
-    unavailable: {
-      editSource: {
-        reason: 'Engine source authoring is unavailable until a stable node identity and apply/fold contract is published.',
-        recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+    ...(canMount ? {} : {
+      unavailable: {
+        mount: { reason: 'This imported output is preview-only and cannot be mounted.', recoveryActions: ['previewImportedScene'] },
       },
-    },
+    }),
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { OperationRun } from '@forgeax/editor-core';
-import { importRunToResult } from './import-pipeline';
+import { importRunToResult, isRetryableImportRun } from './import-pipeline';
 
 function run(overrides: Partial<OperationRun>): OperationRun {
   return {
@@ -71,5 +71,28 @@ describe('import pipeline terminal projection', () => {
       error: 'cancelled at the read boundary',
       errorDetail: { retryable: false },
     });
+  });
+
+  it('never offers Retry for a producer cook failure even if a stale host marks the run retryable', () => {
+    expect(isRetryableImportRun(run({
+      status: 'failed',
+      retryable: true,
+      error: {
+        code: 'IMPORT_COOK_FAILED',
+        hint: 'malformed GLB',
+        retryable: true,
+        recoveryActions: [],
+      },
+    }))).toBe(false);
+    expect(isRetryableImportRun(run({
+      status: 'failed',
+      retryable: true,
+      error: {
+        code: 'IMPORT_NETWORK_ERROR',
+        hint: 'temporary transport failure',
+        retryable: true,
+        recoveryActions: ['operation.retry'],
+      },
+    }))).toBe(true);
   });
 });

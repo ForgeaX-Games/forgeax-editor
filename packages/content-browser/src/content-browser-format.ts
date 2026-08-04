@@ -7,6 +7,9 @@ import type { TFunction } from '@forgeax/editor-core/i18n';
 import {
   authoringCapabilityForAssetKind,
   type AssetAuthoringCapability,
+  type CatalogDiagnostic,
+  type CatalogLifecycle,
+  type CatalogProjection,
 } from '@forgeax/engine-types';
 import { resolveGamePath } from '@forgeax/editor-core';
 import type { CBAsset, CBFileFamily, CBViewItem } from './types';
@@ -51,6 +54,11 @@ export interface RegistryCatalogEntry {
   sourcePath?: string;
   sourceKey?: string;
   revision?: string;
+  metaRevision?: string;
+  lifecycle?: CatalogLifecycle;
+  projection?: CatalogProjection;
+  lastKnownGood?: CatalogProjection['lastKnownGood'];
+  diagnostics?: readonly CatalogDiagnostic[];
   metaPath?: string;
   authoring?: AssetAuthoringCapability;
 }
@@ -344,6 +352,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
       : sourcePath
         ? metaPathForSource(sourcePath)
         : e.packageUrl;
+  const lastKnownGood = e.lastKnownGood ?? e.projection?.lastKnownGood;
   return {
     type: 'asset',
     guid: e.guid,
@@ -354,6 +363,10 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
     ...(e.sourcePath ? { sourcePath: e.sourcePath } : {}),
     ...(e.sourceKey ? { sourceKey: e.sourceKey } : {}),
     ...(e.revision ? { revision: e.revision } : {}),
+    ...(e.metaRevision ? { metaRevision: e.metaRevision } : {}),
+    ...(e.lifecycle ? { lifecycle: e.lifecycle } : {}),
+    ...(lastKnownGood === undefined ? {} : { lastKnownGood }),
+    ...(e.diagnostics ? { diagnostics: e.diagnostics } : {}),
     ...(e.metaPath ? { metaPath: e.metaPath } : {}),
     packIndex: index,
     refs: e.refs ? [...e.refs] : [],

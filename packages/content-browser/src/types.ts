@@ -34,6 +34,14 @@ export interface CBAsset extends CBItem {
   sourceKey?: string;
   /** Effective imported output revision. */
   revision?: string;
+  /** Meta CAS revision; distinct from the effective Catalog payload revision. */
+  metaRevision?: string;
+  /** Producer-owned lifecycle projection used for source recovery UI. */
+  lifecycle?: import('@forgeax/engine-types').CatalogLifecycle;
+  /** Last-known-good runtime projection, when the producer retained one. */
+  lastKnownGood?: import('@forgeax/engine-types').CatalogProjection['lastKnownGood'];
+  /** Structured producer diagnostics; UI never parses diagnostic text. */
+  diagnostics?: readonly import('@forgeax/engine-types').CatalogDiagnostic[];
   /** Workspace-observed sidecar path used by explicit source editing. */
   metaPath?: string;
   /** Zero-based index within the pack's `assets[]` array. */

@@ -31,7 +31,19 @@ describe('subject capability availability', () => {
     const capabilities = kinds.map((kind) => getAssetSubjectCapability(subject(kind)));
     const operationNames = Object.keys(capabilities[0]!.operations).sort();
 
-    expect(operationNames).toEqual(['delete', 'duplicate', 'move', 'preflight', 'reimport', 'rename', 'replace', 'restore']);
+    expect(operationNames).toEqual([
+      'delete',
+      'discard-source-overrides-and-reimport',
+      'duplicate',
+      'move',
+      'preflight',
+      'reimport',
+      'reimport-asset',
+      'rename',
+      'replace',
+      'restore',
+      'save-asset-source-override',
+    ]);
     for (const capability of capabilities) {
       expect(Object.keys(capability.operations).sort()).toEqual(operationNames);
       expect(capability.subjectRef).toMatch(/^subject:/);

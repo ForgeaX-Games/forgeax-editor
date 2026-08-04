@@ -151,7 +151,6 @@ describe('assetIO facade — source sidecar file CAS', () => {
       calls.push(String(url));
       return new Response(JSON.stringify({ content: JSON.stringify(initialMeta()) }), { status: 200 });
     }) as typeof fetch;
-
     await expect(new AssetIOFacade().readExistingMeta(META_PATH)).resolves.toEqual(initialMeta());
     expect(calls).toEqual([`/api/files?path=${encodeURIComponent(META_PATH)}&optional=1`]);
   });

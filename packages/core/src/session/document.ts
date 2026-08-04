@@ -1184,7 +1184,8 @@ export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
     engine,
     // Asset write gate (north-star §2 axis symmetry): begin/undo of destroyAsset
     // reach pack IO through this, consistent with the gateway executor ctx. The
-    // shared `assetIO` singleton has no per-instance state (AC-D2).
+    // shared `assetIO` singleton is intentional (AC-D2): its per-path pack write
+    // chains serialize RMW writes across every consumer of the gate.
     assetIO,
     alias,
     // Non-span-pushing recursion reusing the SAME ctx (so the transaction alias

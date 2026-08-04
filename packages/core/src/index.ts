@@ -62,9 +62,12 @@ export type {
 } from './public/gateway';
 export type { GameplayIdentity } from './public/runtime';
 export type {
+  AssetBrowserAsset,
+  AssetBrowserCatalogRelation,
   AssetBrowserCatalogRoot,
   AssetBrowserRegistry,
   AssetBrowserSnapshot,
+  ActiveSceneSourceReference,
   AssetMutationOperation,
   AssetMutationRequest,
   AssetPreflightResult,
@@ -78,6 +81,8 @@ export type {
   ImportSubAsset,
   PackAsset,
   SceneActivationDescriptor,
+  SourceAuthoringRuntime,
+  SourceMutationPreflightInput,
 } from './public/assets';
 
 // ── Eval channel (dev-accessible AI eval) ──

@@ -40,6 +40,7 @@ import {
   type PersistenceGateway,
   type SaveDocToDiskResult,
 } from '../store/persistence/disk-io';
+import { assetIO } from '../io/asset-io-facade';
 import { createScenePersistenceContext, type ScenePersistenceContext } from '../store/scene-persistence';
 import type { EditSession } from '../types';
 
@@ -448,6 +449,65 @@ describe('M2-T1 structured save failures preserve bytes and dirty state', () => 
   });
 });
 
+// Material-persistence fix: the scene save commits through the asset gate's
+// per-path write chain, so a createMaterial read-modify-write on the SAME scene
+// pack can never interleave with the save's write. The floor is re-checked
+// INSIDE the chain: if a material write landed while the save waited (raising
+// the baseline), the pre-computed body is refused instead of clobbering it.
+describe('doSaveDocToDisk — pack write chain + in-chain floor re-check', () => {
+  it('waits behind an in-flight pack write, then refuses when the floor rose during the wait', async () => {
+    const fixture = saveFixture({ serialized: validPack({ inlineAssets: 1 }), ctx: { loadedInlineAssetFloor: 1 } });
+    const packPath = '/games/g1/scene.pack.json';
+
+    // Occupy the gate's chain for the scene pack (stands in for an in-flight
+    // createMaterial read-modify-write).
+    let release!: () => void;
+    const holder = assetIO.runExclusivePackWrite(packPath, () => new Promise<void>((resolve) => { release = resolve; }));
+
+    const savePromise = fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    // Let the save serialize + queue behind the held chain link.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The material write landed while the save waited: the baseline rose.
+    fixture.ctx.loadedInlineAssetFloor = 2;
+    release();
+
+    const result = await savePromise;
+    await holder;
+    expectSaveFailure(result, 'save-inline-assets-missing', {
+      expected: { minimum: 2 },
+      current: { actual: 1 },
+      subjectRef: { kind: 'scene', id: packPath },
+    });
+    expect(fixture.fetchCalls).toHaveLength(0);
+    expect(fixture.bytes.value).toBe('{"lastGood":true}\n');
+    expect(fixture.ctx.isDirty).toBe(true);
+  });
+
+  it('commits after the held write releases when the floor is still satisfied', async () => {
+    const fixture = saveFixture({ serialized: validPack({ inlineAssets: 1 }), ctx: { loadedInlineAssetFloor: 1 } });
+    const packPath = '/games/g1/scene.pack.json';
+
+    const order: string[] = [];
+    let release!: () => void;
+    const holder = assetIO.runExclusivePackWrite(packPath, async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      order.push('gated-write');
+    });
+
+    const savePromise = fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The save is queued behind the holder — nothing written yet.
+    expect(fixture.fetchCalls).toHaveLength(0);
+    release();
+
+    const result = await savePromise;
+    await holder;
+    expect(result).toMatchObject({ ok: true });
+    expect(order).toEqual(['gated-write']);
+    expect(fixture.fetchCalls).toHaveLength(1);
+  });
+});
+
 describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes guid only after load (AC-02)', () => {
   it('returns false for the default slug without touching the injected net', async () => {
     const net = makeNetSpies();
@@ -488,6 +548,26 @@ describe('loadSceneByGuid — headless world short-circuits (AC-02)', () => {
     const { deps } = makeDeps();
     const io = createDiskIo(deps);
     expect(await io.loadSceneByGuid('11111111-2222-5333-8444-555555555555')).toBe(false);
+  });
+
+  it('surfaces thrown asset-load failures with the scene GUID', async () => {
+    const warnings: string[] = [];
+    const previousWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+    try {
+      const { deps } = makeDeps({
+        gateway: makeFakeGateway({
+          world: {} as never,
+          registry: { loadByGuid: async () => { throw new Error('pack body unavailable'); } } as never,
+        }).gateway,
+      });
+      const guid = '11111111-2222-5333-8444-555555555555';
+      expect(await createDiskIo(deps).loadSceneByGuid(guid)).toBe(false);
+      expect(warnings.join('\n')).toContain(guid);
+      expect(warnings.join('\n')).toContain('pack body unavailable');
+    } finally {
+      console.warn = previousWarn;
+    }
   });
 });
 

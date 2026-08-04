@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { gateway, panelBridge } from '@forgeax/editor-core';
 import { useAssetBrowserSnapshot } from '../hooks/useAssetBrowserSnapshot';
 
-GlobalRegistrator.register();
+try { GlobalRegistrator.register(); } catch { /* another content-browser DOM test already registered it */ }
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const registry = {

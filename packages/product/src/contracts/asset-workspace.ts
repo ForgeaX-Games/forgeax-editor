@@ -34,6 +34,45 @@ export type AssetMutationOperation =
   | 'reimport'
   | 'restore';
 
+export type AssetSourceMutationIntent =
+  | 'save-asset-source-override'
+  | 'reimport-asset'
+  | 'discard-source-overrides-and-reimport';
+
+export type AssetSourceMutationScope =
+  | { readonly sourceKey: string; readonly all?: false }
+  | { readonly all: true; readonly sourceKey?: never };
+
+export interface AssetSourceMutationOutput {
+  readonly guid: string;
+  readonly sourceKey: string;
+  readonly referencerGuids: readonly string[];
+  readonly instanceGuids: readonly string[];
+  readonly promoted?: boolean;
+}
+
+export interface AssetSourceMutationSnapshot {
+  readonly metaRevision: string;
+  readonly outputs: readonly AssetSourceMutationOutput[];
+}
+
+/** Gateway-facing source mutation intent; the revision is the Meta CAS fact. */
+export interface AssetSourceMutationRequest {
+  readonly guid: string;
+  readonly scope: AssetSourceMutationScope;
+  readonly expectedRevision?: string;
+}
+
+/** Destructive discard confirmation bound to one explicit impact set. */
+export interface AssetSourceMutationConfirmation {
+  readonly required: boolean;
+  readonly token?: string;
+  readonly expiresAt?: number;
+  readonly scope: AssetSourceMutationScope;
+  readonly expectedRevision: string;
+  readonly affectedGuids: readonly string[];
+}
+
 export interface AssetMutationRequest {
   readonly operation: AssetMutationOperation;
   readonly subjectId: AssetSubjectId;

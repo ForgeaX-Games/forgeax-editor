@@ -603,4 +603,35 @@ describe('texture resolve branch (UE-style drop)', () => {
     // ...but its terminal failure does not die invisibly inside the OperationRun.
     expect(errs.some((e) => e.op === 'bindAssetRef' && e.hint.includes('M_Wood') && e.hint.includes('could not resolve catalogued asset GUID'))).toBe(true);
   });
+
+  it('(t13) authored-material readiness failure → bind ABORTED (no /__import 404 cascade)', async () => {
+    // The barrier rejects (catalog never exposes the fresh GUID — e.g. the pack
+    // write was refused or the watcher stalled). resolveTexture must NOT fall
+    // through to dispatchMaterialBind: a bind against a material that never
+    // persisted loadByGuid-misses and falls back to POST /__import/{guid},
+    // which 404s for internal materials — the exact gray-card cascade.
+    const spy = spyOnError();
+    registerPostAssetWriteCatalogSync(async () => { throw new Error('visibility deadline exceeded'); });
+    try {
+      const bus = makeBusStub();
+      const world = makeMaterialWorldStub();
+      const renderer = makeMaterialRendererStub({ [TEX_GUID]: rgbaTexture(4, 4, 255) });
+      installDragSpawnMeshResolver(bus as never, world as never, renderer as never);
+      const errorsBefore = recentAssetsErrors().length;
+      bus.fire(texSpawnCmd({ id: 7 }));
+      await flush();
+
+      expect(createMaterialCmd(bus.dispatched)).not.toBeNull(); // create attempted
+      expect(bindCmd(bus.dispatched)).toBeNull(); // bind ABORTED (fail-fast)
+      const aborts = spy.mock.calls.filter((c) =>
+        typeof c[0] === 'string' && (c[0] as string).includes('authored material never became ready'));
+      expect(aborts.length).toBe(1);
+      // resolveTexture does NOT double-toast: the createMaterial applier owns
+      // the staged assetsError broadcast; here (stub bus) nothing new is pushed.
+      const errs = recentAssetsErrors().slice(errorsBefore);
+      expect(errs.some((e) => e.op === 'createMaterial')).toBe(false);
+    } finally {
+      registerPostAssetWriteCatalogSync(null);
+    }
+  });
 });

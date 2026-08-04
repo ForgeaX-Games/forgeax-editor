@@ -12,7 +12,7 @@ import type { FieldShapeKind, World } from '@forgeax/engine-ecs';
 import { clearSelection, getSelection, getSelectionList } from '../store/selection';
 import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
 import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
-import type { OpDescriptor, PlanFn, ArgsSchema } from './catalog';
+import type { CatalogReconcileProvider, OpDescriptor, PlanFn, ArgsSchema } from './catalog';
 import { listOps as catalogListOps, registerBuiltinOp, registerDefinedOp, hasOp, getOp } from './catalog';
 import type { QuerySnapshotFn } from './query-snapshot';
 import { validate as validateArgs } from './args-schema';
@@ -58,7 +58,7 @@ import {
 // returns it as opaque-handle.raw) into its live payload — covering both
 // builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets, O(1).
 import { resolveAssetHandle, type AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { Asset, AssetGuid, Handle } from '@forgeax/engine-types';
+import type { Asset, AssetGuid, CatalogEntry, Handle } from '@forgeax/engine-types';
 // Component read surface: same registry the query snapshot uses to resolve
 // component names, projected here so an AI can discover component names +
 // field schemas BEFORE a spawn/setComponent (instead of learning them only by
@@ -82,6 +82,7 @@ import {
   type OperationRunReadResult,
   type OperationRunSnapshot,
 } from './operation-runs';
+import { acceptOperationRun } from './operation-run-dispatch';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -390,6 +391,9 @@ export class EditGateway {
   // Gateway only projects that single provider so AI and UI have one read door.
   private _sceneReadProvider: (() => SceneReadModel) | null = null;
   private _sceneAuthoringSessionProvider: (() => SceneAuthoringSessionReadModel) | null = null;
+  // The Catalog replica remains owned by the engine/read model. Gateway stores
+  // only this injected read callback, never a second catalog or revision map.
+  private _catalogReconcileProvider: CatalogReconcileProvider | null = null;
 
 
   // ── Play-attempt observability (solo round-8, friction #3) ────────────────
@@ -792,8 +796,16 @@ export class EditGateway {
     };
   }
 
+  registerCatalogReconcile(provider: CatalogReconcileProvider): () => void {
+    this._catalogReconcileProvider = provider;
+    return () => {
+      if (this._catalogReconcileProvider === provider) this._catalogReconcileProvider = null;
+    };
+  }
+
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
+    this.registerCatalogReconcile = this.registerCatalogReconcile.bind(this);
   }
 
   getOperationRun(requestId: string): OperationRun | undefined {
@@ -815,6 +827,11 @@ export class EditGateway {
   /** Subscribe to every Gateway-owned operation run fact, including terminal updates. */
   subscribeOperationRuns(listener: OperationRunListener): () => void {
     return this.operationRuns.subscribeAll(listener);
+  }
+
+  /** Read/reconcile the canonical run registry without creating another state map. */
+  reconcileOperationRuns(): { readonly ok: true; readonly value: OperationRunSnapshot } {
+    return { ok: true, value: this.operationRuns.snapshot() };
   }
 
   /** Read the retained Gateway-owned runs and their monotonic projection revision. */
@@ -1101,6 +1118,8 @@ export class EditGateway {
       return { ok: false, error: { code: 'scan-in-progress', hint: 'Asset scan is in progress; edits are blocked until catalog is ready.' } };
     }
 
+    if (requestedKind === 'catalog.reconcile') return this._dispatchCatalogReconcile(cmd, origin);
+
     // Three-tier routing: the DOMAIN of an op = which applier table registers its
     // kind (plan-strategy §2 D-1, structural, no bypassable label). Unregistered
     // kind → UNKNOWN_OP (Fail Fast; headless play/stop lands here — D-11).
@@ -1248,17 +1267,48 @@ export class EditGateway {
       }
     }
 
-    if (kind === 'editImportedSource' || kind === 'saveImportedSource') {
-      return {
-        ok: false,
-        error: {
-          code: 'engine-source-authoring-unavailable',
-          hint: 'The current Engine does not publish the stable node identity and apply/fold contract required for imported source authoring.',
-          current: { operation: kind, canEditSource: false },
-          retryable: false,
-          recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
-        },
-      };
+    if (kind === 'saveAssetSourceOverride') {
+      const sourceOverride = cmd as Extract<EditorOp, { kind: 'saveAssetSourceOverride' }>;
+      if (!('sourceKey' in sourceOverride.scope)) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_ARGS',
+            hint: 'saveAssetSourceOverride requires scope.sourceKey so one producer payload schema can be selected.',
+            recoveryActions: ['asset.preflight'],
+          },
+        };
+      }
+      const catalogFacts = this.assetCatalog() as readonly (ReturnType<AssetRegistry['listCatalog']>[number] & {
+        readonly sourceOverrideDescriptors?: CatalogEntry['sourceOverrideDescriptors'];
+      })[];
+      const payloadSchema = catalogFacts
+        .filter((asset) => asset.guid.toLowerCase() === sourceOverride.guid.toLowerCase())
+        .flatMap((asset) => asset.sourceOverrideDescriptors ?? [])
+        .find((entry) => entry.sourceKey === sourceOverride.scope.sourceKey)
+        ?.payloadSchema;
+      if (payloadSchema === null || typeof payloadSchema !== 'object' || Array.isArray(payloadSchema)) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_ARGS',
+            hint: `No producer payload schema is published for sourceKey "${sourceOverride.scope.sourceKey}".`,
+            recoveryActions: ['asset.preflight', 'catalog.reconcile'],
+          },
+        };
+      }
+      const payloadValidation = validateArgs(payloadSchema as ArgsSchema, sourceOverride.override);
+      if (!payloadValidation.ok) {
+        const first = payloadValidation.errors[0];
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_ARGS',
+            hint: `invalid producer override for "${sourceOverride.scope.sourceKey}": ${first ? `${first.path}: ${first.message}` : 'schema validation failed'}`,
+            recoveryActions: ['asset.preflight'],
+          },
+        };
+      }
     }
 
     if (kind === 'promoteImportedScene') {
@@ -1337,6 +1387,7 @@ export class EditGateway {
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
     const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame'
+      || kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport'
       ? (cmd as { readonly requestId?: unknown }).requestId
       : undefined;
     const isRequestCorrelatedSave = kind === 'saveDocToDisk' && typeof requestId === 'string';
@@ -1349,6 +1400,7 @@ export class EditGateway {
     const isRequestCorrelatedDefaultScene = kind === 'setDefaultScene' && typeof requestId === 'string';
     const isRequestCorrelatedSceneDelete = kind === 'deleteScene' && typeof requestId === 'string';
     const isRequestCorrelatedCapture = kind === 'captureFrame' && typeof requestId === 'string';
+    const isRequestCorrelatedSource = (kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport') && typeof requestId === 'string';
     let acceptedRun: OperationRunReadResult | null = null;
     if (isRequestCorrelatedSave) {
       const saveRequestId = requestId as string;
@@ -1529,6 +1581,21 @@ export class EditGateway {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
       }
       acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedSource) {
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const accepted = acceptOperationRun({
+        registry: this.operationRuns,
+        command: cmd,
+        origin,
+        operationId: kind,
+        requestId: requestId as string,
+        cancellable: kind !== 'previewAssetSourceMutation' && kind !== 'asset.preflight',
+        retryable: true,
+        ...(typeof retryOfRequestId === 'string' ? { retryOfRequestId } : {}),
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
+      acceptedRun = { ok: true, value: accepted.run };
     }
 
     const progressReporter = acceptedRun === null
@@ -1560,7 +1627,7 @@ export class EditGateway {
     if (acceptedRun !== null) {
       if (sResult.completion !== undefined) {
         this.operationRuns.bindCompletion(acceptedRun.value.runId, sResult.completion, (run) => {
-          if (run.status !== 'succeeded' || this.transientMode) return;
+          if (run.status !== 'succeeded' || this.transientMode || domain !== 'session') return;
           this.ledger.push(cmd);
           this.origins.push(origin);
           this.emitDiagnostics();
@@ -1590,6 +1657,72 @@ export class EditGateway {
       return { ok: true };
     })();
     return result.ok ? result : { ok: false, error: normalizeGatewayError(result.error, cmd) };
+  }
+
+  private _dispatchCatalogReconcile(cmd: EditorOp, origin: CommandOrigin): DispatchResult {
+    const descriptor = getOp('catalog.reconcile');
+    if (descriptor?.argsSchema !== null && descriptor?.argsSchema !== undefined) {
+      const validation = validateArgs(descriptor.argsSchema, cmd);
+      if (!validation.ok) {
+        const first = validation.errors[0];
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_ARGS',
+            hint: `invalid args for "catalog.reconcile": ${first ? `${first.path}: ${first.message}` : 'schema validation failed'}`,
+          },
+        };
+      }
+    }
+    const provider = this._catalogReconcileProvider;
+    if (provider === null) {
+      return {
+        ok: false,
+        error: {
+          code: 'UNKNOWN_OP',
+          hint: 'catalog.reconcile has no existing Catalog replica provider; register the read-only reconcile seam before dispatch.',
+          recoveryActions: ['catalog.reconcile'],
+        },
+      };
+    }
+
+    const requestId = requestIdOf(cmd);
+    if (requestId === undefined) {
+      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'catalog.reconcile requires requestId' } };
+    }
+    const actor = origin === 'ai'
+      ? { id: 'ai', kind: 'ai' as const }
+      : { id: 'human', kind: 'human' as const };
+    const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+    const retrySource = typeof retryOfRequestId === 'string'
+      ? this.operationRuns.getRunResult(retryOfRequestId)
+      : null;
+    if (retrySource !== null && !retrySource.ok) return { ok: false, error: retrySource.error as unknown as CommandError };
+    if (retrySource !== null && (retrySource.value.status !== 'failed' || !retrySource.value.retryable)) {
+      return {
+        ok: false,
+        error: {
+          code: 'operation-not-retryable',
+          hint: 'Only a failed catalog reconciliation run can be retried.',
+          current: retrySource.value,
+        },
+      };
+    }
+    const accepted = this.operationRuns.acceptOperation(requestId, { ...cmd }, actor, {
+      operationId: 'catalog.reconcile',
+      cancellable: false,
+      retryable: true,
+      ...(retrySource === null ? {} : {
+        parentRunId: retrySource.value.runId,
+        attempt: retrySource.value.attempt + 1,
+      }),
+    });
+    if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+    if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
+    const running = this.operationRuns.markRunning(accepted.run.runId);
+    if (!running.ok) return { ok: false, error: running.error as unknown as CommandError };
+    this.operationRuns.bindCompletion(accepted.run.runId, Promise.resolve().then(() => provider()));
+    return { ok: true, result: { created: [], operationRun: running.value } };
   }
 
   // ── Lifecycle methods (plan-strategy §2 D-2) ────────────────────────────
@@ -2069,7 +2202,16 @@ export class EditGateway {
   assetCatalog(): ReturnType<AssetRegistry['listCatalog']> {
     const registry = this.doc.registry;
     if (registry === undefined) return [];
-    return registry.listCatalog();
+    const listed = registry.listCatalog();
+    const snapshot = registry.catalogSnapshot?.();
+    if (snapshot === undefined) return listed;
+    const factsByGuid = new Map(snapshot.entries.map((entry) => [entry.guid.toLowerCase(), entry]));
+    const rows = listed.map((row) => ({ ...factsByGuid.get(row.guid.toLowerCase()), ...row }));
+    const listedGuids = new Set(listed.map((row) => row.guid.toLowerCase()));
+    for (const entry of snapshot.entries) {
+      if (!listedGuids.has(entry.guid.toLowerCase())) rows.push(entry);
+    }
+    return rows as ReturnType<AssetRegistry['listCatalog']>;
   }
 
   /**

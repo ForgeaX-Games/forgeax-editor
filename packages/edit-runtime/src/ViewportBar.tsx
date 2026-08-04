@@ -111,10 +111,8 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
         <button type="button" className="vp-btn" data-testid="vp-play"
           onClick={onPlay} title="Play (▶)">▶</button>
       )}
-      {isPlay && (
-        <button type="button" className={`vp-btn${isGame ? ' on' : ''}`} data-testid="vp-display"
-          onClick={onToggleDisplay} title={isGame ? 'Show scene view (Shift+G)' : 'Game view (Shift+G)'}>G</button>
-      )}
+      <button type="button" className={`vp-btn${isGame ? ' on' : ''}`} data-testid="vp-display"
+        onClick={onToggleDisplay} title={isGame ? 'Show scene view (G / Shift+G)' : 'Game view (G / Shift+G)'}>G</button>
       <span className="vp-sep" />
       {/* ── FPS counter (w25): live from frame-loop accumulator ── */}
       <span className="vp-fps" data-testid="vp-fps">{fps} FPS</span>
@@ -134,6 +132,16 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
         onClick={() => gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' })} title="Rotate (E)">⟳</button>
       <button type="button" className={`vp-btn${gizmoMode === 'scale' ? ' on' : ''}`}
         onClick={() => gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' })} title="Scale (R)">⤢</button>
+      <span className="vp-sep" />
+      <button type="button" className="vp-btn" data-testid="vp-camera-projection"
+        onClick={() => gateway.dispatch({ kind: 'cameraToggleProjection' }, 'human')}
+        title="Toggle Perspective / Orthographic (V)">V</button>
+      <button type="button" className="vp-btn" data-testid="vp-camera-fov-in"
+        onClick={() => gateway.dispatch({ kind: 'cameraAdjustFov', delta: 1 }, 'human')}
+        title="Zoom view in (Z)">Z</button>
+      <button type="button" className="vp-btn" data-testid="vp-camera-fov-out"
+        onClick={() => gateway.dispatch({ kind: 'cameraAdjustFov', delta: -1 }, 'human')}
+        title="Zoom view out (C)">C</button>
       <span className="vp-sep" />
       <DirtyIndicator />
       <span className="vp-sep" />

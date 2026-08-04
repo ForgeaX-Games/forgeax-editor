@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useHost } from '@forgeax/interface/core/app-shell';
 import { useTranslation } from '@forgeax/editor-core/i18n';
@@ -33,13 +33,25 @@ import { CBGrid } from './CBGrid';
 import { CBPreviewPanel } from './CBPreviewPanel';
 import { CBSourceTree } from './CBSourceTree';
 import { iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
-import { importFiles, retryImportRun, type ImportProgress, type ImportRunRecord } from './import-pipeline';
+import { importFiles, isRetryableImportRun, retryImportRun, type ImportProgress, type ImportRunRecord } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { resolveFileActivateAction } from './folder-view';
 import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
-import { sceneActivationToOp, scenePromoteToOp, sceneSourceEditToOp } from './scene-activation-route';
+import { SourceMutationDialog } from './source-authoring/SourceMutationDialog';
+import {
+  createSourceMutationViewModel,
+  findRetryableSourceMutationRun,
+  findSourceMutationPreflightRun,
+  findSourceMutationRun,
+  resolveSourceMutationExpectedRevision,
+  resolveSourceMutationLifecycle,
+  sourceMutationOperationFromRun,
+  sourceMutationPreflightFromRun,
+  type SourceMutationAction,
+} from './source-authoring/source-mutation-view-model';
+import { sceneActivationToOp, scenePromoteToOp } from './scene-activation-route';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
 import {
   viewItemKey,
@@ -90,13 +102,18 @@ export function ContentBrowser() {
   // Subscribe to the existing scene-list signal so the read model is rebuilt
   // from the real slug instead of remaining on the initial `default` guard.
   const sceneModel = useSceneReadModel();
+  const operationRunRevision = useSyncExternalStore(
+    (listener) => gateway.subscribeOperationRuns(() => listener()),
+    () => gateway.operationRunSnapshot().revision,
+    () => gateway.operationRunSnapshot().revision,
+  );
   // The standalone host already has the authoritative slug at compile time;
   // use it during the async host-session gap, then let the scene-list signal
   // take over for scene switches and embedded hosts.
   const gameSlug = sceneModel.gameId === null && typeof __FORGEAX_GAME_SLUG__ === 'string'
     ? __FORGEAX_GAME_SLUG__
     : (sceneModel.gameId ?? 'default');
-  const { allAssets: catalogAssets, loading, reload, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
+  const { allAssets: catalogAssets, loading, reload, catalogStale, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
   const allAssets = useMemo(() => catalogAssets.map((asset) => {
     const activation = describeSceneActivation({
       guid: asset.guid,
@@ -118,11 +135,22 @@ export function ContentBrowser() {
     && currentImportRun.cancellable
     && currentImportRun.progress.stage === 'cooking'
     && currentImportRun.progress.fraction < 1;
-  const retryableImportRuns = importProgress?.runs.filter(record => record.run.status === 'failed' && record.run.retryable) ?? [];
+  const retryableImportRuns = importProgress?.runs.filter((record) => isRetryableImportRun(record.run)) ?? [];
   const [dragOver, setDragOver] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
   const [previewItem, setPreviewItem] = useState<CBViewItem | null>(null);
+  const [sourceMutationAsset, setSourceMutationAsset] = useState<CBAsset | null>(null);
+  useEffect(() => {
+    if (sourceMutationAsset?.sourceKey === undefined) return;
+    const result = gateway.dispatch({
+      kind: 'asset.preflight',
+      guid: sourceMutationAsset.guid,
+      scope: { sourceKey: sourceMutationAsset.sourceKey },
+      requestId: crypto.randomUUID(),
+    }, 'human');
+    if (!result.ok) console.warn('[content-browser] source preflight rejected', result.error);
+  }, [sourceMutationAsset]);
   // Selection/preview for files & folders is anchored on the disk PATH
   // (viewItemKey), which is exactly what a rename mutates — so after the catalog
   // rebuilds, the old key matches nothing and the highlight drops. A rename queues
@@ -422,6 +450,7 @@ export function ContentBrowser() {
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
+    onSourceMutation: setSourceMutationAsset,
     onDelete: requestDelete,
     onDeleteFolder: (folder: { path: string; name: string }) =>
       setPathDeleteTarget({ path: folder.path, name: folder.name, kind: 'dir' }),
@@ -472,7 +501,74 @@ export function ContentBrowser() {
         gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
       })();
     },
-  }), [host, reload, requestDelete, t, workspaceSnapshot]);
+  }), [host, reload, requestDelete, setSourceMutationAsset, t, workspaceSnapshot]);
+
+  const sourceMutationViewModel = useMemo(() => {
+    if (!sourceMutationAsset?.sourceKey) return null;
+    const runs = gateway.operationRunSnapshot().runs;
+    const preflightRun = findSourceMutationPreflightRun(runs, sourceMutationAsset.guid, sourceMutationAsset.sourceKey);
+    const preflight = preflightRun === undefined ? undefined : sourceMutationPreflightFromRun(preflightRun);
+    if (preflight === undefined) return null;
+    const run = findSourceMutationRun(runs, sourceMutationAsset.guid, sourceMutationAsset.sourceKey);
+    const expectedRevision = resolveSourceMutationExpectedRevision(
+      sourceMutationAsset.metaRevision,
+      { expectedRevision: preflight.source.expectedRevision },
+    );
+    if (expectedRevision === undefined) return null;
+    const lifecycle = resolveSourceMutationLifecycle({
+      catalogLifecycle: sourceMutationAsset.lifecycle,
+      operationStatus: run?.status,
+      hasLastKnownGood: sourceMutationAsset.lastKnownGood !== undefined,
+    });
+    const operation = run === undefined ? undefined : sourceMutationOperationFromRun(run);
+    return createSourceMutationViewModel({
+      guid: sourceMutationAsset.guid,
+      sourceKey: sourceMutationAsset.sourceKey,
+      lifecycle,
+      ...(sourceMutationAsset.lastKnownGood?.packageUrl === undefined ? {} : { lastKnownGood: sourceMutationAsset.lastKnownGood.packageUrl }),
+      impact: { ...preflight.impact, expectedRevision },
+      ...(operation === undefined ? {} : { operation }),
+      ...(preflight.confirmation === undefined ? {} : { confirmation: preflight.confirmation }),
+      now: Date.now(),
+    });
+  }, [operationRunRevision, sourceMutationAsset]);
+
+  const dispatchCatalogReconcile = useCallback(() => {
+    const result = gateway.dispatch({
+      kind: 'catalog.reconcile',
+      requestId: crypto.randomUUID(),
+    }, 'human');
+    if (!result.ok) console.warn('[content-browser] catalog reconcile rejected', result.error);
+  }, []);
+
+  const handleSourceMutationAction = useCallback((action: SourceMutationAction) => {
+    const asset = sourceMutationAsset;
+    const viewModel = sourceMutationViewModel;
+    const sourceKey = asset?.sourceKey;
+    if (!asset || !sourceKey || !viewModel) return;
+    if (action === 'reimport') {
+      dispatchReimportAsset({ ...asset, revision: viewModel.impact.expectedRevision });
+    } else if (action === 'discard' && viewModel.confirmationToken) {
+      const result = gateway.dispatch({
+        kind: 'discardSourceOverridesAndReimport',
+        guid: asset.guid,
+        scope: { sourceKey: asset.sourceKey! },
+        expectedRevision: viewModel.impact.expectedRevision,
+        confirmationToken: viewModel.confirmationToken,
+        requestId: crypto.randomUUID(),
+      }, 'human');
+      if (!result.ok) console.warn('[content-browser] discard source overrides rejected', result.error);
+    } else if (action === 'retry') {
+      const run = findRetryableSourceMutationRun(
+        gateway.operationRunSnapshot().runs,
+        asset.guid,
+        sourceKey,
+      );
+      if (run) gateway.retryOperationRun(run.requestId ?? run.runId, crypto.randomUUID(), 'human');
+    } else if (action === 'reconcile') {
+      dispatchCatalogReconcile();
+    }
+  }, [dispatchCatalogReconcile, sourceMutationAsset, sourceMutationViewModel]);
 
   const createFolderInCurrentPath = useCallback(() => {
     void (async () => {
@@ -625,13 +721,6 @@ export function ContentBrowser() {
     const fullPath = resolveCopyPath(relPath);
     const importedActions = item.activation?.provenance === 'imported-output'
       ? [{
-          label: 'Edit Imported Source',
-          icon: 'pencil',
-          disabled: !item.activation.canEditSource,
-          onClick: item.activation.canEditSource
-            ? () => gateway.dispatch(sceneSourceEditToOp(item.activation!))
-            : undefined,
-        }, {
           label: 'Promote to Editable Scene',
           icon: 'copy-plus',
           disabled: !item.activation.canPromote,
@@ -738,7 +827,7 @@ export function ContentBrowser() {
           : item.id === 'render-preview' || item.id === 'audition'
           ? () => setPreviewItem(file)
           : item.id === 'reimport' && firstAsset
-            ? () => dispatchReimportAsset(firstAsset)
+            ? () => setSourceMutationAsset(firstAsset)
           : item.id === 'set-default-scene' && sceneAsset
             ? () => {
               const result = gateway.dispatch({
@@ -1028,6 +1117,12 @@ export function ContentBrowser() {
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
             <CBNavigationBar nav={nav} gameSlug={gameSlug} />
+            {catalogStale && (
+              <div className="cb-catalog-stale" data-testid="cb-catalog-stale" role="status">
+                <span>Catalog is stale. Browser context is preserved until reconciliation.</span>
+                <Button size="sm" variant="subtle" onClick={dispatchCatalogReconcile}>Reconcile Catalog</Button>
+              </div>
+            )}
             {loading && viewItems.length === 0 ? (
               <div style={{ padding: 16, opacity: 0.5 }}>{t('editor.contentBrowser.empty.loading')}</div>
             ) : viewItems.length === 0 ? (
@@ -1138,6 +1233,16 @@ export function ContentBrowser() {
         <div className="cb-drag-overlay">
           <div className="cb-drag-overlay-label">{t('editor.contentBrowser.empty.dropFiles')}</div>
         </div>
+      )}
+
+      {sourceMutationViewModel && createPortal(
+        <div className="cb-dialog-overlay" data-testid="cb-source-mutation-overlay" onClick={() => setSourceMutationAsset(null)}>
+          <div className="cb-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <SourceMutationDialog viewModel={sourceMutationViewModel} onAction={handleSourceMutationAction} />
+            <Button size="sm" variant="subtle" onClick={() => setSourceMutationAsset(null)}>Close</Button>
+          </div>
+        </div>,
+        document.body,
       )}
 
       {deleteTargets && createPortal(

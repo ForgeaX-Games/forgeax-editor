@@ -316,3 +316,25 @@ export function registerSessionApplier(
     _unregisterApplier(kind, applier);
   };
 }
+
+/** Register a read-only/transient downstream capability with symmetric cleanup. */
+export function registerTransientApplier(
+  kind: string,
+  applier: SessionApplier,
+  meta?: SessionApplierMeta,
+): () => void {
+  const existing = domainOf(kind);
+  if (existing !== null) {
+    throw new OpRegistrationError(
+      'OP_ID_CONFLICT',
+      `op "${kind}" already registered (domain: ${existing})`,
+    );
+  }
+  registerApplier('transient', kind, applier, meta);
+  let live = true;
+  return () => {
+    if (!live) return;
+    live = false;
+    _unregisterApplier(kind, applier);
+  };
+}

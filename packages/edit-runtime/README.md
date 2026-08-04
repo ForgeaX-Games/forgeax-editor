@@ -41,6 +41,20 @@ use the same operation and the same persistence-owned `gateway.hasPendingDiskSav
 read. `save-then-play` waits for the canonical Gateway save run before loading the
 fresh SceneAsset.
 
+## Source publication and Play barrier
+
+Edit Runtime observes imported source publication through the Gateway operation run and Catalog
+projection. The shortest path is discover → preview → submit → wait → reconcile/retry; the runtime
+does not become a second Meta, DDC, Catalog, or run owner. A failed cook preserves the Catalog's
+last-known-good projection, and a publication timeout is recoverable only after reading the existing
+run and reconciling the Catalog.
+
+After a successful current projection is observed, a fresh Edit reopen and Play must expose the same
+`guid`, `sourceKey`, and revision. Instance-only overrides and Promote remain separate authored
+semantics; source reimport must not promote or rewrite them. All source errors are structured
+(`code`, `phase`, `expected`, `actual`, `retryable`, `recoveryActions`) and are not decoded from UI
+messages.
+
 ## troubleshooting
 
 | 症状 | 原因 | 解决 |

@@ -33,7 +33,7 @@
 // mesh) re-patches from cache without a second loadByGuid.
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { EditGateway, awaitPostAssetWriteCatalogSync, broadcastAssetsError, type EditorOp, type EngineFacade } from '@forgeax/editor-core';
+import { EditGateway, awaitAuthoredMaterialReady, broadcastAssetsError, type EditorOp, type EngineFacade } from '@forgeax/editor-core';
 
 /** Loose renderer handle — the renderer type evolves independently, so we
  *  mirror host-boot's `as never` discipline with a narrow structural shape. */
@@ -280,14 +280,16 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
  * document op (undoable, writes to pack); `bindAssetRef` is a session op
  * (loadByGuid → allocSharedRef → setComponent).
  *
- * VISIBILITY BARRIER: createMaterial's applier returns ok synchronously while
+ * COMPLETION CONTRACT: createMaterial's applier returns ok synchronously while
  * its pack write lands fire-and-forget, and the served pack-index only
  * reflects the new GUID after the vite watcher rebuild (~150 ms). Dispatching
  * bindAssetRef immediately raced that rebuild — loadByGuid missed,
  * ASSET_NOT_FOUND aborted the bind, and the entity kept the engine's default
- * gray material FOREVER (no retry). Await the host-owned catalog barrier
- * (awaitPostAssetWriteCatalogSync) between the two dispatches; in unit env
- * (no hook registered) it resolves immediately.
+ * gray material FOREVER (no retry). Await the single authored-material
+ * completion (awaitAuthoredMaterialReady: write landed AND catalog barrier
+ * observed the GUID) between the two dispatches; a failed readiness ABORTS the
+ * bind (the applier already broadcast the staged error) instead of attempting
+ * a bind whose loadByGuid would fall back to a guaranteed-404 `/__import`.
  *
  * FAILURE DISCIPLINE (Fail Fast + user-visible): a texture that cannot be
  * loaded at all aborts the whole resolve BEFORE any material is authored;
@@ -373,13 +375,15 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
     });
     return;
   }
-  try {
-    await awaitPostAssetWriteCatalogSync(materialGuid);
-  } catch (e) {
-    // Barrier failed (visibility deadline / load miss): attempt the bind anyway —
-    // a late pack-index row can still make it succeed, and the alternative is a
-    // guaranteed default-gray entity.
-    console.warn('[drag-spawn-resolve:texture] catalog visibility barrier failed; attempting bind anyway', e);
+  const ready = await awaitAuthoredMaterialReady(materialGuid);
+  if (!ready.ok) {
+    // The applier already broadcast the staged assetsError (write or catalog);
+    // do NOT double-toast here. Aborting the bind is the Fail Fast half: a bind
+    // against a material that never reached the pack would loadByGuid → miss →
+    // `/__import/{materialGuid}` 404 (that route serves external import sources
+    // only) and leave the permanent gray card this contract exists to prevent.
+    console.error('[drag-spawn-resolve:texture] authored material never became ready; bind aborted', { materialGuid, materialName, stage: ready.stage, hint: ready.hint });
+    return;
   }
   dispatchMaterialBind(bus, entity, materialGuid, materialName);
 }

@@ -98,6 +98,103 @@
     "title": "Apply Visual Quality Preset"
   },
   {
+    "id": "asset.preflight",
+    "domain": "transient",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable imported output GUID used to read the owning Meta source fact."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "sourceKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One producer-issued source key."
+            },
+            "all": {
+              "type": "boolean",
+              "description": "Explicitly select every source output; omission is not equivalent to all."
+            }
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sourceKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "One producer-issued source key."
+                }
+              },
+              "required": [
+                "sourceKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "all": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ],
+                  "description": "Explicitly select every source output."
+                }
+              },
+              "required": [
+                "all"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "guid",
+        "scope",
+        "requestId"
+      ]
+    },
+    "title": "Read Asset Source Preflight",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
     "id": "assetCatalogRefreshed",
     "domain": "session",
     "source": "builtin",
@@ -276,6 +373,52 @@
     }
   },
   {
+    "id": "cameraAdjustFov",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "number",
+          "description": "Positive zooms in; negative zooms out."
+        }
+      },
+      "required": [
+        "delta"
+      ]
+    },
+    "title": "Adjust camera view scale"
+  },
+  {
+    "id": "cameraBookmark",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "save",
+            "recall",
+            "clear"
+          ]
+        },
+        "slot": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 9
+        }
+      },
+      "required": [
+        "action",
+        "slot"
+      ]
+    },
+    "title": "Camera bookmark"
+  },
+  {
     "id": "cameraFly",
     "domain": "session",
     "source": "builtin",
@@ -368,6 +511,27 @@
     "title": "Orbit camera"
   },
   {
+    "id": "cameraSetProjection",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "projection": {
+          "type": "string",
+          "enum": [
+            "perspective",
+            "orthographic"
+          ]
+        }
+      },
+      "required": [
+        "projection"
+      ]
+    },
+    "title": "Set camera projection"
+  },
+  {
     "id": "cameraTeleport",
     "domain": "session",
     "source": "builtin",
@@ -395,6 +559,31 @@
       ]
     },
     "title": "Teleport camera to position"
+  },
+  {
+    "id": "cameraToggleProjection",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": null,
+    "title": "Toggle camera projection"
+  },
+  {
+    "id": "cameraZoom",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "number",
+          "description": "Positive zooms in; negative zooms out."
+        }
+      },
+      "required": [
+        "delta"
+      ]
+    },
+    "title": "Zoom camera"
   },
   {
     "id": "captureFrame",
@@ -437,6 +626,56 @@
       "terminalStatuses": [
         "succeeded",
         "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
+    "id": "catalog.reconcile",
+    "domain": "transient",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "title": "Reconcile Asset Catalog",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
       ],
       "read": {
         "get": "getOperationRun",
@@ -777,6 +1016,120 @@
     "title": "Destroy Entity"
   },
   {
+    "id": "discardSourceOverridesAndReimport",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable imported output GUID; never infer identity from a path or output index."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "sourceKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One producer-issued source key."
+            },
+            "all": {
+              "type": "boolean",
+              "description": "Explicitly select every source output; omission is not equivalent to all."
+            }
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sourceKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "One producer-issued source key."
+                }
+              },
+              "required": [
+                "sourceKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "all": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ],
+                  "description": "Explicitly select every source output."
+                }
+              },
+              "required": [
+                "all"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "expectedRevision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Meta revision observed by preflight; retry after a revision conflict."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "confirmationToken": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Discard confirmation returned by source preflight and bound to its impact set."
+        }
+      },
+      "required": [
+        "guid",
+        "scope",
+        "expectedRevision",
+        "requestId"
+      ]
+    },
+    "title": "Discard Source Overrides and Reimport",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": true
+    }
+  },
+  {
     "id": "duplicateAsset",
     "domain": "document",
     "source": "builtin",
@@ -833,50 +1186,6 @@
       ]
     },
     "title": "Duplicate Entity"
-  },
-  {
-    "id": "editImportedSource",
-    "domain": "session",
-    "source": "builtin",
-    "argsSchema": {
-      "type": "object",
-      "properties": {
-        "guid": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Imported scene output GUID. The current Engine lacks the source-authoring producer contract, so this operation fails closed."
-        },
-        "sourceKey": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Producer-issued output sourceKey; never inferred from a filename or output index."
-        },
-        "metaPath": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Workspace-observed metadata path; retained for API compatibility and never written while source authoring is unavailable."
-        },
-        "revision": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Effective DDC revision retained for API compatibility."
-        },
-        "requestId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-        }
-      },
-      "required": [
-        "guid",
-        "sourceKey",
-        "metaPath",
-        "revision",
-        "requestId"
-      ]
-    },
-    "title": "Edit Imported Source (Unavailable)"
   },
   {
     "id": "importAsset",
@@ -1017,6 +1326,115 @@
       }
     },
     "title": "Play"
+  },
+  {
+    "id": "previewAssetSourceMutation",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable imported output GUID; never infer identity from a path or output index."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "sourceKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One producer-issued source key."
+            },
+            "all": {
+              "type": "boolean",
+              "description": "Explicitly select every source output; omission is not equivalent to all."
+            }
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sourceKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "One producer-issued source key."
+                }
+              },
+              "required": [
+                "sourceKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "all": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ],
+                  "description": "Explicitly select every source output."
+                }
+              },
+              "required": [
+                "all"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "expectedRevision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Meta revision observed by preflight; retry after a revision conflict."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "guid",
+        "scope",
+        "expectedRevision",
+        "requestId"
+      ]
+    },
+    "title": "Preview Asset Source Mutation",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": true
+    }
   },
   {
     "id": "previewImportedScene",
@@ -1174,25 +1592,79 @@
     "argsSchema": {
       "type": "object",
       "properties": {
-        "destPath": {
+        "guid": {
           "type": "string",
           "minLength": 1,
-          "description": "Existing game-relative source path whose metadata sidecar supplies stable output GUIDs and import settings."
+          "description": "Stable imported output GUID; never infer identity from a path or output index."
         },
-        "sourceName": {
+        "scope": {
+          "type": "object",
+          "properties": {
+            "sourceKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One producer-issued source key."
+            },
+            "all": {
+              "type": "boolean",
+              "description": "Explicitly select every source output; omission is not equivalent to all."
+            }
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sourceKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "One producer-issued source key."
+                }
+              },
+              "required": [
+                "sourceKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "all": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ],
+                  "description": "Explicitly select every source output."
+                }
+              },
+              "required": [
+                "all"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "expectedRevision": {
           "type": "string",
-          "description": "Optional basename override; defaults to the last path segment."
+          "minLength": 1,
+          "description": "Meta revision observed by preflight; retry after a revision conflict."
         },
         "requestId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-          "description": "Caller-minted correlation id for the accepted/running/terminal OperationRun."
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
         }
       },
       "required": [
-        "destPath",
+        "guid",
+        "scope",
+        "expectedRevision",
         "requestId"
       ]
     },
@@ -1492,6 +1964,121 @@
     "title": "Reveal in File Manager"
   },
   {
+    "id": "saveAssetSourceOverride",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "guid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable imported output GUID; never infer identity from a path or output index."
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "sourceKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One producer-issued source key."
+            },
+            "all": {
+              "type": "boolean",
+              "description": "Explicitly select every source output; omission is not equivalent to all."
+            }
+          },
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sourceKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "One producer-issued source key."
+                }
+              },
+              "required": [
+                "sourceKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "all": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ],
+                  "description": "Explicitly select every source output."
+                }
+              },
+              "required": [
+                "all"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "expectedRevision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Meta revision observed by preflight; retry after a revision conflict."
+        },
+        "override": {
+          "type": "object",
+          "$ref": "asset.preflight.result.source.sourceOverrideDescriptors[].payloadSchema",
+          "description": "Producer-owned override payload for the selected sourceKey; validate against its catalog descriptor schema."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "guid",
+        "scope",
+        "expectedRevision",
+        "override",
+        "requestId"
+      ]
+    },
+    "title": "Save Asset Source Override",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": true
+    }
+  },
+  {
     "id": "saveDocToDisk",
     "domain": "session",
     "source": "builtin",
@@ -1541,32 +2128,6 @@
       },
       "cancellable": false
     }
-  },
-  {
-    "id": "saveImportedSource",
-    "domain": "session",
-    "source": "builtin",
-    "argsSchema": {
-      "type": "object",
-      "properties": {
-        "requestId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-        },
-        "retryOfRequestId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-        }
-      },
-      "required": [
-        "requestId"
-      ]
-    },
-    "title": "Save Imported Source Overrides (Unavailable)"
   },
   {
     "id": "setAnimationPreview",

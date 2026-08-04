@@ -110,6 +110,35 @@ export interface AssetImportSpec {
   onCancellationPolicy?: (policy: ImportCancellationPolicy) => void;
 }
 
+export interface SourceReimportSpec {
+  readonly guid: string;
+  readonly metaPath: string;
+  readonly signal?: AbortSignal;
+}
+
+/** Rebuild an existing source through the producer without rewriting Meta. */
+export async function executeSourceReimport(spec: SourceReimportSpec): Promise<ImportFileResult> {
+  const snapshot = await assetIO.readMetaSidecar(spec.metaPath);
+  if (!snapshot.ok) {
+    return failedImport(spec.guid, spec.metaPath, 'IMPORT_REIMPORT_META_MISSING', snapshot.error.hint, { retryable: true, guid: spec.guid });
+  }
+  try {
+    const meta = JSON.parse(snapshot.value.contents) as { subAssets?: unknown };
+    if (!Array.isArray(meta.subAssets) || meta.subAssets.length === 0) {
+      return failedImport(spec.guid, spec.metaPath, 'IMPORT_REIMPORT_IDENTITY_MISSING', 'Reimport Meta has no producer-owned sub-asset identities.', { retryable: false, guid: spec.guid });
+    }
+    const cooked = await assetIO.triggerCook(spec.guid, spec.signal);
+    if (!cooked.ok) {
+      return failedImport(spec.guid, spec.metaPath, 'IMPORT_COOK_TRIGGER_FAILED', cooked.error.hint, { guid: spec.guid });
+    }
+    await awaitPostAssetWriteCatalogSync(spec.guid);
+    broadcastAssetsChanged();
+    return { filename: spec.guid, status: 'done', guid: spec.guid, subAssets: subAssetsFromMetaJson(snapshot.value.contents) };
+  } catch (error) {
+    return failedImport(spec.guid, spec.metaPath, 'IMPORT_EXECUTION_FAILED', error instanceof Error ? error.message : String(error), { guid: spec.guid });
+  }
+}
+
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -184,6 +213,24 @@ interface ExistingSubAsset {
 interface ExistingImportMeta {
   readonly subAssets: readonly ExistingSubAsset[];
   readonly importSettings?: Readonly<Record<string, unknown>>;
+}
+
+/** Preserve authored identity and editor-owned facts across a producer rebuild. */
+export function mergeSourceReimportMeta(
+  existingValue: unknown,
+  rebuiltValue: unknown,
+): Record<string, unknown> {
+  const existing = existingValue !== null && typeof existingValue === 'object' && !Array.isArray(existingValue)
+    ? existingValue as Record<string, unknown>
+    : {};
+  const rebuilt = rebuiltValue !== null && typeof rebuiltValue === 'object' && !Array.isArray(rebuiltValue)
+    ? rebuiltValue as Record<string, unknown>
+    : {};
+  const merged = { ...rebuilt };
+  for (const field of ['guid', 'sourceOverrides', 'importSettings', 'subAssets', 'instances', 'promote'] as const) {
+    if (existing[field] !== undefined) merged[field] = existing[field];
+  }
+  return merged;
 }
 
 function existingImportMeta(value: unknown): ExistingImportMeta | undefined {
@@ -518,7 +565,9 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
 }
 
 registerImportOperation('importAsset', 'import');
-registerImportOperation('reimportAsset', 'reimport');
+// Canonical GUID/source-scope reimport is descriptor-only in M2. Its producer
+// coordinator is introduced by the next milestone; keep dispatch fail-closed
+// instead of retaining the old path-addressed writer.
 
 // Re-export so consumers passing an EditorOp keep the union import shape.
 export type { EditorOp };

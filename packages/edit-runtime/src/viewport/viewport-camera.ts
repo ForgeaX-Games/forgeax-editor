@@ -28,6 +28,7 @@ export type RunMode = 'edit' | 'play';
 export type DisplayMode = 'scene' | 'game';
 export type InputTarget = 'editor' | 'game';
 export type ControlOwner = InputTarget;
+export type CameraProjection = 'perspective' | 'orthographic';
 
 /** Result of orbit camera pose computation — camera position + basis vectors + camera quaternion. */
 export interface OrbitCameraResult {
@@ -56,6 +57,8 @@ export interface FlyInput {
   right: boolean;     // D
   up: boolean;        // E
   down: boolean;      // Q
+  /** Temporary UE-style speed boost while Shift is held. */
+  boost?: boolean;
 }
 
 /** 飞行相机状态 — 绝对位姿（笛卡尔坐标，非球坐标）。 */
@@ -71,6 +74,18 @@ export const FLY_SPEED_MIN = 0.5;
 export const FLY_SPEED_MAX = 100;
 /** 滚轮每格速度倍率（UE5 标准）。 */
 export const FLY_SPEED_STEP = 1.15;
+/** Shift-held temporary flight multiplier. */
+export const FLY_BOOST_MULTIPLIER = 2;
+
+/** Perspective / orthographic editor-camera defaults and bounds. */
+export const FOV_DEFAULT = Math.PI / 3;
+export const FOV_MIN = (20 * Math.PI) / 180;
+export const FOV_MAX = (120 * Math.PI) / 180;
+export const FOV_STEP = (5 * Math.PI) / 180;
+export const ORTHO_HALF_HEIGHT_DEFAULT = 10;
+export const ORTHO_HALF_HEIGHT_MIN = 0.1;
+export const ORTHO_HALF_HEIGHT_MAX = 10000;
+export const ORTHO_ZOOM_STEP = 1.1;
 
 // ── clamp constants (from viewport.ts orbit handlers) ────────────────────────
 
@@ -106,6 +121,40 @@ export function clampDist(dist: number): number {
   if (dist > DIST_MAX) return DIST_MAX;
   if (dist < DIST_MIN) return DIST_MIN;
   return dist;
+}
+
+/** Clamp perspective FOV and reject non-finite inputs at the math boundary. */
+export function clampFov(fov: number): number {
+  if (!Number.isFinite(fov)) return FOV_DEFAULT;
+  if (fov > FOV_MAX) return FOV_MAX;
+  if (fov < FOV_MIN) return FOV_MIN;
+  return fov;
+}
+
+/** Clamp orthographic half-height and reject non-finite inputs. */
+export function clampOrthoHalfHeight(halfHeight: number): number {
+  if (!Number.isFinite(halfHeight)) return ORTHO_HALF_HEIGHT_DEFAULT;
+  if (halfHeight > ORTHO_HALF_HEIGHT_MAX) return ORTHO_HALF_HEIGHT_MAX;
+  if (halfHeight < ORTHO_HALF_HEIGHT_MIN) return ORTHO_HALF_HEIGHT_MIN;
+  return halfHeight;
+}
+
+/**
+ * Apply a signed view-zoom step. Positive delta means zoom in, matching wheel
+ * up and the Z shortcut; negative delta means zoom out.
+ */
+export function adjustFov(fov: number, delta: number): number {
+  return clampFov(clampFov(fov) - delta * FOV_STEP);
+}
+
+export function adjustOrthoHalfHeight(halfHeight: number, delta: number): number {
+  const current = clampOrthoHalfHeight(halfHeight);
+  return clampOrthoHalfHeight(current * Math.pow(ORTHO_ZOOM_STEP, -delta));
+}
+
+/** Keep the first orthographic view visually close to the perspective framing. */
+export function deriveOrthoHalfHeight(dist: number, fov: number): number {
+  return clampOrthoHalfHeight(Math.max(ORTHO_HALF_HEIGHT_MIN, dist * Math.tan(clampFov(fov) / 2)));
 }
 
 /** Advance orbit state with user input deltas, clamping pitch and distance.
@@ -163,9 +212,10 @@ export function clampFlySpeed(speed: number): number {
 
 /** 应用滚轮 delta 到飞行速度（UE5：滚轮上加速、滚轮下减速）。
  *  wheelDelta > 0 加速（每格 * FLY_SPEED_STEP），wheelDelta < 0 减速。 */
-export function applyFlyWheelSpeed(speed: number, wheelDelta: number): number {
+export function applyFlyWheelSpeed(speed: number, wheelDelta: number, stepScale = 1): number {
   if (wheelDelta === 0) return clampFlySpeed(speed);
-  const steps = wheelDelta > 0 ? 1 : -1;
+  const scale = Number.isFinite(stepScale) ? Math.max(0, stepScale) : 1;
+  const steps = (wheelDelta > 0 ? 1 : -1) * scale;
   const factor = Math.pow(FLY_SPEED_STEP, steps);
   return clampFlySpeed(speed * factor);
 }
@@ -182,9 +232,13 @@ export function advanceFly(
   input: FlyInput,
   speed: number,
   dt: number,
+  boostMultiplier = FLY_BOOST_MULTIPLIER,
 ): FlyState {
   if (dt <= 0) return state;
-  const step = speed * dt;
+  const boost = Number.isFinite(boostMultiplier)
+    ? Math.max(1, boostMultiplier)
+    : FLY_BOOST_MULTIPLIER;
+  const step = speed * (input.boost ? boost : 1) * dt;
 
   // 计算基向量（复用 orbit 的 quat 逻辑，但只需 fwd/rgt，up 取世界 [0,1,0]）
   const qY = quat.create();

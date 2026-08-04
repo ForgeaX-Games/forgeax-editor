@@ -31,6 +31,7 @@ const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
 const e2eTempRoot = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'forgeax-save-e2e-'));
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
+// Stage the real producer input before any fresh backend/catalog process starts.
 // J1's disposable source fixture must exist before all three webServers start:
 // the browser/backend import path reads the isolated game directory that is
 // captured at server boot. Keep the binary in the temp copy only, so the

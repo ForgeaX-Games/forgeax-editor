@@ -102,7 +102,7 @@ export function isEditorSurfaceActive(): boolean {
 // ── Editor keyboard-router deps (keyboard-router convergence, M4 T4-1..T4-3) ──
 // The interface package is editor-agnostic (lint:agnostic forbids importing
 // @forgeax/editor), so the edit-domain shortcuts (Delete / Backspace / F2 /
-// Ctrl+D / Ctrl+A / Shift+G) are injected by the host editor via
+// Ctrl+D / Ctrl+A / G / Shift+G) are injected by the host editor via
 // registerKeyboardRouterDeps. Each dep is a thin callback the editor wires to
 // its own gateway / selection / viewport-quadrant — the router stays a pure
 // dispatcher and never touches editor state directly (G-1 / AC-A1: still ONE
@@ -126,7 +126,7 @@ export interface KeyboardRouterDeps {
   getLastSelectionDomain: () => 'entity' | 'asset' | 'folder' | null;
   /** True under ▶ Play (entity-domain Delete must early-return, AC-A5b). */
   isPlayMode: () => boolean;
-  /** Current viewport display axis (for Shift+G toggle, AC-Cb4). */
+  /** Current viewport display axis (for G / Shift+G Game View toggle, AC-Cb4). */
   getDisplay: () => 'scene' | 'game';
   /** Current input owner. */
   getInputTarget: () => 'editor' | 'game';
@@ -244,10 +244,10 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
     else deps.selectAllEntities();
     return true;
   };
-  // Shift+G viewport escape: plain G remains game-owned. Outside Play this
-  // shortcut is inactive; during Play it toggles play·game ⇄ play·scene.
+  // Viewport Game View toggle. Plain G is editor-only while not playing so a
+  // running game retains its gameplay binding; Shift+G remains the explicit
+  // Play shortcut and is also available in Edit Viewport.
   const routeShiftG = (): boolean => {
-    if (!deps.isPlayMode()) return false;
     deps.dispatch({ kind: 'setDisplay', display: deps.getDisplay() === 'game' ? 'scene' : 'game' }, 'human');
     return true;
   };
@@ -297,8 +297,17 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
     {
       combo: 'Shift+G',
       group: 'edit',
-      label: 'Toggle Play scene view',
+      label: 'Toggle viewport Game View',
       match: (e) => !mod(e) && e.shiftKey && !e.altKey
+        && (e.key === 'g' || e.key === 'G'),
+      run: routeShiftG,
+    },
+    {
+      combo: 'G',
+      group: 'edit',
+      label: 'Toggle viewport Game View',
+      match: (e) => !mod(e) && !e.shiftKey && !e.altKey
+        && !deps.isPlayMode() && deps.getInputTarget() !== 'game'
         && (e.key === 'g' || e.key === 'G'),
       run: routeShiftG,
     },
@@ -331,11 +340,18 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       run: () => { deps.save(); return true; },
     },
     {
-      combo: 'W/E/R/F + fly input',
+      combo: 'Viewport camera and fly input',
       group: 'edit',
       label: 'Viewport navigation and gizmo mode',
-      match: (e) => !mod(e) && !e.altKey && deps.getInputTarget() !== 'game'
-        && ['w', 'e', 'r', 'f', 'a', 's', 'd', 'q'].includes(e.key.toLowerCase()),
+      match: (e) => {
+        if (deps.getInputTarget() === 'game' || e.altKey) return false;
+        const key = e.key.toLowerCase();
+        const plainCameraKey = !mod(e)
+          && (['w', 'e', 'r', 'f', 'a', 's', 'd', 'q', 'v', 'z', 'c', 'escape', 'shift'].includes(key)
+            || /^[1-9]$/.test(key));
+        const bookmarkKey = mod(e) && !e.shiftKey && /^[1-9]$/.test(key);
+        return plainCameraKey || bookmarkKey;
+      },
       run: routeViewportInput,
     },
     {

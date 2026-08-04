@@ -40,7 +40,7 @@ describe('importAsset op registration (catalog SSOT)', () => {
     expect(hasOp('reimportAsset')).toBe(true);
     expect(getOp('reimportAsset')?.domain).toBe('session');
     const op = listOps().find((entry) => entry.id === 'reimportAsset');
-    expect(op?.argsSchema?.required).toEqual(['destPath', 'requestId']);
+    expect(op?.argsSchema?.required).toEqual(['guid', 'scope', 'expectedRevision', 'requestId']);
     expect(op?.operationRun?.terminalStatuses).toEqual(['succeeded', 'failed', 'cancelled']);
   });
 });
@@ -208,68 +208,27 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     expect(gw.ledger).toHaveLength(0);
   });
 
-  it('reimport refuses to mint a replacement when the source metadata is missing', async () => {
+  it('keeps canonical reimport fail-closed until its producer coordinator is available', () => {
     const dispatched = gw.dispatch({
       kind: 'reimportAsset',
-      destPath: 'assets/logo.png',
-      sourceName: 'logo.png',
+      guid: '019f0000-0000-7000-8000-000000000001',
+      scope: { sourceKey: 'source:logo' },
+      expectedRevision: 'meta:r1',
       requestId: 'reimport-missing-meta',
     });
-    expect(dispatched).toMatchObject({ ok: true });
-
-    expect(await gw.waitOperationRun('reimport-missing-meta')).toMatchObject({
-      ok: true,
-      value: {
-        status: 'failed',
-        error: {
-          code: 'IMPORT_REIMPORT_META_MISSING',
-          retryable: false,
-          recoveryActions: ['import.verifySource'],
-        },
-      },
-    });
+    expect(dispatched).toMatchObject({ ok: false, error: { code: 'UNKNOWN_OP' } });
     expect(gw.ledger).toHaveLength(0);
   });
 
-  it('reimport preserves the producer GUID and existing import settings', async () => {
-    const stableGuid = '019f0000-0000-7000-8000-000000000001';
-    let writtenMeta: Record<string, unknown> | undefined;
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, init?: { body?: BodyInit | null }) => {
-      if (url.includes('optional=1')) {
-        return Promise.resolve(new Response(JSON.stringify({
-          content: JSON.stringify({
-            schemaVersion: '1.0.0',
-            importer: 'image',
-            importSettings: { colorSpace: 'linear', customSetting: 'keep-me' },
-            subAssets: [{ guid: stableGuid, kind: 'texture', sourceIndex: 0 }],
-          }),
-        }), { status: 200, headers: { 'content-type': 'application/json' } }));
-      }
-      if (url === '/api/files' && typeof init?.body === 'string') {
-        const request = JSON.parse(init.body) as { content?: string };
-        writtenMeta = JSON.parse(request.content ?? '{}') as Record<string, unknown>;
-      }
-      return Promise.resolve(new Response('', { status: 200 }));
-    }) as unknown as typeof fetch;
-
+  it('does not retain a path-addressed reimport dispatch compatibility path', () => {
     const dispatched = gw.dispatch({
       kind: 'reimportAsset',
-      destPath: 'assets/logo.png',
-      sourceName: 'logo.png',
-      requestId: 'reimport-stable-identity',
+      guid: '019f0000-0000-7000-8000-000000000001',
+      scope: { sourceKey: 'source:logo' },
+      expectedRevision: 'meta:r1',
+      requestId: 'reimport-canonical-red',
     });
-    expect(dispatched).toMatchObject({ ok: true });
-    expect(await gw.waitOperationRun('reimport-stable-identity')).toMatchObject({
-      ok: true,
-      value: {
-        status: 'succeeded',
-        result: { status: 'done', guid: stableGuid, subAssets: [{ guid: stableGuid, kind: 'texture' }] },
-      },
-    });
-    expect(writtenMeta).toMatchObject({
-      importSettings: { colorSpace: 'linear', customSetting: 'keep-me' },
-      subAssets: [{ guid: stableGuid, kind: 'texture', sourceIndex: 0 }],
-    });
+    expect(dispatched).toMatchObject({ ok: false, error: { code: 'UNKNOWN_OP' } });
   });
 
   it('retries a failed import run with the same operation input and a new request id', async () => {
@@ -392,15 +351,11 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
   });
 
   it('waits for every produced sub-asset before import terminal success', async () => {
-    const subAssets = [
-      { guid: '019f0000-0000-7000-8000-000000000011', kind: 'texture', sourceIndex: 0 },
-      { guid: '019f0000-0000-7000-8000-000000000012', kind: 'sampler', sourceIndex: 0 },
-      { guid: '019f0000-0000-7000-8000-000000000013', kind: 'font', sourceIndex: 0 },
-    ];
+    const subAssetKinds = ['texture', 'sampler', 'font'] as const;
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
       if (url.includes('optional=1')) {
         return Promise.resolve(new Response(JSON.stringify({
-          content: JSON.stringify({ importer: 'font', subAssets }),
+          content: JSON.stringify({ importer: 'font' }),
         }), { status: 200, headers: { 'content-type': 'application/json' } }));
       }
       return Promise.resolve(new Response('', { status: 200 }));
@@ -409,20 +364,23 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     registerPostAssetWriteCatalogSync(async (guid) => { seen.push(guid); });
     try {
       const dispatched = gw.dispatch({
-        kind: 'reimportAsset',
+        kind: 'importAsset',
         destPath: 'assets/Font.ttf',
         sourceName: 'Font.ttf',
         requestId: 'reimport-all-sub-assets',
       });
       expect(dispatched).toMatchObject({ ok: true });
-      expect(await gw.waitOperationRun('reimport-all-sub-assets')).toMatchObject({
+      const terminal = await gw.waitOperationRun('reimport-all-sub-assets');
+      expect(terminal).toMatchObject({
         ok: true,
         value: {
           status: 'succeeded',
-          result: { subAssets: subAssets.map(({ guid, kind }) => ({ guid, kind })) },
+          result: { subAssets: subAssetKinds.map((kind) => ({ kind })) },
         },
       });
-      expect(seen).toEqual(subAssets.map((asset) => asset.guid));
+      if (!terminal.ok) throw new Error('import terminal result unavailable');
+      const produced = (terminal.value.result as { readonly subAssets?: readonly { readonly guid: string }[] }).subAssets ?? [];
+      expect(seen).toEqual(produced.map((asset) => asset.guid));
     } finally {
       registerPostAssetWriteCatalogSync(null);
     }

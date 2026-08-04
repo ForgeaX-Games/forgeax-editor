@@ -11,7 +11,12 @@
 //   plan-strategy §2.5: io/catalog.ts (new file)
 //   plan-strategy §2 D-4: defineOp transaction wrapper
 
-import type { EditorOp } from '../types';
+import type {
+  AssetRegistry,
+  CatalogReconcileError as EngineCatalogReconcileError,
+  CatalogReplicaSnapshot,
+} from '@forgeax/engine-assets-runtime';
+import type { CommandError, EditorOp } from '../types';
 
 // ── ArgsSchema (D-3 lightweight JSON-Schema subset) ────────────────────────
 
@@ -21,6 +26,12 @@ export interface ArgsSchema {
   required?: string[];
   enum?: unknown[];
   items?: ArgsSchema;
+  /** Mutually exclusive object variants for machine-validatable unions. */
+  oneOf?: ArgsSchema[];
+  /** Reject fields outside the declared object properties when false. */
+  additionalProperties?: boolean;
+  /** Public reference to a producer-owned schema; this is projection metadata. */
+  $ref?: string;
   /**
    * When true, `null` is an accepted value regardless of `type` (F-4). Several
    * session/transient ops use `null` as a documented "clear" signal —
@@ -82,6 +93,10 @@ export interface OpDescriptor {
   readonly sugar?: boolean;
   /** OperationRun lifecycle metadata projected by the owning Gateway. */
   readonly operationRun?: OperationRunDescriptor;
+  /** Whether the operation discards authored source overrides. */
+  readonly destructive?: boolean;
+  /** Canonical machine-readable recovery actions for the operation. */
+  readonly recoveryActions?: readonly string[];
 }
 
 export interface OperationRunDescriptor {
@@ -101,6 +116,65 @@ export interface OperationRunDescriptor {
   readonly cancellable: boolean;
 }
 
+/** Read-only result projected from the existing Catalog replica reconcile seam. */
+export interface CatalogReconcileResult {
+  readonly revision: number;
+  readonly stale: boolean;
+  readonly diagnostics: readonly unknown[];
+}
+
+/** Public Engine surface required by the canonical Gateway recovery operation. */
+export type CatalogReconcileProvider = () => CatalogReconcileResult | Promise<CatalogReconcileResult>;
+export type EngineCatalogReconcileProvider = Pick<
+  AssetRegistry,
+  'catalogSnapshot' | 'reconcileCatalog'
+>;
+
+function projectCatalogSnapshot(snapshot: CatalogReplicaSnapshot): CatalogReconcileResult {
+  return {
+    revision: snapshot.version,
+    stale: snapshot.stale,
+    diagnostics: snapshot.diagnostics,
+  };
+}
+
+function catalogReconcileFailure(
+  error: EngineCatalogReconcileError,
+  snapshot: CatalogReplicaSnapshot | undefined,
+): CommandError {
+  return {
+    code: 'asset-catalog-subscription-gap',
+    phase: 'gap',
+    owner: 'engine',
+    category: 'resource',
+    operationId: 'catalog.reconcile',
+    cause: {
+      code: error.code,
+      owner: 'engine',
+      hint: error.hint,
+      ...(error.detail === undefined ? {} : { details: error.detail }),
+    },
+    hint: error.hint,
+    expected: error.expected,
+    current: snapshot === undefined
+      ? { revision: 0, stale: true, diagnostics: [] }
+      : projectCatalogSnapshot(snapshot),
+    retryable: true,
+    recoveryActions: ['run.retry', 'catalog.reconcile', 'run.get', 'run.wait'],
+  };
+}
+
+/** Build the Core provider from the Engine's public typed Result surface. */
+export function createCatalogReconcileProvider(
+  provider: EngineCatalogReconcileProvider,
+): CatalogReconcileProvider {
+  return async () => {
+    const result = await provider.reconcileCatalog();
+    if (!result.ok) throw catalogReconcileFailure(result.error, provider.catalogSnapshot());
+    return projectCatalogSnapshot(result.value);
+  };
+}
+
 // ── Plan function type (defineOp) ──────────────────────────────────────────
 
 export type PlanFn = (query: unknown, args: unknown) => EditorOp[];
@@ -108,6 +182,93 @@ export type PlanFn = (query: unknown, args: unknown) => EditorOp[];
 // ── Internal catalog Map ────────────────────────────────────────────────────
 
 const _catalog = new Map<string, OpDescriptor>();
+
+/**
+ * Shared public run schema for source operations: accepted/running are not
+ * completion; only the three terminal statuses are safe to act on.
+ */
+function sourceOperationRun(cancellable = true): OperationRunDescriptor {
+  return {
+    acceptedStatuses: ['accepted', 'running'],
+    terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+    read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+    retry: { requiresNewRequestId: true },
+    retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+    cancellable,
+  };
+}
+
+const sourceRecoveryActions = ['asset.preflight', 'run.get', 'run.wait', 'run.retry', 'catalog.reconcile'] as const;
+
+/**
+ * Canonical source mutation schema. `guid` + `scope.sourceKey` identify the
+ * producer output, `expectedRevision` guards Meta CAS, and discard alone adds
+ * the impact-bound confirmation token. No path or compatibility alias belongs
+ * in this schema.
+ */
+function sourceScopeArgs(): ArgsSchema {
+  return {
+    type: 'object',
+    properties: {
+      sourceKey: { type: 'string', minLength: 1, description: 'One producer-issued source key.' },
+      all: { type: 'boolean', description: 'Explicitly select every source output; omission is not equivalent to all.' },
+    },
+    oneOf: [
+      {
+        type: 'object',
+        properties: {
+          sourceKey: { type: 'string', minLength: 1, description: 'One producer-issued source key.' },
+        },
+        required: ['sourceKey'],
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        properties: {
+          all: { type: 'boolean', enum: [true], description: 'Explicitly select every source output.' },
+        },
+        required: ['all'],
+        additionalProperties: false,
+      },
+    ],
+  };
+}
+
+function sourceMutationArgs(includeConfirmationToken = false, includeOverride = false): ArgsSchema {
+  return {
+    type: 'object',
+    properties: {
+      guid: { type: 'string', minLength: 1, description: 'Stable imported output GUID; never infer identity from a path or output index.' },
+      scope: sourceScopeArgs(),
+      expectedRevision: { type: 'string', minLength: 1, description: 'Meta revision observed by preflight; retry after a revision conflict.' },
+      ...(includeOverride ? {
+        override: {
+          type: 'object',
+          $ref: 'asset.preflight.result.source.sourceOverrideDescriptors[].payloadSchema',
+          description: 'Producer-owned override payload for the selected sourceKey; validate against its catalog descriptor schema.',
+        },
+      } : {}),
+      requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      ...(includeConfirmationToken ? {
+        confirmationToken: { type: 'string', minLength: 1, description: 'Discard confirmation returned by source preflight and bound to its impact set.' },
+      } : {}),
+    },
+    required: ['guid', 'scope', 'expectedRevision', ...(includeOverride ? ['override'] : []), 'requestId'],
+  };
+}
+
+function sourcePreflightArgs(): ArgsSchema {
+  return {
+    type: 'object',
+    properties: {
+      guid: { type: 'string', minLength: 1, description: 'Stable imported output GUID used to read the owning Meta source fact.' },
+      scope: sourceScopeArgs(),
+      requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+    },
+    required: ['guid', 'scope', 'requestId'],
+  };
+}
 
 // ── Registration ────────────────────────────────────────────────────────────
 
@@ -122,8 +283,17 @@ export function registerDefinedOp(op: Readonly<Omit<OpDescriptor, 'source'>>): v
 
 // ── listOps ─────────────────────────────────────────────────────────────────
 
+/**
+ * Return a detached public descriptor. The catalog is an SSOT, while callers
+ * are allowed to inspect the returned readonly shape without being able to
+ * mutate nested args/run metadata (including through matcher libraries).
+ */
+function snapshotOp(op: OpDescriptor): OpDescriptor {
+  return structuredClone(op);
+}
+
 export function listOps(): readonly OpDescriptor[] {
-  return Array.from(_catalog.values());
+  return Array.from(_catalog.values(), snapshotOp);
 }
 
 export function hasOp(id: string): boolean {
@@ -131,7 +301,8 @@ export function hasOp(id: string): boolean {
 }
 
 export function getOp(id: string): OpDescriptor | undefined {
-  return _catalog.get(id);
+  const op = _catalog.get(id);
+  return op === undefined ? undefined : snapshotOp(op);
 }
 
 // ── Builtin catalog seeding ─────────────────────────────────────────────────
@@ -149,6 +320,8 @@ const builtinOps: ReadonlyArray<{
    *  but flags sugar so callers learn the one canonical shape. */
   sugar?: boolean;
   operationRun?: OperationRunDescriptor;
+  destructive?: boolean;
+  recoveryActions?: readonly string[];
 }> = [
   // ══ document domain (9 primitives) ══════════════════════════════════════
   {
@@ -610,31 +783,6 @@ const builtinOps: ReadonlyArray<{
       cancellable: false,
     },
   },
-  { id: 'editImportedSource', domain: 'session',
-    argsSchema: {
-      type: 'object',
-      properties: {
-        guid: { type: 'string', minLength: 1, description: 'Imported scene output GUID. The current Engine lacks the source-authoring producer contract, so this operation fails closed.' },
-        sourceKey: { type: 'string', minLength: 1, description: 'Producer-issued output sourceKey; never inferred from a filename or output index.' },
-        metaPath: { type: 'string', minLength: 1, description: 'Workspace-observed metadata path; retained for API compatibility and never written while source authoring is unavailable.' },
-        revision: { type: 'string', minLength: 1, description: 'Effective DDC revision retained for API compatibility.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
-      },
-      required: ['guid', 'sourceKey', 'metaPath', 'revision', 'requestId'],
-    },
-    title: 'Edit Imported Source (Unavailable)',
-  },
-  { id: 'saveImportedSource', domain: 'session',
-    argsSchema: {
-      type: 'object',
-      properties: {
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
-      },
-      required: ['requestId'],
-    },
-    title: 'Save Imported Source Overrides (Unavailable)',
-  },
   { id: 'promoteImportedScene', domain: 'session',
     argsSchema: {
       type: 'object',
@@ -771,7 +919,7 @@ const builtinOps: ReadonlyArray<{
   },
   { id: 'stop', domain: 'session', argsSchema: null, title: 'Stop' },
   // ── camera navigation session ops (feat-2026-07-16 UE5 nav) ────────────────
-  // All four are session-domain (ledger-only, no undo). The appliers live in
+  // Camera navigation is session-domain (ledger-only, no undo). The appliers live in
   // edit-runtime/viewport.ts (createViewport() → registerSessionApplier) because
   // they close over the orbit/fly state + the editorEngine facade; in headless
   // core (no edit-runtime boot) a cameraX dispatch returns UNKNOWN_OP, matching
@@ -825,6 +973,44 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Move camera and look at target',
   },
+  { id: 'cameraSetProjection', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        projection: { type: 'string', enum: ['perspective', 'orthographic'] },
+      },
+      required: ['projection'],
+    },
+    title: 'Set camera projection',
+  },
+  { id: 'cameraToggleProjection', domain: 'session', argsSchema: null, title: 'Toggle camera projection' },
+  { id: 'cameraAdjustFov', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { delta: { type: 'number', description: 'Positive zooms in; negative zooms out.' } },
+      required: ['delta'],
+    },
+    title: 'Adjust camera view scale',
+  },
+  { id: 'cameraZoom', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: { delta: { type: 'number', description: 'Positive zooms in; negative zooms out.' } },
+      required: ['delta'],
+    },
+    title: 'Zoom camera',
+  },
+  { id: 'cameraBookmark', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['save', 'recall', 'clear'] },
+        slot: { type: 'number', minimum: 1, maximum: 9 },
+      },
+      required: ['action', 'slot'],
+    },
+    title: 'Camera bookmark',
+  },
   // CB navigation (feat-20260708-cb-nav-session-op-convergence M1):
   // setCBPath/cbGoBack/cbGoForward are session-domain ops (ledger-only, no undo).
   // argsSchema enables AI self-discovery via gateway.listOps() (plan-strategy §8.1 P1).
@@ -859,25 +1045,55 @@ const builtinOps: ReadonlyArray<{
       cancellable: true,
     },
   },
-  { id: 'reimportAsset', domain: 'session',
+  {
+    id: 'catalog.reconcile', domain: 'transient',
     argsSchema: {
       type: 'object',
       properties: {
-        destPath: { type: 'string', minLength: 1, description: 'Existing game-relative source path whose metadata sidecar supplies stable output GUIDs and import settings.' },
-        sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
       },
-      required: ['destPath', 'requestId'],
+      required: ['requestId'],
     },
+    title: 'Reconcile Asset Catalog',
+    operationRun: sourceOperationRun(false),
+    recoveryActions: ['run.retry', 'catalog.reconcile', 'run.get', 'run.wait'],
+  },
+  {
+    id: 'asset.preflight', domain: 'transient',
+    argsSchema: sourcePreflightArgs(),
+    title: 'Read Asset Source Preflight',
+    operationRun: sourceOperationRun(false),
+    destructive: false,
+    recoveryActions: ['catalog.reconcile', 'run.get', 'run.wait'],
+  },
+  { id: 'reimportAsset', domain: 'session',
+    argsSchema: sourceMutationArgs(),
     title: 'Reimport Asset',
-    operationRun: {
-      acceptedStatuses: ['accepted', 'running'],
-      terminalStatuses: ['succeeded', 'failed', 'cancelled'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
-      retry: { requiresNewRequestId: true },
-      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
-      cancellable: true,
-    },
+    operationRun: sourceOperationRun(),
+    destructive: false,
+    recoveryActions: [...sourceRecoveryActions],
+  },
+  { id: 'previewAssetSourceMutation', domain: 'session',
+    argsSchema: sourceMutationArgs(),
+    title: 'Preview Asset Source Mutation',
+    operationRun: sourceOperationRun(),
+    destructive: false,
+    recoveryActions: [...sourceRecoveryActions],
+  },
+  { id: 'saveAssetSourceOverride', domain: 'session',
+    argsSchema: sourceMutationArgs(false, true),
+    title: 'Save Asset Source Override',
+    operationRun: sourceOperationRun(),
+    destructive: false,
+    recoveryActions: [...sourceRecoveryActions],
+  },
+  { id: 'discardSourceOverridesAndReimport', domain: 'session',
+    argsSchema: sourceMutationArgs(true),
+    title: 'Discard Source Overrides and Reimport',
+    operationRun: sourceOperationRun(),
+    destructive: true,
+    recoveryActions: [...sourceRecoveryActions],
   },
   { id: 'deleteSourceFile', domain: 'session',
     argsSchema: {

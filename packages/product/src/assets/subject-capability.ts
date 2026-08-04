@@ -1,5 +1,6 @@
 import type {
   AssetMutationOperation,
+  AssetSourceMutationIntent,
   AssetSubject,
   AssetSubjectId,
 } from '../contracts/asset-workspace';
@@ -16,7 +17,7 @@ export interface SubjectOperationAvailability {
 
 export interface AssetSubjectCapability {
   readonly subjectRef: AssetSubjectId;
-  readonly operations: Readonly<Record<AssetMutationOperation | 'preflight', SubjectOperationAvailability>>;
+  readonly operations: Readonly<Record<AssetMutationOperation | AssetSourceMutationIntent | 'preflight', SubjectOperationAvailability>>;
 }
 
 function unsupported(operation: string, subject: AssetSubject): SubjectOperationAvailability {
@@ -37,6 +38,7 @@ export function getAssetSubjectCapability(subject: AssetSubject): AssetSubjectCa
   const destructive = subject.capabilities.canPreflight;
   const movable = subject.capabilities.canMove;
   const deletable = subject.capabilities.canDelete;
+  const sourceAuthoring = destructive && subject.kind === 'imported-output';
   const operations = {
     rename: available(destructive && movable, 'rename', subject),
     move: available(destructive && movable, 'move', subject),
@@ -45,8 +47,11 @@ export function getAssetSubjectCapability(subject: AssetSubject): AssetSubjectCa
     duplicate: available(destructive && subject.kind !== 'imported-output', 'duplicate', subject),
     reimport: available(destructive && subject.kind !== 'imported-output', 'reimport', subject),
     restore: available(destructive && deletable, 'restore', subject),
+    'save-asset-source-override': available(sourceAuthoring, 'save-asset-source-override', subject),
+    'reimport-asset': available(sourceAuthoring, 'reimport-asset', subject),
+    'discard-source-overrides-and-reimport': available(sourceAuthoring, 'discard-source-overrides-and-reimport', subject),
     preflight: available(destructive, 'preflight', subject),
-  } satisfies Readonly<Record<AssetMutationOperation | 'preflight', SubjectOperationAvailability>>;
+  } satisfies Readonly<Record<AssetMutationOperation | AssetSourceMutationIntent | 'preflight', SubjectOperationAvailability>>;
   return Object.freeze({ subjectRef: subject.id, operations });
 }
 

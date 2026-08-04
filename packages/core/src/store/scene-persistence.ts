@@ -67,7 +67,12 @@ import { gateway } from './gateway';
 import { domainOf, sessionAppliers } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
-import { awaitPostAssetWriteCatalogSync, registerActiveScenePackResolver } from '../session/pack-ops';
+import {
+  awaitPostAssetWriteCatalogSync,
+  registerActiveScenePackResolver,
+  registerAuthoredInlineAssetTracker,
+  type AuthoredInlineAssetSnapshot,
+} from '../session/pack-ops';
 import { normalizePackForRuntime, stableGuid, validatePackShell } from '../scene/scene-pack';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
@@ -556,32 +561,6 @@ sessionAppliers.set('previewImportedScene', (op) => {
   return { ok: true, completion };
 });
 
-sessionAppliers.set('editImportedSource', (op) => {
-  return {
-    ok: false,
-    error: {
-      code: 'engine-source-authoring-unavailable',
-      hint: 'The current Engine does not publish the stable node identity and apply/fold contract required for imported source authoring.',
-      current: { operation: op.kind, canEditSource: false },
-      retryable: false,
-      recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
-    },
-  };
-});
-
-sessionAppliers.set('saveImportedSource', (op) => {
-  return {
-    ok: false,
-    error: {
-      code: 'engine-source-authoring-unavailable',
-      hint: 'The current Engine does not publish the stable node identity and apply/fold contract required for imported source authoring.',
-      current: { operation: op.kind, canEditSource: false },
-      retryable: false,
-      recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
-    },
-  };
-});
-
 type PromoteImportedSceneOp = {
   readonly importedGuid: string;
   readonly sourceKey: string;
@@ -782,18 +761,6 @@ export function previewImportedScene(facts: {
   return gateway.waitOperationRun(requestId).then((terminal) => (
     terminal.ok && terminal.value.status === 'succeeded'
   ));
-}
-
-export function editImportedSource(facts: {
-  readonly guid: string;
-  readonly sourceKey: string;
-  readonly metaPath: string;
-  readonly revision: string;
-}): Promise<boolean> {
-  const requestId = globalThis.crypto.randomUUID();
-  const accepted = gateway.dispatch({ kind: 'editImportedSource', ...facts, requestId }, 'human');
-  if (!accepted.ok) return Promise.resolve(false);
-  return gateway.waitOperationRun(requestId).then((terminal) => terminal.ok && terminal.value.status === 'succeeded');
 }
 
 // ── play-config cluster surface (createPlayConfig) ────────────────────────────
@@ -1000,6 +967,50 @@ export const getActiveScenePackPath = diskIo.scenePath;
 // without a static import cycle (pack-ops <- ... <- scene-persistence). One-way:
 // scene-persistence imports pack-ops (already, for its appliers), never the reverse.
 registerActiveScenePackResolver(() => diskIo.scenePath());
+
+// ── Post-load authored inline assets (material persistence race fix) ─────────
+// createMaterial writes a material into the ACTIVE scene pack AFTER the load
+// baseline (loadedInlineAssetFloor / loadedInlineAssets) was captured. In the
+// window between that write and the follow-up bindAssetRef, no entity refs the
+// material yet — a scene save landing in that window would serialize the pack
+// WITHOUT it, clobbering the freshly written body on disk. These hooks close
+// the window: a successful material write targeting the active scene pack is
+// added to the save baseline (floor bump + orphan-merge snapshot), and a
+// successful destroyAsset removes exactly the entries this tracker added
+// (trackedPostLoad symmetry — undo of a create must not refuse later saves).
+const trackedPostLoad = new Set<string>();
+registerAuthoredInlineAssetTracker(
+  (snapshot: AuthoredInlineAssetSnapshot) => {
+    const active = diskIo.scenePath();
+    if (!active || snapshot.packPath !== active) return;
+    const key = snapshot.guid.toLowerCase();
+    if (trackedPostLoad.has(key)) return;
+    trackedPostLoad.add(key);
+    ctx.loadedInlineAssetFloor = (ctx.loadedInlineAssetFloor ?? 0) + 1;
+    const existing = ctx.loadedInlineAssets ?? [];
+    if (!existing.some((e) => e.guid.toLowerCase() === key)) {
+      ctx.loadedInlineAssets = [
+        ...existing,
+        {
+          guid: snapshot.guid,
+          kind: snapshot.kind,
+          payload: snapshot.payload,
+          refs: snapshot.refs !== undefined ? [...snapshot.refs] : [],
+        },
+      ];
+    }
+  },
+  (guid: string) => {
+    const key = guid.toLowerCase();
+    if (!trackedPostLoad.delete(key)) return;
+    if (ctx.loadedInlineAssetFloor !== null && ctx.loadedInlineAssetFloor > 0) {
+      ctx.loadedInlineAssetFloor -= 1;
+    }
+    if (ctx.loadedInlineAssets !== null) {
+      ctx.loadedInlineAssets = ctx.loadedInlineAssets.filter((e) => e.guid.toLowerCase() !== key);
+    }
+  },
+);
 /** @internal-store — the exact-bytes save path (serializedPack) uses this. */
 export const worldToPack = diskIo.worldToPack;
 /** @internal-store — disk-watch CALLS this to reload on a genuine external edit. */

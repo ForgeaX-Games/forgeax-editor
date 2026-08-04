@@ -88,10 +88,14 @@ describe('listOps builtin full coverage (m4-w1, RED)', () => {
     'setGizmoMode', 'requestFrame', 'requestRename',
     'setSceneId', 'switchSceneFile', 'createSceneFile',
     'saveDocToDisk', 'loadDocFromDisk',
-    'previewImportedScene', 'editImportedSource', 'saveImportedSource', 'promoteImportedScene',
+    'previewImportedScene', 'promoteImportedScene',
     // keyboard-router convergence (M1/M4): setAssetSelection migrated transient→session;
     // setAssetSelectionOne is its sugar alias; setDisplay is the scene⇄game toggle.
     'setAssetSelection', 'setAssetSelectionOne', 'setDisplay',
+    // UE-style viewport camera capabilities (session-only, no document undo).
+    'cameraOrbit', 'cameraFly', 'cameraTeleport', 'cameraLookAt',
+    'cameraSetProjection', 'cameraToggleProjection', 'cameraAdjustFov',
+    'cameraZoom', 'cameraBookmark',
   ];
 
   const TRANSIENT_OPS = [
@@ -166,6 +170,22 @@ describe('listOps counts match M2 consolidation (m4-w1, RED)', () => {
     const ops = gw.listOps();
     const docCount = ops.filter((o) => o.domain === 'document').length;
     expect(docCount).toBeGreaterThanOrEqual(9);
+  });
+});
+
+describe('catalog reconciliation operation projection (M2 pure AI contract)', () => {
+  it('exposes one canonical read-only operation with Gateway-owned run reads', () => {
+    const reconcile = gw.listOps().find((op) => op.id === 'catalog.reconcile');
+    expect(reconcile).toMatchObject({
+      id: 'catalog.reconcile',
+      domain: 'transient',
+      argsSchema: { type: 'object', required: ['requestId'] },
+      operationRun: {
+        acceptedStatuses: ['accepted', 'running'],
+        terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+        read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      },
+    });
   });
 });
 
@@ -264,7 +284,7 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
   it('does not add run metadata or change the domain of unrelated operations', () => {
     const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
     for (const op of gw.listOps()) {
-      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame') continue;
+      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'asset.preflight' || op.id === 'previewAssetSourceMutation' || op.id === 'saveAssetSourceOverride' || op.id === 'discardSourceOverridesAndReimport' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame' || op.id === 'catalog.reconcile') continue;
       expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
       expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
     }
@@ -312,5 +332,36 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: true,
     });
+  });
+});
+
+describe('source mutation manifest migration (M2-t08, RED)', () => {
+  it('enumerates only canonical source intents and their structured safety metadata', () => {
+    const ids = new Set(gw.listOps().map((op) => op.id));
+    expect([...ids]).toEqual(expect.arrayContaining([
+      'previewAssetSourceMutation',
+      'saveAssetSourceOverride',
+      'reimportAsset',
+      'discardSourceOverridesAndReimport',
+    ]));
+    expect(ids).not.toEqual(expect.arrayContaining(['editImportedSource', 'saveImportedSource']));
+
+    for (const id of ['previewAssetSourceMutation', 'saveAssetSourceOverride', 'reimportAsset', 'discardSourceOverridesAndReimport']) {
+      const descriptor = gw.listOps().find((entry) => entry.id === id) as (OpDescriptor & {
+        destructive?: boolean;
+        recoveryActions?: readonly string[];
+      }) | undefined;
+      expect(descriptor?.domain).toBe('session');
+      expect(descriptor?.argsSchema?.properties?.guid).toMatchObject({ type: 'string', minLength: 1 });
+      expect(descriptor?.argsSchema?.properties?.scope).toMatchObject({
+        type: 'object',
+        properties: { sourceKey: { type: 'string' }, all: { type: 'boolean' } },
+      });
+      expect(descriptor?.argsSchema?.properties?.expectedRevision).toMatchObject({ type: 'string', minLength: 1 });
+      expect(descriptor?.argsSchema?.properties?.requestId).toMatchObject({ type: 'string', minLength: 1 });
+      expect(descriptor?.operationRun?.terminalStatuses).toEqual(['succeeded', 'failed', 'cancelled']);
+      expect(descriptor?.recoveryActions).toEqual(expect.arrayContaining(['run.get', 'run.wait', 'run.retry', 'catalog.reconcile']));
+    }
+    expect((gw.listOps().find((entry) => entry.id === 'discardSourceOverridesAndReimport') as OpDescriptor & { destructive?: boolean }).destructive).toBe(true);
   });
 });

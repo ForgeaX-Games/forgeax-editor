@@ -28,3 +28,15 @@ import { CBGrid, CBList, useFilter, type CBAsset } from '@forgeax/editor-content
 `engine ← editor-core ← editor-content-browser ← editor-panels ← edit-runtime`
 
 与 `editor-panels` 同层依赖 `editor-core`；`editor-panels` 的 Assets 面板反过来依赖本包（lazy import）。
+
+## Imported source lifecycle projection
+
+The browser is a read projection over the immutable Catalog. It discovers source operations from the
+Gateway manifest, renders `sourceKey`, revision, current/LKG, lifecycle, diagnostics, and structured
+discard impact, then dispatches the selected canonical operation through the same Gateway door as AI.
+It does not open Meta files, call DDC, maintain a second Catalog, or infer identity from paths.
+
+The UI must keep `current` and `lastKnownGood` visible when a cook fails. Confirmation is required for
+`discardSourceOverridesAndReimport`; a stale revision or missing source key routes back to preflight.
+Timeouts and Catalog gaps route to `catalog.reconcile`, while retryable cook/validation failures use
+`run.retry` with a new request id. Error handling branches on stable fields, never message text.

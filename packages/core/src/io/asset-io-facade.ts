@@ -15,7 +15,10 @@
 import { normalizePackForRuntime, type PackFile } from '../scene/scene-pack';
 import {
   readPack, writePack, deleteAsset, generateAssetGuid,
+  readPackDetailed, writePackDetailed,
   readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset, type MetaSubAsset,
+  parseMetaDocument, serializeMetaDocument, mutateMetaSourceOverrides,
+  type MetaSourceScope,
 } from './asset-io-primitives';
 import { recordAssetLeaf } from './trace';
 import type { CommandError } from '../types';
@@ -54,6 +57,14 @@ export type CreateAuthoredPackResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: 'collision' | 'write-failed'; readonly hint: string };
 
+/** Diagnosable result for createAssetInPack. `read-failed` means the target
+ *  pack EXISTS on disk but could not be read/validated — the write was REFUSED
+ *  because creating a fresh envelope would clobber the existing scene/material
+ *  bodies (the "material written but pack lost" gray-card root cause). */
+export type CreateAssetInPackResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: 'read-failed' | 'write-failed'; readonly hint: string };
+
 export const SOURCE_SIDECAR_REVISION_DOMAIN = 'source-sidecar-file-v1';
 
 export interface AssetResourceRef {
@@ -78,6 +89,20 @@ export interface AssetResourceTransactionPort<TInput = unknown> {
     readonly commit: () => Promise<{ readonly revision: string; readonly result?: unknown }>;
     readonly rollback?: () => Promise<void>;
   }>;
+}
+
+export interface SourceOverrideCommitInput {
+  readonly metaPath: string;
+  readonly expectedRevision: string;
+  readonly scope: MetaSourceScope;
+  readonly override?: unknown;
+  readonly discard?: boolean;
+}
+
+export interface SourceOverrideCommitResult {
+  readonly revision: string;
+  readonly contents: string;
+  readonly document: Record<string, unknown>;
 }
 
 export class AssetResourceConflictError extends Error {
@@ -162,6 +187,29 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
  */
 export class AssetIOFacade {
   private resourceTransaction: AssetResourceTransactionPort | undefined;
+  /** Per-path serialization chains for read-modify-write pack operations.
+   *  Every RMW method (createAssetInPack / writePackEntry / renamePackEntry /
+   *  cloneAssetInPack / deletePackEntry) runs its read+mutate+write INSIDE the
+   *  chain for its pack path, so two concurrent ops on the same pack can never
+   *  interleave into a lost update (read stale → both write → last writer
+   *  clobbers the first's asset). Keyed by the exact packPath string. */
+  private packWriteChains = new Map<string, Promise<void>>();
+
+  /** Run `fn` serialized against every other pack write on `packPath` routed
+   *  through this gate. The scene-save commit path also enters through
+   *  runExclusivePackWrite so a save cannot interleave with a createMaterial
+   *  read-modify-write on the same scene pack. */
+  runExclusivePackWrite<T>(packPath: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.packWriteChains.get(packPath) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    // Chain tail never rejects, so one failed write cannot wedge later writers.
+    const tail = next.then(() => undefined, () => undefined);
+    this.packWriteChains.set(packPath, tail);
+    void tail.then(() => {
+      if (this.packWriteChains.get(packPath) === tail) this.packWriteChains.delete(packPath);
+    });
+    return next;
+  }
 
   /** Install the public resource port supplied by platform-io. */
   setResourceTransactionPort(port: AssetResourceTransactionPort | undefined): void {
@@ -214,6 +262,34 @@ export class AssetIOFacade {
         return { revision: body.revision, result: body };
       },
     };
+  }
+
+  /**
+   * Compare-and-swap only the sourceOverrides field. The read is used to retain
+   * all producer-owned Meta fields; the resource port remains the sole commit
+   * boundary and arbitrates concurrent writers on the expected revision.
+   */
+  async commitSourceOverrides(input: SourceOverrideCommitInput): Promise<SourceOverrideCommitResult> {
+    recordAssetLeaf('assetIO.writeMetaSidecar');
+    const snapshot = await this.readMetaSidecar(input.metaPath);
+    if (!snapshot.ok) throw new Error(snapshot.error.hint);
+    if (snapshot.value.revision !== input.expectedRevision) {
+      throw new AssetResourceConflictError(input.expectedRevision, snapshot.value.revision);
+    }
+    const document = mutateMetaSourceOverrides(
+      parseMetaDocument(snapshot.value.contents),
+      { scope: input.scope, override: input.override, discard: input.discard },
+    );
+    const contents = serializeMetaDocument(document);
+    const prepared = await this.prepareRevisionAwareResourceTransaction({
+      resource: { kind: 'source-sidecar', path: input.metaPath },
+      expectedRevision: input.expectedRevision,
+      content: contents,
+      changes: [{ kind: 'put', path: input.metaPath, content: contents }],
+    });
+    if (prepared === null) throw new Error('source-sidecar CAS is unavailable');
+    const committed = await prepared.commit();
+    return { revision: committed.revision, contents, document };
   }
 
   /** Delete exactly one resolved source file. This is separate from pack-entry
@@ -303,11 +379,13 @@ export class AssetIOFacade {
    *  `.meta.json` targets to the sidecar-aware path. */
   async deletePackEntry(packPath: string, guid: string): Promise<AssetEntry> {
     recordAssetLeaf('assetIO.deletePackEntry');
-    const entry = await this.readPackEntry(packPath, guid);
-    if (!entry) throw new Error(`[editor-core] assetIO.deletePackEntry: entry ${guid} not found in ${packPath}`);
-    const ok = await deleteAsset(packPath, guid);
-    if (!ok) throw new Error(`[editor-core] assetIO.deletePackEntry: failed to delete ${guid} from ${packPath}`);
-    return entry;
+    return this.runExclusivePackWrite(packPath, async () => {
+      const entry = await this.readPackEntry(packPath, guid);
+      if (!entry) throw new Error(`[editor-core] assetIO.deletePackEntry: entry ${guid} not found in ${packPath}`);
+      const ok = await deleteAsset(packPath, guid);
+      if (!ok) throw new Error(`[editor-core] assetIO.deletePackEntry: failed to delete ${guid} from ${packPath}`);
+      return entry;
+    });
   }
 
   /** Write (create or replace) one asset entry. Returns true on success.
@@ -315,44 +393,69 @@ export class AssetIOFacade {
   async writePackEntry(packPath: string, entry: AssetEntry): Promise<boolean> {
     recordAssetLeaf('assetIO.writePackEntry');
     if (isMetaPath(packPath)) return writeMetaSubAsset(packPath, entry as MetaSubAsset);
-    const pack = await readPack(packPath);
-    if (!pack) return false;
-    const packEntry = entry as PackAssetEntry;
-    const idx = pack.assets.findIndex((a) => a.guid === packEntry.guid);
-    if (idx >= 0) pack.assets[idx] = packEntry;
-    else pack.assets.push(packEntry);
-    return writePack(packPath, pack);
+    return this.runExclusivePackWrite(packPath, async () => {
+      const pack = await readPack(packPath);
+      if (!pack) return false;
+      const packEntry = entry as PackAssetEntry;
+      const idx = pack.assets.findIndex((a) => a.guid === packEntry.guid);
+      if (idx >= 0) pack.assets[idx] = packEntry;
+      else pack.assets.push(packEntry);
+      return writePack(packPath, pack);
+    });
   }
 
   /** Create a new asset entry in a pack (creates the pack file if missing).
-   *  Single gate for `createAsset` document op — all other callers are lint-gated. */
-  async createAssetInPack(opts: {
+   *  Single gate for `createAsset`/`createMaterial` document ops — all other
+   *  callers are lint-gated.
+   *
+   *  Failure discipline (material-persistence fix): the result is DIAGNOSABLE.
+   *  `read-failed` refuses the write when the pack exists but is unreadable or
+   *  fails shell validation — the legacy `readPack → null → fresh envelope`
+   *  collapse would otherwise overwrite a valid scene pack with one containing
+   *  ONLY the new asset, silently dropping every existing scene/material/refs
+   *  body. `write-failed` reports the exact write rejection (validation/HTTP/
+   *  network). Only `ok:true` may be treated as "the asset is on disk". */
+  createAssetInPack(opts: {
     packPath: string;
     asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[] };
-  }): Promise<{ ok: boolean }> {
+  }): Promise<CreateAssetInPackResult> {
     recordAssetLeaf('assetIO.createAssetInPack');
-    let pack = await readPack(opts.packPath);
-    if (!pack) {
-      // Create the pack file on first asset
-      // The engine runtime's loadByGuid boundary accepts Pack v2 only. The
-      // editor's read validator intentionally keeps accepting legacy string
-      // versions, but every authored write must emit the runtime envelope.
-      pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
-    }
-    pack.assets.push({
-      guid: opts.asset.guid,
-      kind: opts.asset.kind,
-      name: opts.asset.name,
-      payload: opts.asset.payload as Record<string, unknown>,
-      refs: opts.asset.refs ?? [],
+    return this.runExclusivePackWrite(opts.packPath, async () => {
+      const read = await readPackDetailed(opts.packPath);
+      let pack: PackFile;
+      if (read.status === 'error') {
+        return {
+          ok: false as const,
+          reason: 'read-failed' as const,
+          hint: `refusing to overwrite existing pack ${opts.packPath}: ${read.hint}`,
+        };
+      }
+      if (read.status === 'missing') {
+        // Create the pack file on first asset.
+        // The engine runtime's loadByGuid boundary accepts Pack v2 only. The
+        // editor's read validator intentionally keeps accepting legacy string
+        // versions, but every authored write must emit the runtime envelope.
+        pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
+      } else {
+        pack = read.pack;
+      }
+      pack.assets.push({
+        guid: opts.asset.guid,
+        kind: opts.asset.kind,
+        name: opts.asset.name,
+        payload: opts.asset.payload as Record<string, unknown>,
+        refs: opts.asset.refs ?? [],
+      });
+      // Upgrade legacy editor-created packs and add the asset-local artifact
+      // map required by the Pack v2 loader. normalizePackForRuntime preserves
+      // unknown fields, so this remains a lossless repair at the shared write
+      // gate for both human UI and AI dispatches.
+      pack = normalizePackForRuntime(pack as unknown as Record<string, unknown>) as PackFile;
+      const written = await writePackDetailed(opts.packPath, pack);
+      return written.ok
+        ? { ok: true as const }
+        : { ok: false as const, reason: 'write-failed' as const, hint: written.hint };
     });
-    // Upgrade legacy editor-created packs and add the asset-local artifact
-    // map required by the Pack v2 loader. normalizePackForRuntime preserves
-    // unknown fields, so this remains a lossless repair at the shared write
-    // gate for both human UI and AI dispatches.
-    pack = normalizePackForRuntime(pack as unknown as Record<string, unknown>) as PackFile;
-    const ok = await writePack(opts.packPath, pack);
-    return { ok };
   }
 
   /**
@@ -362,29 +465,31 @@ export class AssetIOFacade {
    */
   async createAuthoredPackIfAbsent(packPath: string, content: string): Promise<CreateAuthoredPackResult> {
     recordAssetLeaf('assetIO.writePackEntry');
-    try {
-      const existing = await fetch(`/api/files/raw?path=${encodeURIComponent(packPath)}`);
-      if (existing.ok) {
-        return { ok: false, reason: 'collision', hint: `An authored resource already exists at ${packPath}.` };
+    return this.runExclusivePackWrite(packPath, async () => {
+      try {
+        const existing = await fetch(`/api/files/raw?path=${encodeURIComponent(packPath)}`);
+        if (existing.ok) {
+          return { ok: false, reason: 'collision', hint: `An authored resource already exists at ${packPath}.` };
+        }
+        if (existing.status !== 404) {
+          return { ok: false, reason: 'write-failed', hint: `Could not validate target availability (HTTP ${existing.status}).` };
+        }
+        const written = await fetch('/api/files', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: packPath, content }),
+        });
+        return written.ok
+          ? { ok: true }
+          : { ok: false, reason: 'write-failed', hint: `Authored pack write failed (HTTP ${written.status}).` };
+      } catch (cause) {
+        return {
+          ok: false,
+          reason: 'write-failed',
+          hint: `Authored pack write failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        };
       }
-      if (existing.status !== 404) {
-        return { ok: false, reason: 'write-failed', hint: `Could not validate target availability (HTTP ${existing.status}).` };
-      }
-      const written = await fetch('/api/files', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: packPath, content }),
-      });
-      return written.ok
-        ? { ok: true }
-        : { ok: false, reason: 'write-failed', hint: `Authored pack write failed (HTTP ${written.status}).` };
-    } catch (cause) {
-      return {
-        ok: false,
-        reason: 'write-failed',
-        hint: `Authored pack write failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-      };
-    }
+    });
   }
 
   /** Rename one asset entry (change its `name` field), returning the REPLACED
@@ -401,14 +506,16 @@ export class AssetIOFacade {
   ): Promise<{ ok: boolean; oldName: string | null }> {
     recordAssetLeaf('assetIO.renamePackEntry');
     if (isMetaPath(packPath)) return renameMetaSubAsset(packPath, guid, newName);
-    const pack = await readPack(packPath);
-    if (!pack) return { ok: false, oldName: null };
-    const entry = pack.assets.find((a) => a.guid === guid);
-    if (!entry) return { ok: false, oldName: null };
-    const oldName = entry.name ?? null;
-    entry.name = newName;
-    const ok = await writePack(packPath, pack);
-    return { ok, oldName };
+    return this.runExclusivePackWrite(packPath, async () => {
+      const pack = await readPack(packPath);
+      if (!pack) return { ok: false, oldName: null };
+      const entry = pack.assets.find((a) => a.guid === guid);
+      if (!entry) return { ok: false, oldName: null };
+      const oldName = entry.name ?? null;
+      entry.name = newName;
+      const ok = await writePack(packPath, pack);
+      return { ok, oldName };
+    });
   }
 
   // ── Import write-gate (source-file / cook axis) ─────────────────────────────
@@ -586,23 +693,26 @@ export class AssetIOFacade {
    *  (CBContextMenu etc.) — pack writes stay inside the gate. */
   async cloneAssetInPack(packPath: string, guid: string): Promise<{ ok: boolean; newGuid: string }> {
     recordAssetLeaf('assetIO.cloneAssetInPack');
-    const pack = await readPack(packPath);
-    if (!pack) return { ok: false, newGuid: '' };
-    const source = pack.assets.find((a) => a.guid === guid);
-    if (!source) return { ok: false, newGuid: '' };
-    const targetGuid = generateAssetGuid();
-    pack.assets.push({
-      guid: targetGuid,
-      kind: source.kind,
-      name: source.name ? `${source.name} (copy)` : undefined,
-      payload: structuredClone(source.payload),
-      refs: [...source.refs],
+    return this.runExclusivePackWrite(packPath, async () => {
+      const pack = await readPack(packPath);
+      if (!pack) return { ok: false, newGuid: '' };
+      const source = pack.assets.find((a) => a.guid === guid);
+      if (!source) return { ok: false, newGuid: '' };
+      const targetGuid = generateAssetGuid();
+      pack.assets.push({
+        guid: targetGuid,
+        kind: source.kind,
+        name: source.name ? `${source.name} (copy)` : undefined,
+        payload: structuredClone(source.payload),
+        refs: [...source.refs],
+      });
+      const ok = await writePack(packPath, pack);
+      return { ok, newGuid: targetGuid };
     });
-    const ok = await writePack(packPath, pack);
-    return { ok, newGuid: targetGuid };
   }
 }
 
-/** Shared singleton — AssetIOFacade holds no per-instance state, so a single
- *  instance is used by the gateway ctx builder and document.ts's ctx builder. */
+/** Shared singleton — the gateway ctx builder and document.ts's ctx builder
+ *  share ONE instance so the per-path write chains serialize all pack writes
+ *  across every consumer. */
 export const assetIO = new AssetIOFacade();

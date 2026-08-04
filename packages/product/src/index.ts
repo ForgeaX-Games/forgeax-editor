@@ -151,6 +151,12 @@ export type {
   AssetWorkspaceIssueSeverity,
   AssetWorkspaceSnapshot,
   CreateAssetWorkspaceSnapshotInput,
+  AssetSourceMutationConfirmation,
+  AssetSourceMutationIntent,
+  AssetSourceMutationOutput,
+  AssetSourceMutationRequest,
+  AssetSourceMutationScope,
+  AssetSourceMutationSnapshot,
 } from './contracts/asset-workspace';
 export {
   compareAssetWorkspaceSnapshots,
@@ -191,6 +197,18 @@ export type {
   AssetPreflightOptions,
   AssetPreflightResult,
   AssetSubjectAction,
+} from './assets/preflight';
+export {
+  authorizeAssetSourceMutation,
+  preflightAssetSourceMutation,
+} from './assets/preflight';
+export type {
+  AssetSourceMutationAuthorizationRequest,
+  AssetSourceMutationAuthorizationResult,
+  AssetSourceMutationError,
+  AssetSourceMutationErrorCode,
+  AssetSourceMutationPreflightOptions,
+  AssetSourceMutationPreflightResult,
 } from './assets/preflight';
 export {
   getAssetSubjectCapability,

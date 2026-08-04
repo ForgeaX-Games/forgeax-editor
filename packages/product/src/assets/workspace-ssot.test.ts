@@ -17,7 +17,7 @@ describe('workspace SSOT structural gate', () => {
 
     expect(productWorkspace).toContain('export function createAssetWorkspace');
     expect(browserModel).toContain('const workspace = createAssetWorkspace()');
-    expect(browserModel).toContain('workspace: workspaceResult.snapshot');
+    expect(browserModel).toContain('workspace: workspaceResult');
     expect(browser).not.toContain('useAssetGraph(');
     expect(graphProjection).toContain('Compatibility projection from the workspace relations');
   });

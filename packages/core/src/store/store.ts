@@ -94,7 +94,6 @@ export {
   initSceneList,
   switchSceneFile,
   previewImportedScene,
-  editImportedSource,
   readPlayConfig,
   writePlayConfig,
   createSceneFile,

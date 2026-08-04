@@ -26,6 +26,14 @@ export async function ensureAssetCataloged(
   guid: string,
 ): Promise<boolean> {
   if (registry === undefined) return false;
+  const catalog = registry.catalogSnapshot?.();
+  if (catalog?.stale === true) {
+    console.info('[mat-tex-drop]', 'ensureAssetCataloged: Catalog is stale; reconcile before consuming new facts', {
+      guid,
+      diagnostics: catalog.diagnostics,
+    });
+    return false;
+  }
   if (registry.lookup(guid) !== undefined) return true;
   const parsed = AssetGuid.parse(guid);
   if (!parsed.ok) return false;

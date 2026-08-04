@@ -1,4 +1,4 @@
-// viewport-camera-appliers — the 5 camera session-op registrations extracted
+// viewport-camera-appliers — camera session-op registrations extracted
 // from viewport.ts (M8).
 //
 // Session-op appliers vs the per-frame facade write:
@@ -28,7 +28,40 @@ import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { EngineFacade } from '@forgeax/editor-core';
 import { registerSessionApplier } from '@forgeax/editor-core';
 import type { Vec3 } from './viewport-ray';
-import { clampPitch, computeFlyCamera, computeOrbitCamera, flyToOrbit } from './viewport-camera';
+import {
+  adjustFov,
+  adjustOrthoHalfHeight,
+  clampDist,
+  clampFov,
+  clampOrthoHalfHeight,
+  clampPitch,
+  computeFlyCamera,
+  computeOrbitCamera,
+  flyToOrbit,
+  type CameraProjection,
+} from './viewport-camera';
+
+const invalidArgs = (hint: string) => ({
+  ok: false as const,
+  error: { code: 'INVALID_ARGS' as const, hint },
+});
+
+function isFiniteVec3(value: unknown): value is [number, number, number] {
+  return Array.isArray(value)
+    && value.length === 3
+    && value.every((entry) => typeof entry === 'number' && Number.isFinite(entry));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+interface NormalizedFlyInput {
+  readonly ok: true;
+  readonly pos: Vec3;
+  readonly yaw: number;
+  readonly pitch: number;
+}
 
 /** The camera pose the appliers read and write back into the caller (viewport). */
 export interface CameraPose {
@@ -40,7 +73,12 @@ export interface CameraPose {
   fwd: Vec3;
   rgt: Vec3;
   upv: Vec3;
+  projection: CameraProjection;
+  fov: number;
+  orthoHalfHeight: number;
 }
+
+export type CameraBookmark = CameraPose;
 
 export interface CameraAppliersDeps {
   editorEngine: EngineFacade;
@@ -49,14 +87,18 @@ export interface CameraAppliersDeps {
   getPose(): CameraPose;
   /** Write the new pose back into caller storage after each applier runs. */
   setPose(pose: CameraPose): void;
+  /** Repaint the editor camera, projection and visual helpers from caller state. */
+  applyCamera(): void;
+  getBookmark(slot: number): CameraBookmark | undefined;
+  setBookmark(slot: number, bookmark: CameraBookmark | null): void;
   /** requestFrame delegates to the closure-local frameSelection(). */
   frameSelection(): void;
 }
 
-/** Register all 5 camera session-op appliers. Returns a dispose fn that
+/** Register all camera session-op appliers. Returns a dispose fn that
  *  unregisters them in reverse order. */
 export function registerCameraAppliers({
-  editorEngine, camera, getPose, setPose, frameSelection,
+  editorEngine, camera, getPose, setPose, applyCamera, getBookmark, setBookmark, frameSelection,
 }: CameraAppliersDeps): () => void {
   const writeCameraTransform = (r: { camPos: Vec3; qCam: number[] }): void => {
     editorEngine.set(camera, Transform, {
@@ -75,15 +117,20 @@ export function registerCameraAppliers({
   // (target = pos + fwd * dist).
   const unregOrbit = registerSessionApplier(
     'cameraOrbit',
-    (op, _ctx): { ok: true } => {
+    (op, _ctx): { ok: true } | ReturnType<typeof invalidArgs> => {
       const o = op as unknown as {
         target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number;
         pos?: [number, number, number];
       };
       const cur = getPose();
+      if (o.target !== undefined && !isFiniteVec3(o.target)) return invalidArgs('target must be a finite [x,y,z] array');
+      if (o.pos !== undefined && !isFiniteVec3(o.pos)) return invalidArgs('pos must be a finite [x,y,z] array');
+      if (o.yaw !== undefined && !isFiniteNumber(o.yaw)) return invalidArgs('yaw must be a finite number');
+      if (o.pitch !== undefined && !isFiniteNumber(o.pitch)) return invalidArgs('pitch must be a finite number');
+      if (o.dist !== undefined && !isFiniteNumber(o.dist)) return invalidArgs('dist must be a finite number');
       const nextYaw = o.yaw ?? cur.yaw;
-      const nextPitch = o.pitch ?? cur.pitch;
-      const nextDist = o.dist ?? cur.dist;
+      const nextPitch = clampPitch(o.pitch ?? cur.pitch);
+      const nextDist = clampDist(o.dist ?? cur.dist);
       let tgt: Vec3;
       if (o.pos) {
         const flyR = computeFlyCamera({ pos: [o.pos[0], o.pos[1], o.pos[2]], yaw: nextYaw, pitch: nextPitch });
@@ -96,11 +143,12 @@ export function registerCameraAppliers({
         tgt = o.target ? [o.target[0], o.target[1], o.target[2]] : [...cur.target];
       }
       const r = computeOrbitCamera(tgt, nextYaw, nextPitch, nextDist);
-      writeCameraTransform(r);
       setPose({
         target: tgt, yaw: nextYaw, pitch: nextPitch, dist: nextDist,
         camPos: r.camPos, fwd: r.fwd, rgt: r.rgt, upv: r.upv,
+        projection: cur.projection, fov: cur.fov, orthoHalfHeight: cur.orthoHalfHeight,
       });
+      applyCamera();
       return { ok: true };
     },
     { title: 'Orbit camera' },
@@ -110,23 +158,36 @@ export function registerCameraAppliers({
   // The FLY gesture end dispatches ONE cameraFly session op carrying
   // {pos, yaw, pitch}. Also reconstructs a reasonable orbit target so a
   // subsequent MMB/Alt+LMB gesture builds on the fly-end pose smoothly (T6a).
-  const applyFlyLike = (op: unknown): void => {
+  const normalizeFlyInput = (op: unknown, cur: CameraPose): NormalizedFlyInput | ReturnType<typeof invalidArgs> => {
     const o = op as { pos?: [number, number, number]; yaw?: number; pitch?: number };
-    const cur = getPose();
+    if (o.pos !== undefined && !isFiniteVec3(o.pos)) return invalidArgs('pos must be a finite [x,y,z] array');
+    if (o.yaw !== undefined && !isFiniteNumber(o.yaw)) return invalidArgs('yaw must be a finite number');
+    if (o.pitch !== undefined && !isFiniteNumber(o.pitch)) return invalidArgs('pitch must be a finite number');
     const p: Vec3 = o.pos ? [o.pos[0], o.pos[1], o.pos[2]] : [...cur.camPos];
     const nextYaw = o.yaw ?? cur.yaw;
-    const nextPitch = o.pitch ?? cur.pitch;
+    const nextPitch = clampPitch(o.pitch ?? cur.pitch);
+    return { ok: true, pos: p, yaw: nextYaw, pitch: nextPitch };
+  };
+  const applyFlyLike = (op: unknown): { ok: true } | ReturnType<typeof invalidArgs> => {
+    const cur = getPose();
+    const normalized = normalizeFlyInput(op, cur);
+    if (!normalized.ok) return normalized;
+    const p = normalized.pos;
+    const nextYaw = normalized.yaw;
+    const nextPitch = normalized.pitch;
     const r = computeFlyCamera({ pos: p, yaw: nextYaw, pitch: nextPitch });
-    writeCameraTransform(r);
     const orb = flyToOrbit({ pos: p, yaw: nextYaw, pitch: nextPitch }, cur.dist);
     setPose({
       target: orb.target, yaw: nextYaw, pitch: nextPitch, dist: orb.dist,
       camPos: r.camPos, fwd: r.fwd, rgt: r.rgt, upv: r.upv,
+      projection: cur.projection, fov: cur.fov, orthoHalfHeight: cur.orthoHalfHeight,
     });
+    applyCamera();
+    return { ok: true };
   };
   const unregFly = registerSessionApplier(
     'cameraFly',
-    (op, _ctx): { ok: true } => { applyFlyLike(op); return { ok: true }; },
+    (op, _ctx) => applyFlyLike(op),
     { title: 'Fly camera to position' },
   );
 
@@ -136,7 +197,7 @@ export function registerCameraAppliers({
   // here now". Separate kind for ledger/self-introspection.
   const unregTeleport = registerSessionApplier(
     'cameraTeleport',
-    (op, _ctx): { ok: true } => { applyFlyLike(op); return { ok: true }; },
+    (op, _ctx) => applyFlyLike(op),
     { title: 'Teleport camera to position' },
   );
 
@@ -147,26 +208,29 @@ export function registerCameraAppliers({
   //   → yaw = atan2(-dx, -dz),  pitch = atan2(dy, hypot(dx,dz))
   const unregLookAt = registerSessionApplier(
     'cameraLookAt',
-    (op, _ctx): { ok: true } => {
+    (op, _ctx): { ok: true } | ReturnType<typeof invalidArgs> => {
       const o = op as unknown as {
         pos?: [number, number, number]; lookAt?: [number, number, number];
       };
-      if (!o.pos || !o.lookAt) return { ok: true };
+      if (!isFiniteVec3(o.pos)) return invalidArgs('pos must be a finite [x,y,z] array');
+      if (!isFiniteVec3(o.lookAt)) return invalidArgs('lookAt must be a finite [x,y,z] array');
       const dx = o.lookAt[0] - o.pos[0];
       const dy = o.lookAt[1] - o.pos[1];
       const dz = o.lookAt[2] - o.pos[2];
       const horiz = Math.hypot(dx, dz);
+      if (Math.hypot(dx, dy, dz) <= Number.EPSILON) return invalidArgs('lookAt must differ from pos');
       const calcYaw = Math.atan2(-dx, -dz);
       const calcPitch = clampPitch(Math.atan2(dy, horiz));
       const p: Vec3 = [o.pos[0], o.pos[1], o.pos[2]];
       const r = computeFlyCamera({ pos: p, yaw: calcYaw, pitch: calcPitch });
-      writeCameraTransform(r);
       const cur = getPose();
       const orb = flyToOrbit({ pos: p, yaw: calcYaw, pitch: calcPitch }, cur.dist);
       setPose({
         target: orb.target, yaw: calcYaw, pitch: calcPitch, dist: orb.dist,
         camPos: r.camPos, fwd: r.fwd, rgt: r.rgt, upv: r.upv,
+        projection: cur.projection, fov: cur.fov, orthoHalfHeight: cur.orthoHalfHeight,
       });
+      applyCamera();
       return { ok: true };
     },
     { title: 'Move camera and look at target' },
@@ -187,7 +251,160 @@ export function registerCameraAppliers({
     { title: 'Frame selection in viewport' },
   );
 
+  const unregSetProjection = registerSessionApplier(
+    'cameraSetProjection',
+    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+      const value = (op as { projection?: unknown }).projection;
+      if (value !== 'perspective' && value !== 'orthographic') {
+        return invalidArgs('projection must be "perspective" or "orthographic"');
+      }
+      const cur = getPose();
+      setPose({ ...cur, projection: value });
+      applyCamera();
+      return { ok: true };
+    },
+    {
+      title: 'Set camera projection',
+      argsSchema: {
+        type: 'object',
+        properties: { projection: { type: 'string', enum: ['perspective', 'orthographic'] } },
+        required: ['projection'],
+      },
+    },
+  );
+
+  const unregToggleProjection = registerSessionApplier(
+    'cameraToggleProjection',
+    (_op, _ctx): { ok: true } => {
+      const cur = getPose();
+      setPose({ ...cur, projection: cur.projection === 'perspective' ? 'orthographic' : 'perspective' });
+      applyCamera();
+      return { ok: true };
+    },
+    { title: 'Toggle camera projection' },
+  );
+
+  const unregAdjustFov = registerSessionApplier(
+    'cameraAdjustFov',
+    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+      const delta = (op as { delta?: unknown }).delta;
+      if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0) {
+        return invalidArgs('delta must be a non-zero finite number');
+      }
+      const cur = getPose();
+      setPose({
+        ...cur,
+        fov: cur.projection === 'perspective' ? adjustFov(cur.fov, delta) : cur.fov,
+        orthoHalfHeight: cur.projection === 'orthographic'
+          ? adjustOrthoHalfHeight(cur.orthoHalfHeight, delta)
+          : cur.orthoHalfHeight,
+      });
+      applyCamera();
+      return { ok: true };
+    },
+    {
+      title: 'Adjust camera view scale',
+      argsSchema: {
+        type: 'object',
+        properties: { delta: { type: 'number' } },
+        required: ['delta'],
+      },
+    },
+  );
+
+  const unregZoom = registerSessionApplier(
+    'cameraZoom',
+    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+      const delta = (op as { delta?: unknown }).delta;
+      if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0) {
+        return invalidArgs('delta must be a non-zero finite number');
+      }
+      const cur = getPose();
+      setPose({
+        ...cur,
+        dist: cur.projection === 'perspective'
+          ? clampDist(cur.dist * (delta > 0 ? 0.9 : delta < 0 ? 1.1 : 1))
+          : cur.dist,
+        orthoHalfHeight: cur.projection === 'orthographic'
+          ? adjustOrthoHalfHeight(cur.orthoHalfHeight, delta)
+          : cur.orthoHalfHeight,
+      });
+      applyCamera();
+      return { ok: true };
+    },
+    {
+      title: 'Zoom camera',
+      argsSchema: {
+        type: 'object',
+        properties: { delta: { type: 'number' } },
+        required: ['delta'],
+      },
+    },
+  );
+
+  const unregBookmark = registerSessionApplier(
+    'cameraBookmark',
+    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+      const input = op as { action?: unknown; slot?: unknown };
+      if (input.action !== 'save' && input.action !== 'recall' && input.action !== 'clear') {
+        return invalidArgs('action must be "save", "recall", or "clear"');
+      }
+      if (typeof input.slot !== 'number' || !Number.isInteger(input.slot) || input.slot < 1 || input.slot > 9) {
+        return invalidArgs('slot must be an integer between 1 and 9');
+      }
+      const slot = input.slot;
+      if (input.action === 'save') {
+        const cur = getPose();
+        setBookmark(slot, {
+          ...cur,
+          target: [...cur.target],
+          camPos: [...cur.camPos],
+          fwd: [...cur.fwd],
+          rgt: [...cur.rgt],
+          upv: [...cur.upv],
+        });
+        return { ok: true };
+      }
+      if (input.action === 'clear') {
+        setBookmark(slot, null);
+        return { ok: true };
+      }
+      const bookmark = getBookmark(slot);
+      if (!bookmark) return invalidArgs(`camera bookmark ${slot} is empty`);
+      setPose({
+        ...bookmark,
+        target: [...bookmark.target],
+        pitch: clampPitch(bookmark.pitch),
+        dist: clampDist(bookmark.dist),
+        camPos: [...bookmark.camPos],
+        fwd: [...bookmark.fwd],
+        rgt: [...bookmark.rgt],
+        upv: [...bookmark.upv],
+        fov: clampFov(bookmark.fov),
+        orthoHalfHeight: clampOrthoHalfHeight(bookmark.orthoHalfHeight),
+      });
+      applyCamera();
+      return { ok: true };
+    },
+    {
+      title: 'Camera bookmark',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['save', 'recall', 'clear'] },
+          slot: { type: 'number', minimum: 1, maximum: 9 },
+        },
+        required: ['action', 'slot'],
+      },
+    },
+  );
+
   return () => {
+    unregBookmark();
+    unregZoom();
+    unregAdjustFov();
+    unregToggleProjection();
+    unregSetProjection();
     unregRequestFrame();
     unregLookAt();
     unregTeleport();

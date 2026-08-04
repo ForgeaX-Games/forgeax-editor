@@ -33,6 +33,27 @@ import {
 | `.` | 所有核心类型与函数（见上方 import 示例） |
 | `./package.json` | 包元信息 |
 
+## Asset source workflow
+
+AI and UI callers share the same Gateway path: `listOps()` → `previewAssetSourceMutation` →
+`saveAssetSourceOverride` or `reimportAsset` → `waitOperationRun(requestId)`. Use
+`discardSourceOverridesAndReimport` only after preflight returns the impact set and its
+`confirmationToken`. The stable identity tuple is `guid` + `scope.sourceKey` + `expectedRevision`;
+the Catalog is the read SSOT and no caller reads DDC or edits Meta files directly.
+
+Operation runs expose `accepted`/`running`, terminal `succeeded`/`failed`/`cancelled`, and Gateway
+read methods `getOperationRun`, `waitOperationRun`, and `subscribeOperationRun`. Recovery actions are
+`asset.preflight`, `run.get`, `run.wait`, `run.retry`, and `catalog.reconcile`. Branch on the public
+error `code`, `phase`, `expected`, `actual`, `retryable`, and `recoveryActions`; never parse `hint` or
+`message`.
+
+| Error index | Recovery |
+|:--|:--|
+| `asset-source-key-*`, `asset-meta-revision-conflict`, `asset-confirmation-*` | Re-run preflight with the current Catalog fact |
+| `asset-validation-failed`, `asset-cook-failed`, `run-cancelled-before-cas` | Retry with a new request id when `retryable` |
+| `asset-publish-observation-timeout`, `asset-catalog-subscription-gap` | Reconcile Catalog, then read the existing run |
+| `asset-operation-cas-committed` | Read the terminal run; do not duplicate the mutation |
+
 ## troubleshooting
 
 Gateway failures expose the shared structured envelope from

@@ -200,6 +200,10 @@
     "signature": "OperationRunRegistry"
   },
   {
+    "name": "reconcileOperationRuns",
+    "signature": "() => { readonly ok: true; readonly value: OperationRunSnapshot; }"
+  },
+  {
     "name": "peekUndoInverse",
     "signature": "() => EditorOp | undefined"
   },
@@ -226,6 +230,10 @@
   {
     "name": "registerSceneAuthoringSessionProvider",
     "signature": "(provider: () => SceneAuthoringSessionReadModel) => () => void"
+  },
+  {
+    "name": "registerCatalogReconcile",
+    "signature": "(provider: CatalogReconcileProvider) => () => void"
   },
   {
     "name": "registerSceneReadProvider",

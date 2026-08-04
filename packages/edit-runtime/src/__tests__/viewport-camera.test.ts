@@ -9,6 +9,11 @@ import {
   computeOrbitCamera,
   clampFlySpeed,
   applyFlyWheelSpeed,
+  clampFov,
+  adjustFov,
+  clampOrthoHalfHeight,
+  adjustOrthoHalfHeight,
+  deriveOrthoHalfHeight,
   advanceFly,
   advanceFlyLook,
   computeFlyCamera,
@@ -17,6 +22,10 @@ import {
   FLY_SPEED_MIN,
   FLY_SPEED_MAX,
   FLY_SPEED_STEP,
+  FOV_MIN,
+  FOV_MAX,
+  ORTHO_HALF_HEIGHT_MIN,
+  ORTHO_HALF_HEIGHT_MAX,
   type OrbitState,
   type OrbitCameraResult,
   type FlyState,
@@ -231,9 +240,32 @@ test('applyFlyWheelSpeed: negative delta scales down', () => {
   expect(applyFlyWheelSpeed(speed, -1)).toBeCloseTo(speed / FLY_SPEED_STEP, 4);
 });
 
+test('applyFlyWheelSpeed: respects a fractional preference scalar', () => {
+  const speed = 8;
+  expect(applyFlyWheelSpeed(speed, 1, 0.5)).toBeCloseTo(speed * Math.sqrt(FLY_SPEED_STEP), 4);
+});
+
 test('applyFlyWheelSpeed: zero delta returns current speed (clamped)', () => {
   expect(applyFlyWheelSpeed(8, 0)).toBe(8);
   expect(applyFlyWheelSpeed(1000, 0)).toBe(FLY_SPEED_MAX);
+});
+
+test('FOV and orthographic zoom values clamp non-finite and extreme input', () => {
+  expect(clampFov(Number.NaN)).toBeCloseTo(Math.PI / 3, 6);
+  expect(clampFov(0)).toBe(FOV_MIN);
+  expect(clampFov(Math.PI)).toBe(FOV_MAX);
+  expect(clampOrthoHalfHeight(Number.POSITIVE_INFINITY)).toBe(10);
+  expect(clampOrthoHalfHeight(0)).toBe(ORTHO_HALF_HEIGHT_MIN);
+  expect(clampOrthoHalfHeight(ORTHO_HALF_HEIGHT_MAX * 2)).toBe(ORTHO_HALF_HEIGHT_MAX);
+});
+
+test('adjustFov and adjustOrthoHalfHeight use positive delta for zoom in', () => {
+  const fov = Math.PI / 3;
+  expect(adjustFov(fov, 1)).toBeLessThan(fov);
+  expect(adjustFov(fov, -1)).toBeGreaterThan(fov);
+  expect(adjustOrthoHalfHeight(10, 1)).toBeLessThan(10);
+  expect(adjustOrthoHalfHeight(10, -1)).toBeGreaterThan(10);
+  expect(deriveOrthoHalfHeight(10, fov)).toBeCloseTo(10 * Math.tan(fov / 2), 6);
 });
 
 // ── advanceFly (movement) ───────────────────────────────────────────────────
@@ -312,6 +344,19 @@ test('advanceFly: speed and dt scale movement linearly', () => {
   const r1 = advanceFly(state, { ...emptyInput, forward: true }, 10, 1);
   const r2 = advanceFly(state, { ...emptyInput, forward: true }, 20, 0.5);
   expect(Math.abs(r1.pos[2])).toBeCloseTo(Math.abs(r2.pos[2]), 6);
+});
+
+test('advanceFly: Shift boost doubles movement without changing direction', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const normal = advanceFly(state, { ...emptyInput, forward: true }, 10, 1);
+  const boosted = advanceFly(state, { ...emptyInput, forward: true, boost: true }, 10, 1);
+  expect(boosted.pos[2]).toBeCloseTo(normal.pos[2] * 2, 6);
+});
+
+test('advanceFly: custom preference boost multiplier is applied', () => {
+  const state: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
+  const boosted = advanceFly(state, { ...emptyInput, forward: true, boost: true }, 10, 1, 3);
+  expect(boosted.pos[2]).toBeCloseTo(-30, 6);
 });
 
 test('advanceFly: yaw=90deg forward moves along -X', () => {

@@ -3,10 +3,15 @@
 //
 // Camera bindings (UE5 editor style):
 //   RMB (hold)     = FLY MODE (free-look + WASD/QE + scroll speed)
+//   Shift (hold)   = temporary fly-speed boost
 //   MMB drag       = pan (no modifier needed)
 //   Alt + LMB      = orbit (tumble around target)
 //   Alt + RMB      = zoom / dolly
+//   Alt + MMB      = pan alias
 //   scroll wheel   = zoom (outside fly) / speed adj (inside fly)
+//   V              = perspective / orthographic
+//   Z / C          = view scale
+//   Ctrl+1…9 / 1…9 = save / recall camera bookmark
 //   LMB            = select / gizmo
 //
 // Click-to-pick: left-click an entity → select (ray vs per-entity AABB);
@@ -20,7 +25,7 @@
 // Pure geometry (ray/AABB/plane) is factored into sibling modules and unit-
 // tested; only the wiring depends on the (untyped) engine.
 import { Transform, ChildOf } from '@forgeax/engine-scene';
-import { Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { Camera, orthographic, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import { quat } from '@forgeax/engine-math';
 // engine #650 (Tier-2 decomposition) moved pick/PickError into @forgeax/engine-picking.
 import { pick as enginePick, PickError } from '@forgeax/engine-picking';
@@ -34,10 +39,42 @@ import type { World, EntityHandle } from '@forgeax/engine-ecs';
 // (createViewport) + a re-export barrel + the interaction state machine
 // (fly/orbit tick, pointer/keyboard handlers, drag lifecycle).
 export { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, orthoBasis, angleOnAxis, entityBox } from './viewport-ray';
-export { deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, clampFlySpeed, applyFlyWheelSpeed, advanceFly, advanceFlyLook, computeFlyCamera, orbitToFly, flyToOrbit, FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX, FLY_SPEED_STEP, type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type OrbitState, type OrbitCameraResult, type FlyState, type FlyInput, type Quat } from './viewport-camera';
+export {
+  deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, clampFlySpeed,
+  applyFlyWheelSpeed, advanceFly, advanceFlyLook, computeFlyCamera, orbitToFly, flyToOrbit,
+  clampFov, adjustFov, clampOrthoHalfHeight, adjustOrthoHalfHeight, deriveOrthoHalfHeight,
+  FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX, FLY_SPEED_STEP, FLY_BOOST_MULTIPLIER,
+  FOV_DEFAULT, FOV_MIN, FOV_MAX, FOV_STEP, ORTHO_HALF_HEIGHT_DEFAULT,
+  ORTHO_HALF_HEIGHT_MIN, ORTHO_HALF_HEIGHT_MAX, ORTHO_ZOOM_STEP,
+  type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type CameraProjection,
+  type OrbitState, type OrbitCameraResult, type FlyState, type FlyInput, type Quat,
+} from './viewport-camera';
+export {
+  cameraGestureForPointer, cameraPoseChanged, pointerMovementDelta,
+  type CameraGestureMode, type CameraPoseSnapshot, type PointerGestureModifiers,
+} from './viewport-navigation';
+export {
+  defaultViewportPreferences, loadViewportPreferences, normalizeViewportPreferences,
+  saveViewportPreferences, VIEWPORT_PREFERENCES_STORAGE_KEY,
+  type CameraBookmarkSlot, type ViewportPreferences, type ViewportPreferencesStorage,
+} from './viewport-preferences';
 import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closestAxisT, rayPlane, angleOnAxis, entityBox } from './viewport-ray';
-import { clampDist, advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera, applyFlyWheelSpeed, flyToOrbit, FLY_SPEED_DEFAULT, type InputTarget, type FlyInput } from './viewport-camera';
-import { registerCameraAppliers } from './viewport-camera-appliers';
+import {
+  advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera,
+  applyFlyWheelSpeed, flyToOrbit, deriveOrthoHalfHeight, adjustOrthoHalfHeight,
+  FOV_MIN, FOV_MAX,
+  ORTHO_HALF_HEIGHT_MIN, ORTHO_HALF_HEIGHT_MAX,
+  type InputTarget, type FlyInput, type CameraProjection,
+} from './viewport-camera';
+import { cameraGestureForPointer, cameraPoseChanged, type CameraGestureMode, type CameraPoseSnapshot } from './viewport-navigation';
+import { createViewportCursorCapture, type ViewportCursorCapture } from './viewport-cursor';
+import { registerCameraAppliers, type CameraBookmark } from './viewport-camera-appliers';
+import {
+  loadViewportPreferences,
+  saveViewportPreferences,
+  type CameraBookmarkSlot,
+  type ViewportPreferences,
+} from './viewport-preferences';
 import { createGizmoPool } from './viewport-gizmo';
 import { createParamGizmo } from './viewport-param-gizmo';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
@@ -51,7 +88,7 @@ import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-co
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getGizmoSpace, getSelection, onGizmoModeChange, onGizmoSpaceChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getGizmoSpace, getSelection, getSelectionList, onGizmoModeChange, onGizmoSpaceChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -92,6 +129,8 @@ export interface ViewportDeps {
    *  derivation. The viewport never stores run/display itself — it only reads
    *  inputTarget through this accessor (SSOT lives upstream). */
   getInputTarget?: () => InputTarget;
+  /** Optional host-provided cursor adapter; browser pointer-lock/capture is the default. */
+  cursorCapture?: ViewportCursorCapture;
 }
 
 export interface Viewport {
@@ -109,9 +148,9 @@ export function getViewportKeyHandler(): ((event: KeyboardEvent) => void) | null
   return activeViewportKeyHandler;
 }
 
-const FOV = Math.PI / 3;
-
-export function createViewport({ canvas, engine, editorEngine, camera, initialOrbit, getInputTarget }: ViewportDeps): Viewport {
+export function createViewport({
+  canvas, engine, editorEngine, camera, initialOrbit, getInputTarget, cursorCapture: injectedCursorCapture,
+}: ViewportDeps): Viewport {
   // M3 t19: all view-scaffold writes (camera t17 / gizmo per-frame t18 / gizmo
   // pool + param gizmo + drag fallback t19) now call the injected `engine`
   // (EngineFacade) directly — the migration bridge alias is gone, so no raw
@@ -121,15 +160,58 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // work — by EARLY-RETURN (not stopPropagation), so the same DOM event still
   // bubbles to the canvas → game InputBackend (AC-10 hard constraint).
   const inputToGame = (): boolean => (getInputTarget?.() ?? 'editor') === 'game';
+  const viewportPreferences: ViewportPreferences = loadViewportPreferences();
   // orbit state — frames the typical arena (centered, looking slightly down).
   let target: Vec3 = initialOrbit?.target ? [...initialOrbit.target] : [0, 2, 0];
   let yaw = initialOrbit?.yaw ?? 0.6, pitch = initialOrbit?.pitch ?? -0.5, dist = initialOrbit?.dist ?? 34;
+  let projection: CameraProjection = viewportPreferences.projection;
+  let fov = viewportPreferences.fov;
+  let orthoHalfHeight = viewportPreferences.orthoHalfHeight
+    ?? deriveOrthoHalfHeight(dist, fov);
+  const bookmarks = new Map<number, CameraBookmark>();
+  for (const [slot, bookmark] of Object.entries(viewportPreferences.bookmarks)) {
+    if (bookmark) bookmarks.set(Number(slot), bookmark);
+  }
+  let flySpeed = viewportPreferences.flySpeed;
+
+  function persistViewportState(): void {
+    const persistedBookmarks: Partial<Record<CameraBookmarkSlot, CameraBookmark>> = {};
+    for (const [slot, bookmark] of bookmarks) {
+      if (slot >= 1 && slot <= 9) {
+        persistedBookmarks[slot as CameraBookmarkSlot] = bookmark;
+      }
+    }
+    saveViewportPreferences({
+      ...viewportPreferences,
+      projection,
+      fov,
+      orthoHalfHeight,
+      flySpeed,
+      bookmarks: persistedBookmarks,
+    });
+  }
 
   // current camera basis (recomputed on every applyCamera).
   let camPos: Vec3 = [0, 0, 0];
   let fwd: Vec3 = [0, 0, -1], rgt: Vec3 = [1, 0, 0], upv: Vec3 = [0, 1, 0];
 
   const aspect = () => (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height) || 1;
+
+  function cameraComponentData(): Record<string, unknown> {
+    if (projection === 'orthographic') {
+      const halfHeight = Math.min(ORTHO_HALF_HEIGHT_MAX, Math.max(ORTHO_HALF_HEIGHT_MIN, orthoHalfHeight));
+      const halfWidth = halfHeight * aspect();
+      return orthographic({
+        left: -halfWidth,
+        right: halfWidth,
+        bottom: -halfHeight,
+        top: halfHeight,
+        near: 0.05,
+        far: 2000,
+      });
+    }
+    return perspective({ fov: Math.min(FOV_MAX, Math.max(FOV_MIN, fov)), aspect: aspect(), near: 0.05, far: 2000 });
+  }
 
   function applyCamera(): void {
     const r = computeOrbitCamera(target, yaw, pitch, dist);
@@ -152,7 +234,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     // a neutral studio blue reads as sky. perspective() carries clearColor=[0,0,0,1],
     // so it MUST be re-applied here (this set replaces the whole Camera each frame),
     // not just at spawn. On Chromium the cubemap skybox draws over it.
-    editorEngine.set(camera, Camera, { ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] });
+    editorEngine.set(camera, Camera, { ...cameraComponentData(), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] });
     updateGizmo();
     updateParamGizmo();
   }
@@ -170,7 +252,13 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     const dt = Math.min((now - lastFlyTime) / 1000, 0.1); // clamp for tab-blur spikes
     lastFlyTime = now;
     const input = getFlyInput();
-    const nextFly = advanceFly({ pos: camPos, yaw, pitch }, input, flySpeed, dt);
+    const nextFly = advanceFly(
+      { pos: camPos, yaw, pitch },
+      input,
+      flySpeed,
+      dt,
+      viewportPreferences.flyBoostMultiplier,
+    );
     camPos = nextFly.pos;
     const r = computeFlyCamera(nextFly);
     fwd = r.fwd; rgt = r.rgt; upv = r.upv;
@@ -180,7 +268,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       scale: [1, 1, 1],
     });
     editorEngine.set(camera, Camera, {
-      ...perspective({ fov: FOV, aspect: aspect(), near: 0.05, far: 2000 }),
+      ...cameraComponentData(),
       tonemap: TONEMAP_REINHARD_EXTENDED,
       clearColor: [0.42, 0.55, 0.78, 1],
     });
@@ -196,10 +284,19 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // ledger record (D-12 path A, session domain: no undo, no lifecycle slot).
   const unregCameraAppliers = registerCameraAppliers({
     editorEngine, camera,
-    getPose: () => ({ target, yaw, pitch, dist, camPos, fwd, rgt, upv }),
+    getPose: () => ({ target, yaw, pitch, dist, camPos, fwd, rgt, upv, projection, fov, orthoHalfHeight }),
     setPose: (p) => {
       target = p.target; yaw = p.yaw; pitch = p.pitch; dist = p.dist;
       camPos = p.camPos; fwd = p.fwd; rgt = p.rgt; upv = p.upv;
+      projection = p.projection; fov = p.fov; orthoHalfHeight = p.orthoHalfHeight;
+      persistViewportState();
+    },
+    applyCamera,
+    getBookmark: (slot) => bookmarks.get(slot),
+    setBookmark: (slot, bookmark) => {
+      if (bookmark === null) bookmarks.delete(slot);
+      else bookmarks.set(slot, bookmark);
+      persistViewportState();
     },
     frameSelection: () => frameSelection(),
   });
@@ -250,7 +347,19 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   function rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 } {
     const r = canvas.getBoundingClientRect();
     const [nx, ny] = ndcFromClient(clientX - r.left, clientY - r.top, r.width, r.height);
-    return { origin: camPos, dir: rayDirection(fwd, rgt, upv, nx, ny, FOV, aspect()) };
+    if (projection === 'orthographic') {
+      const halfHeight = Math.max(ORTHO_HALF_HEIGHT_MIN, Math.min(ORTHO_HALF_HEIGHT_MAX, orthoHalfHeight));
+      const halfWidth = halfHeight * aspect();
+      return {
+        origin: [
+          camPos[0] + rgt[0] * nx * halfWidth + upv[0] * ny * halfHeight,
+          camPos[1] + rgt[1] * nx * halfWidth + upv[1] * ny * halfHeight,
+          camPos[2] + rgt[2] * nx * halfWidth + upv[2] * ny * halfHeight,
+        ],
+        dir: [...fwd],
+      };
+    }
+    return { origin: camPos, dir: rayDirection(fwd, rgt, upv, nx, ny, fov, aspect()) };
   }
 
   /**
@@ -336,11 +445,12 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
 
   // ── pointer interaction ──
   // UE5 fly mode: RMB drag = free-look + WASD/QE keyboard-driven flight (rAF loop).
-  type Mode = 'none' | 'orbit' | 'pan' | 'zoom' | 'fly' | 'pendDrag' | 'drag' | 'axisDrag';
+  type Mode = 'none' | CameraGestureMode | 'pendDrag' | 'drag' | 'axisDrag';
   let mode: Mode = 'none';
   let lastX = 0, lastY = 0, downX = 0, downY = 0;
+  let gestureStart: CameraPoseSnapshot | null = null;
+  let cursorCapture: ViewportCursorCapture | null = null;
   // ── fly-mode state (Task 2b + T5: speed persists across gestures) ──────────
-  let flySpeed = FLY_SPEED_DEFAULT;
   let flyRAF = 0;
   let lastFlyTime = 0;
   /** Held-key snapshot (fly mode reads every rAF tick).
@@ -354,6 +464,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       right: !!keyState['d'],
       up: !!keyState['e'],
       down: !!keyState['q'],
+      boost: !!keyState['shift'],
     };
   }
   let dragId: EntityHandle | null = null;
@@ -442,45 +553,52 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   const inCanvas = (target: EventTarget | null): boolean =>
     target === canvas || canvas.contains(target as Node | null);
 
+  const isCameraMode = (value: Mode): value is CameraGestureMode =>
+    value === 'orbit' || value === 'pan' || value === 'zoom' || value === 'fly';
+
+  function currentCameraPose(): CameraPoseSnapshot {
+    return {
+      target: [...target],
+      yaw,
+      pitch,
+      dist,
+      camPos: [...camPos],
+      projection,
+      fov,
+      orthoHalfHeight,
+    };
+  }
+
+  function beginCameraGesture(nextMode: CameraGestureMode, e: PointerEvent): void {
+    mode = nextMode;
+    gestureStart = currentCameraPose();
+    cursorCapture?.begin(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+
   function onDown(e: PointerEvent): void {
     if (!inCanvas(e.target)) return;
     if (inputToGame()) return;
     canvas.focus({ preventScroll: true });
     lastX = downX = e.clientX; lastY = e.clientY;
-    // UE5 editor navigation (feedback 2026-07-16):
-    //   RMB (hold)  = FLY MODE (free-look + WASD/QE + scroll = speed)
-    //   Alt + RMB   = zoom / dolly
-    //   MMB drag    = pan (no modifier)
-    //   Alt + LMB   = orbit (tumble around target)
-    //   LMB         = select / gizmo (reserved, unchanged)
-    // RMB (button 2)
-    if (e.button === 2) {
-      if (e.altKey) {
-        // Alt + RMB = dolly / zoom (UE5 alt-drag zoom).
-        mode = 'zoom';
-      } else {
-        // Enter fly mode: rAF loop reads keyState + advances the camera position
-        // along the current basis; onMove handles free-look mouse deltas.
-        mode = 'fly';
-        // Attempt to capture pointer so the fly-look tracks even when the mouse
-        // leaves the canvas (fires "pointermove" via setPointerCapture semantics).
-        try { canvas.setPointerCapture(e.pointerId); } catch { /* not supported */ }
+    const cameraMode = cameraGestureForPointer({
+      button: e.button,
+      altKey: e.altKey,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      shiftKey: e.shiftKey,
+    });
+    if (cameraMode !== null) {
+      // Orthographic navigation has no meaningful perspective fly velocity.
+      // Keep RMB from silently switching to a different movement semantic.
+      if (cameraMode === 'fly' && projection === 'orthographic') {
+        e.preventDefault();
+        return;
+      }
+      beginCameraGesture(cameraMode, e);
+      if (cameraMode === 'fly') {
         lastFlyTime = performance.now();
         if (flyRAF === 0) flyRAF = requestAnimationFrame(flyTick);
       }
-      e.preventDefault();
-      return;
-    }
-    // MMB (button 1) = pan
-    if (e.button === 1) {
-      mode = 'pan';
-      e.preventDefault();
-      return;
-    }
-    if (e.button !== 0) return;
-    // Alt + LMB = orbit (UE5 tumble; also Mac trackpad "Emulate 3-Button Mouse")
-    if (e.altKey) {
-      mode = (e.ctrlKey || e.metaKey) ? 'zoom' : (e.shiftKey ? 'pan' : 'orbit');
       e.preventDefault();
       return;
     }
@@ -539,14 +657,22 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   }
 
   function onMove(e: PointerEvent): void {
-    if (inputToGame()) return;
+    if (inputToGame()) {
+      cancelNavigation();
+      return;
+    }
     if (mode === 'none') return;
-    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    const [rawDx, rawDy] = isCameraMode(mode)
+      ? (cursorCapture?.movement(e, [lastX, lastY]) ?? [e.clientX - lastX, e.clientY - lastY])
+      : [e.clientX - lastX, e.clientY - lastY];
     lastX = e.clientX; lastY = e.clientY;
+    const dx = rawDx * viewportPreferences.mouseSensitivity;
+    const dy = rawDy * viewportPreferences.mouseSensitivity;
+    const lookDy = (viewportPreferences.invertY ? rawDy : -rawDy) * viewportPreferences.mouseSensitivity;
     if (mode === 'fly') {
       // UE5 free-look while RMB held: mouse dx/dy → yaw/pitch delta.
       // Position advance happens in flyTick (rAF loop), so we only rotate here.
-      const look = advanceFlyLook({ pos: camPos, yaw, pitch }, -dx * 0.003, -dy * 0.003);
+      const look = advanceFlyLook({ pos: camPos, yaw, pitch }, -dx * 0.003, lookDy * 0.003);
       yaw = look.yaw; pitch = look.pitch;
       // Note: intentionally NOT calling flyTick here — the rAF loop is the SSOT
       // for the per-frame camera write. This handler just updates yaw/pitch;
@@ -554,19 +680,25 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       return;
     }
     if (mode === 'orbit') {
-      const r = advanceOrbit(yaw, pitch, dist, -dx * 0.005, -dy * 0.005, 0);
+      const r = advanceOrbit(yaw, pitch, dist, -dx * 0.005, lookDy * 0.005, 0);
       yaw = r.yaw; pitch = r.pitch; dist = r.dist;
       applyCamera();
     } else if (mode === 'pan') {
-      const k = dist * 0.0016;
+      const k = projection === 'orthographic'
+        ? (orthoHalfHeight * 2) / Math.max(1, canvas.clientHeight || canvas.height)
+        : dist * 0.0016;
       target = [target[0] - rgt[0] * dx * k + upv[0] * dy * k,
                 target[1] - rgt[1] * dx * k + upv[1] * dy * k,
                 target[2] - rgt[2] * dx * k + upv[2] * dy * k];
       applyCamera();
     } else if (mode === 'zoom') {
       // Ctrl+MMB drag-zoom (Blender): drag down = zoom out, up = zoom in.
-      const r = advanceOrbit(yaw, pitch, dist, 0, 0, -dy * 0.005 * dist);
-      yaw = r.yaw; pitch = r.pitch; dist = r.dist;
+      if (projection === 'orthographic') {
+        orthoHalfHeight = adjustOrthoHalfHeight(orthoHalfHeight, -dy * 0.02);
+      } else {
+        const r = advanceOrbit(yaw, pitch, dist, 0, 0, -dy * 0.005 * dist);
+        yaw = r.yaw; pitch = r.pitch; dist = r.dist;
+      }
       applyCamera();
     } else if (mode === 'axisDrag') {
       const { origin, dir } = rayAt(e.clientX, e.clientY);
@@ -626,7 +758,10 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       const ctrl = e.ctrlKey || e.metaKey;
       if (e.shiftKey) {
         // vertical: screen dy → world Y (scaled by distance so it tracks roughly).
-        dragY += -dy * dist * 0.0016 * Math.tan(FOV / 2) * 2;
+        const verticalScale = projection === 'orthographic'
+          ? orthoHalfHeight
+          : dist * 0.0016 * Math.tan(fov / 2) * 2;
+        dragY += -dy * verticalScale;
         const local = worldPositionToLocal(gateway.activeWorld, dragId!, [
           dragWorldPos[0],
           snap(dragY, 0.5, ctrl),
@@ -653,6 +788,10 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     // gesture as one session op (D-12 path A). Only orbit/pan/zoom are camera
     // navigation; drag/axisDrag are entity edits (already document ops).
     const endedMode = mode;
+    const cameraGestureChanged = isCameraMode(endedMode)
+      && gestureStart !== null
+      && cameraPoseChanged(gestureStart, currentCameraPose());
+    if (isCameraMode(endedMode)) cursorCapture?.end();
     // Close the gizmo document-continuous op (D-9). If a lifecycle handle is open
     // (drag produced live changes), commit lands the whole drag as ONE undoable
     // setComponent whose recorded pose = the final accumulated update (gateway
@@ -662,20 +801,20 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
       gateway.commit(dragHandle);
       dragHandle = null;
     }
-    mode = 'none'; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
+    mode = 'none'; gestureStart = null; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
     // D-12 path A (S13 / AC-30): a completed camera-nav gesture records ONE
     // cameraOrbit session op carrying the gesture-end pose. Mid-frame poses stayed
     // on the facade direct write (applyCamera) — out of the ledger (OOS-4). A
     // cancelled/aborted gesture never reaches onUp so emits nothing (0 records —
     // no "half record" in the structure). AC-30 gates orbit; pan/zoom ride the
     // same op as best-effort (same pose payload, not an AC assertion).
-    if (endedMode === 'orbit' || endedMode === 'pan' || endedMode === 'zoom') {
+    if ((endedMode === 'orbit' || endedMode === 'pan' || endedMode === 'zoom') && cameraGestureChanged) {
       gateway.dispatch({
         kind: 'cameraOrbit',
         target: [target[0], target[1], target[2]],
         yaw, pitch, dist,
       }, 'human');
-    } else if (endedMode === 'fly') {
+    } else if (endedMode === 'fly' && cameraGestureChanged) {
       // T2d + T6a: FLY gesture ended. Stop the rAF loop, reconstruct a reasonable
       // orbit target from the fly-end pose (so a subsequent MMB/Alt+LMB gesture
       // orbits smoothly around the point ahead of the camera), then record ONE
@@ -689,25 +828,69 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
         pos: [camPos[0], camPos[1], camPos[2]],
         yaw, pitch,
       }, 'human');
+    } else if (endedMode === 'fly' && flyRAF !== 0) {
+      cancelAnimationFrame(flyRAF);
+      flyRAF = 0;
     }
     // Stop the Inspector preview (transient op); the panel now reads the committed doc.
     gateway.dispatch({ kind: 'setFieldPreview', id: null });
     updateGizmo();
   }
 
+  /**
+   * Cancel a camera gesture without creating a session record. Reverting the
+   * local pose is important: the already-committed camera remains authoritative
+   * after Escape, blur, visibility loss, pointer-lock loss, or game-control
+   * takeover.
+   */
+  function cancelNavigation(): void {
+    for (const key in keyState) keyState[key] = false;
+    if (!isCameraMode(mode)) return;
+    if (flyRAF !== 0) {
+      cancelAnimationFrame(flyRAF);
+      flyRAF = 0;
+    }
+    const start = gestureStart;
+    cursorCapture?.cancel();
+    if (start) {
+      target = [...start.target];
+      yaw = start.yaw;
+      pitch = start.pitch;
+      dist = start.dist;
+      projection = start.projection;
+      fov = start.fov;
+      orthoHalfHeight = start.orthoHalfHeight;
+      camPos = [...start.camPos];
+      applyCamera();
+    }
+    mode = 'none';
+    gestureStart = null;
+  }
+
   function onWheel(e: WheelEvent): void {
     if (!inCanvas(e.target)) return;
-    if (inputToGame()) return;
+    if (inputToGame()) {
+      cancelNavigation();
+      return;
+    }
     e.preventDefault();
     if (mode === 'fly') {
       // T5: in-flight scroll adjusts move speed (UE5 standard).
       //   wheel up  (deltaY < 0) → speed up
       //   wheel dn  (deltaY > 0) → slow down
-      flySpeed = applyFlyWheelSpeed(flySpeed, e.deltaY > 0 ? -1 : 1);
+      const wheelDirection = e.deltaY > 0 ? -1 : 1;
+      flySpeed = applyFlyWheelSpeed(
+        flySpeed,
+        wheelDirection * viewportPreferences.wheelDirection,
+        viewportPreferences.wheelSpeedScalar,
+      );
+      persistViewportState();
       return;
     }
-    dist = clampDist(dist * (e.deltaY > 0 ? 1.1 : 0.9));
-    applyCamera();
+    gateway.dispatch({
+      kind: 'cameraZoom',
+      delta: (e.deltaY > 0 ? -1 : 1) * viewportPreferences.wheelDirection,
+    }, 'human');
   }
 
   function onContext(e: MouseEvent): void {
@@ -722,17 +905,62 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     yaw = 0.6;
     pitch = -0.3;
     dist = 4.5;
+    if (projection === 'orthographic') orthoHalfHeight = deriveOrthoHalfHeight(dist, fov);
     applyCamera();
   }
 
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
-    const sel = getSelection();
-    const t = sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
-    if (!t) return;
-    const { center, half } = entityBox(t);
+    const selected = Array.from(getSelectionList());
+    if (selected.length === 0) {
+      const primary = getSelection();
+      if (primary !== null) selected.push(primary);
+    }
+    if (selected.length === 0) return;
+
+    let min: Vec3 | null = null;
+    let max: Vec3 | null = null;
+    for (const entity of selected) {
+      const transform = readWorldTransform(gateway.activeWorld, entity);
+      if (!transform) continue;
+      const bounds = entityBox(transform);
+      const lo: Vec3 = [
+        bounds.center[0] - bounds.half[0],
+        bounds.center[1] - bounds.half[1],
+        bounds.center[2] - bounds.half[2],
+      ];
+      const hi: Vec3 = [
+        bounds.center[0] + bounds.half[0],
+        bounds.center[1] + bounds.half[1],
+        bounds.center[2] + bounds.half[2],
+      ];
+      if (min === null || max === null) {
+        min = [...lo];
+        max = [...hi];
+      } else {
+        for (let axis = 0; axis < 3; axis++) {
+          min[axis] = Math.min(min[axis]!, lo[axis]!);
+          max[axis] = Math.max(max[axis]!, hi[axis]!);
+        }
+      }
+    }
+    if (min === null || max === null) return;
+    const center: Vec3 = [
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2,
+    ];
+    const half: Vec3 = [
+      Math.max(0.01, (max[0] - min[0]) / 2),
+      Math.max(0.01, (max[1] - min[1]) / 2),
+      Math.max(0.01, (max[2] - min[2]) / 2),
+    ];
     target = center;
-    dist = Math.max(4, Math.max(half[0], half[1], half[2]) * 4);
+    const maxHalf = Math.max(half[0], half[1], half[2]);
+    dist = Math.max(4, maxHalf * 4);
+    if (projection === 'orthographic') {
+      orthoHalfHeight = Math.max(ORTHO_HALF_HEIGHT_MIN, maxHalf * 1.25);
+    }
     applyCamera();
   }
 
@@ -744,12 +972,27 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // through the one gateway door.
   function handleViewportKeyDown(e: KeyboardEvent): void {
     const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') keyState[k] = true;
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e' || k === 'shift') keyState[k] = true;
+    if (k === 'escape' && isCameraMode(mode)) {
+      e.preventDefault();
+      cancelNavigation();
+      return;
+    }
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
-    if (inputToGame()) return; // play·game: W/E/R/F gizmo shortcuts yield to the game
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (inputToGame()) {
+      cancelNavigation();
+      return;
+    } // play·game: editor shortcuts yield to the game
+    if (e.metaKey || e.ctrlKey) {
+      if (/^[1-9]$/.test(k)) {
+        gateway.dispatch({ kind: 'cameraBookmark', action: 'save', slot: Number(k) }, 'human');
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.altKey) return;
     // T2 risk-1: in fly mode WASD/QE drive movement — do NOT hijack W/E/R for
     // gizmo mode switching. Frame (F) is likewise ambiguous while flying.
     if (mode === 'fly') return;
@@ -757,16 +1000,32 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     else if (k === 'e') gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' });
     else if (k === 'r') gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' });
     else if (k === 'f') gateway.dispatch({ kind: 'requestFrame' });
+    else if (k === 'v') gateway.dispatch({ kind: 'cameraToggleProjection' }, 'human');
+    else if (k === 'z') gateway.dispatch({ kind: 'cameraAdjustFov', delta: 1 }, 'human');
+    else if (k === 'c') gateway.dispatch({ kind: 'cameraAdjustFov', delta: -1 }, 'human');
+    else if (/^[1-9]$/.test(k)) {
+      gateway.dispatch({ kind: 'cameraBookmark', action: 'recall', slot: Number(k) }, 'human');
+    }
   }
   function onKeyUp(e: KeyboardEvent): void {
     const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e' || k === 'shift') {
       keyState[k] = false;
     }
   }
   // Guard against sticky keys when tab loses focus mid-flight (release all).
   function onBlur(): void {
+    cancelNavigation();
     for (const k in keyState) keyState[k] = false;
+  }
+
+  function onPointerCancel(): void {
+    cancelNavigation();
+    for (const k in keyState) keyState[k] = false;
+  }
+
+  function onVisibilityChange(): void {
+    if (document.visibilityState === 'hidden') onPointerCancel();
   }
 
   // double-click an entity → select + frame it.
@@ -777,7 +1036,9 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
     if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); gateway.dispatch({ kind: 'requestFrame' }); }
   }
 
+  cursorCapture = injectedCursorCapture ?? createViewportCursorCapture(canvas, { onLost: cancelNavigation });
   canvas.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('pointercancel', onPointerCancel);
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -785,6 +1046,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
   // T2b: keyup/blur release fly keys tracked by the injected keydown bridge.
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   canvas.addEventListener('dblclick', onDblClick);
   activeViewportKeyHandler = handleViewportKeyDown;
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
@@ -794,7 +1056,7 @@ export function createViewport({ canvas, engine, editorEngine, camera, initialOr
 
 // Display visibility bus (w23, D-5): re-gate gizmos when display toggles so
 // display='game' immediately hides / 'scene' immediately restores visual aides.
-onDisplayModeChange(() => refreshGizmos());
+  const unsubDisplay = onDisplayModeChange(() => refreshGizmos());
   // The gizmos depend ONLY on the selected entity's own components (updateGizmo
   // reads its local Transform; updateParamGizmo reads its Light/Camera). So an
   // edit to any OTHER entity can't move them — skip the refresh by tracking a
@@ -822,19 +1084,24 @@ onDisplayModeChange(() => refreshGizmos());
   return {
     dispose() {
       canvas.removeEventListener('pointerdown', onDown);
+      canvas.removeEventListener('pointercancel', onPointerCancel);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContext);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       canvas.removeEventListener('dblclick', onDblClick);
       if (activeViewportKeyHandler === handleViewportKeyDown) activeViewportKeyHandler = null;
       if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
+      cursorCapture?.dispose();
+      cursorCapture = null;
       unsubSel();
       unsubMode();
       unsubSpace();
       unsubDoc();
+      unsubDisplay();
       unregCameraAppliers();
       gizmoPool.dispose();
       paramGizmo.dispose();

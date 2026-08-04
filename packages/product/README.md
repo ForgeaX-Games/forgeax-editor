@@ -71,6 +71,18 @@ validated by the core handle-pair gate. `cause` is a JSON-safe causal link.
 `withCommandErrorContext()` adds Gateway correlation without rewriting the hint;
 `isCommandError()` narrows unknown transport data.
 
+## Imported asset source path
+
+The product contract projects the same source workflow without owning UI, Meta, DDC, or Catalog state:
+discover the operation manifest, preview with `guid`/`sourceKey`/`expectedRevision`, submit the
+canonical Gateway operation, then read the correlated terminal run. `discardSourceOverridesAndReimport`
+is destructive and requires the structured preflight impact plus `confirmationToken`.
+
+The recovery index is `asset.preflight`, `run.get`, `run.wait`, `run.retry`, and `catalog.reconcile`.
+Asset source errors are stable fields (`code`, `phase`, `subjectRef`, `expected`, `actual`,
+`retryable`, `recoveryActions`); callers must not branch on `hint` or `message`. A transport adapter
+may carry these facts, but it must not create an AI-only alias or a second operation/run registry.
+
 ## Public entry points
 
 - `createEditorProduct()` creates the shared facade.

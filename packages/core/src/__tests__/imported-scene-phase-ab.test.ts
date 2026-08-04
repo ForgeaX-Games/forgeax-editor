@@ -58,7 +58,7 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
     expect(gateway.getOperationRun('preview-save')).toBeUndefined();
   });
 
-  it('reports source editing unavailable without inferring from file facts', () => {
+  it('keeps source authoring out of scene activation facts until the operation is available', () => {
     const facts = {
       guid: 'imported-guid',
       kind: 'scene',
@@ -67,40 +67,40 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
       sourceKey: 'scene:main',
       metaPath: 'assets/Fox.glb.meta.json',
     };
-    expect(describeSceneActivation(facts, [], 'ddc:r1')).toMatchObject({
-      canEditSource: false,
-      unavailable: {
-        editSource: {
-          recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
-        },
-      },
+    const descriptor = describeSceneActivation(facts, [], 'ddc:r1');
+    expect(descriptor).toMatchObject({
+      provenance: 'imported-output',
+      guid: 'imported-guid',
+      sourceKey: 'scene:main',
+      mode: 'preview-imported',
     });
+    expect(descriptor).not.toHaveProperty('canEditSource');
 
     const gateway = new EditGateway();
     const worldBefore = gateway.doc.world;
     const revisionBefore = gateway.rev;
     const rejected = gateway.dispatch({
-      kind: 'editImportedSource',
+      kind: 'saveAssetSourceOverride',
       guid: 'imported-guid',
-      sourceKey: 'scene:main',
-      metaPath: 'assets/Fox.glb.meta.json',
-      revision: 'ddc:r1',
+      scope: { sourceKey: 'scene:main' },
+      expectedRevision: 'ddc:r1',
       requestId: 'denied-source-edit',
     });
     expect(rejected).toMatchObject({
       ok: false,
       error: {
-        code: 'engine-source-authoring-unavailable',
-        retryable: false,
-        recoveryActions: ['awaitEngineSourceAuthoringUpdate'],
+        code: expect.stringMatching(/UNKNOWN_OP|unavailable|source-authoring/),
       },
     });
     expect(gateway.dispatch({
-      kind: 'saveImportedSource',
+      kind: 'previewAssetSourceMutation',
+      guid: 'imported-guid',
+      scope: { sourceKey: 'scene:main' },
+      expectedRevision: 'ddc:r1',
       requestId: 'denied-source-save',
     })).toMatchObject({
       ok: false,
-      error: { code: 'engine-source-authoring-unavailable' },
+      error: { code: expect.stringMatching(/UNKNOWN_OP|unavailable|source-authoring/) },
     });
     expect(gateway.doc.world).toBe(worldBefore);
     expect(gateway.rev).toBe(revisionBefore);

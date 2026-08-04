@@ -490,7 +490,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       // Fetch + parse before touching the current world. A load failure leaves
       // the current scene intact.
       const loadRes = await reg.loadByGuid(parsed.value);
-      if (!loadRes.ok) return false;
+      if (!loadRes.ok) {
+        console.warn(`[editor-core] scene asset load failed guid=${sceneGuid}: ${JSON.stringify(loadRes.error)}`);
+        return false;
+      }
       const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
       const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
       // Do not overlap the replacement with the old scene in one World. See the
@@ -498,11 +501,17 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       // new nested SceneInstance members through an old wrapper's subtree.
       teardownCurrentScene();
       const instRes = reg.instantiateFlat(sceneHandle, w);
-      if (!instRes.ok) return false;
+      if (!instRes.ok) {
+        console.warn(`[editor-core] scene instantiateFlat failed guid=${sceneGuid}: ${JSON.stringify(instRes.error)}`);
+        return false;
+      }
       // Track the scene's top-level entities so a later reload can despawn them.
       ctx.currentSceneEntities = instRes.value;
       return true;
-    } catch {
+    } catch (error) {
+      console.warn(
+        `[editor-core] scene load threw guid=${sceneGuid}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+      );
       return false;
     }
   }
@@ -862,40 +871,73 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
 
     let committedRevision: string;
     try {
-      const transactionInput = {
-        path: p,
-        content,
-        canonicalRevision,
-        changes: [createPackResourceChange(p, content)],
-      };
-      const preparedResource = deps.prepareResourceTransaction === undefined
-        ? await assetIO.prepareResourceTransaction(transactionInput)
-        : await deps.prepareResourceTransaction(transactionInput);
-      if (preparedResource !== null) {
-        const committed = await preparedResource.commit();
-        if (committed.revision.length === 0) {
-          return saveFailure('save-write-failed', 'Canonical resource transaction did not publish a revision.', subjectRef, {
-            retryable: true,
-            recoveryActions: ['save.retry'],
-          });
+      // Serialize against every OTHER pack write on this path that goes through
+      // the asset gate (createMaterial's read-modify-write above all): the save
+      // body was computed from the world BEFORE this point, so a material write
+      // that lands between serialization and this commit would be clobbered by
+      // the write below. Entering the gate's per-path chain makes the two
+      // writes strictly ordered, and the floor re-check INSIDE the chain turns
+      // a lost race into a loud refused-save instead of silent data loss.
+      type CommitOutcome =
+        | { readonly ok: true; readonly committedRevision: string }
+        | { readonly ok: false; readonly saveResult: ReturnType<typeof saveFailure> };
+      const outcome = await assetIO.runExclusivePackWrite(p, async (): Promise<CommitOutcome> => {
+        // Re-check the inline floor with the CURRENT baseline: a createMaterial
+        // that completed while this save waited on the chain bumped the floor,
+        // and the pre-computed body would drop it.
+        if (wouldDropInlineAssets(ctx.loadedInlineAssetFloor, parsedNew)) {
+          return {
+            ok: false,
+            saveResult: saveFailure(
+              'save-inline-assets-missing',
+              'Serialized scene pack would drop inline asset bodies written after serialization began; no bytes were written.',
+              subjectRef,
+              { expected: { minimum: ctx.loadedInlineAssetFloor }, current: { actual: inlineAssetCount(parsedNew) } },
+            ),
+          };
         }
-        committedRevision = committed.revision;
-      } else {
+        const transactionInput = {
+          path: p,
+          content,
+          canonicalRevision,
+          changes: [createPackResourceChange(p, content)],
+        };
+        const preparedResource = deps.prepareResourceTransaction === undefined
+          ? await assetIO.prepareResourceTransaction(transactionInput)
+          : await deps.prepareResourceTransaction(transactionInput);
+        if (preparedResource !== null) {
+          const committed = await preparedResource.commit();
+          if (committed.revision.length === 0) {
+            return {
+              ok: false,
+              saveResult: saveFailure('save-write-failed', 'Canonical resource transaction did not publish a revision.', subjectRef, {
+                retryable: true,
+                recoveryActions: ['save.retry'],
+              }),
+            };
+          }
+          return { ok: true, committedRevision: committed.revision };
+        }
         const response = await deps.fetch('/api/files', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ path: p, content }),
         });
         if (!response.ok) {
-          return saveFailure('save-write-failed', `Scene pack write failed with HTTP ${response.status}.`, subjectRef, {
-            retryable: true,
-            recoveryActions: ['save.retry'],
-            expected: { status: 200 },
-            current: { status: response.status },
-          });
+          return {
+            ok: false,
+            saveResult: saveFailure('save-write-failed', `Scene pack write failed with HTTP ${response.status}.`, subjectRef, {
+              retryable: true,
+              recoveryActions: ['save.retry'],
+              expected: { status: 200 },
+              current: { status: response.status },
+            }),
+          };
         }
-        committedRevision = canonicalRevision;
-      }
+        return { ok: true, committedRevision: canonicalRevision };
+      });
+      if (!outcome.ok) return outcome.saveResult;
+      committedRevision = outcome.committedRevision;
     } catch (cause) {
       return saveFailure(
         'save-write-failed',

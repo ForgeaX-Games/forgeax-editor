@@ -149,28 +149,30 @@ describe('keyboard router — Escape Play stop (AC-Cb4)', () => {
 });
 
 describe('keyboard router — Shift+G viewport escape/toggle (AC-Cb4, T4-9)', () => {
-  it('plain G is not registered, so gameplay keeps the key', () => {
+  it('edit-owned plain G toggles Game View', () => {
     const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const shortcuts = buildShortcuts();
-    expect(shortcuts.some((s) => s.combo === 'G')).toBe(false);
-    expect(shortcuts.some((s) => s.match({ key: 'g', code: 'KeyG', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false } as KeyboardEvent))).toBe(false);
+    const g = findByCombo(shortcuts, 'G');
+    expect(g.match({ key: 'g', code: 'KeyG', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false } as KeyboardEvent)).toBe(true);
+    expect(g.run()).toBe(true);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'game' }, 'human']]);
   });
 
-  it('edit·scene + Shift+G → inactive', () => {
+  it('edit·scene + Shift+G → Game View', () => {
     const deps = mockDeps({ getDisplay: () => 'scene', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const g = findByCombo(buildShortcuts(), 'Shift+G');
-    expect(g.run()).toBe(false);
-    expect(deps.calls.dispatch).toEqual([]);
+    expect(g.run()).toBe(true);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'game' }, 'human']]);
   });
 
-  it('edit·game + Shift+G → inactive', () => {
+  it('edit·game + Shift+G → scene view', () => {
     const deps = mockDeps({ getDisplay: () => 'game', getInputTarget: () => 'editor' });
     registerKeyboardRouterDeps(deps);
     const g = findByCombo(buildShortcuts(), 'Shift+G');
-    expect(g.run()).toBe(false);
-    expect(deps.calls.dispatch).toEqual([]);
+    expect(g.run()).toBe(true);
+    expect(deps.calls.dispatch).toEqual([[{ kind: 'setDisplay', display: 'scene' }, 'human']]);
   });
 
   it('play·scene + Shift+G → ordinary play game display', () => {
@@ -225,6 +227,35 @@ describe('keyboard router — editor-owned Play key shield', () => {
     registerKeyboardRouterDeps(deps);
     const shield = findByCombo(buildShortcuts(), 'Play editor input shield');
     expect(shield.match({ key: 'q' } as KeyboardEvent)).toBe(false);
+  });
+});
+
+describe('keyboard router — camera projection, scale, and bookmark keys', () => {
+  it('routes camera keys to the viewport handler instead of dropping them', () => {
+    const seen: string[] = [];
+    const deps = mockDeps({
+      handleViewportKeyDown: (event) => { seen.push(`${event.ctrlKey ? 'ctrl+' : ''}${event.key}`); },
+    });
+    registerKeyboardRouterDeps(deps);
+    const route = findByCombo(buildShortcuts(), 'Viewport camera and fly input');
+    for (const event of [
+      { key: 'v', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false },
+      { key: 'z', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false },
+      { key: 'c', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false },
+      { key: '1', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false },
+      { key: '1', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false },
+    ]) {
+      expect(route.match(event as KeyboardEvent)).toBe(true);
+      expect(route.run(event as KeyboardEvent)).toBe(true);
+    }
+    expect(seen).toEqual(['v', 'z', 'c', '1', 'ctrl+1']);
+  });
+
+  it('does not route camera keys while the game owns Play input', () => {
+    const deps = mockDeps({ getInputTarget: () => 'game', isPlayMode: () => true });
+    registerKeyboardRouterDeps(deps);
+    const route = findByCombo(buildShortcuts(), 'Viewport camera and fly input');
+    expect(route.match({ key: 'v', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false } as KeyboardEvent)).toBe(false);
   });
 });
 
