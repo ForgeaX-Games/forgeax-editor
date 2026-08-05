@@ -22,6 +22,18 @@ describe("createFramePhaseProfiler", () => {
 		expect(createFramePhaseProfiler()).toBeUndefined();
 	});
 
+	it("keeps production phase observation active without User Timing", () => {
+		const ended: string[] = [];
+		const profiler = createFramePhaseProfiler({
+			onPhaseEnd: ({ source, phase }) => ended.push(`${source}:${phase}`),
+		});
+		const session = profiler?.activeSession();
+		session?.beginFrame(1);
+		session?.beginPhase({ source: "render", phase: "features" });
+		session?.endPhase();
+		expect(ended).toEqual(["render:features"]);
+	});
+
 	it("preserves the stable app and render User Timing vocabulary", () => {
 		const marks: string[] = [];
 		Object.defineProperty(globalThis, "performance", {

@@ -18,13 +18,15 @@ function snapshot(): DiagnosticsSnapshot {
     },
     assets: { errors: [], dropped: 0, deduplicated: 0 },
     operationRuns: { runs: [], registryRevision: 0, dropped: 0, deduplicated: 0 },
+    runtime: { facts: [], dropped: 0, deduplicated: 0 },
     policy: {
-      retention: { traceRoots: 64, scanDiagnostics: 128, assetErrors: 64, operationRuns: 64 },
+      retention: { traceRoots: 64, scanDiagnostics: 128, assetErrors: 64, operationRuns: 64, runtimeFacts: 128 },
       dedupe: {
         traceRoots: 'traceId',
         scanDiagnostics: 'file+severity+code+message+suggestion',
         assetErrors: 'op+path+hint',
         operationRuns: 'runId',
+        runtimeFacts: 'providerId+id',
       },
     },
   };

@@ -2,6 +2,33 @@
 
 > forgeax editor 内容浏览器 — 资源浏览子应用。以往内嵌在 `editor-panels/src/content-browser/`（2.8k 行，比 8 个正牌 panel 加起来还大），现抽出为独立包，让 `editor-panels` 回归纯粹的「面板包」。
 
+## AI 最小命题
+
+Content Browser 只消费 core 的 producer facts：producer token →
+`assetCatalog({ compatibleWith })` → `describeComponent('ParticleEffectPlayer')`
+→ generic `bindAssetRef`。人类 AssetPicker 与 AI query 读取同一个 core
+projection，因此不在本包维护 `particle-effect` 或其他 concrete-kind switch。
+
+```ts
+const assets = gateway.assetCatalog({ compatibleWith: 'ParticleEffectAsset' });
+if (assets.ok) {
+  console.table(assets.assets.map(({ guid, name }) => ({ guid, name })));
+}
+```
+
+`IMPORT_FORMATS` 的事实 owner 是 `@forgeax/editor-core` 的 scan surface；本包
+只消费并展示它。`.particle.json` 的 source cook 位于 build-side importer，
+Content Browser 与 runtime 都通过 cooked GUID/Pack v2 读取，不在 UI 内重写
+converter 或建立第二个 registry。
+
+<details>
+<summary>错误、恢复与边界</summary>
+
+- `asset-compatibility-token-unknown` 是结构化失败，显示 hint 并引导调用 `describeComponent`；禁止用空列表隐藏 schema 缺失。
+- readiness 的 `committed-awaiting-reload`、`resident-ready`、`simulation-ready`、`render-ready` 与 `visible-ready` 属于 core 的 correlated projection，本包不创建本地 run store。
+- Edit/Play world 不是同一批 live handles；浏览器只展示 catalog identity 与 producer metadata。visual evidence 由 verify 阶段采集。
+</details>
+
 ## 职责
 
 资源浏览器的完整功能域：网格 / 列表 / 分栏三种视图、过滤 / 排序 / 导航历史 / 多选 / 收藏 / 缩略图 hooks、拖拽生成、导入管线（FBX / glTF cook 经 editor-core）。它以一个 panel 的形式呈现（Assets 面板 lazy-import 本包的 `ContentBrowser`），但代码量与内聚度已是独立包级别。

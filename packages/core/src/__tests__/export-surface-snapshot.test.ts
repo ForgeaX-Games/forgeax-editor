@@ -262,7 +262,10 @@ describe('AC-01 export-surface snapshot', () => {
     // model plus explicit activation wrappers → 67. The Page navigation bridge
     // adds configureEditorPageNavigation plus active-asset get/use projections;
     // mutations remain Gateway/PagePort-only → 70.
-    expect(entries.length).toBe(70);
+    // gizmo-ue-parity (M3) then PUBLISHED 4 gizmo-pivot symbols
+    // (getGizmoPivot / onGizmoPivotChange / useGizmoPivot / GizmoPivot type)
+    // — same session-state shape as gizmo-space → 70 + 4 = 74.
+    expect(entries.length).toBe(74);
 
     // Every entry must be non-empty.
     for (const e of entries) {

@@ -95,13 +95,16 @@ describe.serial('imported scene Phase E Promote', () => {
       }
       return new Response('', { status: 404 });
     }) as typeof fetch;
-    (gateway as unknown as { assetCatalog: typeof gateway.assetCatalog }).assetCatalog = () => [{
-      guid: importedGuid,
-      kind: 'scene',
-      packageUrl: '/__forgeax-ddc/imported.pack.json',
-      sourceKey,
-      revision: revision as never,
-    }];
+    (gateway as unknown as { assetCatalog: typeof gateway.assetCatalog }).assetCatalog = ((options?: { compatibleWith?: string }) => {
+      const rows = [{
+        guid: importedGuid,
+        kind: 'scene',
+        packageUrl: '/__forgeax-ddc/imported.pack.json',
+        sourceKey,
+        revision: revision as never,
+      }];
+      return options?.compatibleWith === undefined ? rows : { ok: true as const, assets: [] };
+    }) as typeof gateway.assetCatalog;
     ctx.currentSceneId = 'test-game';
     ctx.currentSceneFile = null;
     ctx.sceneList = [];

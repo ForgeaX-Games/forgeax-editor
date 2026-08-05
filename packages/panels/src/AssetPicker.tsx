@@ -9,40 +9,13 @@
 // copy has none). Data comes from the gateway read surface the drop path uses:
 //   - gateway.assetCatalog()          → { guid, kind, name, packageUrl }[]
 //   - gateway.describeAssetByGuid(g)  → { kind, meta } for a lightweight swatch
-// Filtering is by assetKindToType(entry.kind) === the field's expected asset type
-// (parsed from the engine schema's shared<T> keyword by the caller), so the picker
-// can never offer an asset the field would reject.
+// Filtering is by the producer-owned binding target token, so the picker can
+// never offer an asset the field would reject.
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { gateway } from '@forgeax/editor-core';
 import { ForgeaxIcon, AssetThumbnail } from '@forgeax/editor-ui';
 import './inspector.css';
-
-// kind → editor asset-union tag. Mirrors the (newer) core schema.ts
-// assetKindToType; inlined here because this editor copy's schema.ts predates
-// that export. Keep in sync if the engine adds asset kinds.
-function assetKindToType(kind: string): string | null {
-  switch (kind) {
-    case 'mesh': return 'MeshAsset';
-    case 'material': return 'MaterialAsset';
-    case 'texture':
-    case 'image': return 'TextureAsset';
-    case 'cube-texture': return 'CubeTextureAsset';
-    case 'equirect': return 'EquirectAsset';
-    case 'video': return 'VideoAsset';
-    case 'audio': return 'AudioClipAsset';
-    case 'animation-clip':
-    case 'animation':
-    case 'clip':
-    // The catalogued kind the gltf/inline-pack cooks emit for clips
-    // (engine-types AnimationClipAsset.kind) — without it an AnimationPlayer
-    // clips slot's picker lists nothing.
-    case 'animation-clip': return 'AnimationClip';
-    case 'scene': return 'SceneAsset';
-    case 'font': return 'FontAsset';
-    default: return null;
-  }
-}
 
 export interface AssetPickerProps {
   /** The field's expected asset-union type, e.g. 'MeshAsset' / 'MaterialAsset'. */
@@ -97,10 +70,11 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
   const inputRef = useRef<HTMLInputElement>(null);
 
   const rows = useMemo<Row[]>(() => {
-    const catalog = gateway.assetCatalog();
+    const queried = gateway.assetCatalog({ compatibleWith: assetType });
+    if (!queried.ok) return [];
+    const catalog = queried.assets;
     const out: Row[] = [];
     for (const e of catalog) {
-      if (assetKindToType(e.kind) !== assetType) continue;
       out.push({ guid: e.guid, kind: e.kind, name: catalogEntryName(e), packageUrl: e.packageUrl });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));

@@ -219,6 +219,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   }
 
   function stopAssembly(assembly: PlayAssembly, label: string): void {
+    try {
+      assembly.detachBeforeStop?.();
+    } catch (err) {
+      console.warn(`[editor] ${label} detachBeforeStop() threw:`, err);
+    }
     try { assembly.clearGameProjection?.(); } catch (err) {
       console.warn(`[editor] ${label} clearGameProjection() threw:`, err);
     }

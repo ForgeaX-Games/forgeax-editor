@@ -95,6 +95,31 @@ describe('material pack refs encoder', () => {
 });
 
 describe('normalizeMaterialPackEntries', () => {
+  it('derives material kind from the pack entry instead of requiring duplicate payload.kind', () => {
+    const pack: Record<string, unknown> = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: 'mat-with-derived-kind',
+          kind: 'material',
+          payload: {
+            passes: [],
+            values: { baseColor: [1, 1, 1, 1], metallic: 0 },
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    const result = normalizeMaterialPackEntries(pack);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changed).toBe(false);
+    expect((pack.assets as Array<Record<string, unknown>>)[0]?.payload).not.toHaveProperty('kind');
+  });
+
   it('normalizes material entries in place and reports changed entries', () => {
     const pack: Record<string, unknown> = {
       schemaVersion: '2.0.0',

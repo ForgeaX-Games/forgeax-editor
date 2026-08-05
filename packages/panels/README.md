@@ -2,6 +2,38 @@
 
 > forgeax editor 业务面板清单 — 8 个可停靠面板组件（Hierarchy、Inspector、Assets、History、Capabilities、Material、Timeline、MaterialGraph）及面板组件注入。
 
+## AI 最小命题
+
+Inspector 的 generic `AssetPicker` 与 AI 使用同一条发现路径：producer token →
+`assetCatalog({ compatibleWith })` → `describeComponent('ParticleEffectPlayer')`
+→ generic `bindAssetRef`。Picker 不知道 `particle-effect` kind，也不复制
+producer mapping；它只把字段的 `shared<T>` token 交给 Gateway。
+
+```tsx
+<AssetPicker
+  assetType="ParticleEffectAsset"
+  currentGuid={currentGuid}
+  onPick={(guid) => void gateway.dispatch({
+    kind: 'bindAssetRef', entity, component: 'ParticleEffectPlayer', field: 'effect',
+    assetType: 'ParticleEffectAsset', guids: [guid], requestId: 'bind-particle-1',
+  }, 'human')}
+  onClose={() => setPickerOpen(false)}
+/>
+```
+
+`ParticleEffectPlayer` 的 schema/manifest 公开四个 authored fields：`effect`、
+`playing`、`seed`、`timeScale`。bind descriptor 还公开 `requestId` correlation；
+成功后面板读取 terminal result 与 readiness projection，而不是把按钮完成或
+toast 视为 visible-ready。
+
+<details>
+<summary>错误、恢复、world boundary 与 visual evidence</summary>
+
+- 未知 token 显示 structured `code` 与 `hint`，恢复动作是先读取 component schema，再重新执行 generic query；不增加 VFX 专用 panel 或 document op。
+- `committed-awaiting-reload` 只表示 catalog commit；后续 readiness 必须保持同一 request、asset 与 revision。stale handle 需要在当前 world 重新查询。
+- 所有变更仍经 EditGateway；面板不直接写 World、EditSession、store 或 Pack。visual evidence、PNG 与 falsification 属于 verify/judgment，不是 panel 状态 owner。
+</details>
+
 ## 导入示例
 
 ```ts

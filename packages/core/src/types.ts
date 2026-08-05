@@ -101,6 +101,7 @@ export type BuiltinEditorOp =
   | { kind: 'setAssetSelection'; assets: SelectedAsset[]; primary: SelectedAsset | null }
   | { kind: 'openAssetEditor'; asset: SelectedAsset }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
+  | { kind: 'setGizmoPivot'; pivot: 'center' | 'lastSelected' }
   | { kind: 'requestFrame' }
   | { kind: 'cameraSetProjection'; projection: 'perspective' | 'orthographic' }
   | { kind: 'cameraToggleProjection' }

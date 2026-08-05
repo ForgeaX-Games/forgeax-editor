@@ -56,6 +56,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@forgeax/editor-game-plugins": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
@@ -94,6 +95,8 @@
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vfx-compiler": "workspace:*",
+    "@forgeax/engine-vfx-render": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",

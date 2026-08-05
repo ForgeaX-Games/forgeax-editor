@@ -16,18 +16,25 @@ import { gateway } from '@forgeax/editor-core';
 import { AssetPicker } from '../AssetPicker';
 
 const fakeCatalog = [
-  { guid: 'g-cube', kind: 'mesh', name: 'Cube', packageUrl: 'cube.mesh' },
-  { guid: 'g-sphere', kind: 'mesh', name: 'Sphere', packageUrl: 'sphere.mesh' },
-  { guid: 'g-red', kind: 'material', name: 'RedMat', packageUrl: 'red.mat' },
-  { guid: 'g-run', kind: 'animation-clip', name: 'Run', packageUrl: 'run.anim' },
-  { guid: 'g-walk', kind: 'animation-clip', name: 'Walk', packageUrl: 'fox.anim' },
+  { guid: 'g-cube', kind: 'mesh', name: 'Cube', packageUrl: 'cube.mesh', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'MeshRenderer', field: 'mesh', assetType: 'MeshAsset', cardinality: 'single' }, requiredSlots: 1 } } },
+  { guid: 'g-sphere', kind: 'mesh', name: 'Sphere', packageUrl: 'sphere.mesh', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'MeshRenderer', field: 'mesh', assetType: 'MeshAsset', cardinality: 'single' }, requiredSlots: 1 } } },
+  { guid: 'g-red', kind: 'material', name: 'RedMat', packageUrl: 'red.mat', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'StandardMaterial', field: 'material', assetType: 'MaterialAsset', cardinality: 'single' }, requiredSlots: 1 } } },
+  { guid: 'g-run', kind: 'animation-clip', name: 'Run', packageUrl: 'run.anim', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'AnimationPlayer', field: 'clips', assetType: 'AnimationClip', cardinality: 'many' }, requiredSlots: 1 } } },
+  { guid: 'g-walk', kind: 'animation-clip', name: 'Walk', packageUrl: 'fox.anim', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'AnimationPlayer', field: 'clips', assetType: 'AnimationClip', cardinality: 'many' }, requiredSlots: 1 } } },
 ];
 
 const gw = gateway as unknown as { assetCatalog: unknown; describeAssetByGuid: unknown };
 const orig = { assetCatalog: gw.assetCatalog, describeAssetByGuid: gw.describeAssetByGuid };
+const compatibleCatalog = (rows: readonly Record<string, unknown>[], assetType?: string) => ({
+  ok: true as const,
+  assets: assetType === undefined ? rows : rows.filter((row) => {
+    const binding = (row.authoring as { binding?: { operation: string; target?: { assetType: string } } } | undefined)?.binding;
+    return binding?.operation !== 'unavailable' && binding?.target?.assetType === assetType;
+  }),
+});
 
 beforeAll(() => {
-  gw.assetCatalog = () => fakeCatalog;
+  gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog(fakeCatalog, options?.compatibleWith);
   gw.describeAssetByGuid = () => ({ ok: false });
 });
 
@@ -85,17 +92,40 @@ describe('AssetPicker', () => {
   });
 
   it('AudioClipAsset field → only audio rows', () => {
-    gw.assetCatalog = () => [
+    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog([
       ...fakeCatalog,
-      { guid: 'g-sfx', kind: 'audio', name: 'test_mp3', packageUrl: 'assets/test_mp3.mp3' },
-    ];
+      { guid: 'g-sfx', kind: 'audio', name: 'test_mp3', packageUrl: 'assets/test_mp3.mp3', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'AudioSource', field: 'clip', assetType: 'AudioClipAsset', cardinality: 'single' }, requiredSlots: 1 } } },
+    ], options?.compatibleWith);
     const html = renderToStaticMarkup(
       <AssetPicker assetType="AudioClipAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-sfx');
     expect(html).toContain('test_mp3');
     expect(html).not.toContain('asset-picker-row-g-cube');
-    gw.assetCatalog = () => fakeCatalog;
+    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog(fakeCatalog, options?.compatibleWith);
+  });
+
+  it('ParticleEffectAsset field → producer capability selects particle rows', () => {
+    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog([
+      {
+        guid: 'g-particle', kind: 'particle-effect', name: 'Burst', packageUrl: 'burst.pack',
+        authoring: {
+          placement: { operation: 'spawnEntity' },
+          binding: {
+            operation: 'bindAssetRef',
+            target: { component: 'ParticleEffectPlayer', field: 'effect', assetType: 'ParticleEffectAsset', cardinality: 'single' },
+            requiredSlots: 1,
+          },
+        },
+      },
+      ...fakeCatalog,
+    ], options?.compatibleWith);
+    const html = renderToStaticMarkup(
+      <AssetPicker assetType="ParticleEffectAsset" onPick={() => {}} onClose={() => {}} />,
+    );
+    expect(html).toContain('asset-picker-row-g-particle');
+    expect(html).not.toContain('asset-picker-row-g-cube');
+    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog(fakeCatalog, options?.compatibleWith);
   });
 
   it('AnimationClip field → imported animation-clip rows', () => {

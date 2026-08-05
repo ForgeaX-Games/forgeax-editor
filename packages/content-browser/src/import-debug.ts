@@ -2,7 +2,7 @@
  * Stale-HMR compatibility shim — new code imports logImport from import-registry.
  * Do not add new exports here; keep this file as a re-export barrel only.
  */
-import { logImport, getImportRegistrySnapshot } from './import-registry';
+import { getImportRegistrySnapshot, logImport } from '@forgeax/editor-core';
 
 export { logImport, getImportRegistrySnapshot };
 

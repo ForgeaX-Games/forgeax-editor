@@ -108,3 +108,27 @@ export function isImportable(filename: string): boolean {
 export function getAllExtensions(): string[] {
   return IMPORT_FORMATS.flatMap(f => f.extensions);
 }
+
+/** Build the file-input accept list from the canonical registry. */
+export function buildAcceptString(): string {
+  return getAllExtensions().join(',');
+}
+
+/** Read-only debug projection of the canonical registry. */
+export function getImportRegistrySnapshot() {
+  const extensions = getAllExtensions();
+  return {
+    moduleUrl: import.meta.url,
+    formatCount: IMPORT_FORMATS.length,
+    importers: IMPORT_FORMATS.map((format) => format.importer),
+    extensions,
+    accept: buildAcceptString(),
+    hasFbx: extensions.includes('.fbx'),
+  };
+}
+
+/** Structured import trace shared by browser consumers. */
+export function logImport(step: string, data?: Record<string, unknown>): void {
+  const href = typeof location !== 'undefined' ? location.href : undefined;
+  console.info('[CB:import]', step, { ...data, href });
+}

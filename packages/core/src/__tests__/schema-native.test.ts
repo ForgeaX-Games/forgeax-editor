@@ -7,11 +7,13 @@
 
 import { describe, expect, it, beforeAll } from 'bun:test';
 import { Transform } from '@forgeax/engine-scene';
+import { ParticleEffectPlayer } from '../../../engine/packages/vfx/src/player';
 import { MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera } from '@forgeax/engine-render';
 import { _resetSchemaCache, getComponentSchema } from '../scene/schema';
 
 void Transform; void MeshFilter; void MeshRenderer;
 void DirectionalLight; void PointLight; void SpotLight; void Camera;
+void ParticleEffectPlayer;
 
 beforeAll(() => {
   _resetSchemaCache();
@@ -132,5 +134,12 @@ describe('Reflection: engine-native field assertions', () => {
     expect(keys.has('pos')).toBe(true);
     expect(keys.has('quat')).toBe(true);
     expect(keys.has('scale')).toBe(true);
+  });
+
+  it('ParticleEffectPlayer schema exposes the four authored fields and producer token', () => {
+    const schema = getComponentSchema('ParticleEffectPlayer');
+    expect(schema).toBeDefined();
+    expect(schema!.fields.map((field) => field.key)).toEqual(['effect', 'playing', 'seed', 'timeScale']);
+    expect(ParticleEffectPlayer.schema.effect).toBe('shared<ParticleEffectAsset>');
   });
 });

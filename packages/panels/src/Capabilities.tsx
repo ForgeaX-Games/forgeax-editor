@@ -13,7 +13,7 @@ import {
   type DiagnosticsPanelSource,
 } from './diagnostics/diagnostics-view-model';
 
-const SOURCES: readonly DiagnosticsPanelSource[] = ['trace', 'scan', 'assets', 'operationRuns'];
+const SOURCES: readonly DiagnosticsPanelSource[] = ['trace', 'scan', 'assets', 'operationRuns', 'runtime'];
 const SEVERITIES: readonly DiagnosticsPanelSeverity[] = ['error', 'warn', 'info'];
 
 function useDiagnosticsRevision(): number {

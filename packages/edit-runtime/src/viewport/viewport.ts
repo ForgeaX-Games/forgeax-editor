@@ -43,6 +43,7 @@ export {
   deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, clampFlySpeed,
   applyFlyWheelSpeed, advanceFly, advanceFlyLook, computeFlyCamera, orbitToFly, flyToOrbit,
   clampFov, adjustFov, clampOrthoHalfHeight, adjustOrthoHalfHeight, deriveOrthoHalfHeight,
+  gizmoViewScale, GIZMO_VIEW_SCALE_MIN,
   FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX, FLY_SPEED_STEP, FLY_BOOST_MULTIPLIER,
   FOV_DEFAULT, FOV_MIN, FOV_MAX, FOV_STEP, ORTHO_HALF_HEIGHT_DEFAULT,
   ORTHO_HALF_HEIGHT_MIN, ORTHO_HALF_HEIGHT_MAX, ORTHO_ZOOM_STEP,
@@ -62,6 +63,7 @@ import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closes
 import {
   advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera,
   applyFlyWheelSpeed, flyToOrbit, deriveOrthoHalfHeight, adjustOrthoHalfHeight,
+  gizmoViewScale,
   FOV_MIN, FOV_MAX,
   ORTHO_HALF_HEIGHT_MIN, ORTHO_HALF_HEIGHT_MAX,
   type InputTarget, type FlyInput, type CameraProjection,
@@ -75,8 +77,9 @@ import {
   type CameraBookmarkSlot,
   type ViewportPreferences,
 } from './viewport-preferences';
-import { createGizmoPool } from './viewport-gizmo';
+import { createGizmoPool, type GizmoAnchor } from './viewport-gizmo';
 import { createParamGizmo } from './viewport-param-gizmo';
+import { buildDragGroup, translatedMemberTarget, type DragGroupMember } from './viewport-drag-group';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
 import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, isEntEffectivelyHidden, type EditorTransform } from './viewport-entity-read';
 
@@ -88,7 +91,7 @@ import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-co
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getGizmoSpace, getSelection, getSelectionList, onGizmoModeChange, onGizmoSpaceChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getGizmoSpace, getGizmoPivot, getSelection, getSelectionList, onGizmoModeChange, onGizmoSpaceChange, onGizmoPivotChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -312,19 +315,43 @@ export function createViewport({
     const sel = getSelection();
     return sel !== null ? readWorldTransform(gateway.activeWorld, sel) : undefined;
   };
-  const gizmoSelWorldQ = (): [number, number, number, number] | null => {
-    const sel = getSelection();
-    return sel !== null ? readWorldQuat(gateway.activeWorld, sel) : null;
+  // Gizmo anchor (gizmo-ue-parity plan §4.1): single selection → that entity's
+  // world pivot; multi selection with pivot='center' (UE default) → average of
+  // all selected world positions; pivot='lastSelected' → the primary entity.
+  // Orientation follows the PRIMARY entity's world rotation in local space.
+  const gizmoAnchor = (): GizmoAnchor | null => {
+    const primary = getSelection();
+    if (primary === null) return null;
+    const world = gateway.activeWorld;
+    const pt = readWorldTransform(world, primary);
+    if (!pt) return null;
+    const quat = readWorldQuat(world, primary);
+    const primaryCenter: Vec3 = [num(pt.x, 0), num(pt.y, 0), num(pt.z, 0)];
+    const selected = getSelectionList();
+    if (getGizmoPivot() === 'lastSelected' || selected.size <= 1) {
+      return { center: primaryCenter, quat };
+    }
+    let sx = 0, sy = 0, sz = 0, n = 0;
+    for (const id of selected) {
+      const t = readWorldTransform(world, id);
+      if (!t) continue; // deleted / no Transform → excluded from the average
+      sx += num(t.x, 0); sy += num(t.y, 0); sz += num(t.z, 0); n++;
+    }
+    if (n === 0) return null;
+    return { center: [sx / n, sy / n, sz / n], quat };
   };
+  // View scale for constant on-screen gizmo size (plan §4.2): reads the LIVE
+  // camera state every update, so fly roaming no longer freezes the size on a
+  // stale orbit `dist`, and ortho zoom scales the gizmo by the half-height.
+  const gizmoViewScaleAt = (anchor: Vec3): number =>
+    gizmoViewScale(projection, camPos, anchor, orthoHalfHeight, fov);
   const gizmoPool = createGizmoPool({
     editorEngine,
-    getSelection,
+    getAnchor: gizmoAnchor,
     getGizmoMode,
-    getSelectionWorldTransform: gizmoSelWorldT,
-    getSelectionWorldQuat: gizmoSelWorldQ,
     getGizmoSpace,
     isAuxVisible,
-    getDist: () => dist,
+    getViewScale: gizmoViewScaleAt,
   });
   const paramGizmo = createParamGizmo({
     editorEngine,
@@ -336,7 +363,7 @@ export function createViewport({
     },
     getSelectionWorldTransform: gizmoSelWorldT,
     isAuxVisible,
-    getDist: () => dist,
+    getViewScale: gizmoViewScaleAt,
     getAspect: aspect,
   });
   const updateGizmo = (): void => gizmoPool.update();
@@ -504,6 +531,11 @@ export function createViewport({
   let planeGrab: Vec3 = [0, 0, 0];
   // the changed Transform fields, committed as ONE command on release.
   let livePatch: Record<string, number> = {};
+  // Multi-selection translate drag (gizmo-ue-parity plan §4.3): every selected
+  // entity moves by the same world delta; the whole group lands as ONE
+  // `transaction` document op on release. Empty unless the gizmo-handle drag
+  // started in translate mode. Rotate/scale stay primary-only (documented gap).
+  let dragGroup: DragGroupMember[] = [];
   const qd = quat.create();
 
   /** Convert an editor-shape Transform (x/y/z + rotX/rotY/rotZ + scale) into the
@@ -549,6 +581,53 @@ export function createViewport({
     // Mirror the changed fields into the Inspector live via the transient
     // field-preview op — numbers track the drag; the single commit lands on release.
     for (const k in patch) gateway.dispatch({ kind: 'setFieldPreview', id: dragId, key: `Transform.${k}`, value: patch[k]! });
+  };
+  /** Multi-selection translate drag (plan §4.3): apply the same world delta to
+   *  every member of dragGroup. The whole gesture is ONE document op — a
+   *  `transaction` of per-entity setComponent commands opened lazily via the
+   *  gateway lifecycle (begin snapshots orig, update re-applies live, commit
+   *  on pointerup = one undo entry for the whole group). */
+  const applyLiveGroup = (delta: Vec3, ctrl: boolean): void => {
+    if (dragGroup.length === 0) return;
+    const patches = dragGroup.map((m) => {
+      const target = translatedMemberTarget(m, delta);
+      const local = worldPositionToLocal(gateway.activeWorld, m.id, target);
+      return {
+        entity: m.id,
+        patch: {
+          x: snap(local[0], 0.5, ctrl),
+          y: snap(local[1], 0.5, ctrl),
+          z: snap(local[2], 0.5, ctrl),
+        },
+      };
+    });
+    if (dragHandle === null) {
+      const b = gateway.begin({
+        kind: 'transaction',
+        label: 'multi-selection translate drag',
+        commands: dragGroup.map((m) => ({
+          kind: 'setComponent' as const, entity: m.id, component: 'Transform',
+          patch: toEnginePatch(m.origLocal),
+        })),
+      });
+      if (b.ok) dragHandle = b.handle;
+    }
+    const commands = patches.map((p, i) => ({
+      kind: 'setComponent' as const, entity: p.entity, component: 'Transform',
+      patch: toEnginePatch({ ...dragGroup[i]!.origLocal, ...p.patch }),
+    }));
+    if (dragHandle !== null) {
+      gateway.update(dragHandle, { commands });
+    } else {
+      // Lifecycle unavailable (op interrupted) — degrade to direct preview
+      // writes so the drag still tracks; nothing enters the ledger.
+      for (const c of commands) engine.set(c.entity as unknown as EntityHandle, Transform, c.patch);
+    }
+    // Inspector mirrors the primary entity only (it is dragGroup[0] by construction).
+    const primary = patches[0]!;
+    for (const k in primary.patch) {
+      gateway.dispatch({ kind: 'setFieldPreview', id: primary.entity, key: `Transform.${k}`, value: primary.patch[k as 'x' | 'y' | 'z']! });
+    }
   };
   const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
   const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
@@ -624,6 +703,20 @@ export function createViewport({
       dragWorldPos = [num(worldT?.x, 0), num(worldT?.y, 0), num(worldT?.z, 0)];
       axisStart = [...dragWorldPos];
       livePatch = {};
+      // Multi-selection translate drag (plan §4.3): build the group and re-base
+      // the axis reference on the gizmo anchor (multi = average center), so the
+      // handles the user grabbed are the reference the delta math uses.
+      dragGroup = [];
+      if (getGizmoMode() === 'translate') {
+        const anchorNow = gizmoAnchor();
+        if (anchorNow) axisStart = [...anchorNow.center];
+        dragGroup = buildDragGroup(sel, getSelectionList(), (entity) => {
+          const lt = readLocalTransform(gateway.activeWorld, entity);
+          const wt = readWorldTransform(gateway.activeWorld, entity);
+          if (!lt || !wt) return undefined;
+          return { local: { ...lt }, worldPos: [num(wt.x, 0), num(wt.y, 0), num(wt.z, 0)] as Vec3 };
+        });
+      }
       if (h >= 3) {
         dragPlane = PLANES[h - 3]!;
         dragPlaneNormal = gizmoPool.getPlaneNormal(h - 3);
@@ -714,17 +807,22 @@ export function createViewport({
       if (dragPlane) {
         const hit = rayPlane(origin, dir, axisStart, dragPlaneNormal);
         if (hit) {
-          const target: Vec3 = [
-            dragWorldPos[0] + hit[0] - planeGrab[0],
-            dragWorldPos[1] + hit[1] - planeGrab[1],
-            dragWorldPos[2] + hit[2] - planeGrab[2],
-          ];
-          const local = worldPositionToLocal(gateway.activeWorld, dragId!, target);
-          applyLive({
-            x: snap(local[0], 0.5, ctrl),
-            y: snap(local[1], 0.5, ctrl),
-            z: snap(local[2], 0.5, ctrl),
-          });
+          const delta: Vec3 = [hit[0] - planeGrab[0], hit[1] - planeGrab[1], hit[2] - planeGrab[2]];
+          if (dragGroup.length > 1) {
+            applyLiveGroup(delta, ctrl);
+          } else {
+            const target: Vec3 = [
+              dragWorldPos[0] + delta[0],
+              dragWorldPos[1] + delta[1],
+              dragWorldPos[2] + delta[2],
+            ];
+            const local = worldPositionToLocal(gateway.activeWorld, dragId!, target);
+            applyLive({
+              x: snap(local[0], 0.5, ctrl),
+              y: snap(local[1], 0.5, ctrl),
+              z: snap(local[2], 0.5, ctrl),
+            });
+          }
         }
       } else if (gm === 'rotate') {
         const a = angleOnAxis(origin, dir, axisStart, axisVec);
@@ -745,17 +843,21 @@ export function createViewport({
         }
       } else {
         const delta = closestAxisT(origin, dir, axisStart, axisVec) - axisT0;
-        const target: Vec3 = [
-          axisStart[0] + axisVec[0] * delta,
-          axisStart[1] + axisVec[1] * delta,
-          axisStart[2] + axisVec[2] * delta,
-        ];
-        const local = worldPositionToLocal(gateway.activeWorld, dragId!, target);
-        applyLive({
-          x: snap(local[0], 0.5, ctrl),
-          y: snap(local[1], 0.5, ctrl),
-          z: snap(local[2], 0.5, ctrl),
-        });
+        if (dragGroup.length > 1) {
+          applyLiveGroup([axisVec[0] * delta, axisVec[1] * delta, axisVec[2] * delta], ctrl);
+        } else {
+          const target: Vec3 = [
+            axisStart[0] + axisVec[0] * delta,
+            axisStart[1] + axisVec[1] * delta,
+            axisStart[2] + axisVec[2] * delta,
+          ];
+          const local = worldPositionToLocal(gateway.activeWorld, dragId!, target);
+          applyLive({
+            x: snap(local[0], 0.5, ctrl),
+            y: snap(local[1], 0.5, ctrl),
+            z: snap(local[2], 0.5, ctrl),
+          });
+        }
       }
       updateGizmo(); // handles follow the entity
     } else if (mode === 'pendDrag' || mode === 'drag') {
@@ -808,7 +910,7 @@ export function createViewport({
       gateway.commit(dragHandle);
       dragHandle = null;
     }
-    mode = 'none'; gestureStart = null; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null;
+    mode = 'none'; gestureStart = null; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null; dragGroup = [];
     // D-12 path A (S13 / AC-30): a completed camera-nav gesture records ONE
     // cameraOrbit session op carrying the gesture-end pose. Mid-frame poses stayed
     // on the facade direct write (applyCamera) — out of the ledger (OOS-4). A
@@ -1080,6 +1182,7 @@ export function createViewport({
   const unsubSel = onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
   const unsubMode = onGizmoModeChange(updateGizmo);
   const unsubSpace = onGizmoSpaceChange(updateGizmo);
+  const unsubPivot = onGizmoPivotChange(updateGizmo);
   const unsubDoc = gateway.subscribe(() => {
     const sig = selSig();
     if (sig === lastSelSig) return; // selected entity unchanged → gizmos unaffected
@@ -1107,6 +1210,7 @@ export function createViewport({
       unsubSel();
       unsubMode();
       unsubSpace();
+      unsubPivot();
       unsubDoc();
       unsubDisplay();
       unregCameraAppliers();

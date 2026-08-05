@@ -35,8 +35,9 @@ export interface ParamGizmoDeps {
   getSelectionWorldTransform(): EditorTransform | undefined;
   /** Aux-entity visibility gate (w23, D-5). */
   isAuxVisible(): boolean;
-  /** Current camera distance (dot size ∝ dist). */
-  getDist(): number;
+  /** View scale in world units at a given point (dot size ∝ view scale, so
+   *  dots keep a constant on-screen size in both projections and while flying). */
+  getViewScale(anchor: Vec3): number;
   /** Current camera aspect (needed by cameraGizmoPoints for frustum shape). */
   getAspect(): number;
 }
@@ -49,7 +50,7 @@ export interface ParamGizmo {
 /** Build the parameter-gizmo pool (camera frustum). */
 export function createParamGizmo({
   editorEngine, spawnHandleCube, getSelection, getSelectionComponents,
-  getSelectionWorldTransform, isAuxVisible, getDist, getAspect,
+  getSelectionWorldTransform, isAuxVisible, getViewScale, getAspect,
 }: ParamGizmoDeps): ParamGizmo {
   let paramEnts: EntityHandle[] = [];
   let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
@@ -88,10 +89,10 @@ export function createParamGizmo({
     const cam = comps.Camera as Record<string, unknown> | undefined;
     // The wireframe POINT SETS are pure geometry (viewport-gizmo-geometry.ts);
     // the engine dot-pool placement (placeDots) is the only side-effecting edge.
-    const dist = getDist();
+    const scale = getViewScale(center);
     const pts: Vec3[] = [];
-    if (cam) pts.push(...cameraGizmoPoints(cam, center, t, dist, getAspect()));
-    placeDots(pts, Math.max(0.05, dist * 0.006));
+    if (cam) pts.push(...cameraGizmoPoints(cam, center, t, scale, getAspect()));
+    placeDots(pts, Math.max(0.05, scale * 0.006));
   }
 
   return { update, dispose: despawnParam };

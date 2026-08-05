@@ -150,8 +150,8 @@ export function encodeMaterialPackRefs(
   payload: unknown,
   refs?: readonly unknown[],
 ): EncodeMaterialPackRefsResult {
-  if (!isRecord(payload) || payload.kind !== 'material') {
-    return fail('payload', 'Material payload must be an object with kind "material".');
+  if (!isRecord(payload) || (payload.kind !== undefined && payload.kind !== 'material')) {
+    return fail('payload', 'Material payload must be an object; an optional kind must be "material".');
   }
   if (refs !== undefined && !Array.isArray(refs)) {
     return fail('refs', 'Material refs must be an array of asset GUIDs.');

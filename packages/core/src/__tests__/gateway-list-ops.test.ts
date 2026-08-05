@@ -14,6 +14,7 @@ import { describe, expect, it, beforeAll } from 'bun:test';
 import { EditGateway } from '../io/gateway';
 import type { OpDescriptor } from '../io/catalog';
 import { createEditSession } from '../session/document';
+import diagnosticsSchema from '../io/runtime-ui-diagnostics.schema.json';
 
 // ── Fixture ────────────────────────────────────────────────────────────────
 
@@ -332,6 +333,34 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: true,
     });
+  });
+});
+
+describe('generic VFX discovery contract (M2, RED)', () => {
+  it('bindAssetRef exposes the producer token path and request correlation', () => {
+    const bind = gw.listOps().find((op) => op.id === 'bindAssetRef');
+    expect(bind?.argsSchema).toMatchObject({
+      type: 'object',
+      required: expect.arrayContaining(['assetType', 'requestId']),
+      properties: {
+        assetType: { description: expect.stringContaining('ParticleEffectPlayer') },
+        requestId: { type: 'string' },
+      },
+    });
+  });
+
+  it('assetCatalog exposes a structured compatibility query result', () => {
+    const result = gw.assetCatalog({ compatibleWith: 'ParticleEffectAsset' });
+    expect(result).toHaveProperty('ok');
+    if (!result.ok) expect(result.error).toMatchObject({ code: 'asset-compatibility-token-unknown', retryable: false });
+  });
+
+  it('diagnostics schema declares bounded readiness and structured errors', () => {
+    const properties = diagnosticsSchema.properties as Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
+    expect(properties).toHaveProperty('readiness');
+    expect(properties.readiness?.required).toEqual(expect.arrayContaining(['state', 'requestId', 'assetGuid', 'revision']));
+    expect(properties).toHaveProperty('error');
+    expect(properties.error?.required).toEqual(expect.arrayContaining(['code', 'expected', 'actual', 'hint', 'retryable']));
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { getPlayPluginFailure } from '../game-plugins';
+import { getPlayPluginFailure } from '@forgeax/editor-game-plugins';
 
 describe('Play plugin startup failure projection', () => {
   it('projects the first plugin import error as a structured terminal failure', () => {

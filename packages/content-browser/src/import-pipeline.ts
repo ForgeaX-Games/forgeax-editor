@@ -27,8 +27,9 @@ import {
   type ImportFailureCode,
   type ImportFileResult,
   type OperationRun,
+  isImportable,
+  logImport,
 } from '@forgeax/editor-core';
-import { isImportable, logImport } from './import-registry';
 
 // Re-export the core result type so existing consumers keep importing it from here.
 export type { ImportFileResult, ImportFileStatus } from '@forgeax/editor-core';

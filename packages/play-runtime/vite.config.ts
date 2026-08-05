@@ -11,6 +11,10 @@ import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
+import {
+  createStockParticleOperatorRegistry,
+  particleEffectImporter,
+} from '@forgeax/engine-vfx-compiler';
 import { buildPerGameCatalog } from './pack-catalog.js';
 import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy';
 
@@ -126,6 +130,7 @@ const ENGINE_TEMPLATE_UI_BASE = resolve(
 const PREVIEW_GAMES_DIR = process.env.FORGEAX_PREVIEW_GAMES_DIR;
 const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX
   ?? (PREVIEW_GAMES_DIR ? HOST_GAMES_FARM : '');
+const GAME_API_PORT = process.env.FORGEAX_GAME_API_PORT;
 const STATIC_GAME_DIR = process.env.FORGEAX_STATIC_GAME_DIR
   ? resolve(process.env.FORGEAX_STATIC_GAME_DIR)
   : '';
@@ -248,8 +253,14 @@ const viteRoot = here;
     return;
   }
   const linkPath = resolve(here, HOST_GAMES_FARM);
-  if (existsSync(linkPath)) {
-    const stat = lstatSync(linkPath);
+  let linkStat;
+  try {
+    linkStat = lstatSync(linkPath);
+  } catch {
+    linkStat = undefined;
+  }
+  if (linkStat !== undefined) {
+    const stat = linkStat;
     if (!stat.isSymbolicLink()) {
       console.warn(`[forgeax] refusing to replace non-symlink games mount: ${linkPath}`);
       return;
@@ -846,7 +857,13 @@ export default defineConfig({
     pluginPack({
       roots: gameAssetRoots(),
       base: '/preview/',
-      importers: [audioImporter, imageImporter, gltfImporter, fbxImporter],
+      importers: [
+        audioImporter,
+        imageImporter,
+        gltfImporter,
+        fbxImporter,
+        particleEffectImporter(createStockParticleOperatorRegistry()),
+      ],
       // No-op host refresh: importing an asset in the editor MUST NOT full-reload
       // the page. In Studio single-realm the editor + engine boot IN the :18920
       // window, and this play engine (:15173) is proxied in via /preview (ws:true),
@@ -914,6 +931,11 @@ export default defineConfig({
     host: HOST,
     strictPort: true,
     open: false,
+    ...(GAME_API_PORT ? {
+      proxy: {
+        '/api': { target: `http://127.0.0.1:${GAME_API_PORT}`, changeOrigin: true },
+      },
+    } : {}),
     // Perf "A": the studio shell (:18920) now fetches game assets straight from
     // this play-engine origin (:15173) instead of via its same-origin /preview
     // proxy, so asset traffic gets its OWN browser connection pool and can't

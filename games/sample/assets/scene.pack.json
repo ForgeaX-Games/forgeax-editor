@@ -303,6 +303,41 @@
                 "autoAspect": true
               }
             }
+          },
+          {
+            "localId": 34,
+            "components": {
+              "Entity": {
+                "self": 34
+              },
+              "Name": {
+                "value": "VFX Acceptance"
+              },
+              "Transform": {
+                "pos": [
+                  0,
+                  1.2,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
+              },
+              "ParticleEffectPlayer": {
+                "effect": 6,
+                "playing": true,
+                "seed": 424242,
+                "timeScale": 1
+              }
+            }
           }
         ],
         "mounts": [
@@ -620,6 +655,7 @@
         "95730fd2-9846-5f84-8658-0b3c971eb263",
         "3a000003-0000-5000-8000-000000000003",
         "019f56f2-0ac0-776a-9d28-50eb5a9edeb8",
+        "019f56f2-0ac0-776a-9d28-50eb5a9edeb9",
         "019f56f2-0ac0-776a-9d28-50efaa0ebd1f"
       ],
       "artifacts": {}

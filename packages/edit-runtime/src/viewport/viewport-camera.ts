@@ -157,6 +157,34 @@ export function deriveOrthoHalfHeight(dist: number, fov: number): number {
   return clampOrthoHalfHeight(Math.max(ORTHO_HALF_HEIGHT_MIN, dist * Math.tan(clampFov(fov) / 2)));
 }
 
+/** Minimum view scale so a gizmo sitting exactly on the camera still gets a
+ *  non-degenerate size (and never NaN/Infinity downstream). */
+export const GIZMO_VIEW_SCALE_MIN = 1e-3;
+
+/** World-units scale factor for editor gizmos so they keep a constant on-screen
+ *  size (UE parity — gizmo-ue-parity plan §4.2).
+ *  - perspective: the camera→anchor distance. The gizmo reads the LIVE camera
+ *    position every update, so fly roaming no longer freezes the size on a
+ *    stale orbit `dist` (previous bug: size jumped at fly end).
+ *  - orthographic: distance is meaningless (parallel projection), so convert
+ *    the ortho half-height back to the perspective distance that would frame
+ *    the same height — the inverse of deriveOrthoHalfHeight. Zooming an ortho
+ *    view now keeps the gizmo at a constant screen size too.
+ *  Non-finite inputs fall back to a safe default instead of poisoning gizmo math. */
+export function gizmoViewScale(
+  projection: CameraProjection,
+  camPos: Vec3,
+  anchor: Vec3,
+  orthoHalfHeight: number,
+  fov: number,
+): number {
+  if (projection === 'orthographic') {
+    return clampOrthoHalfHeight(orthoHalfHeight) / Math.tan(clampFov(fov) / 2);
+  }
+  const d = Math.hypot(camPos[0] - anchor[0], camPos[1] - anchor[1], camPos[2] - anchor[2]);
+  return Number.isFinite(d) && d > GIZMO_VIEW_SCALE_MIN ? d : GIZMO_VIEW_SCALE_MIN;
+}
+
 /** Advance orbit state with user input deltas, clamping pitch and distance.
  *  Returns the new yaw/pitch/dist — yaw is unbounded (full rotation allowed).
  *  deltaDist > 0 zooms in (reduces dist); deltaDist < 0 zooms out. */

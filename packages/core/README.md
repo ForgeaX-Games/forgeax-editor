@@ -2,6 +2,45 @@
 
 > forgeax editor 核心逻辑层 — EditSession 单一真相源（scene-as-asset）、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
 
+## Minimal AI path
+
+Asset capabilities flow through one discoverable path: producer token →
+`assetCatalog({ compatibleWith })` → `describeComponent('ParticleEffectPlayer')`
+→ generic `bindAssetRef`. Callers neither inspect source nor guess concrete asset kinds:
+
+```ts
+const component = gateway.describeComponent('ParticleEffectPlayer');
+const candidates = gateway.assetCatalog({ compatibleWith: 'ParticleEffectAsset' });
+if (component.ok && candidates.ok) {
+  await gateway.dispatch({
+    kind: 'bindAssetRef',
+    entity,
+    component: component.name,
+    field: 'effect',
+    assetType: 'ParticleEffectAsset',
+    guids: candidates.assets.map((asset) => asset.guid),
+    requestId: 'bind-particle-1',
+  }, 'ai');
+}
+```
+
+The authored `ParticleEffectPlayer` schema contains `effect`, `playing`, `seed`, and
+`timeScale`. `gateway.listOps()` exposes the generic bind's `assetType`, `guids`, and
+`requestId`; `runtime-ui-diagnostics.schema.json` defines machine-readable readiness
+and structured error fields. A successful import terminal result reports only
+`committed-awaiting-reload`, together with `requestId`, `assetGuid`,
+`committedRevision`, `residentRevision`, and `hint`; it never presents a commit as
+visible-ready.
+
+<details>
+<summary>Errors, recovery, and boundaries</summary>
+
+- `asset-compatibility-token-unknown` means no producer schema declared the token. Read `describeComponent` first; do not treat an empty array as success.
+- Loader, revision, render, and stale-handle failures return stable `code`, `expected`, `actual`, `hint`, and `retryable` fields. Follow recovery actions to re-query, retry, Stop/Play, or reopen.
+- Readiness is a bounded projection for one `requestId + assetGuid + revision`. Edit- and Play-world handles are not interchangeable, and background work never rewrites a terminal run.
+- Visual evidence belongs to verification. Core exposes machine-readable facts instead of substituting toasts, console output, or screenshots for state.
+</details>
+
 ## Asset impact reads
 
 `EditGateway.assetImpact({ operation, guid })` or `assetImpact({ operation, sourcePath })` is the

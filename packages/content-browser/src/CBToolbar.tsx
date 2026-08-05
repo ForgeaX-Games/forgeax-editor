@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { broadcastAssetsChanged, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
-import { generateAssetGuid, gateway } from '@forgeax/editor-core';
+import { broadcastAssetsChanged, buildAcceptString, generateAssetGuid, gateway, logImport, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import {
   Button,
@@ -14,7 +13,6 @@ import {
 } from '@forgeax/editor-ui';
 import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
 import { importFiles, type ImportProgress } from './import-pipeline';
-import { buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { ContentBrowserIcon } from './content-browser-icons';
 

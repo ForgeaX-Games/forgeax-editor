@@ -19,13 +19,14 @@ import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { parseScenePayload } from '@forgeax/engine-assets-runtime';
+import type { ParticleRuntimeHost } from '@forgeax/engine-vfx-render';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { createRuntimeUiGraph, entComponent, normalizeAnimationPlayerSceneAsset, panelBridge, publishMeshStats } from '@forgeax/editor-core';
 import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDirtyPolicy, SelectedAsset } from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
-import { ensureGamePluginsLoaded, addGamePluginSystems, getPlayPluginFailure, type GamePluginLoad } from './game-plugins';
+import { ensureGamePluginsLoaded, addGamePluginSystems, getPlayPluginFailure, type GamePluginLoad } from '@forgeax/editor-game-plugins';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -111,6 +112,10 @@ export interface HostSessionContext {
    * plugin set mirrors the edit assembly (D-7).
    */
   readonly physics: PhysicsBackend | undefined;
+  /** Shared engine-owned VFX host; Edit and each fresh Play world use this instance. */
+  readonly vfxRuntimeHost: ParticleRuntimeHost;
+  /** Publish render-feature diagnostic transitions through the Gateway provider. */
+  readonly onVfxDiagnosticsChanged?: () => void;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
   /**
@@ -731,6 +736,12 @@ export function createHostSession(deps: HostSessionDeps): {
             };
           },
           ...(ctx.physics ? { physics: ctx.physics } : {}),
+          vfxRuntimeHost: ctx.vfxRuntimeHost,
+          ...(ctx.onVfxDiagnosticsChanged
+            ? { onRenderPhaseEnd: (phase: string) => {
+              if (phase === 'features') ctx.onVfxDiagnosticsChanged?.();
+            } }
+            : {}),
           ...(ctx.onPlayFrame ? { onPlayFrame: ctx.onPlayFrame } : {}),
         });
         // PLAY-only: add the plugin systems into the fresh play world so game
@@ -932,7 +943,7 @@ export function createHostSession(deps: HostSessionDeps): {
   // The gateway's _preFillMaterialOp reads assetCatalog SYNCHRONOUSLY (catalog-only,
   // no fetch); when the selected material is absent it cannot fill _oldEntry/_oldPatch
   // and applyUpdateMaterialParams rejects the edit with "_oldPatch missing" — the
-  // color change silently does nothing (the reported "刷新后编辑不生效").
+  // color change silently does nothing (the reported "edit fails after reload").
   //
   // Fix: mirror the mesh-stats publisher — when a material becomes the MAIN-window
   // asset selection, loadByGuid it (idempotent: loadByGuid fast-paths an already

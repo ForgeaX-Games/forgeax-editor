@@ -84,6 +84,7 @@ import {
   WebAudioEngine,
   syncListenerFromWorldMatrix,
 } from '@forgeax/engine-audio-webaudio';
+import type { ParticleRuntimeHost } from '@forgeax/engine-vfx-render';
 import { normalizeAnimationPlayerSceneAsset, type SceneAsset } from '@forgeax/editor-core';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 
@@ -141,6 +142,8 @@ export interface PlayAssembly {
   readonly installGameProjection?: () => void;
   /** Clear game-owned Play projections before this world is torn down. */
   readonly clearGameProjection?: () => void;
+  /** Detach engine-owned runtime systems before stopping the Play App. */
+  readonly detachBeforeStop?: () => void;
   /** Release this world's GPU residency when the Play run is stopped. */
   readonly disposeWorld: () => void;
   /** Tear down this play run's host-owned side effects. Called on ■ Stop AFTER
@@ -222,6 +225,10 @@ export interface AssemblePlayWorldDeps {
     install(): void;
     clear(): void;
   };
+  /** The one host created by Edit; attach it to this fresh Play world. */
+  readonly vfxRuntimeHost?: ParticleRuntimeHost;
+  /** Observe render phases through the current profiler owner. */
+  readonly onRenderPhaseEnd?: (phase: string) => void;
 }
 
 /**
@@ -325,6 +332,7 @@ export async function assemblePlayWorld(
   const gameProjection = deps.createGameProjection?.();
   let audioBackend: ReturnType<typeof createWebAudioBackend> | undefined;
   let playAppForCleanup: PlayApp | undefined;
+  let detachVfx: () => void = () => {};
   let detached = false;
 
   const startupError = (code: string, error: unknown): { code: string; hint: string } => {
@@ -372,6 +380,11 @@ export async function assemblePlayWorld(
   };
 
   const cleanupFailedAssembly = (): void => {
+    try {
+      detachVfx();
+    } catch (err) {
+      console.warn('[editor] ▶ Play failed VFX detach threw:', err);
+    }
     try {
       playAppForCleanup?.stop();
     } catch (err) {
@@ -439,8 +452,13 @@ export async function assemblePlayWorld(
       renderer: shielded as never,
       world: playWorld as never,
       plugins: plugins as never,
+      ...(deps.vfxRuntimeHost ? { features: [deps.vfxRuntimeHost.feature] } : {}),
       ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
-      profiler: createFramePhaseProfiler(),
+      profiler: createFramePhaseProfiler({
+        onPhaseEnd: ({ source, phase }) => {
+          if (source === 'render') deps.onRenderPhaseEnd?.(phase);
+        },
+      }),
     });
   } catch (error) {
     detachHostResources();
@@ -459,6 +477,29 @@ export async function assemblePlayWorld(
     readonly input?: { setPointerLockAllowed?: (allowed: boolean) => void };
   };
   playAppForCleanup = playApp;
+
+  if (deps.vfxRuntimeHost !== undefined) {
+    let detachedVfx = false;
+    detachVfx = () => {
+      if (detachedVfx) return;
+      detachedVfx = true;
+      const result = deps.vfxRuntimeHost!.detachWorld({ world: playWorld as never });
+      if (!result.ok) console.warn('[editor] Play VFX host detach failed:', result.error);
+    };
+    try {
+      const attached = await deps.vfxRuntimeHost.attachWorld({
+        world: playWorld as never,
+        assets: deps.renderer.assets as never,
+      });
+      if (!attached.ok) {
+        cleanupFailedAssembly();
+        return { ok: false, error: attached.error };
+      }
+    } catch (error) {
+      cleanupFailedAssembly();
+      return { ok: false, error: startupError('play-vfx-host-attach-failed', error) };
+    }
+  }
 
   // Audio listener-sync (round-17, P8): the assemble form deliberately leaves
   // listener-sync to the host (create-app.ts:665 registers it ONLY on the canvas
@@ -629,7 +670,7 @@ export async function assemblePlayWorld(
       description: 'Current FPS, frame time (dt), and frame count since Play started',
       read: () => ({
         fps: lastFps,
-        dt: Math.round(lastDt * 1000) / 1000, // seconds → ms, rounded to µs
+        dt: Math.round(lastDt * 1000) / 1000, // seconds -> ms, rounded to microseconds
         frameCount,
       }),
     });
@@ -742,6 +783,7 @@ export async function assemblePlayWorld(
     value: {
       playApp,
       playWorld,
+      ...(deps.vfxRuntimeHost ? { detachBeforeStop: detachVfx } : {}),
       ...(gameProjection !== undefined
         ? { installGameProjection: gameProjection.install, clearGameProjection: gameProjection.clear }
         : {}),

@@ -63,13 +63,15 @@ const EMPTY_SNAPSHOT: DiagnosticsSnapshot = Object.freeze({
   scan: Object.freeze({ diagnostics: Object.freeze([]), dropped: 0, deduplicated: 0 }),
   assets: Object.freeze({ errors: Object.freeze([]), dropped: 0, deduplicated: 0 }),
   operationRuns: Object.freeze({ runs: Object.freeze([]), registryRevision: 0, dropped: 0, deduplicated: 0 }),
+  runtime: Object.freeze({ facts: Object.freeze([]), dropped: 0, deduplicated: 0 }),
   policy: Object.freeze({
-    retention: Object.freeze({ traceRoots: 64, scanDiagnostics: 128, assetErrors: 64, operationRuns: 64 }),
+    retention: Object.freeze({ traceRoots: 64, scanDiagnostics: 128, assetErrors: 64, operationRuns: 64, runtimeFacts: 128 }),
     dedupe: Object.freeze({
       traceRoots: 'traceId',
       scanDiagnostics: 'file+severity+code+message+suggestion',
       assetErrors: 'op+path+hint',
       operationRuns: 'runId',
+      runtimeFacts: 'providerId+id',
     }),
   }),
 });

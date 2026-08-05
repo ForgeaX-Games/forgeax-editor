@@ -11,6 +11,8 @@ import type { SpanNode } from '../trace';
 import { createEditSession } from '../../session/document';
 import { EditGateway } from '../gateway';
 import '../../scan/scan-ops';
+import { createRuntimeReadiness } from '../vfx-runtime-readiness';
+import { runtimeReadinessDiagnostic } from '../diagnostics';
 
 function span(traceId: string, name: string): SpanNode {
   return {
@@ -66,6 +68,28 @@ const assetError: AssetsErrorPayload = {
 };
 
 describe('R0-07C diagnostics read model', () => {
+  it('projects bounded readiness with request, asset, and revision correlation', () => {
+    const readiness = createRuntimeReadiness({
+      state: 'render-unavailable',
+      requestId: 'request-render-1',
+      assetGuid: 'particle-guid',
+      committedRevision: 4,
+      residentRevision: 4,
+      hint: 'Renderer is unavailable; retry after a render device is bound.',
+    });
+    expect(runtimeReadinessDiagnostic(readiness)).toEqual({
+      source: 'operationRuns',
+      severity: 'warn',
+      code: 'runtime-readiness',
+      requestId: 'request-render-1',
+      assetGuid: 'particle-guid',
+      revision: 4,
+      state: 'render-unavailable',
+      hint: 'Renderer is unavailable; retry after a render device is bound.',
+      retryable: true,
+    });
+  });
+
   it('derives all four owned sources with latest-wins dedupe and explicit bounded retention', () => {
     const operationSnapshot: OperationRunSnapshot = {
       revision: 9,
@@ -82,7 +106,7 @@ describe('R0-07C diagnostics read model', () => {
       getAssetErrors: () => [assetError, assetError, { ...assetError, op: 'renameSourceFile' }],
       getAssetErrorRevision: () => 4,
       getOperationRunSnapshot: () => operationSnapshot,
-    }, { retention: { traceRoots: 1, scanDiagnostics: 1, assetErrors: 1, operationRuns: 1 } });
+    }, { retention: { traceRoots: 1, scanDiagnostics: 1, assetErrors: 1, operationRuns: 1, runtimeFacts: 1 } });
 
     const snapshot = model.snapshot();
 
@@ -100,7 +124,7 @@ describe('R0-07C diagnostics read model', () => {
     expect(snapshot.operationRuns.runs.map((item) => item.runId)).toEqual(['run-2']);
     expect(snapshot.operationRuns.deduplicated).toBe(1);
     expect(snapshot.operationRuns.dropped).toBe(1);
-    expect(snapshot.policy.retention).toEqual({ traceRoots: 1, scanDiagnostics: 1, assetErrors: 1, operationRuns: 1 });
+    expect(snapshot.policy.retention).toEqual({ traceRoots: 1, scanDiagnostics: 1, assetErrors: 1, operationRuns: 1, runtimeFacts: 1 });
     expect(snapshot.policy.dedupe).toEqual(DIAGNOSTICS_DEDUPE);
   });
 
@@ -134,6 +158,89 @@ describe('R0-07C diagnostics read model', () => {
     expect(dispatched.ok).toBe(true);
     expect(gateway.diagnostics.snapshot().scan.diagnostics).toEqual([scanDiagnostic]);
     expect(gateway.diagnostics.snapshot().operationRuns.runs).toEqual([]);
+  });
+
+  it('projects producer-owned runtime facts through the same Gateway query', () => {
+    let listener: (() => void) | undefined;
+    const gateway = new EditGateway(createEditSession());
+    const unregister = gateway.registerRuntimeDiagnosticsProvider({
+      id: 'editor-vfx',
+      snapshot: () => [{
+        id: 'particle-render-feature',
+        severity: 'warn',
+        code: 'particle-render-camera-unavailable',
+        title: 'Particle renderer',
+        message: 'The particle renderer has no active camera.',
+        requestId: 'request-vfx-1',
+        assetGuid: 'particle-guid',
+        retryable: true,
+        recoveryActions: ['runtime.vfx.retry'],
+        detail: {
+          readiness: 'unavailable',
+          feature: 'forgeax.vfx-render.particles',
+          provenance: { source: 'engine-vfx-render', host: 'ParticleRuntimeHost' },
+        },
+      }],
+      subscribe: (fn) => {
+        listener = fn;
+        return () => { listener = undefined; };
+      },
+    });
+
+    const projected = gateway.diagnostics.query({ sources: ['runtime'], query: 'particle-guid' });
+    expect(projected.items).toHaveLength(1);
+    expect(projected.items[0]).toMatchObject({
+      source: 'runtime',
+      providerId: 'editor-vfx',
+      assetGuid: 'particle-guid',
+      requestId: 'request-vfx-1',
+      code: 'particle-render-camera-unavailable',
+      retryable: true,
+      recoveryActions: ['runtime.vfx.retry'],
+    });
+    expect(projected.items[0]?.detail).toMatchObject({
+      providerId: 'editor-vfx',
+      fact: { feature: 'forgeax.vfx-render.particles' },
+    });
+
+    const before = gateway.diagnostics.snapshot().revision;
+    listener?.();
+    expect(gateway.diagnostics.snapshot().revision).toBeGreaterThan(before);
+    unregister();
+    expect(gateway.diagnostics.query({ sources: ['runtime'] }).items).toEqual([]);
+  });
+
+  it('advances the composite revision when a non-max source changes', () => {
+    let runtimeRevision = 1;
+    const model = createDiagnosticsReadModel({
+      getRevision: () => 0,
+      getLedger: () => [],
+      getTraceRoots: () => [],
+      getDroppedTraceCount: () => 0,
+      getAssetErrors: () => [],
+      getAssetErrorRevision: () => 9,
+      getOperationRunSnapshot: () => ({ revision: 0, runs: [] }),
+      getRuntimeDiagnosticsProviders: () => [{
+        id: 'editor-vfx',
+        snapshot: () => [{
+          id: 'particle-render-feature',
+          severity: 'info' as const,
+          code: 'particle-render-ready',
+          title: 'Particle renderer',
+          message: 'ready',
+          retryable: false,
+          recoveryActions: [],
+          detail: {},
+        }],
+      }],
+      getRuntimeDiagnosticsRevision: () => runtimeRevision,
+    });
+
+    expect(model.snapshot().revision).toBe(9);
+    runtimeRevision = 2;
+    expect(model.snapshot().revision).toBe(10);
+    runtimeRevision = 3;
+    expect(model.snapshot().revision).toBe(11);
   });
 
   it('notifies diagnostics subscribers for ledger-only facts', () => {

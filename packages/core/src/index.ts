@@ -84,6 +84,12 @@ export type {
   SourceAuthoringRuntime,
   SourceMutationPreflightInput,
 } from './public/assets';
+export { queryCompatibleAssetCatalog } from './assets/compatible-asset-catalog';
+export type {
+  CompatibleAssetCatalogError,
+  CompatibleAssetCatalogResult,
+  CompatibleAssetCatalogRow,
+} from './assets/compatible-asset-catalog';
 
 // ── Eval channel (dev-accessible AI eval) ──
 // Consumed by edit-runtime to mount on globalThis.__forgeaxEval.
@@ -136,7 +142,18 @@ export type {
   DiagnosticsSource,
   DiagnosticsSnapshot,
   DiagnosticsTraceSource,
+  RuntimeDiagnosticFact,
+  RuntimeDiagnosticProjectionFact,
+  RuntimeDiagnosticsProvider,
 } from './io/diagnostics';
+export { createRuntimeReadiness, RUNTIME_READINESS_STATES, runtimeReadinessDiagnostic } from './public/gateway';
+export type {
+  CreateRuntimeReadinessInput,
+  RuntimeReadiness,
+  RuntimeReadinessState,
+  RuntimeRevision,
+} from './public/gateway';
+export type { RuntimeReadinessDiagnostic } from './public/gateway';
 
 // Runtime UI diagnostics are the typed read-only Gateway contract. The graph
 // remains internal; consumers receive only schema-valid status and counters.
@@ -332,11 +349,13 @@ export {
   getSelectionList,
   getGizmoMode,
   getGizmoSpace,
+  getGizmoPivot,
   replaceDoc,
   onSelectionChange,
   onRenameRequest,
   onGizmoModeChange,
   onGizmoSpaceChange,
+  onGizmoPivotChange,
   requestRefComponent,
   requestRefAsset,
   requestRefEntity,
@@ -344,6 +363,7 @@ export {
   useDocVersion,
   useGizmoMode,
   useGizmoSpace,
+  useGizmoPivot,
   useSelection,
   useSelectionList,
   useIsSelected,
@@ -421,7 +441,7 @@ export type { AssetsChangedHint } from './store/assets-changed';
 // state mutation (north-star §9). See dev-plan §5 step 3.
 export { assetsErrorRevision, broadcastAssetsError, recentAssetsErrors } from './store/assets-error-bus';
 export type { AssetsErrorPayload } from './store/assets-error-bus';
-export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace } from './store/store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace, GizmoPivot } from './store/store';
 
 // ── Entity operations ──
 export {
@@ -513,6 +533,9 @@ export {
   getImportFormat,
   isImportable,
   getAllExtensions,
+  buildAcceptString,
+  getImportRegistrySnapshot,
+  logImport,
   validateSource,
   validateSourceQuick,
   scanAssetsIntegrity,

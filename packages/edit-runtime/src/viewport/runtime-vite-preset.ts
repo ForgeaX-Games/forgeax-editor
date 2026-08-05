@@ -36,6 +36,10 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
+import {
+  createStockParticleOperatorRegistry,
+  particleEffectImporter,
+} from '@forgeax/engine-vfx-compiler';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 
 // This helper's own directory: packages/edit-runtime/src/viewport/. Used to locate
@@ -489,7 +493,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     cleanOrphanMetas(packRoots);
     // Decode percent-encoded non-ASCII URLs before pluginPack's middleware runs,
     // so its urlToAbs Map (keyed by Unicode filenames) can match Chinese/CJK paths.
-    // Without this, `req.url` arrives as `%E6%B8%A9...` but the map key is `温...`.
+    // Without this, `req.url` arrives percent-encoded while the map key is decoded.
     plugins.push({
       name: 'forgeax-decode-asset-url',
       configureServer(server) {
@@ -505,7 +509,14 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       pluginPack({
         roots: packRoots,
         base,
-        importers: [imageImporter, gltfImporter, fbxImporter, fontImporter, audioImporter],
+        importers: [
+          audioImporter,
+          imageImporter,
+          gltfImporter,
+          fbxImporter,
+          fontImporter,
+          particleEffectImporter(createStockParticleOperatorRegistry()),
+        ],
         // No-op host refresh: the editor MUST NOT full-reload on a watched asset
         // change. Importing an asset writes source bytes + `.meta.json` to disk,
         // which the pluginPack watcher would otherwise answer with a Vite

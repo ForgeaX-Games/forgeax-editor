@@ -17,6 +17,7 @@ import type { AssetsErrorPayload } from '../store/assets-error-bus';
 import type { ErrorObjectRefs, ErrorSubjectRef } from '@forgeax/editor-product';
 import type { OperationRun, OperationRunSnapshot } from './operation-runs';
 import type { SpanNode } from './trace';
+import type { RuntimeReadiness } from './vfx-runtime-readiness';
 
 export const DIAGNOSTICS_SCHEMA_VERSION = 'diagnostics/v1' as const;
 
@@ -25,6 +26,7 @@ export interface DiagnosticsRetention {
   readonly scanDiagnostics: number;
   readonly assetErrors: number;
   readonly operationRuns: number;
+  readonly runtimeFacts: number;
 }
 
 export const DIAGNOSTICS_RETENTION: Readonly<DiagnosticsRetention> = Object.freeze({
@@ -32,6 +34,7 @@ export const DIAGNOSTICS_RETENTION: Readonly<DiagnosticsRetention> = Object.free
   scanDiagnostics: 128,
   assetErrors: 64,
   operationRuns: 64,
+  runtimeFacts: 128,
 });
 
 export const DIAGNOSTICS_DEDUPE = Object.freeze({
@@ -39,6 +42,7 @@ export const DIAGNOSTICS_DEDUPE = Object.freeze({
   scanDiagnostics: 'file+severity+code+message+suggestion',
   assetErrors: 'op+path+hint',
   operationRuns: 'runId',
+  runtimeFacts: 'providerId+id',
 });
 
 export type DiagnosticsDedupe = typeof DIAGNOSTICS_DEDUPE;
@@ -74,6 +78,39 @@ export interface DiagnosticsOperationRunSource {
   readonly deduplicated: number;
 }
 
+/**
+ * A producer-owned, JSON-safe runtime fact projected through the Gateway.
+ * Runtime owners retain their own state; the Gateway only bounds and indexes
+ * the current read projection.
+ */
+export interface RuntimeDiagnosticFact {
+  readonly id: string;
+  readonly severity: DiagnosticsSeverity;
+  readonly code: string;
+  readonly title: string;
+  readonly message: string;
+  readonly path?: string;
+  readonly requestId?: string;
+  readonly assetGuid?: string;
+  readonly subjectRef?: ErrorSubjectRef;
+  readonly objectRefs?: ErrorObjectRefs;
+  readonly retryable: boolean;
+  readonly recoveryActions: readonly string[];
+  /** Producer-owned JSON-safe facts; consumers must not use this as control. */
+  readonly detail: Readonly<Record<string, unknown>>;
+}
+
+export interface RuntimeDiagnosticProjectionFact extends RuntimeDiagnosticFact {
+  readonly providerId: string;
+}
+
+/** Runtime owners register one read-only provider instead of creating a store. */
+export interface RuntimeDiagnosticsProvider {
+  readonly id: string;
+  readonly snapshot: () => readonly RuntimeDiagnosticFact[];
+  readonly subscribe?: (listener: () => void) => () => void;
+}
+
 export interface DiagnosticsSnapshot {
   readonly schemaVersion: typeof DIAGNOSTICS_SCHEMA_VERSION;
   /** Monotonic composite of session, run-registry, and asset-bus revisions. */
@@ -82,14 +119,45 @@ export interface DiagnosticsSnapshot {
   readonly scan: DiagnosticsScanSource;
   readonly assets: DiagnosticsAssetSource;
   readonly operationRuns: DiagnosticsOperationRunSource;
+  readonly runtime: {
+    readonly facts: readonly RuntimeDiagnosticProjectionFact[];
+    readonly dropped: number;
+    readonly deduplicated: number;
+  };
   readonly policy: {
     readonly retention: DiagnosticsRetention;
     readonly dedupe: DiagnosticsDedupe;
   };
 }
 
-export type DiagnosticsSource = 'trace' | 'scan' | 'assets' | 'operationRuns';
+export type DiagnosticsSource = 'trace' | 'scan' | 'assets' | 'operationRuns' | 'runtime';
 export type DiagnosticsSeverity = 'error' | 'warn' | 'info';
+
+export interface RuntimeReadinessDiagnostic {
+  readonly source: 'operationRuns';
+  readonly severity: 'info' | 'warn';
+  readonly code: 'runtime-readiness';
+  readonly requestId: string;
+  readonly assetGuid: string;
+  readonly revision: RuntimeReadiness['residentRevision'];
+  readonly state: RuntimeReadiness['state'];
+  readonly hint: string;
+  readonly retryable: boolean;
+}
+
+export function runtimeReadinessDiagnostic(readiness: RuntimeReadiness): RuntimeReadinessDiagnostic {
+  return Object.freeze({
+    source: 'operationRuns',
+    severity: readiness.state === 'render-unavailable' ? 'warn' as const : 'info' as const,
+    code: 'runtime-readiness' as const,
+    requestId: readiness.requestId,
+    assetGuid: readiness.assetGuid,
+    revision: readiness.residentRevision ?? readiness.committedRevision,
+    state: readiness.state,
+    hint: readiness.hint,
+    retryable: readiness.state === 'render-unavailable',
+  });
+}
 
 export interface DiagnosticsQueryRequest {
   readonly query?: string;
@@ -111,6 +179,8 @@ export interface DiagnosticsQueryItem {
   readonly requestId?: string;
   readonly operationId?: string;
   readonly traceId?: string;
+  readonly providerId?: string;
+  readonly assetGuid?: string;
   readonly subjectRef?: ErrorSubjectRef;
   readonly objectRefs?: ErrorObjectRefs;
   readonly retryable: boolean;
@@ -141,6 +211,8 @@ export interface CreateDiagnosticsReadModelDeps {
   readonly getAssetErrors: () => readonly AssetsErrorPayload[];
   readonly getAssetErrorRevision?: () => number;
   readonly getOperationRunSnapshot: () => OperationRunSnapshot;
+  readonly getRuntimeDiagnosticsProviders?: () => readonly RuntimeDiagnosticsProvider[];
+  readonly getRuntimeDiagnosticsRevision?: () => number;
 }
 
 interface DedupeResult<T> {
@@ -233,6 +305,7 @@ function retentionFrom(options: DiagnosticsReadModelOptions): DiagnosticsRetenti
     scanDiagnostics: Math.max(1, Math.floor(requested.scanDiagnostics ?? DIAGNOSTICS_RETENTION.scanDiagnostics)),
     assetErrors: Math.max(1, Math.floor(requested.assetErrors ?? DIAGNOSTICS_RETENTION.assetErrors)),
     operationRuns: Math.max(1, Math.floor(requested.operationRuns ?? DIAGNOSTICS_RETENTION.operationRuns)),
+    runtimeFacts: Math.max(1, Math.floor(requested.runtimeFacts ?? DIAGNOSTICS_RETENTION.runtimeFacts)),
   });
 }
 
@@ -245,7 +318,8 @@ function queryLimit(snapshot: DiagnosticsSnapshot, requested: number | undefined
     snapshot.policy.retention.traceRoots
       + snapshot.policy.retention.scanDiagnostics
       + snapshot.policy.retention.assetErrors
-      + snapshot.policy.retention.operationRuns,
+      + snapshot.policy.retention.operationRuns
+      + snapshot.policy.retention.runtimeFacts,
   );
   if (requested === undefined || !Number.isFinite(requested)) return Math.max(1, fallback);
   return Math.max(1, Math.min(DIAGNOSTICS_QUERY_MAX_LIMIT, Math.floor(requested)));
@@ -333,6 +407,26 @@ function operationQueryItems(snapshot: DiagnosticsSnapshot): DiagnosticsQueryIte
     });
 }
 
+function runtimeQueryItems(snapshot: DiagnosticsSnapshot): DiagnosticsQueryItem[] {
+  return snapshot.runtime.facts.map((fact) => Object.freeze({
+    id: `runtime:${fact.providerId}:${fact.id}`,
+    source: 'runtime' as const,
+    severity: fact.severity,
+    code: fact.code,
+    title: fact.title,
+    message: fact.message,
+    ...(fact.path === undefined ? {} : { path: fact.path }),
+    ...(fact.requestId === undefined ? {} : { requestId: fact.requestId }),
+    ...(fact.assetGuid === undefined ? {} : { assetGuid: fact.assetGuid }),
+    providerId: fact.providerId,
+    ...(fact.subjectRef === undefined ? {} : { subjectRef: fact.subjectRef }),
+    ...(fact.objectRefs === undefined ? {} : { objectRefs: fact.objectRefs }),
+    retryable: fact.retryable,
+    recoveryActions: Object.freeze([...fact.recoveryActions]),
+    detail: Object.freeze({ source: 'runtime', providerId: fact.providerId, fact: fact.detail }),
+  }));
+}
+
 function queryText(item: DiagnosticsQueryItem): readonly string[] {
   return [
     item.source,
@@ -344,6 +438,8 @@ function queryText(item: DiagnosticsQueryItem): readonly string[] {
     item.requestId,
     item.operationId,
     item.traceId,
+    item.providerId,
+    item.assetGuid,
     item.subjectRef?.id,
     ...Object.values(item.objectRefs ?? {}).map((ref): string | undefined => ref?.id),
     ...item.recoveryActions,
@@ -363,6 +459,7 @@ export function queryDiagnosticsSnapshot(
     ...scanQueryItems(snapshot),
     ...assetQueryItems(snapshot),
     ...operationQueryItems(snapshot),
+    ...runtimeQueryItems(snapshot),
   ];
   const matchedItems = all.filter((item) => {
     if (sources !== undefined && !sources.has(item.source)) return false;
@@ -386,6 +483,8 @@ export function createDiagnosticsReadModel(
 ): DiagnosticsReadModel {
   const retention = retentionFrom(options);
   const policy = Object.freeze({ retention, dedupe: DIAGNOSTICS_DEDUPE });
+  let lastRevisionKey: string | undefined;
+  let diagnosticsRevision = 0;
 
   const readModel: DiagnosticsReadModel = {
     snapshot(): DiagnosticsSnapshot {
@@ -411,15 +510,33 @@ export function createDiagnosticsReadModel(
         (run) => run.runId,
         retention.operationRuns,
       );
+      const runtime = dedupeLatest(
+        (deps.getRuntimeDiagnosticsProviders?.() ?? []).flatMap((provider) => {
+          try {
+            return provider.snapshot().map((fact) => ({ ...fact, providerId: provider.id }));
+          } catch {
+            return [];
+          }
+        }),
+        (fact) => `${fact.providerId}:${fact.id}`,
+        retention.runtimeFacts,
+      );
+      const revisionParts = [
+        deps.getRevision(),
+        ledger.length,
+        operationSnapshot.revision,
+        deps.getAssetErrorRevision?.() ?? 0,
+        deps.getRuntimeDiagnosticsRevision?.() ?? 0,
+      ];
+      const revisionKey = revisionParts.join(':');
+      if (revisionKey !== lastRevisionKey) {
+        diagnosticsRevision = Math.max(diagnosticsRevision + 1, ...revisionParts);
+        lastRevisionKey = revisionKey;
+      }
 
       return Object.freeze({
         schemaVersion: DIAGNOSTICS_SCHEMA_VERSION,
-        revision: Math.max(
-          deps.getRevision(),
-          ledger.length,
-          operationSnapshot.revision,
-          deps.getAssetErrorRevision?.() ?? 0,
-        ),
+        revision: diagnosticsRevision,
         trace: Object.freeze({
           roots: trace.items,
           deduplicated: trace.deduplicated,
@@ -440,6 +557,11 @@ export function createDiagnosticsReadModel(
           registryRevision: operationSnapshot.revision,
           deduplicated: operationRuns.deduplicated,
           dropped: operationRuns.dropped,
+        }),
+        runtime: Object.freeze({
+          facts: runtime.items,
+          deduplicated: runtime.deduplicated,
+          dropped: runtime.dropped,
         }),
         policy,
       });

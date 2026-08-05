@@ -193,4 +193,91 @@ describe('w3 — stale-entity-handle error contract', () => {
       expect(err.code).toBe('stale-entity');
     }
   });
+
+  // ── M3: Edit/Play world boundary — no silent cross-world remap ───────────
+  // feat-20260803-editor-vfx-particle-runtime-integration M3:
+  // EntityHandle values are only meaningful with their world-bound locator.
+  // Fresh worlds intentionally produce the same raw handle so this test first
+  // proves the engine-level collision, then proves the editor read gate rejects
+  // it before the wrong entity can be returned.
+  const EDIT_WORLD_REF = 0;
+  const PLAY_WORLD_REF = 1;
+
+  it('(M3) Edit handle queried in Play is rejected with expected/actual world refs', () => {
+    const editWorld = new World();
+    const playWorld = new World();
+    const editHandle = editWorld.spawn({ component: Name, data: { value: 'EditEntity' } });
+    const playHandle = playWorld.spawn({ component: Name, data: { value: 'PlayEntity' } });
+    if (!editHandle.ok || !playHandle.ok) throw new Error('spawn failed');
+
+    // The raw engine handle collides across fresh worlds and would silently
+    // resolve the Edit handle to PlayEntity without the world-bound gate.
+    expect(editHandle.value).toBe(playHandle.value);
+    const raw = playWorld.get(editHandle.value, Name);
+    expect(raw.ok).toBe(true);
+    if (raw.ok) expect(raw.value.value).toBe('PlayEntity');
+
+    const result = entComponent(playWorld, editHandle.value, 'Name', {
+      binding: { worldRef: PLAY_WORLD_REF, epoch: 0, world: playWorld },
+      pair: { worldRef: EDIT_WORLD_REF, epoch: 0 },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('world-mismatch');
+      if (result.error.code === 'world-mismatch') {
+        expect(result.error.detail.expectedWorldRef).toBe(PLAY_WORLD_REF);
+        expect(result.error.detail.actualWorldRef).toBe(EDIT_WORLD_REF);
+        expect(result.error.objectRefs.entity.locator).toMatchObject({
+          handle: editHandle.value,
+          worldRef: EDIT_WORLD_REF,
+          epoch: 0,
+        });
+        expect(result.error.hint).toContain('route');
+      }
+    }
+  });
+
+  it('(M3) Play handle queried after Stop is rejected, and re-querying Edit gives a live handle', () => {
+    const editWorld = new World();
+    const playWorld = new World();
+    const editHandle = editWorld.spawn({ component: Name, data: { value: 'EditEntity' } });
+    const playHandle = playWorld.spawn({ component: Name, data: { value: 'PlayEntity' } });
+    if (!editHandle.ok || !playHandle.ok) throw new Error('spawn failed');
+
+    // Stop swaps the active binding from Play (1) back to Edit (0). The raw
+    // values collide, so an unguarded read would incorrectly return EditEntity.
+    expect(editHandle.value).toBe(playHandle.value);
+    const rawAfterStop = editWorld.get(playHandle.value, Name);
+    expect(rawAfterStop.ok).toBe(true);
+    if (rawAfterStop.ok) expect(rawAfterStop.value.value).toBe('EditEntity');
+
+    const stale = entComponent(editWorld, playHandle.value, 'Name', {
+      binding: { worldRef: EDIT_WORLD_REF, epoch: 0, world: editWorld },
+      pair: { worldRef: PLAY_WORLD_REF, epoch: 0 },
+    });
+
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) {
+      expect(stale.error.code).toBe('world-mismatch');
+      if (stale.error.code === 'world-mismatch') {
+        expect(stale.error.detail.expectedWorldRef).toBe(EDIT_WORLD_REF);
+        expect(stale.error.detail.actualWorldRef).toBe(PLAY_WORLD_REF);
+        expect(stale.error.objectRefs.entity.locator).toMatchObject({
+          handle: playHandle.value,
+          worldRef: PLAY_WORLD_REF,
+          epoch: 0,
+        });
+        expect(stale.error.hint).toContain('route');
+      }
+    }
+
+    // The recovery path is an active-world re-query, not a remap of the stale
+    // Play handle. The freshly minted Edit pair is valid after Stop.
+    const recovered = entComponent(editWorld, editHandle.value, 'Name', {
+      binding: { worldRef: EDIT_WORLD_REF, epoch: 0, world: editWorld },
+      pair: { worldRef: EDIT_WORLD_REF, epoch: 0 },
+    });
+    expect(recovered).toMatchObject({ ok: true, value: { value: 'EditEntity' } });
+  });
 });

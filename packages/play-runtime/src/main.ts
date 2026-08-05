@@ -12,6 +12,7 @@ import { Transform } from '@forgeax/engine-scene';
 // engine-runtime into the @forgeax/engine-geometry leaf package.
 import { createCylinderGeometry } from '@forgeax/engine-geometry';
 import { physicsPlugin } from '@forgeax/engine-physics';
+import { ParticleEffectPlayer } from '@forgeax/engine-vfx';
 import {
   sendVagMessage,
   onVagMessage,
@@ -34,17 +35,23 @@ import {
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SceneAsset, AssetError } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
-import { Time, Update, type EntityHandle } from '@forgeax/engine-ecs';
+import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
 import { createPlayProductRuntimeAdapter } from './product-runtime-adapter';
+import { createPlayVfxRuntime } from './vfx-runtime';
 import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
 import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
 
 // TODO 004: When this Play/preview viewport is embedded as a studio iframe,
 // forward global shortcuts to the studio shell. Standalone mode is a no-op.
 installShortcutForwarder();
+
+// Keep the authored VFX component in the Play bundle's ECS name registry so
+// scene-pack instantiation can restore ParticleEffectPlayer before the host
+// simulation advances the fresh Play World.
+void ParticleEffectPlayer;
 
 const root = document.getElementById('app') ?? document.body;
 
@@ -199,6 +206,13 @@ if (gpResult?.ok) {
   }
 }
 
+// The independent Play host owns one ParticleRuntimeHost. Its camera source is
+// late-bound because createApp yields the fresh World only after construction.
+// The same public host feature is supplied to createApp and the same world plus
+// renderer AssetRegistry are attached after the app has been created.
+let runtimeWorld: World | undefined;
+const vfxRuntime = createPlayVfxRuntime({ world: () => runtimeWorld });
+
 // ── Pointer-capture bridge (M5 w22 / D-6) ──────────────────────────────────
 // WKWebView denies the web Pointer Lock API for embedded content, so the engine
 // input backend's W3C requestPointerLock() cannot grab the cursor inside the
@@ -233,6 +247,7 @@ const post = (capture: boolean): void => {
 // the game-driven setPointerLockAllowed (D-3) wired onto ctx below.
 const app = await createApp(canvas, {
   ...(physics ? { plugins: [physicsPlugin(physics)] } : {}),
+  features: [vfxRuntime.host.feature],
   lockProvider: {
     requestLock: () => post(true),
     exitLock: () => post(false),
@@ -271,6 +286,13 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
+runtimeWorld = world;
+const vfxAttached = await vfxRuntime.attachWorld(world, renderer.assets);
+if (!vfxAttached.ok) {
+  hideLoadingOverlay();
+  paintDiagnosticMessage(canvas, vfxAttached.error);
+  throw new Error(`[engine] particle runtime host attach failed: ${vfxAttached.error.code}`);
+}
 // Renderer identity belongs to the renderer producer, not to the page nonce.
 // Prefer the renderer producer's explicit numeric generation. The current public
 // Renderer contract has no generation field, so 0 is the initial producer

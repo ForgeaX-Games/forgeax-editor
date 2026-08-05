@@ -106,6 +106,7 @@ export default defineConfig({
         FORGEAX_PREVIEW_GAMES_DIR: e2eTempRoot,
         FORGEAX_GAMES_URL_PREFIX: 'e2e-games',
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
+        FORGEAX_GAME_API_PORT: e2eApiPort,
       },
       url: `http://127.0.0.1:${e2eEnginePort}/preview/`,
       reuseExistingServer: !process.env.CI,

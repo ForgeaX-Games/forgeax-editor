@@ -25,6 +25,11 @@ type OpenPhase = {
 	readonly phase: string;
 };
 
+export interface FramePhaseProfilerOptions {
+	/** Production observer invoked from the same profiler phase owner. */
+	readonly onPhaseEnd?: (phase: OpenPhase) => void;
+}
+
 type PhaseCatalog = ProfileCapture["phaseCatalog"];
 
 function partialCapture(phaseCatalog: PhaseCatalog): ProfileCapture {
@@ -53,14 +58,18 @@ function partialCapture(phaseCatalog: PhaseCatalog): ProfileCapture {
  * the current engine `Profiler` boundary while retaining the stable mark names
  * consumed by `scripts/chrome-performance.mjs`.
  */
-export function createFramePhaseProfiler(): Profiler | undefined {
+export function createFramePhaseProfiler(
+	options: FramePhaseProfilerOptions = {},
+): Profiler | undefined {
 	const diagnosticGlobal = globalThis as DiagnosticGlobal;
-	if (diagnosticGlobal[DIAGNOSTICS_KEY]?.enabled !== true) return undefined;
+	const timingEnabled = diagnosticGlobal[DIAGNOSTICS_KEY]?.enabled === true;
+	if (!timingEnabled && options.onPhaseEnd === undefined) return undefined;
 
-	const performanceApi = globalThis.performance;
+	const performanceApi = timingEnabled ? globalThis.performance : undefined;
 	if (
-		performanceApi === undefined ||
-		typeof performanceApi.mark !== "function"
+		timingEnabled &&
+		(performanceApi === undefined || typeof performanceApi.mark !== "function") &&
+		options.onPhaseEnd === undefined
 	) {
 		return undefined;
 	}
@@ -72,6 +81,7 @@ export function createFramePhaseProfiler(): Profiler | undefined {
 	const openPhases: OpenPhase[] = [];
 
 	function mark(name: string): void {
+		if (performanceApi === undefined || typeof performanceApi.mark !== "function") return;
 		try {
 			performanceApi.mark(name);
 		} catch {
@@ -100,6 +110,7 @@ export function createFramePhaseProfiler(): Profiler | undefined {
 		},
 		endPhase() {
 			const phase = openPhases.pop();
+			if (phase !== undefined) options.onPhaseEnd?.(phase);
 			if (frameId !== undefined && phase !== undefined) {
 				mark(
 					`forgeax.${timingSource(phase.source)}.phase.${frameId}.${phase.phase}.end`,

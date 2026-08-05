@@ -35,17 +35,11 @@ describe('viewport gizmo material contract', () => {
 
     const pool = createGizmoPool({
       editorEngine,
-      getSelection: () => 29 as never,
+      getAnchor: () => ({ center: [0, 0, 0], quat: [0, 0, 0, 1] }),
       getGizmoMode: () => 'translate',
-      getSelectionWorldTransform: () => ({
-        x: 0, y: 0, z: 0,
-        rotX: 0, rotY: 0, rotZ: 0,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      }),
-      getSelectionWorldQuat: () => [0, 0, 0, 1],
       getGizmoSpace: () => 'world',
       isAuxVisible: () => true,
-      getDist: () => 10,
+      getViewScale: () => 10,
     });
 
     pool.update();
@@ -84,7 +78,7 @@ describe('viewport gizmo material contract', () => {
         scaleX: 1, scaleY: 1, scaleZ: 1,
       }),
       isAuxVisible: () => true,
-      getDist: () => 10,
+      getViewScale: () => 10,
       getAspect: () => 1,
     });
 

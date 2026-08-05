@@ -157,9 +157,14 @@ const STUDIO_ROOT = resolve(PACKAGE_DIR, '../..');
 const HOST_SDK = resolve(STUDIO_ROOT, 'packages/host-sdk/src/index.ts');
 const TYPES_SRC = resolve(STUDIO_ROOT, 'packages/contracts/types/src/index.ts');
 const VENDORED_TYPES_SRC = resolve(PACKAGE_DIR, 'packages/contracts/types/src/index.ts');
+// An editor worktree lives at `<editor>/.worktrees/<name>`, so `../..` points
+// at the primary editor checkout. The contracts submodule exists there too
+// and therefore cannot distinguish Studio embedding from standalone worktree
+// use. host-sdk is Studio-owned and is the stable boundary discriminator.
+const HAS_STUDIO_LAYER = existsSync(HOST_SDK);
 const studioLayerAlias: Record<string, string> = {};
-if (existsSync(HOST_SDK)) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
-if (existsSync(TYPES_SRC)) {
+if (HAS_STUDIO_LAYER) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
+if (HAS_STUDIO_LAYER && existsSync(TYPES_SRC)) {
   studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 } else if (existsSync(VENDORED_TYPES_SRC)) {
   // Standalone editor clones vendor contracts as a submodule instead of
@@ -285,7 +290,7 @@ export default defineConfig({
       // (main.ts) 403s ("outside of Vite serving allow list") and the bootstrap
       // never runs (→ no camera spawned).
       allow: [
-        ...(existsSync(resolve(STUDIO_ROOT, 'package.json')) ? [PACKAGE_DIR, STUDIO_ROOT] : [PACKAGE_DIR]),
+        ...(HAS_STUDIO_LAYER ? [PACKAGE_DIR, STUDIO_ROOT] : [PACKAGE_DIR]),
         ...(GAME_DIR ? [GAME_DIR] : []),
       ],
     },

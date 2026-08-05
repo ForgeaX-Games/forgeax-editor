@@ -24,35 +24,44 @@ import { quat as quatMath } from '@forgeax/engine-math';
 import type { Vec3 as EngineVec3, Quat } from '@forgeax/engine-math';
 
 import type { Vec3 } from './viewport-ray';
-import { num, orthoBasis, rayAABB, rayPlane } from './viewport-ray';
+import { orthoBasis, rayAABB, rayPlane } from './viewport-ray';
 import {
   AXES, PLANES, RING_SEG, TIP_QUAT, buildConeMeshData,
 } from './viewport-gizmo-geometry';
-import type { EditorTransform } from './viewport-entity-read';
 import type { GizmoSpace } from '@forgeax/editor-core';
 
 type Shape = 'translate' | 'scale' | 'rings';
 export type GizmoMode = 'translate' | 'rotate' | 'scale';
 
+/** Where the gizmo sits and how it is oriented, resolved by the caller from
+ *  the current selection (gizmo-ue-parity plan §4.1):
+ *  - single selection: the entity's world pivot (Transform pos);
+ *  - multi selection (pivot='center'): the average of all selected world
+ *    positions; `quat` still follows the PRIMARY (last-selected) entity so
+ *    local-space orientation matches UE. */
+export interface GizmoAnchor {
+  center: Vec3;
+  /** World rotation of the primary selection (null when it has no Transform). */
+  quat: [number, number, number, number] | null;
+}
+
 export interface GizmoDeps {
   /** editorWorld facade — gizmo entities/assets are minted here (AC-01). */
   editorEngine: EngineFacade;
-  /** Selected entity handle (null when nothing is selected). */
-  getSelection(): EntityHandle | null;
+  /** Current gizmo anchor (null when nothing is selected, or every selected
+   *  entity lacks a Transform / is gone → the gizmo hides). */
+  getAnchor(): GizmoAnchor | null;
   /** Current gizmo mode (translate/rotate/scale). */
   getGizmoMode(): GizmoMode;
-  /** World-space Transform of the selected entity (undefined when the entity
-   *  has no Transform, or is hidden, or was deleted). */
-  getSelectionWorldTransform(): EditorTransform | undefined;
-  /** World-space rotation quaternion of the selected entity (null when no Transform). */
-  getSelectionWorldQuat(): [number, number, number, number] | null;
   /** Current gizmo coordinate space (local = follow object rotation). */
   getGizmoSpace(): GizmoSpace;
   /** Aux-entity visibility gate (w23, D-5): display='game' hides all gizmos. */
   isAuxVisible(): boolean;
-  /** Current camera distance — handles are sized ∝ dist so they stay grabbable
-   *  at any zoom. Read on every update (orbit / dolly change it live). */
-  getDist(): number;
+  /** View scale in world units for a given anchor point — handles are sized
+   *  ∝ this so they keep a constant on-screen size (perspective: camera→anchor
+   *  distance; orthographic: derived from the ortho half-height). Read on
+   *  every update, so fly/orbit/zoom changes apply live. */
+  getViewScale(anchor: Vec3): number;
 }
 
 export interface GizmoPool {
@@ -129,9 +138,8 @@ export function createOverlayMaterial(
 }
 
 export function createGizmoPool({
-  editorEngine, getSelection, getGizmoMode, getSelectionWorldTransform,
-  getSelectionWorldQuat, getGizmoSpace,
-  isAuxVisible, getDist,
+  editorEngine, getAnchor, getGizmoMode, getGizmoSpace,
+  isAuxVisible, getViewScale,
 }: GizmoDeps): GizmoPool {
   let gizmoMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
   let tipMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
@@ -282,16 +290,14 @@ export function createGizmoPool({
 
   function update(): void {
     if (!isAuxVisible()) { despawnHandles(); return; }
-    const sel = getSelection();
-    const t = sel !== null ? getSelectionWorldTransform() : undefined;
-    if (sel === null || !t) { despawnHandles(); return; }
-    const center: Vec3 = [num(t.x, 0), num(t.y, 0), num(t.z, 0)];
+    const anchor = getAnchor();
+    if (!anchor) { despawnHandles(); return; }
+    const center = anchor.center;
 
     // Compute gizmo orientation based on coordinate space setting
     const space = getGizmoSpace();
     if (space === 'local') {
-      const wq = getSelectionWorldQuat();
-      gizmoQuat = wq ?? IDENTITY_QUAT;
+      gizmoQuat = anchor.quat ?? IDENTITY_QUAT;
     } else {
       gizmoQuat = IDENTITY_QUAT;
     }
@@ -299,8 +305,8 @@ export function createGizmoPool({
     rotatedPlaneNormals = PLANES.map(p => rotVec3(gizmoQuat, p.normal));
     gizmoCenter = center;
 
-    const dist = getDist();
-    const len = dist * 0.13, thick = dist * 0.007;
+    const scale = getViewScale(center);
+    const len = scale * 0.13, thick = scale * 0.007;
     const gm = getGizmoMode();
     const want: Shape = gm === 'rotate' ? 'rings' : gm === 'scale' ? 'scale' : 'translate';
     if (shape !== want) { despawnHandles(); buildShape(want); }

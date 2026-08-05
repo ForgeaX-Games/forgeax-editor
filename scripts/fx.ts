@@ -639,6 +639,9 @@ async function run(argv: string[]): Promise<void> {
     ...portEnvironment(WORKTREE_PORTS),
     ...bridgeEnv,
     FORGEAX_GAME_DIR: gameDir,
+    // play-runtime serves games as sibling slugs under host-games; --game
+    // supplies one slug directory, so inject its parent as the scan root.
+    FORGEAX_PREVIEW_GAMES_DIR: gameDir ? dirname(gameDir) : '',
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
     // The pure preview is proxied through the standalone host. Play Runtime
     // serves game files from an in-root `host-games/<slug>` farm, so a direct

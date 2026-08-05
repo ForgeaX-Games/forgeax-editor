@@ -24,6 +24,30 @@
     "actual": {},
     "retryable": { "type": "boolean" },
     "capabilities": { "type": "object", "additionalProperties": false },
-    "counters": { "type": "object", "additionalProperties": false }
+    "counters": { "type": "object", "additionalProperties": false },
+    "readiness": {
+      "type": "object",
+      "required": ["state", "requestId", "assetGuid", "revision", "hint"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["committed-awaiting-reload", "resident-ready", "simulation-ready", "render-ready", "visible-ready", "render-unavailable"] },
+        "requestId": { "type": "string", "minLength": 1 },
+        "assetGuid": { "type": "string", "minLength": 1 },
+        "revision": {},
+        "hint": { "type": "string", "minLength": 1 }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "expected", "actual", "hint", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "expected": {},
+        "actual": {},
+        "hint": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      }
+    }
   }
 }

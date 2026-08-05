@@ -34,6 +34,7 @@ import { sessionAppliers } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
 import type { EditorOp } from '../types';
+import { createRuntimeReadiness, type RuntimeReadiness, type RuntimeRevision } from '../io/vfx-runtime-readiness';
 
 /** Terminal status of a single-file import (shared with the content-browser UI). */
 export type ImportFileStatus = 'pending' | 'uploading' | 'sidecar' | 'cooking' | 'done' | 'cancelled' | 'error';
@@ -85,6 +86,30 @@ export interface ImportFileResult {
   errorDetail?: ImportFailure;
   guid?: string;
   subAssets?: readonly ImportSubAsset[];
+  runtimeReadiness?: RuntimeReadiness;
+}
+
+export function withRuntimeReadiness(
+  result: ImportFileResult,
+  input: {
+    readonly requestId: string;
+    readonly assetGuid: string;
+    readonly committedRevision: RuntimeRevision;
+    readonly residentRevision: RuntimeRevision;
+  },
+): ImportFileResult {
+  if (result.status !== 'done') return result;
+  return {
+    ...result,
+    runtimeReadiness: createRuntimeReadiness({
+      state: 'committed-awaiting-reload',
+      requestId: input.requestId,
+      assetGuid: input.assetGuid,
+      committedRevision: input.committedRevision,
+      residentRevision: input.residentRevision,
+      hint: 'Stop and Play to load the committed revision.',
+    }),
+  };
 }
 
 /**

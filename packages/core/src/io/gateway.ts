@@ -21,7 +21,11 @@ import { EngineFacade } from './engine-facade';
 import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
 import { assetsErrorRevision, recentAssetsErrors } from '../store/assets-error-bus';
-import { createDiagnosticsReadModel, type DiagnosticsReadModel } from './diagnostics';
+import {
+  createDiagnosticsReadModel,
+  type DiagnosticsReadModel,
+  type RuntimeDiagnosticsProvider,
+} from './diagnostics';
 import { EMPTY_SCENE_READ_MODEL, type SceneReadModel } from './scene-read-model';
 import type { SelectionReadModel } from './selection-read-model';
 import {
@@ -29,6 +33,11 @@ import {
   type SceneAuthoringSessionReadModel,
 } from './scene-authoring-session';
 import { describeSceneActivation } from '../assets/scene-activation';
+import { createRuntimeReadiness } from './vfx-runtime-readiness';
+import {
+  queryCompatibleAssetCatalog,
+  type CompatibleAssetCatalogResult,
+} from '../assets/compatible-asset-catalog';
 import { catalogStoragePath } from '../assets/catalog-storage-path';
 // gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
@@ -274,6 +283,11 @@ export class EditGateway {
   /** Diagnostics consumers need session-ledger pulses too; document `subscribe`
    * intentionally remains the World/docVersion signal. */
   private diagnosticsListeners = new Set<() => void>();
+  private readonly runtimeDiagnosticsProviders = new Map<string, {
+    readonly provider: RuntimeDiagnosticsProvider;
+    readonly unsubscribe: () => void;
+  }>();
+  private _runtimeDiagnosticsRevision = 0;
   // Scene-reload listeners (M5 / D-4). Fired by replaceDoc — the SSOT collar every
   // scene reload funnels through (scene switch, disk/storage load). The super
   // (world-manager) subscribes to bump the sceneWorld epoch + revalidate the
@@ -583,6 +597,8 @@ export class EditGateway {
     getAssetErrors: recentAssetsErrors,
     getAssetErrorRevision: assetsErrorRevision,
     getOperationRunSnapshot: () => this.operationRuns.snapshot(),
+    getRuntimeDiagnosticsProviders: () => [...this.runtimeDiagnosticsProviders.values()].map((entry) => entry.provider),
+    getRuntimeDiagnosticsRevision: () => this._runtimeDiagnosticsRevision,
   });
 
   // ── Executor: EngineFacade (boot-constructed, plan-strategy §2 D-2) ───────
@@ -1650,7 +1666,29 @@ export class EditGateway {
 
     if (acceptedRun !== null) {
       if (sResult.completion !== undefined) {
-        this.operationRuns.bindCompletion(acceptedRun.value.runId, sResult.completion, (run) => {
+        const completion = isRequestCorrelatedImport
+          ? sResult.completion.then((value) => {
+            const envelope = value as { readonly ok?: unknown; readonly result?: unknown };
+            if (envelope.ok !== true || envelope.result === undefined || typeof envelope.result !== 'object' || envelope.result === null) return value;
+            const imported = envelope.result as { readonly status?: unknown; readonly guid?: unknown; readonly subAssets?: readonly { readonly guid?: unknown }[] };
+            if (imported.status !== 'done') return value;
+            const assetGuid: string | undefined = typeof imported.guid === 'string'
+              ? imported.guid
+              : imported.subAssets?.find((asset) => typeof asset.guid === 'string')?.guid as string | undefined;
+            if (assetGuid === undefined) return value;
+            const catalogAsset = this.assetCatalog().find((asset) => asset.guid === assetGuid);
+            const runtimeReadiness = createRuntimeReadiness({
+              state: 'committed-awaiting-reload',
+              requestId: requestId as string,
+              assetGuid,
+              committedRevision: catalogAsset?.revision ?? null,
+              residentRevision: null,
+              hint: 'Stop and Play to load the committed revision.',
+            });
+            return { ok: true, result: { ...imported, runtimeReadiness } };
+          })
+          : sResult.completion;
+        this.operationRuns.bindCompletion(acceptedRun.value.runId, completion, (run) => {
           if (run.status !== 'succeeded' || this.transientMode || domain !== 'session') return;
           this.ledger.push(cmd);
           this.origins.push(origin);
@@ -2038,6 +2076,32 @@ export class EditGateway {
     return () => this.diagnosticsListeners.delete(fn);
   }
 
+  /**
+   * Register a producer-owned runtime read projection. The provider supplies
+   * only current JSON-safe facts; Gateway owns the bounded aggregation and
+   * notification surface consumed by both panels and scope-1 AI callers.
+   */
+  registerRuntimeDiagnosticsProvider(provider: RuntimeDiagnosticsProvider): () => void {
+    const previous = this.runtimeDiagnosticsProviders.get(provider.id);
+    previous?.unsubscribe();
+    const onChange = (): void => {
+      this._runtimeDiagnosticsRevision += 1;
+      this.emitDiagnostics();
+    };
+    const unsubscribe = provider.subscribe?.(onChange) ?? (() => {});
+    this.runtimeDiagnosticsProviders.set(provider.id, { provider, unsubscribe });
+    this._runtimeDiagnosticsRevision += 1;
+    this.emitDiagnostics();
+    return () => {
+      const current = this.runtimeDiagnosticsProviders.get(provider.id);
+      if (current?.provider !== provider) return;
+      current.unsubscribe();
+      this.runtimeDiagnosticsProviders.delete(provider.id);
+      this._runtimeDiagnosticsRevision += 1;
+      this.emitDiagnostics();
+    };
+  }
+
   private emit(last: EditorOp): void {
     this._rev++;
     for (const fn of this.listeners) fn(this.doc, last);
@@ -2223,19 +2287,43 @@ export class EditGateway {
    * The Engine return type and row value are passed through unchanged, so
    * producer-owned facts remain lossless. Empty array when no registry is bound.
    */
-  assetCatalog(): ReturnType<AssetRegistry['listCatalog']> {
+  assetCatalog(options: { readonly compatibleWith: string }): CompatibleAssetCatalogResult<ReturnType<AssetRegistry['listCatalog']>[number]>;
+  assetCatalog(): ReturnType<AssetRegistry['listCatalog']>;
+  assetCatalog(options?: { readonly compatibleWith?: string }): ReturnType<AssetRegistry['listCatalog']> | CompatibleAssetCatalogResult<ReturnType<AssetRegistry['listCatalog']>[number]> {
     const registry = this.doc.registry;
-    if (registry === undefined) return [];
+    if (registry === undefined) {
+      return options?.compatibleWith === undefined
+        ? []
+        : queryCompatibleAssetCatalog([], options.compatibleWith);
+    }
     const listed = registry.listCatalog();
     const snapshot = registry.catalogSnapshot?.();
-    if (snapshot === undefined) return listed;
-    const factsByGuid = new Map(snapshot.entries.map((entry) => [entry.guid.toLowerCase(), entry]));
-    const rows = listed.map((row) => ({ ...factsByGuid.get(row.guid.toLowerCase()), ...row }));
-    const listedGuids = new Set(listed.map((row) => row.guid.toLowerCase()));
-    for (const entry of snapshot.entries) {
-      if (!listedGuids.has(entry.guid.toLowerCase())) rows.push(entry);
+    const rows = snapshot === undefined
+      ? listed
+      : (() => {
+        const factsByGuid = new Map(snapshot.entries.map((entry) => [entry.guid.toLowerCase(), entry]));
+        const merged = listed.map((row) => ({ ...factsByGuid.get(row.guid.toLowerCase()), ...row }));
+        const listedGuids = new Set(listed.map((row) => row.guid.toLowerCase()));
+        for (const entry of snapshot.entries) {
+          if (!listedGuids.has(entry.guid.toLowerCase())) merged.push(entry);
+        }
+        return merged as ReturnType<AssetRegistry['listCatalog']>;
+      })();
+    if (options?.compatibleWith === undefined) return rows;
+    const knownAssetTypes = new Set<string>();
+    for (const row of rows) {
+      const binding = row.authoring?.binding;
+      if (binding !== undefined && binding.operation !== 'unavailable') {
+        knownAssetTypes.add(binding.target.assetType);
+      }
     }
-    return rows as ReturnType<AssetRegistry['listCatalog']>;
+    for (const token of getRegisteredComponents().values()) {
+      for (const fieldType of Object.values(token.schema)) {
+        const match = /^shared<(.+)>$/.exec(String(fieldType));
+        if (match?.[1] !== undefined) knownAssetTypes.add(match[1]);
+      }
+    }
+    return queryCompatibleAssetCatalog(rows, options.compatibleWith, knownAssetTypes);
   }
 
   /**

@@ -4,9 +4,11 @@ import {
   Box,
   Camera,
   ChevronDown,
+  Crosshair,
   Eye,
   Globe,
   Magnet,
+  MousePointer2,
   RotateCcw,
   SlidersHorizontal,
 } from 'lucide-react';
@@ -35,6 +37,7 @@ import {
   onGizmoSpaceChange,
   onSceneListChange,
   useDocVersion,
+  useGizmoPivot,
   useGizmoSpace,
   useSceneFile,
   useSceneList,
@@ -623,6 +626,7 @@ function CoordinateMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
   const space = useGizmoSpace();
+  const pivot = useGizmoPivot();
 
   return (
     <DropdownMenu>
@@ -632,6 +636,9 @@ function CoordinateMenuControl(): ReactNode {
       <PopPanel title={pickText(L('坐标系', 'Coordinate space'), locale)} width={180}>
         <PopItem icon={<Globe size={14} />} label={pickText(L('世界', 'World'), locale)} active={space === 'world'} onClick={() => gateway.dispatch({ kind: 'setGizmoSpace', space: 'world' } as never)} />
         <PopItem icon={<Box size={14} />} label={pickText(L('本地', 'Local'), locale)} active={space === 'local'} onClick={() => gateway.dispatch({ kind: 'setGizmoSpace', space: 'local' } as never)} />
+        <PopSeparator />
+        <PopItem icon={<Crosshair size={14} />} label={pickText(L('多选中心点', 'Selection center'), locale)} active={pivot === 'center'} onClick={() => gateway.dispatch({ kind: 'setGizmoPivot', pivot: 'center' })} />
+        <PopItem icon={<MousePointer2 size={14} />} label={pickText(L('最后选中物体', 'Last selected'), locale)} active={pivot === 'lastSelected'} onClick={() => gateway.dispatch({ kind: 'setGizmoPivot', pivot: 'lastSelected' })} />
       </PopPanel>
     </DropdownMenu>
   );

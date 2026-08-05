@@ -75,6 +75,15 @@ export type {
   GatewayReplayRequest,
 } from '../product/commit-collar';
 export { createDiagnosticsReadModel, queryDiagnosticsSnapshot } from '../io/diagnostics';
+export { runtimeReadinessDiagnostic } from '../io/diagnostics';
+export type { RuntimeReadinessDiagnostic } from '../io/diagnostics';
+export { createRuntimeReadiness, RUNTIME_READINESS_STATES } from '../io/vfx-runtime-readiness';
+export type {
+  CreateRuntimeReadinessInput,
+  RuntimeReadiness,
+  RuntimeReadinessState,
+  RuntimeRevision,
+} from '../io/vfx-runtime-readiness';
 export type {
   CreateDiagnosticsReadModelDeps,
   DiagnosticsAssetSource,
@@ -91,4 +100,7 @@ export type {
   DiagnosticsSource,
   DiagnosticsSnapshot,
   DiagnosticsTraceSource,
+  RuntimeDiagnosticFact,
+  RuntimeDiagnosticProjectionFact,
+  RuntimeDiagnosticsProvider,
 } from '../io/diagnostics';

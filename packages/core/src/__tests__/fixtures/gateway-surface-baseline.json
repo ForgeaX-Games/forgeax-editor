@@ -9,7 +9,7 @@
   },
   {
     "name": "assetCatalog",
-    "signature": "() => readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; authoring?: AssetAuthoringCapability | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; subject?: CatalogSubject | undefined; execution?: CookExecution | undefined; lifecycle?: CatalogLifecycle | undefined; projection?: CatalogProjection | undefined; sourcePath?: string | undefined; }[]"
+    "signature": "{ (options: { readonly compatibleWith: string; }): CompatibleAssetCatalogResult<{ guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; authoring?: AssetAuthoringCapability | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; subject?: CatalogSubject | undefined; execution?: CookExecution | undefined; lifecycle?: CatalogLifecycle | undefined; projection?: CatalogProjection | undefined; sourcePath?: string | undefined; }>; (): readonly { guid: string; kind: string; name?: string | undefined; packageUrl: string; packageId?: string | undefined; provenance?: ProviderProvenance | undefined; revision?: ResourceRevision | undefined; sourceKey?: string | undefined; sourceIndex?: number | undefined; authoring?: AssetAuthoringCapability | undefined; relations?: readonly AssetRelation[] | undefined; diagnostics?: readonly CatalogDiagnostic[] | undefined; refs?: readonly string[] | undefined; subject?: CatalogSubject | undefined; execution?: CookExecution | undefined; lifecycle?: CatalogLifecycle | undefined; projection?: CatalogProjection | undefined; sourcePath?: string | undefined; }[]; }"
   },
   {
     "name": "assetImpact",
@@ -238,6 +238,10 @@
   {
     "name": "registerSceneReadProvider",
     "signature": "(provider: () => SceneReadModel) => () => void"
+  },
+  {
+    "name": "registerRuntimeDiagnosticsProvider",
+    "signature": "(provider: RuntimeDiagnosticsProvider) => () => void"
   },
   {
     "name": "retryOperationRun",

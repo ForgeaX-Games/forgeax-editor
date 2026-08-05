@@ -36,7 +36,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
 import { setActiveCamera } from '@forgeax/engine-render/internal';
-import { Entity, Update, type World } from '@forgeax/engine-ecs';
+import { Entity, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import {
   attachBrowserInputBackend,
@@ -49,6 +49,7 @@ import {
   panelBridge,
   getSceneId,
   getSelection,
+  entComponent,
   entComponents,
   notifyDocChanged,
   switchSceneFile,
@@ -109,6 +110,7 @@ import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn
 import { ViewportChrome } from '../ViewportChrome';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
 import { registerViewportSessionAppliers } from './viewport-session-appliers';
+import { createEditVfxRuntimeBridge, createParticleCameraSource } from './vfx-runtime-bridge';
 import '../theme.css';
 
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
@@ -474,7 +476,25 @@ async function bootViewport(
   // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
 
-  const profiler = createFramePhaseProfiler();
+  let cameraEntity!: EntityHandle;
+  const vfxBridge = createEditVfxRuntimeBridge({
+    camera: createParticleCameraSource({
+      world: () => worldManager.editorWorld,
+      cameraEntity: () => cameraEntity,
+    }),
+  });
+  // Main's profiler is the single owner of app/render phase observation. Keep
+  // VFX diagnostics on that owner even when User Timing diagnostics are off.
+  const profiler = createFramePhaseProfiler({
+    onPhaseEnd: (event) => {
+      if (event.source === 'render' && event.phase === 'features') {
+        vfxBridge.notifyDiagnosticsChanged();
+      }
+    },
+  });
+  // Keep the AI/panel diagnostics surface on the same engine-owned feature
+  // facts used by the renderer; the Gateway owns only the bounded projection.
+  registerTeardown(gateway.registerRuntimeDiagnosticsProvider(vfxBridge.diagnosticsProvider));
 
   // ── createApp with GPU-failure auto-fallback ────────────────────────────
   // When no WebGPU adapter is available (headless browser, GPU-less CI), the
@@ -485,6 +505,7 @@ async function bootViewport(
   // viewport won't render but the eval channel still mounts. Dynamic import
   // so the null RHI is never bundled into production builds.
   const createAppResult = await createApp(canvas, {
+    features: [vfxBridge.host.feature],
     input: canvasInput.editor,
     pointerLockAllowed: () => false,
     drawSource: worldManager.createDrawSource(),
@@ -520,6 +541,7 @@ async function bootViewport(
       console.warn('[editor] createApp failed (no GPU), retrying with null RHI:', app.error);
       const rhiNull = await import('@forgeax/engine-rhi-null');
       app = await createApp(canvas, {
+        features: [vfxBridge.host.feature],
         input: canvasInput.editor,
         pointerLockAllowed: () => false,
         drawSource: worldManager.createDrawSource(),
@@ -555,6 +577,16 @@ async function bootViewport(
   }
   const editorApp = app.value;
   const { world, renderer } = editorApp;
+  const vfxAttached = await vfxBridge.attachWorld(world, renderer.assets);
+  if (!vfxAttached.ok) {
+    console.error('[editor] Edit VFX host attach failed:', vfxAttached.error);
+    paintDiagnosticMessage(container, vfxAttached.error);
+    return null;
+  }
+  registerTeardown(() => {
+    const detached = vfxBridge.detachWorld(world);
+    if (!detached.ok) console.warn('[editor] Edit VFX host detach failed:', detached.error);
+  });
 
   // solo P7 round-31: selected collider chrome reuses the engine's existing
   // immediate-mode DebugDraw overlay. It reads the active scene-world SSOT each
@@ -665,7 +697,7 @@ async function bootViewport(
   // structural half of AC-01: the camera can never land in the sceneWorld because
   // the only write path onto editorWorld is this facade (plan-strategy §2 D-2/D-5).
   const aspect = canvas.width / canvas.height || 1;
-  const cameraEntity = worldManager.editorFacade.spawn(
+  cameraEntity = worldManager.editorFacade.spawn(
     { component: Transform, data: { pos: [0, 1.5, 9] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] } },
   ).unwrap();
@@ -907,6 +939,8 @@ async function bootViewport(
         () => getViewportQuadrant().display === 'scene',
       ),
       physics: editPhysics,
+      vfxRuntimeHost: vfxBridge.host,
+      onVfxDiagnosticsChanged: vfxBridge.notifyDiagnosticsChanged,
       ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
       // play App while the edit App is paused during play (undefined in prod).
@@ -921,6 +955,7 @@ async function bootViewport(
         setFps(0);
         onFps(0);
         installFpsReport(playWorld as World, onFps);
+        vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = playWorld as World;
         canvas.focus({ preventScroll: true });
         canvasInput.grantGame();
@@ -928,6 +963,7 @@ async function bootViewport(
       },
       onPlayFailed: () => {
         // Degrade back to a coherent edit viewport if fresh-world assembly fails.
+        vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = undefined;
         canvasInput.revokeGame();
         setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
@@ -1090,6 +1126,12 @@ async function bootViewport(
     currentPlayRunId: () => session.currentPlayRunId(),
     getPlayPauseHandle: () => session.getPlayPauseHandle(),
     readActiveWorld: () => gateway.activeWorld.inspect(),
+    // Read-only diagnostic seam for runtime acceptance tests. Writes still use
+    // gateway.dispatch; this helper exposes the same structured stale-handle
+    // result used by the Inspector without adding a second mutation path.
+    readActiveEntityComponent: (entity: EntityHandle, component: string) => (
+      entComponent(gateway.activeWorld, entity, component)
+    ),
     getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
     // M5 (w29): expose the super coordination layer so out-of-frame scripts (AC-02
     // e2e) can witness the separate editorWorld (camera + gizmo) + query bindings.

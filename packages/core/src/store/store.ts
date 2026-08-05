@@ -50,6 +50,14 @@ export {
 } from './gizmo-space';
 export type { GizmoSpace } from './gizmo-space';
 
+// ── cluster 3c: gizmo-pivot (multi-selection anchor: center / last selected) ──
+export {
+  getGizmoPivot,
+  onGizmoPivotChange,
+  useGizmoPivot,
+} from './gizmo-pivot';
+export type { GizmoPivot } from './gizmo-pivot';
+
 // ── cluster 4: frame-request (applier migrated to edit-runtime via registerSessionApplier — D-11 pattern) ──
 
 // ── cluster 5: rename-request (requestRename sealed — M3; onRenameRequest kept) ──
