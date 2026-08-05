@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync, readFileSync } from 'node:fs';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { standaloneRhiDebugPlugins } from './rhi-debug-config';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
 import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
@@ -881,6 +882,10 @@ export default defineConfig({
     forgeaxPerGamePackIndex() as never,
     forgeaxGameRescan() as never,
     silenceShaderEmitInServe(forgeaxShader()) as never,
+    // `bun fx start --rhi-debug` already forwards this opt-in to Play Runtime.
+    // Registering the plugin is the compile-time define + artifact endpoint gate
+    // that makes createApp publish __forgeax.captureFrame and Remote debugAdapter.
+    ...standaloneRhiDebugPlugins().map((plugin) => plugin as never),
   ],
   optimizeDeps: {
     // Exclude the ENTIRE @forgeax workspace family from Vite pre-bundling so each

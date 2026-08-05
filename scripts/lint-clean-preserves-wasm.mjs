@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // lint-clean-preserves-wasm.mjs — static gate: `bun fx clean`'s submodule scrub
 // in scripts/fx.ts must PRESERVE the toolchain-gated engine wasm pkg dirs
-// (packages/fbx/pkg, packages/wgpu-wasm/pkg).
+// (packages/fbx/pkg, packages/wgpu-wasm/pkg, packages/codec/pkg).
 //
 // WHY THIS EXISTS (the defect it closes)
 //   clean() deep-scrubs every submodule with `git clean -ffdx` so the
@@ -14,6 +14,12 @@
 //   superproject's submodule status, so excluding them from the scrub keeps
 //   the clean-status guarantee intact while making clean→setup survivable.
 //
+//   2026-08-05: packages/codec/pkg joined the keep-list — a scrub wiped it,
+//   the codec postinstall (best-effort by design) could not re-fetch the
+//   release offline, and setup had no codec verification, so the failure only
+//   surfaced at runtime as a basis_transcoder.mjs 404 → every KTX2-backed
+//   material failed scene load with "asset-parse-failed".
+//
 //   CI never runs `fx clean`, so without this gate the exclusion could be
 //   dropped in a refactor and the failure would only resurface on a developer
 //   machine. This lint turns that drift into a red `bun run lint` (a required
@@ -21,7 +27,7 @@
 //
 // Usage:   node scripts/lint-clean-preserves-wasm.mjs [--file <path>]
 //          (--file defaults to scripts/fx.ts; the self-test feeds synthetic copies)
-// Exits    0 scrub preserves both wasm pkg dirs
+// Exits    0 scrub preserves all three wasm pkg dirs
 //          · 1 exclusion missing or not wired into the scrub (regression)
 //          · 2 anchor missing/renamed (refuse to pass blind — re-point the gate).
 
@@ -66,7 +72,7 @@ if (scrubIndex === -1) {
   process.exit(2);
 }
 
-const REQUIRED_EXCLUSIONS = ['packages/fbx/pkg/', 'packages/wgpu-wasm/pkg/'];
+const REQUIRED_EXCLUSIONS = ['packages/fbx/pkg/', 'packages/wgpu-wasm/pkg/', 'packages/codec/pkg/'];
 
 if (keepIndex === -1) {
   console.error(
@@ -74,7 +80,8 @@ if (keepIndex === -1) {
   );
   console.error(`  Expected exclusions: ${REQUIRED_EXCLUSIONS.join(', ')}.`);
   console.error('  Without them `fx clean` wipes the toolchain-gated wasm binaries and the next');
-  console.error('  `fx setup` fails wherever the prebuilt fbx release / emcc is unavailable.');
+  console.error('  `fx setup` fails wherever the prebuilt releases / emcc are unavailable — or, for');
+  console.error('  codec, passes silently and 404s basis_transcoder.mjs at runtime (KTX2 materials).');
   process.exit(1);
 }
 
@@ -87,7 +94,7 @@ if (missing.length > 0 || !wired) {
   console.error(`[lint-clean-preserves-wasm] REGRESSION — wasm preservation broken in ${target}:`);
   if (missing.length > 0) console.error(`  keep-list (line ${keepIndex + 1}) drops: ${missing.join(', ')}`);
   if (!wired) console.error(`  scrub (line ${scrubIndex + 1}) does not interpolate the keep-list.`);
-  console.error('  `fx clean` must not delete packages/fbx/pkg or packages/wgpu-wasm/pkg inside the engine submodule.');
+  console.error('  `fx clean` must not delete packages/fbx/pkg, packages/wgpu-wasm/pkg or packages/codec/pkg inside the engine submodule.');
   process.exit(1);
 }
 

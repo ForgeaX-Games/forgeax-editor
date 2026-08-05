@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // lint-clean-preserves-wasm.test.mjs — falsification self-test for the
 // clean-preserves-wasm gate. Proves the gate has discriminating power:
-//   (a) scrub with both exclusions wired     → exit 0
-//   (b) scrub without any keep-list          → exit 1  (the historical bug)
-//   (c) keep-list present but not wired in   → exit 1
-//   (d) keep-list dropping one pkg dir       → exit 1
-//   (e) scrub anchor renamed                 → exit 2  (refuse to pass blind)
-//   (f) the REAL scripts/fx.ts (no --file)   → exit 0  (clean stays correct)
+//   (a) scrub with all three exclusions wired → exit 0
+//   (b) scrub without any keep-list           → exit 1  (the historical bug)
+//   (c) keep-list present but not wired in    → exit 1
+//   (d) keep-list dropping codec pkg          → exit 1  (the 2026-08-05 bug)
+//   (e) scrub anchor renamed                  → exit 2  (refuse to pass blind)
+//   (f) the REAL scripts/fx.ts (no --file)    → exit 0  (clean stays correct)
 //
 // NOTE: colocated *.test.mjs are dev-time harnesses — they are NOT run in CI
 // (nothing in ci.yml / package.json invokes scripts/*.test.mjs). CI enforcement
@@ -48,7 +48,7 @@ function runLint(filePath) {
 
 const GOOD = `
 function clean(argv) {
-  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/'";
+  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/' -e 'packages/codec/pkg/'";
   const subScrub = dryRun
     ? \`git reset --hard -q && git clean -ffndx \${keepWasm}\`
     : \`git reset --hard -q && git clean -ffdx \${keepWasm}\`;
@@ -65,15 +65,16 @@ function clean(argv) {
 // Keep-list defined but the scrub never interpolates it (dead constant).
 const UNWIRED_KEEPLIST = `
 function clean(argv) {
-  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/'";
+  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/' -e 'packages/codec/pkg/'";
   const subScrub = dryRun ? 'git reset --hard -q && git clean -ffndx' : 'git reset --hard -q && git clean -ffdx';
 }
 `;
 
-// One pkg dir dropped from the keep-list (partial preservation still wipes fbx).
+// The 2026-08-05 bug: codec dropped from the keep-list — the scrub wipes
+// packages/codec/pkg while preserving the other two wasm dirs.
 const PARTIAL_KEEPLIST = `
 function clean(argv) {
-  const keepWasm = "-e 'packages/wgpu-wasm/pkg/'";
+  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/'";
   const subScrub = \`git reset --hard -q && git clean -ffdx \${keepWasm}\`;
 }
 `;
@@ -81,7 +82,7 @@ function clean(argv) {
 // Scrub refactored to a different command shape: the gate must NOT pass blind.
 const RENAMED_ANCHOR = `
 function clean(argv) {
-  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/'";
+  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/' -e 'packages/codec/pkg/'";
   const subScrub = \`git reset --hard -q && git clean -ffd \${keepWasm}\`;
 }
 `;
@@ -103,7 +104,7 @@ for (const [name, body] of Object.entries(fixtures)) {
   writeFileSync(paths[name], body);
 }
 
-console.log('Scenario (a): scrub with both exclusions wired — expect exit 0');
+console.log('Scenario (a): scrub with all three exclusions wired — expect exit 0');
 assertEqual('(a) good → 0', runLint(paths.good), 0);
 
 console.log('Scenario (b): scrub without keep-list (historical bug) — expect exit 1');
@@ -112,7 +113,7 @@ assertEqual('(b) no keep-list → 1', runLint(paths.noKeep), 1);
 console.log('Scenario (c): keep-list defined but not wired — expect exit 1');
 assertEqual('(c) unwired keep-list → 1', runLint(paths.unwired), 1);
 
-console.log('Scenario (d): keep-list missing fbx pkg — expect exit 1');
+console.log('Scenario (d): keep-list missing codec pkg (2026-08-05 bug) — expect exit 1');
 assertEqual('(d) partial keep-list → 1', runLint(paths.partial), 1);
 
 console.log('Scenario (e): scrub anchor renamed — expect exit 2');

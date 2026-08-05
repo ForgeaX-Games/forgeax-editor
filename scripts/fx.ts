@@ -95,6 +95,18 @@ const WASM_FILE = join(WASM_DIR, 'pkg', 'wgpu_wasm_bg.wasm');
 const FBX_WASM_DIR = join(ENGINE_DIR, 'packages', 'fbx');
 const FBX_WASM_MJS = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.mjs');
 const FBX_WASM_FILE = join(FBX_WASM_DIR, 'pkg', 'fbx-wasm.wasm');
+// codec wasm: basis_universal transcoder + encoder compiled by emcc; pkg/ is
+// gitignored (zero-binary invariant) like fbx/wgpu. The editor RUNTIME lazily
+// imports pkg/basis_transcoder.mjs to transcode KTX2 textures at scene load —
+// a missing pkg/ 404s that module and every KTX2-backed material fails with
+// "asset-parse-failed" (feedback: 2026-08-05 codec-pkg-wiped-by-clean). The
+// encoder half (pkg/encode/) serves the import/cook pipeline. Presence markers
+// mirror the engine package's own scripts/ensure-wasm.mjs (transcoder + encoder
+// .wasm), plus the transcoder .mjs glue the runtime actually fetches.
+const CODEC_WASM_DIR = join(ENGINE_DIR, 'packages', 'codec');
+const CODEC_WASM_MJS = join(CODEC_WASM_DIR, 'pkg', 'basis_transcoder.mjs');
+const CODEC_WASM_FILE = join(CODEC_WASM_DIR, 'pkg', 'basis_transcoder.wasm');
+const CODEC_ENCODER_WASM_FILE = join(CODEC_WASM_DIR, 'pkg', 'encode', 'basis_encoder.wasm');
 // 15281 = standalone game-backend (platform-io reuse, R3); only with --game.
 // Editor's OWN play-runtime port. Deliberately NOT 15173: the studio superrepo
 // stack (forgeax-studio scripts/run.ts) launches THIS package's play-runtime on
@@ -347,11 +359,15 @@ function update(argv: string[]): void {
 //     to the superproject on ANY untracked content, and the only leftovers are
 //     regenerable gitignored runtime products (engine build/, dist, node_modules).
 //     EXCEPTION: the toolchain-gated wasm pkg/ dirs (engine packages/fbx/pkg,
-//     packages/wgpu-wasm/pkg) are preserved — they are gitignored (so they never
-//     dirty the superproject's submodule status) but NOT freely regenerable:
-//     fbx needs the prebuilt GitHub release (network + auth) or a local
-//     Emscripten toolchain, wgpu needs Rust/wasm-pack. Wiping them made every
-//     `clean` → `setup` fail offline (feedback: clean-scrub-wipes-fbx-wasm).
+//     packages/wgpu-wasm/pkg, packages/codec/pkg) are preserved — they are
+//     gitignored (so they never dirty the superproject's submodule status) but
+//     NOT freely regenerable: fbx/codec need the prebuilt GitHub release
+//     (network + auth) or a local Emscripten toolchain, wgpu needs
+//     Rust/wasm-pack. Wiping them made every `clean` → `setup` fail offline
+//     (feedback: clean-scrub-wipes-fbx-wasm); a wiped codec/pkg additionally
+//     slipped through setup silently (codec's postinstall is best-effort) and
+//     404'd basis_transcoder.mjs at runtime, failing every KTX2 material
+//     (feedback: 2026-08-05 codec-pkg-wiped-by-clean).
 //     Gated by scripts/lint-clean-preserves-wasm.mjs (bun run lint).
 // .forgeax-harness (floating loop-state clone, own .git) is ALWAYS preserved.
 // --dry-run/-n previews. WARNING: discards ALL uncommitted work — commit first.
@@ -360,7 +376,7 @@ function clean(argv: string[]): void {
   const dryRun = argv.includes('--dry-run') || argv.includes('-n');
   const deepRoot = argv.includes('--deep') || argv.includes('-x');
   const rootFlags = deepRoot ? '-fdx' : '-fd';
-  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/'";
+  const keepWasm = "-e 'packages/fbx/pkg/' -e 'packages/wgpu-wasm/pkg/' -e 'packages/codec/pkg/'";
   const subScrub = dryRun
     ? `git reset --hard -q && git clean -ffndx ${keepWasm}`
     : `git reset --hard -q && git clean -ffdx ${keepWasm}`;
@@ -472,6 +488,43 @@ function ensureFbxWasm(): void {
   ok('fbx wasm built');
 }
 
+function codecWasmPresent(): boolean {
+  return existsSync(CODEC_WASM_MJS) && existsSync(CODEC_WASM_FILE) && existsSync(CODEC_ENCODER_WASM_FILE);
+}
+
+// Mirrors ensureFbxWasm: the codec package's own postinstall (scripts/ensure-wasm.mjs)
+// is deliberately best-effort and soft-fails offline, so setup must own the hard
+// guarantee — otherwise a wiped/missing pkg/ slips through install() and only
+// surfaces at runtime as a basis_transcoder.mjs 404 + KTX2 material failures.
+function ensureCodecWasm(): void {
+  if (codecWasmPresent()) {
+    ok('codec wasm present (skip build): packages/codec/pkg/basis_transcoder.{mjs,wasm}');
+    return;
+  }
+
+  step('codec wasm missing — fetching pre-built release bundle ...');
+  const fetched = trySh('pnpm', ['-F', '@forgeax/engine-codec', 'fetch-wasm'], { cwd: ENGINE_DIR });
+  if (fetched && codecWasmPresent()) {
+    ok('codec wasm fetched: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/');
+    return;
+  }
+
+  warn('pre-built codec wasm unavailable — the real cause is in the fetch-wasm output above. Common ones:');
+  warn('  · GitHub auth — set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`');
+  warn('  · `Cannot connect to <drive>: resolve failed` — GNU tar (Git for Windows) sits ahead of');
+  warn('    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first');
+  warn('falling back to local Emscripten build.');
+  requireCmd('emcc', 'the local codec wasm build needs Emscripten. install: brew install emscripten (or activate emsdk)');
+  // build:wasm = fetch-basis (idempotent, downloads pinned basis_universal
+  // source) + emcc -O3 compile. Invoke via the package script so the emcc flag
+  // set stays owned by @forgeax/engine-codec. NOTE: multi-minute compile.
+  sh('pnpm', ['-F', '@forgeax/engine-codec', 'build:wasm'], { cwd: ENGINE_DIR });
+  if (!codecWasmPresent()) {
+    die(`codec wasm build ran but ${CODEC_WASM_MJS} / ${CODEC_WASM_FILE} / ${CODEC_ENCODER_WASM_FILE} still absent.`);
+  }
+  ok('codec wasm built');
+}
+
 /**
  * Bun sees the engine's nested packages as editor workspaces and can rewrite
  * engine/node_modules links to its own store. The engine's test helpers then
@@ -501,16 +554,16 @@ async function install(): Promise<void> {
   requireCmd('bun', 'install bun: https://bun.sh');
   requireCmd('pnpm', 'install pnpm: https://pnpm.io (engine is a pnpm workspace)');
 
-  step('1/6 fetching submodules (engine + interface + platform-io) ...');
+  step('1/8 fetching submodules (engine + interface + platform-io) ...');
   sh('git', ['submodule', 'update', '--init', '--recursive']);
   ok('submodules ready');
 
-  step('2/6 installing editor workspace deps (bun) ...');
+  step('2/8 installing editor workspace deps (bun) ...');
   sh('bun', ['install']);
   ok('bun deps ready');
 
   step(
-    `3/6 installing engine deps (pnpm, network concurrency ${process.env.PNPM_CONFIG_NETWORK_CONCURRENCY ?? DEFAULT_PNPM_NETWORK_CONCURRENCY}) ...`,
+    `3/8 installing engine deps (pnpm, network concurrency ${process.env.PNPM_CONFIG_NETWORK_CONCURRENCY ?? DEFAULT_PNPM_NETWORK_CONCURRENCY}) ...`,
   );
   resetEngineNodeModulesIfBunLinked();
   let installResult;
@@ -537,13 +590,16 @@ async function install(): Promise<void> {
   // esbuild fails to resolve it and the whole `pnpm -r build` aborts.
   // ENFORCED by scripts/lint-wasm-before-dist.mjs (bun run lint) — do not move
   // ensureWasm() below the `pnpm -r ... build` step or CI's typecheck job fails.
-  step('4/6 ensuring wgpu wasm binary ...');
+  step('4/8 ensuring wgpu wasm binary ...');
   ensureWasm();
 
-  step('5/6 ensuring fbx wasm binary ...');
+  step('5/8 ensuring fbx wasm binary ...');
   ensureFbxWasm();
 
-  step('6/6 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
+  step('6/8 ensuring codec wasm binaries ...');
+  ensureCodecWasm();
+
+  step('7/8 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
   // Only the library packages emit the dist/ the editor imports. apps/hello/*
   // are example apps that need extra fixtures and are NOT needed here.
   sh('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: ENGINE_DIR });
@@ -556,7 +612,7 @@ async function install(): Promise<void> {
   sh('pnpm', ['exec', 'tsc', '-b'], { cwd: ENGINE_DIR });
   ok('engine declarations built');
 
-  step('7/8 rebuilding engine declaration graph ...');
+  step('8/8 rebuilding engine declaration graph ...');
   sh('pnpm', ['tsc', '-b', '--clean'], { cwd: ENGINE_DIR });
   sh('pnpm', ['tsc', '-b'], { cwd: ENGINE_DIR });
   ok('engine declarations built');
@@ -577,6 +633,10 @@ async function install(): Promise<void> {
   }
   if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
     warn('missing fbx wasm: packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
+    missing = true;
+  }
+  if (!codecWasmPresent()) {
+    warn('missing codec wasm: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/basis_encoder.wasm');
     missing = true;
   }
   if (missing) die("install incomplete — see warnings above. Re-run 'bun fx setup'.");
