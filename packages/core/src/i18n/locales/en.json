@@ -323,6 +323,33 @@
           "cancel": "Cancel",
           "discard": "Discard",
           "save": "Save and switch"
+        },
+        "saveAllDialog": {
+          "title": "Save Content",
+          "body": "Select content to save",
+          "colAsset": "Asset",
+          "colFile": "File",
+          "colType": "Type",
+          "selectAll": "Select All",
+          "saveSelected": "Save Selected",
+          "cancel": "Cancel",
+          "untitledScene": "Untitled scene",
+          "nothingToSave": "No unsaved changes",
+          "readOnly": "Imported previews are read-only; source editing awaits Engine support.",
+          "assetKinds": {
+            "scene": "Scene",
+            "mesh": "Mesh",
+            "texture": "Texture",
+            "image": "Image",
+            "cube-texture": "Cube Texture",
+            "material": "Material",
+            "skeleton": "Skeleton",
+            "animation-clip": "Animation",
+            "audio": "Audio",
+            "font": "Font",
+            "ui": "UI",
+            "default": "Asset"
+          }
         }
       },
       "preview": {

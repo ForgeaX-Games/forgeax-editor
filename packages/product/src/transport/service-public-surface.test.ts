@@ -60,6 +60,42 @@ test('gameplay is advertised and delegated only when the live carrier supplies i
   expect(unavailable).toMatchObject({ error: { code: 'not-supported' } });
 });
 
+test('Gateway scripts are advertised and executed as typed operation-scope runs', async () => {
+  const calls: string[] = [];
+  const service = createTransportService({
+    evaluate: async (code) => {
+      calls.push(code);
+      return { ok: true, value: 42 };
+    },
+    security: createTransportSecurityPolicy({
+      version: TRANSPORT_PROTOCOL_VERSION,
+      scopes: ['default'],
+      permissions: { 'script.execute': 'execute' },
+    }),
+  });
+  const discovered = await service.handle(request('discover-script', 'discover', {}));
+  expect(discovered.result).toMatchObject({ methods: expect.arrayContaining(['script.execute']) });
+
+  const rejected = await service.handle(request('script-no-permission', 'script.execute', {
+    code: 'gateway.listOps().length', ...auth, permission: 'read',
+  }));
+  expect(rejected).toMatchObject({ error: { code: 'permission-denied' } });
+
+  const executed = await service.handle(request('script', 'script.execute', {
+    code: 'gateway.listOps().length', ...auth, idempotencyKey: 'script-once',
+  }));
+  expect(executed).toMatchObject({
+    runId: 'transport-script',
+    result: { status: 'succeeded', result: { ok: true, value: 42 } },
+  });
+  expect(calls).toEqual(['gateway.listOps().length']);
+
+  const unavailable = await createTransportService().handle(request('script-unavailable', 'script.execute', {
+    code: '42', ...auth,
+  }));
+  expect(unavailable).toMatchObject({ error: { code: 'not-supported' } });
+});
+
 test('dispatches play only through the registered product operation', async () => {
   const registry = new CapabilityRegistry();
   registry.register({

@@ -265,7 +265,12 @@ describe('AC-01 export-surface snapshot', () => {
     // gizmo-ue-parity (M3) then PUBLISHED 4 gizmo-pivot symbols
     // (getGizmoPivot / onGizmoPivotChange / useGizmoPivot / GizmoPivot type)
     // — same session-state shape as gizmo-space → 70 + 4 = 74.
-    expect(entries.length).toBe(74);
+    // feat/ue-save-dialog then PUBLISHED 8 Save Content review-surface symbols:
+    // subscribePendingDiskSave / usePendingDiskSave (scene dirty projection) +
+    // getSessionDirtyAssets / subscribeSessionDirtyAssets /
+    // clearSessionDirtyAssets / clearAllSessionDirtyAssets /
+    // useSessionDirtyAssets / SessionDirtyAsset type → 74 + 8 = 82.
+    expect(entries.length).toBe(82);
 
     // Every entry must be non-empty.
     for (const e of entries) {

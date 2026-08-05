@@ -722,14 +722,10 @@ async function bootViewport(
   onContainerResize = () => viewport.refresh();
   registerTeardown(() => { try { viewport.dispose(); } catch { /* already disposed */ } });
 
-  // M5 t32 (plan-strategy §2 D-4 Q-5): mount eval channel on globalThis in DEV
-  // builds only. AI CLI accesses it via playwright page.evaluate — zero new
-  // network surface (OOS-9). Production builds do NOT get this hook — the AI
-  // eval channel is dev-only (AC-02 scope② production lock).
-  // D-4: the host (edit-runtime) injects rawScope ONLY in DEV so unlockRawScope()
-  // can grant scope② raw engine access here; production omits rawScope entirely
-  // → unlockRawScope() returns SCOPE_LOCKED. Without this the DEV channel would
-  // report scope② permanently locked, contradicting SKILL.md (verify F-V3).
+  // M5 t32 (requirements AC-11): mount the operation-scope eval channel in every
+  // Editor runtime. Its normal scope is {gateway, query, _import}; this semantic
+  // capability is not a dev-only feature. Raw world/renderer/assets access is a
+  // separate privileged scope and is injected only by a development host.
   //
   // The bridge's eval-queue drain is bound to the editor world's Update schedule, which
   // stops ticking when ▶ Play pauses the edit App — so a CLI eval submitted during
@@ -737,27 +733,26 @@ async function bootViewport(
   // session so the run-lifecycle re-registers it on the PLAY App while playing
   // (follow-the-live-app). Undefined unless the bridge block below assigns it.
   let bridgeDrainForPlay: (() => void) | undefined;
-  // Always mount the eval channel in the editor runtime. The file is imported
-  // via @fs in standalone mode where Vite's import.meta.env.DEV runtime
-  // injection is not applied, so an outer `if (import.meta.env.DEV)` gate
-  // would silently never execute. createEvalChannel itself is dev-only
-  // (import.meta.env.DEV gated inside) — the outer guard is deliberately
-  // removed.
+  // Standalone @fs loading does not reliably inject import.meta.env.DEV, but it
+  // explicitly enables VITE_FORGEAX_BRIDGE. Either signal may grant raw scope;
+  // production hosts provide neither and still retain normal Gateway scripts.
   {
-    const channel = createEvalChannel(gateway, {
-      rawScope: { world, renderer, assets: renderer.assets },
-    });
+    const rawScopeEnabled = import.meta.env.DEV === true
+      || import.meta.env.VITE_FORGEAX_BRIDGE === '1';
+    const channel = createEvalChannel(gateway, rawScopeEnabled
+      ? { rawScope: { world, renderer, assets: renderer.assets } }
+      : undefined);
     (globalThis as Record<string, unknown>).__forgeaxEval = channel;
 
     // ── live gateway bridge (DEV-only) ────────────────────────────────────
-    // Companion to __forgeaxEval: instead of a headless playwright instance
+    // Development-only companion to __forgeaxEval: instead of a headless playwright instance
     // page.evaluate-ing the channel (a SEPARATE browser sharing only the disk
     // backend), this dials OUT to the loopback relay (scripts/gateway-bridge-
     // server.mjs) so a CLI can drive THIS already-open window in real time —
     // same in-memory world, changes visible instantly, no CDP debug port, no
     // save-to-disk+refresh round-trip. The page can only dial out, so the relay
-    // is the shared meeting point. DEV-only + loopback + gated behind the same
-    // import.meta.env.DEV as the eval channel: production never opens this.
+    // is the shared meeting point. This legacy driver is DEV-only + loopback;
+    // the operation-scope channel above is not.
     // Opt-in: CI and ordinary `bun run dev` do not start the loopback relay, so
     // they must never emit browser-level ECONNREFUSED noise. dev-standalone turns
     // this on explicitly alongside launching the relay.

@@ -7,9 +7,10 @@
  * The locale is read from the SAME localStorage key the interface uses
  * (`forgeax.locale`) so the editor shell (vendored interface) and the editor
  * panels stay on one language. Because the interface shell and the panels live
- * in the same frame (the editor at :15280), we sync live via:
+ * in the same frame, we sync live via:
  *   - a `forgeax:locale-changed` window CustomEvent (same-frame; the interface
- *     core dispatches it on setLocale), and
+ *     core dispatches it on setLocale with `detail: locale` — even when
+ *     persist:false for system-detected first-run locale), and
  *   - the `storage` event (other tabs/frames).
  */
 
@@ -35,23 +36,54 @@ function isLocale(v: unknown): v is Locale {
   return typeof v === 'string' && SUPPORTED_LOCALES.some((l) => l.code === v);
 }
 
+/** Match interface i18n: first-run with no persisted value follows OS/browser. */
+function detectSystemLocale(): Locale {
+  if (typeof navigator === 'undefined') return DEFAULT_LOCALE;
+  const langs = navigator.languages?.length ? navigator.languages : [navigator.language];
+  for (const l of langs) {
+    if (typeof l === 'string' && l.toLowerCase().startsWith('zh')) return 'zh';
+  }
+  return DEFAULT_LOCALE;
+}
+
 function readPersisted(): Locale {
   if (typeof window === 'undefined') return DEFAULT_LOCALE;
   try {
     const raw = window.localStorage.getItem(LOCALE_STORAGE_KEY);
     if (isLocale(raw)) return raw;
   } catch { /* private mode */ }
-  return DEFAULT_LOCALE;
+  // Interface may have applied a system-detected locale with persist:false —
+  // <html lang> is still updated and is the same-frame fallback.
+  if (typeof document !== 'undefined' && isLocale(document.documentElement.lang)) {
+    return document.documentElement.lang;
+  }
+  return detectSystemLocale();
 }
 
 let current: Locale = readPersisted();
 const listeners = new Set<() => void>();
 function emit() { for (const fn of listeners) fn(); }
 
+function applyLocale(next: Locale): void {
+  if (next === current) return;
+  current = next;
+  emit();
+}
+
 /** Re-read the persisted locale and notify subscribers if it changed. */
 function refresh(): void {
-  const next = readPersisted();
-  if (next !== current) { current = next; emit(); }
+  applyLocale(readPersisted());
+}
+
+/** Same-frame sync: prefer event.detail (interface setLocale always sends it,
+ *  including persist:false first-run), then fall back to storage / <html lang>. */
+function onLocaleChanged(e: Event): void {
+  const detail = (e as CustomEvent).detail;
+  if (isLocale(detail)) {
+    applyLocale(detail);
+    return;
+  }
+  refresh();
 }
 
 let wired = false;
@@ -59,7 +91,10 @@ function ensureWired(): void {
   if (wired || typeof window === 'undefined') return;
   wired = true;
   window.addEventListener('storage', (e) => { if (!e.key || e.key === LOCALE_STORAGE_KEY) refresh(); });
-  window.addEventListener(LOCALE_CHANGED_EVENT, refresh as EventListener);
+  window.addEventListener(LOCALE_CHANGED_EVENT, onLocaleChanged);
+  // If interface already set <html lang> before this module wired listeners,
+  // pick it up once (covers load-order races without waiting for another event).
+  refresh();
 }
 ensureWired();
 
@@ -70,7 +105,9 @@ export function setLocale(next: Locale): void {
   current = next;
   if (typeof window !== 'undefined') {
     try { window.localStorage.setItem(LOCALE_STORAGE_KEY, next); } catch { /* ignore */ }
-    try { window.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT)); } catch { /* ignore */ }
+    try {
+      window.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: next }));
+    } catch { /* ignore */ }
     if (typeof document !== 'undefined') document.documentElement.lang = next;
   }
   emit();

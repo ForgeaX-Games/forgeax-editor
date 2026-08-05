@@ -283,8 +283,12 @@ describe('t33d — scope② unlock refusal (AC-02)', () => {
     gw.doc.world = new World();
     // Create channel WITH rawScope (dev build behavior)
     const channel = createEvalChannel(gw, { rawScope: { world: gw.doc.world } });
+    const beforeUnlock = channel.eval('typeof world');
+    expect(beforeUnlock).toEqual({ ok: true, value: 'undefined' });
     const result = channel.unlockRawScope();
     expect(result.ok).toBe(true);
+    const afterUnlock = channel.eval('world === undefined');
+    expect(afterUnlock).toEqual({ ok: true, value: false });
   });
 
   it('should confirm scope① has no world symbol (AC-02 negative assertion)', () => {
@@ -324,6 +328,7 @@ describe('t33e — eval reentry nesting (requirements §7 boundary)', () => {
     const channelWithRef = createEvalChannel(gw, {
       rawScope: { __forgeaxEval_inner: channel },
     });
+    expect(channelWithRef.unlockRawScope()).toEqual({ ok: true });
 
     const result = channelWithRef.eval(outerCode);
     expect(result.ok).toBe(true);

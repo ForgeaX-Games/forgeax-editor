@@ -111,6 +111,8 @@ export {
   instantiateSceneRefUnderWorld,
   resolveAssetRefToHandle,
   hasPendingDiskSave,
+  subscribePendingDiskSave,
+  usePendingDiskSave,
   cancelPendingDiskSave,
   flushPendingSaveBeacon,
   replaceDoc,
@@ -119,6 +121,16 @@ export {
   mergeLoadedInlineOrphans,
 } from './scene-persistence';
 export type { SceneFileEntry, PlayConfig, LoadedInlineSnapshot } from './scene-persistence';
+
+// ── cluster: session-dirty-assets (UE-style "Save Content" review set) ──
+export {
+  getSessionDirtyAssets,
+  subscribeSessionDirtyAssets,
+  clearSessionDirtyAssets,
+  clearAllSessionDirtyAssets,
+  useSessionDirtyAssets,
+} from './session-dirty-assets';
+export type { SessionDirtyAsset } from './session-dirty-assets';
 
 // ── cluster 11: disk-watch ──
 export { initDiskWatch } from './disk-watch';

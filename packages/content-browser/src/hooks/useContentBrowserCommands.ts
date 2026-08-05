@@ -7,7 +7,6 @@
 // renders.
 
 import { useEffect, type Dispatch, type SetStateAction } from 'react';
-import { broadcastAssetsChanged } from '@forgeax/editor-core';
 import type { AppHost } from '@forgeax/interface/core/app-shell';
 import type { TFunction } from '@forgeax/editor-core/i18n';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from '../creatable-asset-kinds';
@@ -15,6 +14,7 @@ import type { CBViewMode2 } from '../view-mode';
 import type { FilterAPI } from './useFilter';
 import type { SortAPI } from './useSort';
 import type { NavHistoryAPI } from './useNavHistory';
+import { requestSaveAll } from '../save-all-bus';
 
 export interface CBCommandsDeps {
   host: AppHost;
@@ -116,7 +116,7 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
       host.commands.register({
         id: 'contentBrowser.saveAll',
         title: t('editor.contentBrowser.actions.saveAll'),
-        execute: () => { broadcastAssetsChanged(); return { status: 'completed' as const }; },
+        execute: () => { void requestSaveAll(); return { status: 'completed' as const }; },
       }),
       host.commands.register({
         id: 'contentBrowser.toggleFavoritesOnly',

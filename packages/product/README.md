@@ -142,6 +142,13 @@ For a mutating call, send the operation through `run.dispatch` only after
 discovery and preflight. Every response is either `result` or structured
 `error`; never parse the human-readable `hint` as a protocol field.
 
+When the connected host advertises `script.execute`, callers may send a code
+string plus actor, session, execute permission, and idempotency key. The host
+must evaluate it with operation scope `{gateway, query, _import}` only. The
+method is a typed run carrier for composing the same Gateway surface; it is not
+an Engine Remote alias and must never inject raw `world`, `renderer`, or
+`assets`. A script that needs atomic writes dispatches one Gateway transaction.
+
 Play and Stop are the Gateway operations `play` and `stop`. The transport does
 not publish `runtime.play` or any other runtime-prefixed alias; callers discover
 the Gateway catalog and dispatch its canonical operation id.

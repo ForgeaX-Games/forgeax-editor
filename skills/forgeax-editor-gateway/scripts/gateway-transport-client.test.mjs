@@ -130,6 +130,30 @@ test('queries the Gateway read model without operation discovery', async () => {
   }]);
 });
 
+test('executes operation-scope JavaScript through the typed transport', async () => {
+  const requests = [];
+  const client = createGatewayTransportClient({
+    scope: 'game:2048',
+    request: async (method, params) => {
+      requests.push({ method, params });
+      return { runId: 'script-run', result: { runId: 'script-run', status: 'succeeded', result: { ok: true, value: 42 } } };
+    },
+  });
+  const response = await client.evaluate('gateway.listOps().length', { idempotencyKey: 'script-once' });
+  assert.equal(response.result.status, 'succeeded');
+  assert.deepEqual(requests, [{
+    method: 'script.execute',
+    params: {
+      code: 'gateway.listOps().length',
+      scope: 'game:2048',
+      actor: { id: 'forgeax-editor-gateway-cli', kind: 'ai' },
+      sessionId: 'forgeax-editor-gateway-cli:game:2048',
+      permission: 'execute',
+      idempotencyKey: 'script-once',
+    },
+  }]);
+});
+
 test('delegates gameplay to the typed bridge on the same live carrier', async () => {
   const requests = [];
   const client = createGatewayTransportClient({

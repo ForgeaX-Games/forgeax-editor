@@ -203,6 +203,11 @@ export interface LoadedInlineSnapshot {
   artifacts?: unknown;
 }
 
+const dirtyListeners = new Set<() => void>();
+function notifyDirtyListeners(): void {
+  for (const fn of dirtyListeners) fn();
+}
+
 /** Build the single persistence-state handle. Field initial values are the exact
  *  historical `let` initializers (OOS-1 zero behavior change). */
 export function createScenePersistenceContext(): ScenePersistenceContext {
@@ -221,7 +226,11 @@ export function createScenePersistenceContext(): ScenePersistenceContext {
     loadedInlineAssets: null,
     loadedEntityFloor: null,
     lastSelfSave: null,
-    setDirty(v: boolean): void { this.isDirty = v; },
+    setDirty(v: boolean): void {
+      if (this.isDirty === v) return;
+      this.isDirty = v;
+      notifyDirtyListeners();
+    },
     setCurrentSceneGuid(guid: string): void { this.currentSceneGuid = guid; },
     setLastSelfSave(v: LastSelfSave): void { this.lastSelfSave = v; },
   };
@@ -530,7 +539,7 @@ sessionAppliers.set('previewImportedScene', (op) => {
       setAuthoringSession(importedPreviewSession(state));
       ctx.currentSceneFile = null;
       ctx.currentSceneGuid = null;
-      ctx.isDirty = false;
+      ctx.setDirty(false);
       notifyDocChanged();
       return {
         ok: true as const,
@@ -720,7 +729,7 @@ sessionAppliers.set('promoteImportedScene', (rawOp) => {
       ctx.loadedInlineAssetFloor = ((pack.assets as Array<{ kind?: string }>).filter((asset) => asset.kind !== 'scene')).length;
       ctx.loadedInlineAssets = null;
       ctx.previewState = null;
-      ctx.isDirty = false;
+      ctx.setDirty(false);
       try { setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION); } catch { ctx.authoringSession = AUTHORED_SCENE_AUTHORING_SESSION; }
       try { gateway.replaceDoc(fresh); } catch { gateway.doc = fresh; }
       try { notifyDocChanged(); } catch { /* observer only */ }
@@ -1106,7 +1115,7 @@ gateway.subscribe((_doc, lastCommand) => {
   // document-domain command, including undo/redo, makes the persistence-owned
   // dirty bit true. Scene replacement/load paths set the bit explicitly.
   if (lastCommand !== null && domainOf(lastCommand.kind) === 'document') {
-    ctx.isDirty = true;
+    ctx.setDirty(true);
   }
 });
 
@@ -1116,10 +1125,25 @@ export function hasPendingDiskSave(): boolean {
   return ctx.isDirty;
 }
 
+/** Subscribe to scene dirty-bit changes (Save Content dialog / toolbar). */
+export function subscribePendingDiskSave(listener: () => void): () => void {
+  dirtyListeners.add(listener);
+  return () => { dirtyListeners.delete(listener); };
+}
+
+/** React hook: live scene dirty bit for Save Content / toolbar consumers. */
+export function usePendingDiskSave(): boolean {
+  return useSyncExternalStore(
+    subscribePendingDiskSave,
+    hasPendingDiskSave,
+    hasPendingDiskSave,
+  );
+}
+
 /** Clear the dirty flag WITHOUT writing. Used after the editor seeds a default
  *  scene for a genuinely scene-less game: the bare seed must NOT be persisted. */
 export function cancelPendingDiskSave(): void {
-  ctx.isDirty = false;
+  ctx.setDirty(false);
 }
 
 // ── D-6 internal seams (M1 D-2): disk-watch's cross-module writes land on the

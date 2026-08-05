@@ -11,6 +11,7 @@ import { type PackFile } from '../scene/scene-pack';
 import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
+import { clampMaterialPackPath } from '../util/material-pack-path';
 import type { DocApplierCtx } from './document';
 import { deletedEntryCache, renamedNameCache, duplicatedGuidCache } from '../io/asset-op-caches';
 import type { ApplyResult, CreatableAssetKind, EditorOp } from '../types';
@@ -784,6 +785,14 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   } catch {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires an active game path resolver; select a game before authoring a material' } };
   }
+  const clamped = clampMaterialPackPath(targetPack);
+  if (clamped.redirected) {
+    console.warn(
+      `[editor-core] createMaterial: packPath "${targetPack}" is outside assets/; ` +
+      `redirecting to "${clamped.packPath}"`,
+    );
+  }
+  targetPack = clamped.packPath;
   // Canonical PBR POD from the engine builder (SSOT — no hand-rolled passes).
   const payload = Materials.standard({
     baseColor,

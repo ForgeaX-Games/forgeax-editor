@@ -156,6 +156,8 @@ export interface TransportServiceOptions {
   readonly operationRuns?: SaveOperationRunPort;
   readonly security?: TransportSecurityPolicy;
   readonly dispatch?: (operationId: string, input: unknown, request: TransportAuthorizationRequest, signal?: AbortSignal) => unknown | Promise<unknown>;
+  /** Host-owned operation-scope script evaluator. It must not inject raw engine scope. */
+  readonly evaluate?: (code: string, request: TransportAuthorizationRequest, signal?: AbortSignal) => unknown | Promise<unknown>;
   readonly query?: (input: unknown) => unknown | Promise<unknown>;
   /** Host-owned typed gameplay bridge for the same live Editor carrier. */
   readonly gameplay?: (input: unknown) => unknown | Promise<unknown>;
@@ -362,7 +364,7 @@ export function createTransportService(options: TransportServiceOptions = {}): T
       capabilityManifest: product?.capabilityManifest ?? null,
       availability: product?.availability ?? productUnavailable(),
       methods: Object.freeze([
-        'discover', 'transport.describe', 'query', ...(options.gameplay === undefined ? [] : ['gameplay']), 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
+        'discover', 'transport.describe', 'query', ...(options.evaluate === undefined ? [] : ['script.execute']), ...(options.gameplay === undefined ? [] : ['gameplay']), 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
         'run.list', 'run.listEvents', 'run.retry', 'run.cancel', 'run.reconcile',
         'workflow.start', 'workflow.get', 'workflow.recover', 'workflow.retry', 'workflow.listRecipes',
         'save', 'reopen',
@@ -379,7 +381,9 @@ export function createTransportService(options: TransportServiceOptions = {}): T
   ): Promise<{ readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: CommandError }> {
     try {
       let value: unknown;
-      if (options.dispatch !== undefined) value = await options.dispatch(operationId, input, auth, signal);
+      if (operationId === 'script.execute' && options.evaluate !== undefined) {
+        value = await options.evaluate(String(record(input).code ?? ''), auth, signal);
+      } else if (options.dispatch !== undefined) value = await options.dispatch(operationId, input, auth, signal);
       else if (operationId === 'asset.mutate' && options.assetLifecycle !== undefined) value = await options.assetLifecycle.run(input as AssetMutationRequest);
       else if (operationId === 'asset.restore' && options.assetRestore !== undefined) value = await options.assetRestore(input, signal);
       else if (options.product !== undefined) {
@@ -707,6 +711,17 @@ export function createTransportService(options: TransportServiceOptions = {}): T
       if (request.method === 'query') {
         const result = options.query === undefined ? { ok: true, value: undefined } : await options.query(request.params);
         return terminalResponse(request, result, undefined);
+      }
+      if (request.method === 'script.execute') {
+        if (options.evaluate === undefined) return errorResponse(request, securityError('not-supported', 'No operation-scope Gateway script evaluator is connected.'));
+        const params = record(request.params);
+        if (typeof params.code !== 'string' || params.code.trim() === '') {
+          return errorResponse(request, securityError('invalid-script-input', 'script.execute requires a non-empty JavaScript code string.', { recoveryActions: ['transport.describe'] }));
+        }
+        return runOperation(request, 'script.execute', { code: params.code }, params, {
+          asynchronous: params.async === true,
+          ...(typeof params.idempotencyKey === 'string' ? { idempotencyKey: params.idempotencyKey } : {}),
+        });
       }
       if (request.method === 'gameplay') {
         if (options.gameplay === undefined) return errorResponse(request, securityError('not-supported', 'No live gameplay bridge is connected.'));

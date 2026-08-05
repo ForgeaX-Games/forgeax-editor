@@ -9,7 +9,8 @@
 //   - Reads the authoritative gateway directly (this is the MAIN iframe, not a popout).
 //   - canUndo/canRedo toggle button enable/disable in real-time via useDocVersion.
 //   - Gizmo mode reads/writes the store's gizmoMode (same as EditorApp does).
-//   - Save calls saveDocToDisk; keyboard shortcuts are registered here too.
+//   - Scene save is no longer surfaced here; the Content Browser "Save" action is
+//     the canonical human save entry (UE-style summary dialog → saveDocToDisk).
 //   - ▶/■/display + FPS: viewport quadrant controls (w25, requirements AC-05/06/04)
 //     received as props from ViewportChrome.
 import { useEffect, useState } from 'react';
@@ -21,7 +22,6 @@ import { SceneBadge } from './SceneBadge';
 import { DirtyIndicator } from './components/dirty-indicator';
 import { onFpsChange, getFps } from './fps-store';
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
-import { createHumanSaveRequest } from './save-operation-projection';
 
 interface ViewportBarProps {
   onPlay: () => void;
@@ -144,15 +144,6 @@ export function ViewportBar({ onPlay, onStop, onToggleDisplay, onFullscreen }: V
         title="Zoom view out (C)">C</button>
       <span className="vp-sep" />
       <DirtyIndicator />
-      <span className="vp-sep" />
-      <button type="button" className="vp-btn" data-testid="vp-save"
-        disabled={authoringSession.saveTarget === null}
-        onClick={() => gateway.dispatch(createHumanSaveRequest(), 'human')}
-        title={authoringSession.mode === 'imported-preview'
-          ? 'Imported previews are read-only; source editing awaits Engine support.'
-          : 'Save scene (⌘S)'}>
-        ⤓
-      </button>
       <span className="vp-sep" />
       <button type="button" className={`vp-btn${captureState === 'error' ? ' error' : ''}`}
         data-testid="vp-rhi-capture" disabled={captureState === 'capturing'} onClick={() => void captureRhiFrame()}

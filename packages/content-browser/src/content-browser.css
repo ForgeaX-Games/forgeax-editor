@@ -1055,3 +1055,154 @@
 .cb-dialog-btn {
   min-width: 72px;
 }
+
+/* ── UE-style "Save Content" table (plan §7) ── */
+.cb-dialog-wide {
+  min-width: 460px;
+  max-width: 680px;
+}
+.cb-dialog-ue {
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+  overflow: hidden;
+}
+.cb-dialog-ue .cb-dialog-body {
+  max-height: none;
+  overflow: visible;
+  padding: 12px 14px;
+}
+.cb-dialog-empty {
+  margin: 16px 0 8px;
+  padding: 20px 12px;
+  text-align: center;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.55));
+  border: 1px dashed var(--border, #444);
+  border-radius: 4px;
+}
+/* 头部：图标 + 标题 + 关闭按钮 */
+.cb-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border, #444);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0));
+}
+.cb-dialog-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--accent-cyan, #6cc4ff);
+  color: #0b0b0b;
+  opacity: 0.95;
+}
+.cb-dialog-header-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.cb-dialog-header-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--panel-fg, #eee);
+  flex: 1;
+}
+.cb-dialog-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.55));
+  font-size: 13px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cb-dialog-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--panel-fg, #eee);
+}
+.cb-dialog-table-scroll {
+  margin-top: 8px;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+}
+.cb-dialog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cb-dialog-thead th {
+  text-align: left;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border, #444);
+  color: var(--panel-fg, #ccc);
+  background: rgba(255, 255, 255, 0.03);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.cb-dialog-th-check,
+.cb-dialog-td-check {
+  width: 30px;
+  text-align: center;
+}
+.cb-dialog-th-asset { width: 36%; }
+.cb-dialog-th-file { width: 40%; }
+.cb-dialog-th-type { width: 24%; }
+.cb-dialog-row {
+  border-bottom: 1px solid var(--border, #2c2c2c);
+  transition: background 0.12s ease;
+}
+.cb-dialog-row:last-child {
+  border-bottom: none;
+}
+.cb-dialog-row:hover {
+  background: rgba(108, 196, 255, 0.08);
+}
+.cb-dialog-td {
+  padding: 7px 10px;
+  vertical-align: middle;
+  color: var(--panel-fg, #ccc);
+}
+.cb-dialog-td-asset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cb-dialog-icon {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.85;
+}
+.cb-dialog-asset-name {
+  word-break: break-all;
+}
+.cb-dialog-td-file,
+.cb-dialog-td-type {
+  opacity: 0.7;
+  word-break: break-all;
+}
+/* 强调色主操作按钮 */
+.cb-dialog-btn-primary {
+  background: var(--accent-cyan, #6cc4ff) !important;
+  color: #0b0b0b !important;
+  border-color: var(--accent-cyan, #6cc4ff) !important;
+}
+.cb-dialog-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.cb-dialog-btn-primary:disabled {
+  opacity: 0.4;
+}
+

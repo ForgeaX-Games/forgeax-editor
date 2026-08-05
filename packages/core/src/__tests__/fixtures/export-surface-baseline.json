@@ -8,8 +8,16 @@
     "signature": "() => void"
   },
   {
+    "name": "clearAllSessionDirtyAssets",
+    "signature": "() => void"
+  },
+  {
     "name": "clearAssetSelection",
     "signature": "() => void"
+  },
+  {
+    "name": "clearSessionDirtyAssets",
+    "signature": "(guids: readonly string[]) => void"
   },
   {
     "name": "configureEditorPageNavigation",
@@ -86,6 +94,10 @@
   {
     "name": "getSelectionList",
     "signature": "() => Set<EntityHandle>"
+  },
+  {
+    "name": "getSessionDirtyAssets",
+    "signature": "() => readonly SessionDirtyAsset[]"
   },
   {
     "name": "GizmoPivot",
@@ -208,12 +220,24 @@
     "signature": "SelectedAsset"
   },
   {
-    "name": "switchSceneFile",
-    "signature": "(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy | undefined) => Promise<boolean>"
+    "name": "SessionDirtyAsset",
+    "signature": "SessionDirtyAsset"
   },
   {
     "name": "subscribeDocVersion",
     "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "subscribePendingDiskSave",
+    "signature": "(listener: () => void) => () => void"
+  },
+  {
+    "name": "subscribeSessionDirtyAssets",
+    "signature": "(listener: () => void) => () => void"
+  },
+  {
+    "name": "switchSceneFile",
+    "signature": "(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy | undefined) => Promise<boolean>"
   },
   {
     "name": "triggerAssetSelectAll",
@@ -268,6 +292,10 @@
     "signature": "() => MeshStatsWire | null"
   },
   {
+    "name": "usePendingDiskSave",
+    "signature": "() => boolean"
+  },
+  {
     "name": "useSceneAuthoringSession",
     "signature": "() => SceneAuthoringSessionReadModel"
   },
@@ -290,6 +318,10 @@
   {
     "name": "useSelectionList",
     "signature": "() => Set<EntityHandle>"
+  },
+  {
+    "name": "useSessionDirtyAssets",
+    "signature": "() => readonly SessionDirtyAsset[]"
   },
   {
     "name": "writePlayConfig",

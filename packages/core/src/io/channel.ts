@@ -4,7 +4,7 @@
 // createEvalChannel(gateway, {rawScope?}) returns an EvalChannel with two
 // capabilities:
 //   1. eval(code) — new Function injection with scope①={gateway, query, _import}
-//   2. unlockRawScope() — scope② unlock (dev-only, host injects rawScope flag)
+//   2. unlockRawScope() — scope② unlock (privileged host injects rawScope)
 //
 // EVAL PARADIGM (research F-8): follows engine-remote execute.ts pattern:
 //   new Function('gateway','query','_import', 'return eval('+JSON.stringify(code)+')')
@@ -14,8 +14,8 @@
 //
 // SCOPE MODEL (plan-strategy §2 D-4, requirements AC-02):
 //   scope① = {gateway, query, _import} — no world/renderer/assets (AC-02)
-//   scope② = rawScope injected by host (edit-runtime) only in DEV builds
-//   Production: rawScope omitted → unlockRawScope() → {ok:false, code:'SCOPE_LOCKED'}
+//   scope② = rawScope injected by a privileged host and hidden until explicit unlock
+//   Unprivileged host: rawScope omitted → unlockRawScope() → {ok:false, code:'SCOPE_LOCKED'}
 //
 // Anchors:
 //   plan-strategy §2 D-4: Q-2 scope② explicit API + host DEV flag; Q-5 globalThis
@@ -35,9 +35,8 @@ export interface EvalChannel {
   eval(code: string): EvaluateResult;
 
   /** Attempt to unlock scope② (raw engine access). Returns SCOPE_LOCKED if
-   *  the host did not inject rawScope at channel creation time (production build).
-   *  plan-strategy §2 D-4 Q-2: unlock MUST be explicit, production MUST NOT silently
-   *  downgrade to scope①. */
+   *  the host did not inject rawScope at channel creation time. Operation scope is
+   *  environment-neutral; only raw engine access is privileged. */
   unlockRawScope(): RawScopeResult;
 }
 
@@ -72,10 +71,11 @@ export function createEvalChannel(
   opts?: { rawScope?: Record<string, unknown> },
 ): EvalChannel {
   const hasRawScope = opts?.rawScope !== undefined;
+  let rawScopeUnlocked = false;
 
   // Build the scope symbols array for new Function.
   // scope① is always present: gateway, query, _import
-  // scope② (rawScope) is injected when provided by host (dev-only)
+  // scope② (rawScope) is injected only after an explicit successful unlock.
   function evalImpl(code: string): EvaluateResult {
     const scriptLiteral = JSON.stringify(code);
     const body = `return eval(${scriptLiteral})`;
@@ -85,7 +85,7 @@ export function createEvalChannel(
     const scopeParams: string[] = ['gateway', 'query', '_import'];
     const scopeArgs: unknown[] = [gateway, makeQueryFn(gateway), _import];
 
-    if (hasRawScope) {
+    if (hasRawScope && rawScopeUnlocked) {
       const rawKeys = Object.keys(opts!.rawScope!);
       for (const key of rawKeys) {
         scopeParams.push(key);
@@ -143,10 +143,11 @@ export function createEvalChannel(
         ok: false,
         error: {
           code: 'SCOPE_LOCKED',
-          hint: 'raw scope is not available in this build; scope② is dev-only — run in DEV mode or request rawScope injection at channel creation',
+          hint: 'raw scope was not granted by this host; continue with gateway/query/_import operation scope or use an explicitly privileged development host',
         },
       };
     }
+    rawScopeUnlocked = true;
     return { ok: true };
   }
 

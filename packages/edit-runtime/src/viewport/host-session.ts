@@ -485,6 +485,21 @@ export function createHostSession(deps: HostSessionDeps): {
 
     setBootStage('loadDoc');
     await renderer.ready.catch(() => null);
+
+    // Wait for play-runtime's pack catalog to include this game (covers the
+    // gap between game creation and forgeaxGameRescan's Vite restart).
+    const slug = getSceneId();
+    if (slug && slug !== 'default') {
+      const packIndexUrl = `/preview/pack-index/${slug}.json`;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        try {
+          const r = await deps.fetch(packIndexUrl, { cache: 'no-store' });
+          if (r.ok) break;
+        } catch { /* server restarting */ }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+
     await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
     emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
 

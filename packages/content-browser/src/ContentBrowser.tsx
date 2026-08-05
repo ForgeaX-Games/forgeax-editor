@@ -26,6 +26,8 @@ import { useContentBrowserCommands } from './hooks/useContentBrowserCommands';
 import { computeDeleteImpact, computeSceneDeleteGuards } from './delete-guard';
 import { authorizeSubjectAction, preflightSubjectAction, type SubjectActionRequest } from './workspace/subject-actions';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
+import { SaveAssetsDialog } from './SaveAssetsDialog';
+import { subscribeSaveAllRequest, resolveSaveAll } from './save-all-bus';
 import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, dispatchReimportAsset, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
 import { CBNavigationBar } from './CBNavigationBar';
@@ -310,6 +312,15 @@ export function ContentBrowser() {
     [deleteTargets, sceneModel, workspaceSnapshot],
   );
   const [pendingSceneSwitch, setPendingSceneSwitch] = useState<string | null>(null);
+  // UE-style "Save Content" dialog: opened by save-all-bus requests (CBToolbar
+  // Save button / contentBrowser.saveAll command); resolved by the dialog.
+  const [saveAllOpen, setSaveAllOpen] = useState(false);
+  useEffect(() => {
+    return subscribeSaveAllRequest((req) => {
+      if (req === null) setSaveAllOpen(false);
+      else setSaveAllOpen(true);
+    });
+  }, []);
   const requestDelete = useCallback((targets: CBAsset[]) => {
     if (targets.length === 0) return;
     setDeleteError(null);
@@ -1259,6 +1270,13 @@ export function ContentBrowser() {
           error={deleteError}
           onConfirm={performDelete}
           onCancel={() => setDeleteTargets(null)}
+        />,
+        document.body,
+      )}
+
+      {saveAllOpen && createPortal(
+        <SaveAssetsDialog
+          onClose={(confirmed) => { resolveSaveAll(confirmed); setSaveAllOpen(false); }}
         />,
         document.body,
       )}

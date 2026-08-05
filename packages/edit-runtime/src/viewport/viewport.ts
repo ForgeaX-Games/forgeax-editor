@@ -906,9 +906,24 @@ export function createViewport({
     // setComponent whose recorded pose = the final accumulated update (gateway
     // lastCmd). A pointerup with no live change (plain click) opened no handle, so
     // there is nothing to commit — no empty command enters the ledger.
+    //
+    // If begin() failed mid-drag, applyLive fell back to engine.set (visual only):
+    // no dirty bit, no undo, Save Content stays empty. Land one document op here
+    // so persistence / dialog / AI ledger stay isomorphic with a successful begin.
     if (dragHandle !== null) {
       gateway.commit(dragHandle);
       dragHandle = null;
+    } else if (
+      (endedMode === 'drag' || endedMode === 'axisDrag') &&
+      dragId !== null &&
+      Object.keys(livePatch).length > 0
+    ) {
+      gateway.dispatch({
+        kind: 'setComponent',
+        entity: dragId,
+        component: 'Transform',
+        patch: toEnginePatch({ ...dragOrig, ...livePatch }),
+      }, 'human');
     }
     mode = 'none'; gestureStart = null; dragId = null; dragWorld = undefined; livePatch = {}; dragPlane = null; dragGroup = [];
     // D-12 path A (S13 / AC-30): a completed camera-nav gesture records ONE

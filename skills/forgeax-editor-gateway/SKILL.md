@@ -85,7 +85,7 @@ The Gateway is realm-local; attached and fresh are driver lifecycles, not differ
 |:--|:--|
 | Current page and immediate UI response | `gateway.mjs` attaches through the DEV relay |
 | Cold load, save→reopen, or CI isolation | `gateway-fresh-page.mjs` creates a Playwright page |
-| Product-scoped operation | Use that product's CLI; it owns carrier and scope |
+| Product-scoped operation or script | Use that product's typed transport/CLI; it owns carrier and scope |
 
 ```bash
 node skills/forgeax-editor-gateway/scripts/gateway-fresh-page.mjs --help
@@ -94,8 +94,9 @@ node skills/forgeax-editor-gateway/scripts/gateway-fresh-page.mjs \
 ```
 
 `FORGEAX_BRIDGE_PORT` must match the Editor relay (default `127.0.0.1:15296`).
-`FORGEAX_BRIDGE=0` disables it. The relay accepts arbitrary DEV JavaScript; never expose it through
-a public interface or port forward.
+`FORGEAX_BRIDGE=0` disables it. This attached-page relay is a development driver; never expose or port
+forward it. That driver restriction does not make operation-scope eval dev-only: product compositions may
+carry the same `{gateway, query, _import}` scripts through their versioned, scope-selected typed transport.
 
 ## Execute safely
 
@@ -106,7 +107,8 @@ a public interface or port forward.
 - Re-query after Play/Stop. Entity handles belong to one world and become stale across the boundary.
 - `query` is a separate read-only function; do not invent `gateway.query(...)`.
 - Use `gateway.trace.last()` after failures. `undo()` / `redo()` / `canUndo()` return booleans.
-- DEV raw scope is for diagnosis, not authored writes. Never import engine `dist` into the page realm.
+- Raw scope is for privileged development diagnosis, not authored writes. It is absent until the host grants
+  it and `unlockRawScope()` succeeds. Never import engine `dist` into the page realm.
 
 For real Play dogfood, launch a game-backed Editor (`bun fx start --game <dir>`). Bare
 `dev:standalone` has no game backend. Discover Play fields from the running Gateway; wait for

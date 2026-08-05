@@ -51,7 +51,6 @@ import {
   type RunMode,
 } from '@forgeax/editor-edit-runtime/viewport/quadrant';
 import { getFps, onFpsChange } from '@forgeax/editor-edit-runtime/fps';
-import { createHumanSaveRequest } from '@forgeax/editor-edit-runtime/save-operation-projection';
 import './viewport-panel.css';
 
 type ContextKeyValue = string | number | boolean;
@@ -300,11 +299,6 @@ function registerViewportCommands(host: AppHost): Array<() => void> {
       id: 'viewport.redo',
       title: 'Viewport: Redo',
       execute: () => { gateway.redo(); return commandResult(); },
-    }),
-    host.commands.register({
-      id: 'viewport.save',
-      title: 'Viewport: Save scene',
-      execute: () => { gateway.dispatch(createHumanSaveRequest(), 'human'); return commandResult(); },
     }),
     host.commands.register({
       id: 'viewport.rhi.capture',
@@ -1006,20 +1000,6 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             overflowPriority: 1000,
             when: 'panel.viewport.isEdit',
             enablement: 'panel.viewport.canRedo',
-          },
-          {
-            id: 'viewport.save.action',
-            panelId: 'viewport',
-            command: 'viewport.save',
-            title: currentText(L('保存场景', 'Save scene')),
-            icon: 'Save',
-            testId: 'vp-save',
-            location: 'header/right',
-            order: 80,
-            overflowPriority: 1000,
-            when: 'panel.viewport.isEdit',
-            enablement: 'panel.viewport.mounted',
-            highlightWhen: 'panel.viewport.dirty',
           },
           {
             id: 'viewport.rhi.capture.action',

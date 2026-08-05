@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { broadcastAssetsChanged, buildAcceptString, generateAssetGuid, gateway, logImport, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
+import { buildAcceptString, generateAssetGuid, gateway, logImport, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import {
   Button,
@@ -15,6 +15,7 @@ import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { ContentBrowserIcon } from './content-browser-icons';
+import { requestSaveAll } from './save-all-bus';
 
 interface Props {
   currentPath: string;
@@ -154,7 +155,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   }, [currentPath, onReload, onImportProgress]);
 
   const handleSaveAll = useCallback(() => {
-    broadcastAssetsChanged();
+    void requestSaveAll();
   }, []);
 
   return (

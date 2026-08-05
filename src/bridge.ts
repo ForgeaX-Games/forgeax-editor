@@ -8,6 +8,7 @@ export {
   setContextMenuRenderer,
   panelBridge,
   hasPendingDiskSave,
+  createEvalChannel,
 } from '@forgeax/editor-core';
 
 import type { AppExtension } from '@forgeax/interface/core/app-shell/types';

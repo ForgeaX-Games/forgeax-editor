@@ -323,6 +323,33 @@
           "cancel": "取消",
           "discard": "放弃改动",
           "save": "保存并切换"
+        },
+        "saveAllDialog": {
+          "title": "保存内容",
+          "body": "选择要保存的内容",
+          "colAsset": "资产",
+          "colFile": "文件",
+          "colType": "类型",
+          "selectAll": "全选",
+          "saveSelected": "保存选中项",
+          "cancel": "取消",
+          "untitledScene": "未命名场景",
+          "nothingToSave": "没有未保存的改动",
+          "readOnly": "导入预览为只读，源编辑尚待引擎支持。",
+          "assetKinds": {
+            "scene": "场景",
+            "mesh": "网格",
+            "texture": "贴图",
+            "image": "图片",
+            "cube-texture": "立方体贴图",
+            "material": "材质",
+            "skeleton": "骨骼",
+            "animation-clip": "动画",
+            "audio": "音频",
+            "font": "字体",
+            "ui": "界面",
+            "default": "资产"
+          }
         }
       },
       "preview": {

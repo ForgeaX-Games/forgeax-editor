@@ -397,6 +397,13 @@ export {
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
   hasPendingDiskSave,
+  subscribePendingDiskSave,
+  usePendingDiskSave,
+  getSessionDirtyAssets,
+  subscribeSessionDirtyAssets,
+  clearSessionDirtyAssets,
+  clearAllSessionDirtyAssets,
+  useSessionDirtyAssets,
   getAssetSelection,
   useAssetSelection,
   getAssetSelectionList,
@@ -441,7 +448,7 @@ export type { AssetsChangedHint } from './store/assets-changed';
 // state mutation (north-star §9). See dev-plan §5 step 3.
 export { assetsErrorRevision, broadcastAssetsError, recentAssetsErrors } from './store/assets-error-bus';
 export type { AssetsErrorPayload } from './store/assets-error-bus';
-export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace, GizmoPivot } from './store/store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace, GizmoPivot, SessionDirtyAsset } from './store/store';
 
 // ── Entity operations ──
 export {
@@ -474,6 +481,9 @@ export {
   EditorPathResolverError,
 } from './util/path-resolver';
 export type { PathResolver } from './util/path-resolver';
+
+// ── Material pack-path clamping (ensure authoring under assets/) ──
+export { resolveMaterialCreateGameRelDir, clampMaterialPackPath } from './util/material-pack-path';
 
 // ── Run conditions (`and` combinator for RunCondition-shaped predicates) ──
 export { and } from './session/run-conditions';

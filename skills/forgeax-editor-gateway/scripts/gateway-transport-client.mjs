@@ -103,12 +103,32 @@ export function createGatewayTransportClient(options) {
     return unwrapResponse(response, 'query');
   }
 
+  async function evaluate(code, evaluateOptions = {}) {
+    const response = await options.request('script.execute', {
+      code,
+      scope: options.scope,
+      actor,
+      sessionId,
+      permission: 'execute',
+      idempotencyKey: evaluateOptions.idempotencyKey ?? makeIdempotencyKey('script.execute'),
+    });
+    const result = unwrapResponse(response, 'script.execute');
+    if (!isRecord(result) || result.status !== 'succeeded') {
+      throw new GatewayTransportError(
+        'RUN_NOT_SUCCEEDED',
+        'Gateway script did not reach terminal succeeded status.',
+        { scope: options.scope, response },
+      );
+    }
+    return response;
+  }
+
   async function gameplay(input) {
     const response = await options.request('gameplay', input);
     return unwrapResponse(response, 'gameplay');
   }
 
-  return Object.freeze({ discover, list, describe, dispatch, query, gameplay });
+  return Object.freeze({ discover, list, describe, dispatch, query, evaluate, gameplay });
 }
 
 export function resolveGatewayCapability(capabilities, operation) {
