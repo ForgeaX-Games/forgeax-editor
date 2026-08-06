@@ -32,6 +32,25 @@
   min-height: 0;
 }
 
+/* Main (Layout) column: the page-tab strip stacked over the DockShell + AuxBar
+   docks. Sits left of the full-height ActivityRail + chat, so the tab strip's
+   width matches the editor Layout area and stops before the plugin rail. */
+.studio-main-col {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.studio-main-dock {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
 /* Fixed chat column — chat was pulled out of the dockview so the ActivityRail
    (its own 64px column) can sit immediately to its left. Width is drag-resizable
    (inline style from useChatWidth), so flex is fixed-basis:auto. */
@@ -167,7 +186,7 @@ body.fx-chat-resizing iframe {
                     user can still open settings while immersive.
    ────────────────────────────────────────────────────────────────────── */
 .studio-shell[data-fullscreen="1"] > .topbar,
-.studio-shell[data-fullscreen="1"] > [data-fx-slot="PageTabs"],
+.studio-shell[data-fullscreen="1"] [data-fx-slot="PageTabs"],
 .studio-shell[data-fullscreen="1"] > .studio-body > .studio-pane-left,
 .studio-shell[data-fullscreen="1"] > .studio-body > .resize-handle-col,
 .studio-shell[data-fullscreen="1"] > .studio-body > .studio-pane-right,
@@ -175,46 +194,6 @@ body.fx-chat-resizing iframe {
   display: none !important;
 }
 
-.page-tab-strip {
-  display: flex;
-  min-height: 34px;
-  padding: 0 8px;
-  gap: 2px;
-  align-items: end;
-  overflow-x: auto;
-  background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.page-tab {
-  display: flex;
-  align-items: center;
-  max-width: 240px;
-  border-bottom: 2px solid transparent;
-  color: var(--color-text-secondary);
-}
-.page-tab[data-active="1"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-accent-primary);
-}
-.page-tab__label,
-.page-tab__close {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  height: 32px;
-}
-.page-tab__label {
-  min-width: 0;
-  padding: 0 6px 0 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.page-tab__close {
-  display: grid;
-  place-items: center;
-  padding: 0 6px;
-}
 /* Subtle hint at top edge so user remembers they're in fullscreen — a 2px
    lime line they can click to exit (in addition to Esc / Ctrl+Shift+F). */
 .studio-shell[data-fullscreen="1"]::before {

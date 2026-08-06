@@ -65,6 +65,105 @@
 .fx-dockshell .dv-default-tab { padding: 0 10px; }
 .fx-dockshell .content-container { inset: 0; }
 
+/* UE-style focus tab: thin accent bar on the focused group's active tab only.
+   Inactive groups keep their selected tab without the bar (UE "which panel has
+   keyboard/focus" cue). Use ::before — dockview already paints a focus ring on
+   ::after (.dv-tab:focus-within::after). Suppress that ring so it doesn't fight
+   the accent. Scoped to .fx-dockwrap (shell + edge groups live under it). */
+.fx-dockwrap .dv-tab:focus-within::after,
+.fx-dockwrap .dv-tab:focus::after {
+  content: none;
+}
+/* Grid / floating groups: accent on the focused group's active tab.
+   Edge strips: only while the drawer is open — clicking void chrome activates
+   the group without opening a tab, which must NOT light the last active tab. */
+.fx-dockwrap
+  .dv-groupview.dv-active-group:not(.dv-groupview-edge)
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab,
+.fx-dockwrap
+  .dv-groupview-edge.fx-edge-drawer-open.dv-active-group
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab {
+  position: relative;
+}
+.fx-dockwrap
+  .dv-groupview.dv-active-group:not(.dv-groupview-edge)
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab::before,
+.fx-dockwrap
+  .dv-groupview-edge.fx-edge-drawer-open.dv-active-group
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab::before {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  /* UE: brightest at center, falloff to transparent at both ends */
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 22%,
+    var(--lime, #7ee04a) 50%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 78%,
+    transparent 100%
+  );
+  /* default: horizontal tab strip → top edge (UE is ~1px). top:1px (not 0) so
+     the accent clears the splitview sash that overlays the boundary above a
+     lower group's header — at top:0 it was hidden under the sash for every
+     group that isn't in the top row. */
+  left: 0;
+  right: 0;
+  top: 1px;
+  height: 1px;
+  width: auto;
+}
+/* Left/right edge strips: tabs are vertical — put the bar on the outer edge. */
+.fx-dockwrap
+  .dv-groupview-edge.fx-edge-drawer-open.dv-active-group.dv-groupview-header-left
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container.dv-tabs-container-vertical
+  > .dv-tab.dv-active-tab::before {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: auto;
+  width: 1px;
+  height: auto;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 22%,
+    var(--lime, #7ee04a) 50%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 78%,
+    transparent 100%
+  );
+}
+.fx-dockwrap
+  .dv-groupview-edge.fx-edge-drawer-open.dv-active-group.dv-groupview-header-right
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container.dv-tabs-container-vertical
+  > .dv-tab.dv-active-tab::before {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  left: auto;
+  width: 1px;
+  height: auto;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 22%,
+    var(--lime, #7ee04a) 50%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 78%,
+    transparent 100%
+  );
+}
+
 /* Declarative single-tab strategies. Dockview owns tab counting and adds
    `.dv-single-tab`; panel descriptors only declare the preferred presentation.
    `data-fx-dock-title-state="visible"` is the user override used by the
@@ -174,6 +273,188 @@
 /* 1px separators are dockview's sashes already; just tint on hover/active. */
 .fx-dockshell .dv-sash.dv-sash-active,
 .fx-dockshell .sash.active { background: var(--lime, #7ee04a); }
+
+/* Edge-strip tab titles: dockview uses writing-mode:vertical-rl. Default
+   text-orientation:mixed keeps CJK upright (stacked glyph-by-glyph) while
+   Latin rotates — Chinese then looks wrong next to English. Force sideways so
+   every title rotates the same way as "History" / "Capabilities".
+   No `.fx-dockshell` prefix: ShellManager hoists edge groups into `.dv-shell`. */
+.dv-groupview-edge .dv-tabs-container.dv-tabs-container-vertical {
+  text-orientation: sideways;
+  /* Left/right strips render their first tab flush to the strip top; the drawer
+     it opens is inset 6px from that top. Pad the strip by the same 6px so the
+     first tab's top lines up with the flyout's top edge. */
+  padding-top: 6px;
+}
+/* Belt-and-suspenders: empty edge chrome stays unpainted. Drop-back uses the
+   root thin-edge overlay → onWillDrop routes into the edge group (edgeDrawer). */
+.dv-groupview-edge.fx-edge-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* Edge tab hit-target + breathing room: labels must not hug the strip edges.
+   vertical-rl: physical padding-block ≈ along the strip, padding-inline ≈ thickness.
+   Bottom/top strips stay horizontal — same padding, min-width for length. */
+.dv-groupview-edge .dv-tabs-container.dv-tabs-container-vertical > .dv-tab {
+  min-height: 104px;
+  padding: 10px 6px;
+  box-sizing: border-box;
+}
+.dv-groupview-edge .dv-tabs-container:not(.dv-tabs-container-vertical) > .dv-tab {
+  min-width: 104px;
+  padding: 6px 12px;
+  box-sizing: border-box;
+}
+.dv-groupview-edge .dv-default-tab {
+  padding: 4px 2px;
+  gap: 6px;
+  box-sizing: border-box;
+}
+.dv-groupview-edge .dv-default-tab .dv-default-tab-content {
+  margin: 0;
+  padding: 2px 0;
+}
+
+/* Edge tabs: close (X) is swapped for a per-TAB Pin toggle (see edgeDrawer.ts).
+   Always show the action; only the pinned tab's button lights lime. */
+.dv-groupview-edge .dv-default-tab-action.fx-edge-pin {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.55;
+  color: var(--dv-activegroup-hiddenpanel-tab-color, #9aa0aa);
+}
+.dv-groupview-edge .dv-tab:hover .dv-default-tab-action.fx-edge-pin,
+.dv-groupview-edge .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
+  opacity: 0.85;
+}
+.dv-groupview-edge .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
+.dv-groupview-edge .dv-tab.fx-edge-tab-pinned .dv-default-tab-action.fx-edge-pin {
+  opacity: 1;
+  color: var(--lime, #7ee04a);
+}
+.dv-groupview-edge .dv-default-tab-action.fx-edge-pin .fx-edge-pin-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+/* ── Edge-group DRAWER overlay (see edgeDrawer.ts) ───────────────────────────
+   dockview keeps the edge group permanently collapsed (its splitview cell stays
+   at collapsedSize, so the grid NEVER shifts). When edgeDrawer.ts marks the
+   group `.fx-edge-drawer-open`, we reveal the group's `.dv-content-container` as
+   a `position: fixed` flyout anchored to the strip's inner edge — a true drawer
+   ON TOP of the content, not a splitview push. The CSS vars are written by
+   edgeDrawer.ts from the strip's live bounding rect. */
+/* NOTE: no `.fx-dockshell` ancestor prefix — dockview's ShellManager hoists the
+   edge groups into a `.dv-shell` wrapper OUTSIDE the `.fx-dockshell` element, so
+   a prefixed selector never matches. We anchor purely on our own
+   `.fx-edge-drawer-open` marker class (added by edgeDrawer.ts), which only ever
+   lands on a DockShell edge group. */
+.dv-groupview-edge.fx-edge-drawer-open > .dv-content-container {
+  /* UE-style: the flyout is INSET on its cross axis (the axis parallel to the
+     strip) so its far edges never sit flush on the shell's layout separators —
+     a full-height/width overlay reads as "no panel" because its border merges
+     with the sash line. 10px each end keeps the panel's own outline visible. */
+  --fx-edge-drawer-inset: 6px;
+  display: block !important;
+  position: fixed;
+  width: var(--fx-edge-drawer-width, 300px);
+  /* left/right strips: cross axis = vertical → inset top + bottom. */
+  height: calc(var(--fx-edge-strip-height) - 2 * var(--fx-edge-drawer-inset));
+  top: calc(var(--fx-edge-strip-top) + var(--fx-edge-drawer-inset));
+  z-index: 60;
+  background: var(--dv-group-view-background-color, #0d0d0f);
+  /* Floating (inset) flyout: outline the THREE free sides + a directional
+     elevation shadow. The side that meets the strip (the anchor edge) must stay
+     borderless + shadowless so the flyout reads as attached to the menu bar,
+     not floating over it — the per-direction rules below strip that edge's
+     border, flatten its corners and cast the shadow AWAY from the strip. */
+  border: 1px solid var(--dv-separator-border, #2a2d30);
+  border-radius: 6px;
+  overflow: hidden;
+}
+/* UE-style expand: the drawer wipes OUT from the strip's outer edge and fades in.
+   Animation is gated on `.fx-edge-drawer-animating` (toggled by edgeDrawer.ts) so
+   it REPLAYS on first open AND on same-strip tab switches — keeping OPEN alone
+   would leave the flyout static when Hierarchy↔Inspector etc. Because opening
+   flips `display: none → block`, we use `animation` (not `transition`). We do NOT
+   translate the box (that would drag it back OVER the strip); the box stays pinned
+   at its anchor and we reveal with `clip-path` growing away from the strip. */
+@keyframes fx-edge-drawer-in-left {   /* anchored left → grow right  */
+  from { clip-path: inset(0 100% 0 0); opacity: 0.2; }
+  to   { clip-path: inset(0 0 0 0);    opacity: 1; }
+}
+@keyframes fx-edge-drawer-in-right {  /* anchored right → grow left  */
+  from { clip-path: inset(0 0 0 100%); opacity: 0.2; }
+  to   { clip-path: inset(0 0 0 0);    opacity: 1; }
+}
+@keyframes fx-edge-drawer-in-top {    /* anchored top → grow down    */
+  from { clip-path: inset(0 0 100% 0); opacity: 0.2; }
+  to   { clip-path: inset(0 0 0 0);    opacity: 1; }
+}
+@keyframes fx-edge-drawer-in-bottom { /* anchored bottom → grow up   */
+  from { clip-path: inset(100% 0 0 0); opacity: 0.2; }
+  to   { clip-path: inset(0 0 0 0);    opacity: 1; }
+}
+/* Left strip → flyout to the right; right strip → flyout to the left. */
+.dv-groupview-edge.dv-groupview-header-left.fx-edge-drawer-open > .dv-content-container {
+  left: var(--fx-edge-drawer-left);
+  /* keep the full border; only cast the shadow AWAY from the strip (rightward). */
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.30), 1px 0 3px rgba(0, 0, 0, 0.22);
+}
+.dv-groupview-edge.dv-groupview-header-left.fx-edge-drawer-animating > .dv-content-container {
+  animation: fx-edge-drawer-in-left 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dv-groupview-edge.dv-groupview-header-right.fx-edge-drawer-open > .dv-content-container {
+  right: var(--fx-edge-drawer-right);
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.30), -1px 0 3px rgba(0, 0, 0, 0.22);
+}
+.dv-groupview-edge.dv-groupview-header-right.fx-edge-drawer-animating > .dv-content-container {
+  animation: fx-edge-drawer-in-right 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Top/bottom strips → full-width flyout dropping down / rising up. */
+.dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-open > .dv-content-container,
+.dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-open > .dv-content-container {
+  /* top/bottom strips: cross axis = horizontal → inset left + right, and reset
+     the vertical inset the base rule applied for left/right strips. */
+  left: calc(var(--fx-edge-strip-left) + var(--fx-edge-drawer-inset));
+  width: calc(var(--fx-edge-strip-width) - 2 * var(--fx-edge-drawer-inset));
+  height: var(--fx-edge-drawer-height, 300px);
+}
+.dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-open > .dv-content-container {
+  top: var(--fx-edge-drawer-top);
+  height: var(--fx-edge-drawer-width, 300px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+.dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-animating > .dv-content-container {
+  animation: fx-edge-drawer-in-top 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-open > .dv-content-container {
+  top: auto;
+  bottom: var(--fx-edge-drawer-bottom);
+  height: var(--fx-edge-drawer-width, 300px);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.30), 0 -1px 3px rgba(0, 0, 0, 0.22);
+}
+.dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-animating > .dv-content-container {
+  animation: fx-edge-drawer-in-bottom 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Our self-drawn resize grip (edgeDrawer.ts positions it inline via `fixed`).
+   Native dockview resize is a splitview sash that pushes the grid — forbidden here
+   — so this grip only rewrites the drawer size var. To match the app's native
+   resize feel it must LOOK the same: this shell tints the active sash lime
+   (`--dv-active-sash-color` + `.dv-sash-active`), so the grip shows the same lime
+   bar on hover / while dragging. */
+.fx-edge-drawer-grip {
+  z-index: 61;
+  background: transparent;
+  transition: background 0.1s ease;
+}
+.fx-edge-drawer-grip:hover,
+.fx-edge-drawer-grip.fx-edge-drawer-grip--dragging {
+  background: var(--lime, #7ee04a);
+}
 
 /* Standalone Console dock panel. */
 .fx-console-panel { display: flex; flex-direction: column; height: 100%; background: var(--color-background-base, #0d0d0f); }

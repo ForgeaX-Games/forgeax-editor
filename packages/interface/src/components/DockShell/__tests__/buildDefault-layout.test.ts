@@ -35,6 +35,19 @@ function leafPanelIds(layout: { grid: { root: unknown } }): string[] {
   return ids;
 }
 
+/** Collect every panel id referenced by edge groups (bottom footer strip, etc.).
+ *  Edge groups live OUTSIDE the grid tree, so leafPanelIds never reaches them. */
+function edgePanelIds(layout: unknown): string[] {
+  const eg = (layout as { edgeGroups?: Record<string, { group?: { views?: string[] } }> }).edgeGroups;
+  if (!eg) return [];
+  return Object.values(eg).flatMap((entry) => entry.group?.views ?? []);
+}
+
+/** Every panel id a layout references — grid leaves + edge groups. */
+function allReferencedPanelIds(layout: { grid: { root: unknown } }): string[] {
+  return [...leafPanelIds(layout), ...edgePanelIds(layout)];
+}
+
 describe('BUILTIN_WORKBENCHES layout data integrity', () => {
   for (const [id, spec] of Object.entries(BUILTIN_WORKBENCHES)) {
     it(`'${id}' — every leaf view has a matching panel spec`, () => {
@@ -44,10 +57,18 @@ describe('BUILTIN_WORKBENCHES layout data integrity', () => {
       }
     });
 
-    it(`'${id}' — every panel spec is referenced by at least one leaf`, () => {
-      const referenced = new Set(leafPanelIds(spec.layout));
+    it(`'${id}' — every panel spec is referenced by a leaf or edge group`, () => {
+      const referenced = new Set(allReferencedPanelIds(spec.layout));
       for (const panelId of Object.keys(spec.layout.panels)) {
         expect(referenced.has(panelId)).toBe(true);
+      }
+    });
+
+    it(`'${id}' — footer chrome panels default into the bottom edge group`, () => {
+      const edge = new Set(edgePanelIds(spec.layout));
+      expect(edge).toEqual(new Set(['info', 'checkpoints', 'events']));
+      for (const panelId of edge) {
+        expect(spec.layout.panels[panelId]).toBeDefined();
       }
     });
   }
@@ -80,7 +101,11 @@ describe('filterLayoutByMembership', () => {
     const filtered = filterLayoutByMembership(BUILTIN_WORKBENCHES.ai.layout, () => true);
     expect(filtered).not.toBeNull();
     expect(new Set(leafPanelIds(filtered!))).toEqual(new Set(['tools', 'main', 'chat']));
-    expect(Object.keys(filtered!.panels).sort()).toEqual(['chat', 'main', 'tools']);
+    // Footer chrome (info/checkpoints/events) rides along in the bottom edge group.
+    expect(Object.keys(filtered!.panels).sort()).toEqual(
+      ['chat', 'checkpoints', 'events', 'info', 'main', 'tools'],
+    );
+    expect(new Set(edgePanelIds(filtered!))).toEqual(new Set(['info', 'checkpoints', 'events']));
   });
 
   it('reject-all returns null', () => {

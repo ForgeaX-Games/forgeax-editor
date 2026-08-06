@@ -73,6 +73,90 @@ describe('PageSession', () => {
     expect(disposed).toBe(1);
   });
 
+  it('reorders open pages and clamps the target index', async () => {
+    const multiId = qualifyContributionId(owner, 'page', 'multi');
+    const { session } = setup([page(multiId, 'multi-instance')]);
+    const a = await session.open({ typeId: multiId, instanceId: 'a' });
+    const b = await session.open({ typeId: multiId, instanceId: 'b' });
+    const c = await session.open({ typeId: multiId, instanceId: 'c' });
+    const ids = () => session.getSnapshot().instances.map((i) => i.encodedKey);
+
+    expect(ids()).toEqual([a, b, c].map(encodePageKey));
+
+    session.reorder(c, 0);
+    expect(ids()).toEqual([c, a, b].map(encodePageKey));
+
+    // Out-of-range target clamps to the last slot instead of throwing.
+    session.reorder(c, 99);
+    expect(ids()).toEqual([a, b, c].map(encodePageKey));
+
+    // A no-op move publishes nothing new.
+    const gen = session.getSnapshot().generation;
+    session.reorder(c, 2);
+    expect(session.getSnapshot().generation).toBe(gen);
+  });
+
+  it('reflects a controller reactive title into the snapshot and cleans it up on close', async () => {
+    let sceneName: string | undefined = 'MainScene';
+    const titleListeners = new Set<() => void>();
+    const controller: PageController = {
+      prepareClose: () => ({ status: 'ready' }),
+      dispose: () => undefined,
+      getTitle: () => sceneName,
+      subscribeTitle: (listener) => {
+        titleListeners.add(listener);
+        return () => titleListeners.delete(listener);
+      },
+    };
+    // A resource page keeps the level-style singleton free; controller drives title.
+    const closableSingleton: PageTypeRegistration = { ...page(singletonId, 'singleton', controller), closable: true };
+    const { session } = setup([closableSingleton]);
+    const key = await session.open({ typeId: singletonId });
+
+    // Initial title is present in the very first snapshot (read synchronously).
+    expect(session.getSnapshot().instances[0]?.title).toBe('MainScene');
+
+    // A controller change event republishes with the new title (event-driven).
+    sceneName = 'Level_02';
+    for (const l of titleListeners) l();
+    expect(session.getSnapshot().instances[0]?.title).toBe('Level_02');
+
+    // An unchanged re-notification publishes nothing new.
+    const gen = session.getSnapshot().generation;
+    for (const l of titleListeners) l();
+    expect(session.getSnapshot().generation).toBe(gen);
+
+    // Closing unsubscribes: further notifications are inert.
+    await session.close(key);
+    expect(titleListeners.size).toBe(0);
+  });
+
+  it('delegates context-menu items to the page controller and evaluates them fresh', async () => {
+    let dirty = false;
+    const controller: PageController = {
+      prepareClose: () => ({ status: 'ready' }),
+      dispose: () => undefined,
+      getContextMenuItems: () => [
+        { id: 'copy', label: 'Copy path', icon: 'copy', group: 'file', run: () => undefined },
+        { id: 'save', label: 'Save', icon: 'save', group: 'save', disabled: !dirty, run: () => undefined },
+      ],
+    };
+    const { session } = setup([page(singletonId, 'singleton', controller)]);
+    const key = await session.open({ typeId: singletonId });
+
+    // Fresh evaluation: save disabled until the (mock) page becomes dirty.
+    expect(session.getContextMenuItems(key).map((i) => i.id)).toEqual(['copy', 'save']);
+    expect(session.getContextMenuItems(key).find((i) => i.id === 'save')?.disabled).toBe(true);
+    dirty = true;
+    expect(session.getContextMenuItems(key).find((i) => i.id === 'save')?.disabled).toBe(false);
+  });
+
+  it('returns no context-menu items for a controllerless page', async () => {
+    const { session } = setup([page(singletonId, 'singleton')]);
+    const key = await session.open({ typeId: singletonId });
+    expect(session.getContextMenuItems(key)).toEqual([]);
+  });
+
   it('preflights every owned page before an extension cleanup removes any', async () => {
     const secondId = qualifyContributionId(owner, 'page', 'second');
     const ready: PageController = { prepareClose: () => ({ status: 'ready' }), dispose: () => undefined };

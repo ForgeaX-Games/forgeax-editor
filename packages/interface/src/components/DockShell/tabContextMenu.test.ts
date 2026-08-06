@@ -3,17 +3,46 @@ import { buildTabContextMenuItems } from './tabContextMenu';
 import type { DockRegion } from './regions';
 
 describe('buildTabContextMenuItems', () => {
-  it('DockShell region → "Move to Aux Bar" action moves panel to AuxBar', () => {
-    const moves: Array<[string, DockRegion]> = [];
-    const items = buildTabContextMenuItems('DockShell', 'chat', (id, r) => moves.push([id, r]));
-    expect(items).toContain('close');
-    expect(items).toContain('closeOthers');
-    expect(items).toContain('separator');
+  it('DockShell off-side → "Move to Side" calls onMoveToSide with nearerSide', () => {
+    const sides: string[] = [];
+    const items = buildTabContextMenuItems(
+      'DockShell',
+      'inspector',
+      () => {},
+      undefined,
+      {
+        onSideEdge: false,
+        nearerSide: 'right',
+        onMoveToSide: (s) => sides.push(s),
+        onMoveOffSide: () => {},
+      },
+    );
     const custom = items.find((x): x is { label: string; action: () => void } =>
-      typeof x === 'object' && x !== null && 'label' in x);
-    expect(custom?.label).toBe('Move to Aux Bar');
+      typeof x === 'object' && x !== null && 'label' in x && x.label === 'Move to Side');
+    expect(custom).toBeDefined();
     custom?.action();
-    expect(moves).toEqual([['chat', 'AuxBar']]);
+    expect(sides).toEqual(['right']);
+  });
+
+  it('DockShell on-side → "Move off Side" calls onMoveOffSide', () => {
+    let off = 0;
+    const items = buildTabContextMenuItems(
+      'DockShell',
+      'hierarchy',
+      () => {},
+      undefined,
+      {
+        onSideEdge: true,
+        nearerSide: 'left',
+        onMoveToSide: () => {},
+        onMoveOffSide: () => { off += 1; },
+      },
+    );
+    const custom = items.find((x): x is { label: string; action: () => void } =>
+      typeof x === 'object' && x !== null && 'label' in x && x.label === 'Move off Side');
+    expect(custom).toBeDefined();
+    custom?.action();
+    expect(off).toBe(1);
   });
 
   it('AuxBar region → "Move to Primary Dock" action moves panel to DockShell', () => {
@@ -27,7 +56,18 @@ describe('buildTabContextMenuItems', () => {
   });
 
   it('items include close + closeOthers + separator (in that order) before the custom action', () => {
-    const items = buildTabContextMenuItems('DockShell', 'chat', () => {});
+    const items = buildTabContextMenuItems(
+      'DockShell',
+      'chat',
+      () => {},
+      undefined,
+      {
+        onSideEdge: false,
+        nearerSide: 'left',
+        onMoveToSide: () => {},
+        onMoveOffSide: () => {},
+      },
+    );
     expect(items.slice(0, 3)).toEqual(['close', 'closeOthers', 'separator']);
   });
 

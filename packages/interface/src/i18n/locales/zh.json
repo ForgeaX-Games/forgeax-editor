@@ -1238,12 +1238,17 @@
     "extensionPanels": "扩展面板",
     "hidePanelTitle": "隐藏面板标题栏",
     "showPanelTitle": "显示面板标题栏",
+    "moveToSide": "移动到侧边",
+    "moveOffSide": "移出侧边",
+    "moveToPrimaryDock": "移回主停靠区",
     "panelTitles": {
       "hierarchy": "场景树",
       "assets": "文件资源管理器",
       "inspector": "物体属性",
       "viewport": "视口",
-      "info": "信息"
+      "info": "信息",
+      "checkpoints": "检查点",
+      "events": "事件"
     }
   },
   "firstRun": {

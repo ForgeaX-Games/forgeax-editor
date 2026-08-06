@@ -251,15 +251,24 @@ export function mergeLoadedInlineOrphans(
   );
   let merged = 0;
   for (const entry of orphans) {
-    if (!entry?.guid || entry.kind === 'scene') continue;
+    if (!entry?.guid) continue;
     const key = entry.guid.toLowerCase();
     if (already.has(key)) continue;
+    // Normalize refs: accept both flat strings and legacy {guid} objects.
+    let clonedRefs: string[] = [];
+    if (Array.isArray(entry.refs)) {
+      clonedRefs = (entry.refs as unknown[]).map((r) =>
+        typeof r === 'string' ? r
+          : (r && typeof r === 'object' && 'guid' in r) ? String((r as { guid: unknown }).guid)
+          : '',
+      ).filter((s) => s.length > 0);
+    }
     assets.push({
       guid: entry.guid,
       kind: entry.kind,
       // Clone so a later pack mutate cannot corrupt the load-floor snapshot.
       payload: entry.payload === undefined ? undefined : JSON.parse(JSON.stringify(entry.payload)),
-      refs: Array.isArray(entry.refs) ? JSON.parse(JSON.stringify(entry.refs)) : [],
+      refs: clonedRefs,
       // The canonical serializer emits Pack v2. Keep orphan entries inside the
       // same envelope contract so a save cannot turn a valid pack malformed.
       artifacts: entry.artifacts === undefined ? {} : JSON.parse(JSON.stringify(entry.artifacts)),
@@ -326,7 +335,7 @@ function appendInlineAssets(
     //   - same package path as the scene, OR
     //   - no owning package (null) AND not a builtin mesh (editor-authored).
     const isInline =
-      (pkg != null && pkg.path === scenePkgPath) ||
+      (pkg != null && pkg.path === scenePkgPath && payload.kind !== 'scene') ||
       (pkg === null && payload.kind !== 'mesh' && payload.kind !== 'scene');
     if (!isInline) {
       console.info(
@@ -737,7 +746,11 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
               refs?: unknown[];
               artifacts?: unknown;
             }>;
-            const loadedInline = loadedAssets.filter((a) => a.kind !== 'scene');
+            const primarySceneGuid = (loadedAssets.find((a) => a.kind === 'scene')?.guid as string | undefined)?.toLowerCase();
+            const loadedInline = loadedAssets.filter((a) => {
+              if (a.kind !== 'scene') return true;
+              return primarySceneGuid !== undefined && a.guid?.toLowerCase() !== primarySceneGuid;
+            });
             // Snapshot full bodies for orphan merge on save (not just the count).
             ctx.loadedInlineAssets = loadedInline
               .filter((a): a is { guid: string; kind: string; payload?: unknown; refs?: unknown[]; artifacts?: unknown } =>

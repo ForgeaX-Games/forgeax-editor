@@ -18,6 +18,26 @@ import { Orientation } from 'dockview';
 // to plumb a region check. Real callers pass a real isMember from the component.
 const ACCEPT_ALL: (id: string) => boolean = () => true;
 
+// Footer chrome panels (Info / Checkpoints / Events) default into the merged
+// bottom EDGE group across every built-in workbench — they are interface-level
+// chrome, present regardless of the active workbench. edgeDrawer relocates the
+// bottom strip into the StatusBar footer + forces the collapsed cell to 0px, so
+// this reads as tabs in the footer row (not a band above it). Shared so AI /
+// Scene stay byte-identical.
+const FOOTER_EDGE_PANELS = {
+  info: { id: 'info', contentComponent: 'info', title: 'Info' },
+  checkpoints: { id: 'checkpoints', contentComponent: 'checkpoints', title: 'Checkpoints' },
+  events: { id: 'events', contentComponent: 'events', title: 'Events' },
+} as const;
+const FOOTER_EDGE_GROUPS = {
+  bottom: {
+    size: 280,
+    visible: true,
+    collapsed: true,
+    group: { id: 'edge-bottom', views: ['info', 'checkpoints', 'events'], activeView: 'info' },
+  },
+} as const;
+
 export interface BuiltinWorkbenchSpec {
   id: 'scene' | 'ai';
   name: string;
@@ -50,7 +70,9 @@ const AI_DEFAULT_LAYOUT: SerializedDockview = {
     tools: { id: 'tools', contentComponent: 'tools', title: 'Tools' },
     main: { id: 'main', contentComponent: 'main', title: 'Studio' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
+    ...FOOTER_EDGE_PANELS,
   },
+  edgeGroups: FOOTER_EDGE_GROUPS,
   activeGroup: 'g-main',
 };
 
@@ -74,7 +96,9 @@ const SCENE_DEFAULT_LAYOUT: SerializedDockview = {
   panels: {
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
+    ...FOOTER_EDGE_PANELS,
   },
+  edgeGroups: FOOTER_EDGE_GROUPS,
   activeGroup: 'g-viewport',
 };
 
@@ -157,6 +181,30 @@ export function filterLayoutByMembership(
   };
   walk(filteredRoot);
 
+  // Edge groups (collapsible side menu bars) live OUTSIDE the grid tree, so the
+  // walk above never reaches them. Filter each edge group's views by membership,
+  // drop groups whose views all fail, and fold the survivors' ids into keptIds
+  // so their panel specs survive the `panels` pruning below.
+  type EdgeGroupEntry = {
+    size: number;
+    visible: boolean;
+    collapsed?: boolean;
+    group?: { id?: string; views?: string[]; activeView?: string };
+  };
+  const edgeIn = (layout as { edgeGroups?: Record<string, EdgeGroupEntry> }).edgeGroups;
+  let edgeOut: Record<string, EdgeGroupEntry> | undefined;
+  if (edgeIn) {
+    for (const [pos, entry] of Object.entries(edgeIn)) {
+      const views = (entry.group?.views ?? []).filter(isMember);
+      if (views.length === 0) continue;
+      const activeView = entry.group?.activeView && views.includes(entry.group.activeView)
+        ? entry.group.activeView
+        : views[0];
+      views.forEach((v) => keptIds.add(v));
+      (edgeOut ??= {})[pos] = { ...entry, group: { ...entry.group, views, activeView } };
+    }
+  }
+
   const keptPanels: SerializedDockview['panels'] = {};
   for (const [id, spec] of Object.entries(layout.panels)) {
     if (keptIds.has(id)) keptPanels[id] = spec;
@@ -181,6 +229,8 @@ export function filterLayoutByMembership(
     activeGroup: layout.activeGroup && survivingLeafIds.has(layout.activeGroup)
       ? layout.activeGroup
       : undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(edgeOut ? { edgeGroups: edgeOut as any } : {}),
   };
 }
 

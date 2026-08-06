@@ -45,11 +45,49 @@ export type PageClosePreparation =
   | { readonly status: 'dirty'; readonly message?: string }
   | { readonly status: 'vetoed'; readonly message?: string };
 
+/**
+ * One right-click menu entry contributed by a page's controller. VSCode-style:
+ * the controller AUTHORS the item (id/label/icon) and OWNS its behaviour
+ * (`run`) and live state (`disabled`), re-evaluated each time the menu opens —
+ * so e.g. a "Save" item can enable only while the page is dirty.
+ */
+export interface PageMenuItem {
+  readonly id: string;
+  readonly label: string;
+  /** Lucide glyph name (kebab, e.g. "copy" / "folder-search"); the tab strip
+   *  resolves it to a lucide-react icon — same glyph set as the design demo. */
+  readonly icon?: string;
+  /** Items sharing a group render contiguously; a divider separates groups (and
+   *  the platform's base close group). */
+  readonly group?: string;
+  readonly disabled?: boolean;
+  run(): void | Promise<void>;
+}
+
 export interface PageController {
   prepareClose(reason: PageCloseReason): PageClosePreparation | Promise<PageClosePreparation>;
   save?(): void | Promise<void>;
   discard?(): void | Promise<void>;
   dispose(): void | Promise<void>;
+  /**
+   * Contribute this page's right-click menu items (beyond the platform's base
+   * close group), evaluated freshly on each open so `disabled`/`label` reflect
+   * live state. VSCode `menus`-contribution analogue, owned per instance.
+   */
+  getContextMenuItems?(): readonly PageMenuItem[];
+  /**
+   * Live tab title, VSCode `EditorInput.getName()`-style. When present it
+   * overrides the static page-type title in the tab strip — a resource-less
+   * singleton (e.g. the level editor) has no other per-instance name. Return
+   * `undefined` to fall back to the static title.
+   */
+  getTitle?(): string | undefined;
+  /**
+   * Subscribe to title changes, VSCode `onDidChangeLabel`-style. The session
+   * re-reads `getTitle()` on each notification and republishes the snapshot, so
+   * the tab updates event-driven with zero polling. Returns an unsubscribe fn.
+   */
+  subscribeTitle?(listener: () => void): () => void;
 }
 
 export interface PageControllerContext {
@@ -167,6 +205,12 @@ export interface PageInstance {
   readonly resource?: ResourceDescriptor;
   readonly openedAt: number;
   readonly closable: boolean;
+  /**
+   * Live tab title reflected from the page's controller (`getTitle()` +
+   * `subscribeTitle()`), e.g. the level editor tracking the current scene name.
+   * Overrides the static page-type title in the tab strip.
+   */
+  readonly title?: string;
 }
 
 export interface PageSessionSnapshot {
@@ -179,6 +223,19 @@ export interface PagePort {
   open(request: PageOpenRequest): Promise<PageKey>;
   focus(key: PageKey | string): Promise<void>;
   close(key: PageKey | string, request?: PageCloseRequest): Promise<void>;
+  /**
+   * Move an open page to a new position in the tab order. Tab order is session
+   * state (the insertion order of live instances), so reordering lives here —
+   * the SSOT — rather than as UI-local state that would drift from the snapshot.
+   * `toIndex` is clamped to the valid range; a no-op move publishes nothing.
+   */
+  reorder(key: PageKey | string, toIndex: number): void;
+  /**
+   * The right-click menu items contributed by an open page's controller,
+   * evaluated now (fresh live state). Empty when the page has no controller
+   * items — the tab strip always prepends its own base close group.
+   */
+  getContextMenuItems(key: PageKey | string): readonly PageMenuItem[];
   getSnapshot(): PageSessionSnapshot;
   subscribe(listener: () => void): () => void;
 }

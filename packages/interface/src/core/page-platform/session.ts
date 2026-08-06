@@ -8,6 +8,7 @@ import type {
   PageCloseReason,
   PageController,
   PageInstance,
+  PageMenuItem,
   PageOpenRequest,
   PagePort,
   PageRegistry,
@@ -46,6 +47,11 @@ export function createPageSession(
   const createInstanceId = options.createInstanceId ?? (() => crypto.randomUUID());
   const now = options.now ?? (() => Date.now());
   const entries = new Map<string, SessionEntry>();
+  // Controller-reflected live titles, keyed by encoded key — merged into the
+  // snapshot so the instance record stays immutable while the tab label can
+  // change. `titleSubs` holds the matching `subscribeTitle` unsubscribe fns.
+  const titles = new Map<string, string>();
+  const titleSubs = new Map<string, () => void>();
   const listeners = new Set<() => void>();
   let generation = 0;
   let activeKey: string | undefined;
@@ -56,9 +62,36 @@ export function createPageSession(
     snapshot = {
       generation,
       ...(activeKey ? { activeKey } : {}),
-      instances: [...entries.values()].map((entry) => entry.instance),
+      instances: [...entries.entries()].map(([encoded, entry]) =>
+        titles.has(encoded) ? { ...entry.instance, title: titles.get(encoded) as string } : entry.instance,
+      ),
     };
     for (const listener of [...listeners]) listener();
+  };
+
+  // Reflect a controller's reactive title (getTitle + subscribeTitle) into the
+  // `titles` overlay. Reads the initial value synchronously (so the first
+  // snapshot already carries it) and republishes on every change event.
+  const bindTitle = (encoded: string, controller: PageController): void => {
+    const read = (): void => {
+      const next = controller.getTitle?.();
+      const current = titles.get(encoded);
+      if (next === current) return;
+      if (next === undefined) titles.delete(encoded);
+      else titles.set(encoded, next);
+      if (entries.has(encoded)) publish();
+    };
+    const initial = controller.getTitle?.();
+    if (initial !== undefined) titles.set(encoded, initial);
+    if (controller.subscribeTitle) {
+      titleSubs.set(encoded, controller.subscribeTitle(() => read()));
+    }
+  };
+
+  const unbindTitle = (encoded: string): void => {
+    titleSubs.get(encoded)?.();
+    titleSubs.delete(encoded);
+    titles.delete(encoded);
   };
 
   const requireEntry = (key: PageKey | string): { encoded: string; entry: SessionEntry } => {
@@ -173,6 +206,7 @@ export function createPageSession(
         closable: resolved.definition.closable !== false,
       };
       entries.set(encoded, { instance, controller });
+      bindTitle(encoded, controller);
       activeKey = encoded;
       publish();
       return key;
@@ -185,6 +219,26 @@ export function createPageSession(
       publish();
     },
 
+    getContextMenuItems(key): readonly PageMenuItem[] {
+      const { entry } = requireEntry(key);
+      return entry.controller.getContextMenuItems?.() ?? [];
+    },
+
+    reorder(key, toIndex): void {
+      const { encoded } = requireEntry(key);
+      const order = [...entries.keys()];
+      const from = order.indexOf(encoded);
+      const to = Math.max(0, Math.min(toIndex, order.length - 1));
+      if (from === to) return;
+      order.splice(to, 0, order.splice(from, 1)[0] as string);
+      // Rebuild the Map in the new order so the derived snapshot (which reads
+      // insertion order) reflects the move without a parallel ordering field.
+      const moved = order.map((k) => [k, entries.get(k) as SessionEntry] as const);
+      entries.clear();
+      for (const [k, entry] of moved) entries.set(k, entry);
+      publish();
+    },
+
     async close(key, request = {}): Promise<void> {
       const { encoded, entry } = requireEntry(key);
       const reason = request.reason ?? 'user';
@@ -194,6 +248,7 @@ export function createPageSession(
       await resolvePreparation(entry, reason, request.decision);
       await entry.controller.dispose();
       entries.delete(encoded);
+      unbindTitle(encoded);
       if (activeKey === encoded) activeKey = [...entries.keys()].at(-1);
       publish();
     },
@@ -213,7 +268,10 @@ export function createPageSession(
       for (const entry of owned) await entry.controller.dispose();
       if (owned.length === 0) return;
       const ownedKeys = new Set(owned.map((entry) => entry.instance.encodedKey));
-      for (const key of ownedKeys) entries.delete(key);
+      for (const key of ownedKeys) {
+        entries.delete(key);
+        unbindTitle(key);
+      }
       if (activeKey && ownedKeys.has(activeKey)) activeKey = [...entries.keys()].at(-1);
       publish();
     },
@@ -222,7 +280,9 @@ export function createPageSession(
       const all = [...entries.values()];
       for (const entry of all) await resolvePreparation(entry, 'host-dispose', 'discard');
       for (const entry of all) await entry.controller.dispose();
+      for (const encoded of [...titleSubs.keys()]) unbindTitle(encoded);
       entries.clear();
+      titles.clear();
       activeKey = undefined;
       if (all.length > 0) publish();
       listeners.clear();

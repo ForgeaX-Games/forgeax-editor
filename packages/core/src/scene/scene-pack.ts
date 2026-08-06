@@ -30,10 +30,15 @@ export const SPHERE_GUID = '95730fd2-9846-5f84-8658-0b3c971eb263';
 //   classifyFieldSchema duplication (OOS-1).
 // D-4: name is optional — union of PackAssetEntry (has name?) and PackAsset (no name).
 
+// refs accepts both flat string[] and legacy {guid:string}[] (engine internal
+// AssetRef format that some write paths emit). validatePackShell normalizes the
+// latter to flat strings on the returned .pack object.
+const assetRefElement = z.union([z.string(), z.object({ guid: z.string() })]);
+
 const packAssetEntrySchema = z.object({
   guid: z.string(),
   kind: z.string(),
-  refs: z.array(z.string()),
+  refs: z.array(assetRefElement),
   payload: z.unknown(),
   name: z.string().optional(),
 });
@@ -134,6 +139,18 @@ export function validatePackShell(raw: unknown): ValidatePackShellResult {
 
   const result = packFileSchema.safeParse(obj);
   if (result.success) {
+    // Normalize legacy {guid}[] refs to flat string[] on the original object
+    // so downstream consumers always see the canonical form.
+    const pack = obj as { assets?: Array<{ refs?: unknown[] }> };
+    if (Array.isArray(pack.assets)) {
+      for (const asset of pack.assets) {
+        if (Array.isArray(asset.refs)) {
+          asset.refs = asset.refs.map((r: unknown) =>
+            typeof r === 'string' ? r : (r && typeof r === 'object' && 'guid' in r ? (r as { guid: string }).guid : r),
+          );
+        }
+      }
+    }
     // D-1: validator-not-transformer — return the original object, not the parse
     // product. zod's .parse()/.data strips unknown keys; safeParse + original
     // object preserves them (R-zodstrip round-trip fidelity).

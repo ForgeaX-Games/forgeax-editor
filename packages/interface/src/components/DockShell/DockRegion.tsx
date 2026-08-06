@@ -43,6 +43,8 @@ import { buildDefault } from './builtinWorkbenches';
 import { shouldApplyHydratedWorkbenchLayout } from './workspace-hydration';
 import { getDockResetEpoch } from './dockResetEpoch';
 import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
+import { installEdgeDrawer } from './edgeDrawer';
+import { isOnSideEdge, nearerSideEdge, type SideEdge } from './sideEdgeMove';
 import './DockShell.css';
 
 // Strip panels whose `contentComponent` is not in the known component set.
@@ -668,6 +670,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     ]);
     for (const id of titleIds) {
       try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
+    }
+
+    // Edge groups (the collapsible side menu bar) expand as a drawer OVERLAY
+    // instead of dockview's native splitview-push, so opening the sidebar never
+    // shifts the grid layout. DockShell only — the primary dock owns the shell.
+    if (region === 'DockShell' && wrapRef.current) {
+      onReadyCleanupsRef.current.push(installEdgeDrawer(api, wrapRef.current));
     }
   }, []);
 
@@ -1301,8 +1310,19 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         // on <DockviewReact/>; we return a mix of built-in ids ('close',
         // 'closeOthers', 'separator') and custom `{ label, action }` items.
         // See ./tabContextMenu.ts for the pure builder + tests.
-        getTabContextMenuItems={(params) =>
-          buildTabContextMenuItems(
+        getTabContextMenuItems={(params) => {
+          const api = apiRef.current;
+          const loc = params.panel.api.location;
+          const onSide = isOnSideEdge(loc);
+          let nearer: SideEdge = 'left';
+          if (api && !onSide) {
+            const panelRect = params.group.element.getBoundingClientRect();
+            const shellEl = (params.group.element.closest('.dv-shell')
+              ?? wrapRef.current) as HTMLElement | null;
+            const shellRect = shellEl?.getBoundingClientRect() ?? panelRect;
+            nearer = nearerSideEdge(panelRect, shellRect);
+          }
+          return buildTabContextMenuItems(
             region,
             params.panel.id,
             (id, r) => moveTo(id, r),
@@ -1312,8 +1332,40 @@ export function DockRegion({ region }: { region: DockRegionId }) {
               onHideTitle: () => setDockTitleHidden(params.group.element, true),
               onShowTitle: () => setDockTitleHidden(params.group.element, false),
             },
-          )
-        }
+            region === 'DockShell' && api
+              ? {
+                  onSideEdge: onSide,
+                  nearerSide: nearer,
+                  onMoveToSide: (side) => {
+                    const edgeApi = api.getEdgeGroup(side);
+                    if (!edgeApi) return;
+                    const edgeGroup = api.groups.find((g) => g.api.id === edgeApi.id);
+                    if (!edgeGroup) return;
+                    try { api.setEdgeGroupVisible(side, true); } catch { /* noop */ }
+                    edgeGroup.element.classList.remove('fx-edge-empty');
+                    try {
+                      params.panel.api.moveTo({ group: edgeGroup, position: 'center' });
+                    } catch { /* noop */ }
+                    try { edgeGroup.api.collapse(); } catch { /* noop */ }
+                    try { params.panel.api.setActive(); } catch { /* noop */ }
+                  },
+                  onMoveOffSide: () => {
+                    const gridGroup = api.groups.find((g) => g.api.location.type === 'grid');
+                    if (!gridGroup) return;
+                    const fromSide = loc.type === 'edge' && (loc.position === 'left' || loc.position === 'right')
+                      ? loc.position
+                      : 'left';
+                    // Leave the strip as a normal grid split on the same side of
+                    // the primary content (not back into the edge group).
+                    try {
+                      params.panel.api.moveTo({ group: gridGroup, position: fromSide });
+                    } catch { /* noop */ }
+                    try { params.panel.api.setActive(); } catch { /* noop */ }
+                  },
+                }
+              : undefined,
+          );
+        }}
         // rightHeaderActionsComponent removed — the pop-out ⧉ button was
         // rendering inside the tab strip in a confusing position. Pop-out is
         // still available via drag-to-outside-window (Tauri) or the 布局 menu.

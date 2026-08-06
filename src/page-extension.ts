@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
 import type {
   ActivityRegistration,
+  PageController,
+  PageMenuItem,
   PagePanelPlacement,
   PageTypeRegistration,
   PanelTypeRegistration,
@@ -9,6 +11,12 @@ import type {
 } from '@forgeax/interface/core/page-platform';
 import {
   configureEditorPageNavigation,
+  gateway,
+  getActiveScenePackPath,
+  getSceneFile,
+  getSceneList,
+  hasPendingDiskSave,
+  onSceneListChange,
   type SelectedAsset,
 } from '@forgeax/editor-core';
 import {
@@ -28,7 +36,14 @@ const ASSET_PAGE = pageId('asset');
 const MESH_PAGE = pageId('mesh');
 const MATERIAL_PAGE = pageId('material');
 
-const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'ep:assets', 'ep:history', 'ep:capabilities'];
+// `info` / `checkpoints` / `events` are interface-owned footer chrome that
+// default into the merged bottom EDGE group (see default-dock-layout.ts
+// edgeGroups). They must be page-scope members here or DockRegion's isMember
+// (which gates every id by the active page's panel set) filters them out of the
+// footer strip — the "only Info shows" bug. Their bodies render via the
+// interface BASE panel components (which override the page runtime for these
+// stable ids), so no editor panelType component is needed.
+const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'checkpoints', 'events', 'ep:assets', 'ep:history', 'ep:capabilities'];
 const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview'];
 const MESH_PANELS = [...ASSET_PANELS, 'ep:mesh-slots'];
 
@@ -36,12 +51,123 @@ function placements(ids: readonly string[]): PagePanelPlacement[] {
   return ids.map((id) => ({ id, panelTypeId: panelId(id.replace(/^ep:/u, '')) }));
 }
 
+// Current scene name from editor-core's scene manifest (the in-realm SSOT), used
+// as the Level tab's live title. `getSceneFile()` is the bound scene id; the
+// matching manifest entry carries its human name.
+function currentSceneName(): string | undefined {
+  const id = getSceneFile();
+  if (!id) return undefined;
+  return getSceneList().find((entry) => entry.id === id)?.name ?? id;
+}
+
+// Late-bound host for menu actions that dispatch a command (set in setup; the
+// editor extension is a single-realm singleton, like editor-core's own state).
+// Only "reveal" needs it; copy/reference are host-free.
+let hostRef: AppHost | undefined;
+
+// Menu groups (order = divider layout): 'file' = path actions (copy / reveal);
+// 'actions' = the LAST group, holding save + reference-to-chat together (per the
+// interaction spec). copy/reveal need no host; reveal fires the shared
+// `file.reveal` command; reference goes through the public app.chat command.
+// `| undefined` fields keep exactOptionalPropertyTypes callers simple.
+
+function pathMenuItems(path: string | undefined): PageMenuItem[] {
+  if (!path) return [];
+  return [
+    {
+      id: 'copy-path', label: '复制路径', icon: 'copy', group: 'file',
+      run: () => { void navigator.clipboard?.writeText(path).catch(() => {}); },
+    },
+    {
+      id: 'reveal', label: '在文件资源管理器中显示', icon: 'folder-search', group: 'file',
+      run: () => { void hostRef?.commands.execute('file.reveal', { path }).catch(() => {}); },
+    },
+  ];
+}
+
+function referenceMenuItem(opts: {
+  guid?: string | null | undefined;
+  name?: string | undefined;
+  kind?: string | undefined;
+  path?: string | undefined;
+}): PageMenuItem[] {
+  if (!opts.guid) return [];
+  const guid = opts.guid;
+  return [{
+    id: 'reference', label: '引用到对话流', icon: 'at-sign', group: 'actions',
+    run: () => {
+      void hostRef?.commands.execute('app.chat.referenceAsset', {
+        guid,
+        ...(opts.name ? { name: opts.name } : {}),
+        ...(opts.kind ? { assetKind: opts.kind } : {}),
+        ...(opts.path ? { packPath: opts.path } : {}),
+      }).catch(() => {});
+    },
+  }];
+}
+
+// Save = the human Ctrl+S path (saveDocToDisk gateway op), enabled only while
+// the scene has pending disk changes (hasPendingDiskSave — the toolbar dirty
+// read); disabled+greyed when clean. Shares the last 'actions' group with
+// reference-to-chat.
+function saveSceneItem(): PageMenuItem {
+  return {
+    id: 'save', label: '保存', icon: 'save', group: 'actions',
+    disabled: !hasPendingDiskSave(),
+    run: () => {
+      try { gateway.dispatch({ kind: 'saveDocToDisk', requestId: crypto.randomUUID() }, 'human'); } catch { /* gateway locked */ }
+    },
+  };
+}
+
+// The Level tab tracks the current scene the way VSCode's EditorInput tracks its
+// name: `getTitle()` reads the value now, `subscribeTitle()` fires on scene
+// switch/create/delete (editor-core `onSceneListChange`) — event-driven, no poll.
+// Menu: path actions on the current scene pack, then save + reference last.
+const levelController = (): PageController => ({
+  prepareClose: () => ({ status: 'ready' }),
+  dispose: () => undefined,
+  getTitle: () => currentSceneName(),
+  subscribeTitle: (listener) => onSceneListChange(listener),
+  getContextMenuItems: () => {
+    const id = getSceneFile();
+    const entry = id ? getSceneList().find((s) => s.id === id) : undefined;
+    const path = getActiveScenePackPath() ?? undefined;
+    return [
+      ...pathMenuItems(path),
+      saveSceneItem(),
+      ...referenceMenuItem({ guid: entry?.guid ?? null, name: entry?.name ?? id ?? undefined, kind: 'scene', path }),
+    ];
+  },
+});
+
+// Resource pages (Asset / Mesh / Material) get the file actions off their bound
+// resource descriptor — the concrete file behind the tab; reference last.
+const fileController: PageTypeRegistration['createController'] = (context) => {
+  const resource = context.resource;
+  const path = resource?.displayPath ?? resource?.uri;
+  return {
+    prepareClose: () => ({ status: 'ready' }),
+    dispose: () => undefined,
+    getContextMenuItems: () => [
+      ...pathMenuItems(path),
+      ...referenceMenuItem({
+        guid: resource?.canonicalId ?? null,
+        name: path ? path.split('/').at(-1) : undefined,
+        kind: resource?.kind,
+        path,
+      }),
+    ],
+  };
+};
+
 function page(
   id: PageTypeRegistration['id'],
   title: string,
   cardinality: PageTypeRegistration['cardinality'],
   layout: PageTypeRegistration['layout'],
   ids: readonly string[],
+  createController?: PageTypeRegistration['createController'],
 ): PageTypeRegistration {
   return {
     id,
@@ -52,6 +178,7 @@ function page(
     layoutVersion: 1,
     layout,
     panels: placements(ids),
+    ...(createController ? { createController } : {}),
   };
 }
 
@@ -75,10 +202,10 @@ export function createEditorPageExtension(
         runtime: { kind: 'inline', render: () => renderPanel(id.replace(/^ep:/u, '')) },
       })),
       pages: [
-        page(LEVEL_PAGE, 'Level', 'singleton', DEFAULT_EDITOR_DOCK_LAYOUT, LEVEL_PANELS),
-        page(ASSET_PAGE, 'Asset', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS),
-        page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS),
-        page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS),
+        page(LEVEL_PAGE, 'Level', 'singleton', DEFAULT_EDITOR_DOCK_LAYOUT, LEVEL_PANELS, levelController),
+        page(ASSET_PAGE, 'Asset', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
+        page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS, fileController),
+        page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
       ],
       activities: [{
         id: activityId('editor'),
@@ -102,6 +229,7 @@ export function createEditorPageExtension(
       ],
     },
     setup(ctx) {
+      hostRef = ctx.host;
       const activeAsset = (): SelectedAsset | null => {
         const snapshot = ctx.host.pages.getSnapshot();
         const instance = snapshot.instances.find((candidate) => candidate.encodedKey === snapshot.activeKey);
@@ -124,6 +252,8 @@ export function createEditorPageExtension(
         getActiveAsset: activeAsset,
         subscribe: ctx.host.pages.subscribe,
       });
+      // The Level tab's live title comes from its page controller (levelController
+      // → editor-core scene manifest), so opening it is all setup needs here.
       void ctx.host.pages.open({ typeId: LEVEL_PAGE });
       return resetNavigation;
     },

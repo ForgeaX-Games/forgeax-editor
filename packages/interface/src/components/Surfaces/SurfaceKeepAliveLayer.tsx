@@ -123,7 +123,25 @@ export function SurfaceKeepAliveLayer(): ReactNode {
         syncLayout();
       });
     };
-    const onWin = () => scheduleSync();
+    // macOS Chrome throttles rAF during live window drag, so a single rAF after
+    // `resize` often runs before dockview finishes its final reflow — the overlay
+    // gets sized to a stale (smaller) anchor rect and the dock's near-black
+    // --dv-background-color bleeds through on the right/bottom. Schedule a short
+    // settle burst after each resize so the final reflow is caught.
+    const settleTimers: ReturnType<typeof setTimeout>[] = [];
+    const SETTLE_TICKS = 4;
+    const SETTLE_STEP_MS = 60;
+    const cancelSettle = () => {
+      for (const t of settleTimers) clearTimeout(t);
+      settleTimers.length = 0;
+    };
+    const onWin = () => {
+      scheduleSync();
+      cancelSettle();
+      for (let i = 1; i <= SETTLE_TICKS; i++) {
+        settleTimers.push(setTimeout(scheduleSync, i * SETTLE_STEP_MS));
+      }
+    };
     window.addEventListener('resize', onWin);
     window.addEventListener('scroll', onWin, true);
     const visualViewport = window.visualViewport;
@@ -164,6 +182,7 @@ export function SurfaceKeepAliveLayer(): ReactNode {
       window.removeEventListener('resize', onWin);
       window.removeEventListener('scroll', onWin, true);
       visualViewport?.removeEventListener('resize', onWin);
+      cancelSettle();
       offAnchors();
       offRelayout();
       ro?.disconnect();

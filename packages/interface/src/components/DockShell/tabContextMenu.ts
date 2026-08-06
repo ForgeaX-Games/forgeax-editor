@@ -1,5 +1,5 @@
-// Pure helper: given the current DockRegion + panelId + a moveTo callback,
-// return the list of tab-context-menu items dockview should render on right-click.
+// Pure helper: given the current DockRegion + panelId + callbacks, return the
+// list of tab-context-menu items dockview should render on right-click.
 //
 // The list is a mix of built-in item ids (dockview handles close / closeOthers)
 // and custom { label, action } items. dockview's own type for these is
@@ -8,6 +8,7 @@
 // what we produce.
 import type { DockRegion } from './regions';
 import { t as panelT } from '../../i18n';
+import type { SideEdge } from './sideEdgeMove';
 
 export type TabContextMenuItem =
   | 'close'
@@ -24,20 +25,48 @@ export interface TabTitleMenuOptions {
   onShowTitle?: () => void;
 }
 
+/** DockShell side-strip move (left/right edge groups). Replaces Aux Bar move. */
+export interface SideEdgeMenuOptions {
+  onSideEdge: boolean;
+  nearerSide: SideEdge;
+  onMoveToSide: (side: SideEdge) => void;
+  onMoveOffSide: () => void;
+}
+
 export function buildTabContextMenuItems(
   region: DockRegion,
   panelId: string,
   moveTo: (panelId: string, region: DockRegion) => void,
   titleOptions?: TabTitleMenuOptions,
+  sideEdge?: SideEdgeMenuOptions,
 ): TabContextMenuItem[] {
-  const otherRegion: DockRegion = region === 'DockShell' ? 'AuxBar' : 'DockShell';
-  const label = region === 'DockShell' ? 'Move to Aux Bar' : 'Move to Primary Dock';
   const items: TabContextMenuItem[] = [
     'close',
     'closeOthers',
     'separator',
-    { label, action: () => moveTo(panelId, otherRegion) },
   ];
+
+  if (region === 'AuxBar') {
+    // AuxBar is a separate DockviewReact instance — side-edge move lives in
+    // DockShell only. Keep a way back to the primary dock.
+    items.push({
+      label: panelT('dockShell.moveToPrimaryDock'),
+      action: () => moveTo(panelId, 'DockShell'),
+    });
+  } else if (sideEdge) {
+    if (sideEdge.onSideEdge) {
+      items.push({
+        label: panelT('dockShell.moveOffSide'),
+        action: () => sideEdge.onMoveOffSide(),
+      });
+    } else {
+      items.push({
+        label: panelT('dockShell.moveToSide'),
+        action: () => sideEdge.onMoveToSide(sideEdge.nearerSide),
+      });
+    }
+  }
+
   if (titleOptions?.groupPanelCount === 1) {
     const titleHidden = titleOptions.titleHidden === true;
     const action = titleHidden ? titleOptions.onShowTitle : titleOptions.onHideTitle;

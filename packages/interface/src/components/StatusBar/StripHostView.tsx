@@ -68,6 +68,10 @@ export function StripHostView() {
       aria-label="forgeax status bar"
       data-fx-slot="StatusBar"
     >
+      {/* Merged bottom edge menu bar: installEdgeDrawer relocates dockview's
+          bottom-edge tab strip into this host so the dock tabs share the footer
+          row with the status items (drag in/out stays native). Empty → 0 width. */}
+      <div className="sb-slot sb-slot-dock" data-fx-dock-bottom-host aria-hidden="true" />
       <Slot slot="left" items={bySlot.left} tick={tick} />
       <Slot slot="center" items={bySlot.center} tick={tick} />
       <Slot slot="right" items={bySlot.right} tick={tick} />

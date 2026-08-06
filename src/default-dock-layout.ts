@@ -75,6 +75,21 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
+    // Interface-owned footer chrome panels — Info / Checkpoints / Events default
+    // into the merged bottom EDGE group (relocated into the StatusBar footer by
+    // edgeDrawer). Present across every workbench; titles localize via
+    // interface i18n `dockShell.panelTitles.*`.
+    info: { id: 'info', contentComponent: 'info', title: 'Info' },
+    checkpoints: { id: 'checkpoints', contentComponent: 'checkpoints', title: 'Checkpoints' },
+    events: { id: 'events', contentComponent: 'events', title: 'Events' },
+  },
+  edgeGroups: {
+    bottom: {
+      size: 280,
+      visible: true,
+      collapsed: true,
+      group: { id: 'edge-bottom', views: ['info', 'checkpoints', 'events'], activeView: 'info' },
+    },
   },
   activeGroup: 'g-chat',
 };

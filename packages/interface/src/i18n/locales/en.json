@@ -1238,12 +1238,17 @@
     "extensionPanels": "Extension Panels",
     "hidePanelTitle": "Hide Panel Title Bar",
     "showPanelTitle": "Show Panel Title Bar",
+    "moveToSide": "Move to Side",
+    "moveOffSide": "Move off Side",
+    "moveToPrimaryDock": "Move to Primary Dock",
     "panelTitles": {
       "hierarchy": "Hierarchy",
       "assets": "Content Browser",
       "inspector": "Inspector",
       "viewport": "Viewport",
-      "info": "Info"
+      "info": "Info",
+      "checkpoints": "Checkpoints",
+      "events": "Events"
     }
   },
   "firstRun": {

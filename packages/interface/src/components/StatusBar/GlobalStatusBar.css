@@ -52,8 +52,12 @@
 /* spacer — takes remaining space and right-aligns its content (the lone
    far-right health indicator chip). */
 .sb-slot-center {
-  order: 3;
-  flex: 1 1 auto;
+  order: 4;
+  /* margin-left:auto keeps the health chip pinned right whether or not the dock
+     slot (order:3, flex:1) is present — when the dock is empty it collapses to
+     display:none, so this margin is what right-aligns the chip. */
+  flex: 0 0 auto;
+  margin-left: auto;
   justify-content: flex-end;
   padding-right: 8px;
   overflow: visible;
@@ -64,6 +68,180 @@
   align-items: center;
   height: 100%;
   flex-shrink: 0;
+}
+
+/* ── Merged dock bottom-edge strip host ───────────────────────────────────
+   installEdgeDrawer relocates dockview's bottom-edge `.dv-tabs-and-actions-
+   container` into this slot so the dock tabs sit on the SAME footer row as the
+   status items. order:3 places it AFTER the version (order:1) and badges
+   (order:2) groups; flex:1 + justify-content:center floats the tabs in the
+   middle band of the footer (not jammed against the far-left version badge).
+   Empty (no docked bottom panels) → display:none, so the center slot's
+   margin-left:auto still right-aligns the health chip. */
+.sb-slot-dock {
+  order: 3;
+  flex: 1 1 auto;
+  height: 100%;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: visible;
+}
+.sb-slot-dock.is-empty,
+.sb-slot-dock:empty {
+  display: none;
+}
+
+/* Footer-ized dockview strip: the relocated container is no longer under
+   `.dv-groupview-edge`, so the vertical/edge tab rules in DockShell.css no
+   longer apply — restyle it compact + horizontal to live in the 24px footer. */
+.fx-bottom-edge-strip {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  background: transparent;
+  min-width: 0;
+}
+.fx-bottom-edge-strip .dv-tabs-container {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+.fx-bottom-edge-strip .dv-tab {
+  min-width: 0 !important;
+  height: 100%;
+  padding: 0 8px !important;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 0;
+  border-right: 1px solid var(--color-border-default);
+  cursor: pointer;
+}
+/* Only highlight the active tab WHILE the drawer is open (fx-bottom-edge-open,
+   mirrored by edgeDrawer). The bottom group always has an "active" panel, so an
+   unconditional dv-active-tab rule would paint a persistent highlight in the
+   footer with no click. */
+.fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab {
+  position: relative;
+  background: var(--color-background-elevated);
+  color: var(--color-text-primary);
+}
+/* UE focus流光 on the footer active tab (drawer open) — mirrors the grid-group
+   accent in DockShell.css. Bottom strip: put the bar on the TOP edge (the side
+   the drawer rises from). Brightest at center, fading to both ends. */
+.fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 22%,
+    var(--lime, #7ee04a) 50%,
+    color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 78%,
+    transparent 100%
+  );
+}
+.fx-bottom-edge-strip .dv-default-tab {
+  padding: 0;
+  gap: 5px;
+  font-size: 12px;
+}
+.fx-bottom-edge-strip .dv-default-tab .dv-default-tab-content {
+  margin: 0;
+  padding: 0;
+}
+/* Keep the void container narrow — it stays a valid drop target for drag-in
+   but must not expand to eat the whole footer. */
+.fx-bottom-edge-strip .dv-void-container {
+  flex: 0 0 24px;
+  min-width: 24px;
+}
+
+/* ── Drag-in drop zone ────────────────────────────────────────────────────
+   When empty, the dock host is display:none and the void container is only a
+   24px sliver — there is nothing to drop ONTO, so dragging a panel over the
+   footer shows `not-allowed`. Only during a REAL HTML5 tab drag (`html.fx-edge-
+   drag`, set by edgeDrawer on dragstart — NOT the pointerdown-based
+   fx-dock-dragging, which would flash on a plain click) reveal the host and
+   widen its void container into a hittable drop target. We draw NO custom
+   frame: the void is the genuine dockview drop target (header_space), so
+   hovering it shows dockview's own lime overlay — identical to reorder. */
+html.fx-edge-drag .sb-slot-dock,
+html.fx-edge-drag .sb-slot-dock.is-empty {
+  display: flex;
+  min-width: 160px;
+}
+html.fx-edge-drag .fx-bottom-edge-strip {
+  width: 100%;
+}
+html.fx-edge-drag .fx-bottom-edge-strip .dv-void-container {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+/* Pin toggle (swapped for close by edgeDrawer): the `.dv-groupview-edge`-scoped
+   rules don't reach here, so re-declare the footer variant. Hidden by default —
+   dockview always keeps one panel "active" per group, and a persistently shown
+   pin made that tab read like it was selected. Reveal on hover, or on the
+   active tab while the drawer is open; pinned tabs stay lit unconditionally. */
+.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  color: var(--color-text-tertiary, #9aa0aa);
+  transition: opacity 0.1s ease;
+}
+.fx-bottom-edge-strip .dv-tab:hover .dv-default-tab-action.fx-edge-pin,
+.fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
+  opacity: 0.85;
+}
+.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
+.fx-bottom-edge-strip .dv-tab.fx-edge-tab-pinned .dv-default-tab-action.fx-edge-pin {
+  opacity: 1;
+  color: var(--lime, #7ee04a);
+}
+.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin .fx-edge-pin-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+/* ── Footer drop-overlay anchor host (see edgeDrawer.ts bottomDropContainer) ──
+   Viewport-fixed layer that dockview paints the bottom strip's drop highlights
+   / reorder indicators into (its own theme-scoped .dv-drop-target-* CSS lives
+   under .dockview-theme-abyss and doesn't reach here, so we style it directly
+   with the app's lime accent). Never intercepts pointer/drag events. */
+.fx-edge-drop-anchor-host {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+}
+.fx-edge-drop-anchor-host .dv-drop-target-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.fx-edge-drop-anchor-host .dv-drop-target-anchor {
+  position: absolute;
+  pointer-events: none;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--lime, #7ee04a) 20%, transparent);
+  border: 1px solid var(--lime, #7ee04a);
+  border-radius: 3px;
+  transition: left 0.07s ease, top 0.07s ease, width 0.07s ease, height 0.07s ease;
+}
+/* 'line' insertion indicator (thin strip at a tab edge) → solid lime bar. */
+.fx-edge-drop-anchor-host .dv-drop-target-anchor.dv-drop-target-anchor-line {
+  background: var(--lime, #7ee04a);
+  border-color: var(--lime, #7ee04a);
+  border-radius: 2px;
 }
 
 .sb-overflow {

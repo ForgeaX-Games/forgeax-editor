@@ -132,10 +132,18 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
           <OnboardingController />
           <ConnectModelPrompt />
           <TopBar />
-          <PageTabStrip />
           <div className="studio-body">
-            <DockRegion region="DockShell" />
-            <DockRegion region="AuxBar" />
+            {/* The page-tab strip governs the Layout area only (DockShell +
+                AuxBar), so it lives atop the main column and ends before the
+                plugin rail / chat — which rise full-height to just under the
+                TopBar (UE Level-tab / VSCode editor-tabs placement). */}
+            <div className="studio-main-col">
+              <PageTabStrip />
+              <div className="studio-main-dock">
+                <DockRegion region="DockShell" />
+                <DockRegion region="AuxBar" />
+              </div>
+            </div>
             <SurfaceKeepAliveLayer />
             {/* ActivityRail + chat are fixed shell columns on the right, so the
                 rail sits immediately left of the (drag-resizable) chat column
