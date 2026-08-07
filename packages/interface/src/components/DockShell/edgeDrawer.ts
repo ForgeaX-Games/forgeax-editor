@@ -21,31 +21,29 @@
 //   4. Because the drawer floats (no splitview sash), dockview's native
 //      drag-to-resize is gone; we re-add it with our own grip on the drawer's
 //      outer edge that only rewrites the drawer size var (never the grid).
-//   5. Edge tabs replace dockview's close (X) with a per-TAB Pin toggle
+//   5. Edge tabs show a per-TAB Pin toggle instead of dockview's close (X)
 //      (UE): at most one pinned tab per edge group (mutual exclusion). A pinned
 //      active tab ignores auto-dismiss; a non-pinned tab still auto-dismisses,
 //      but if the group has a pin that dismiss snaps back to the pinned tab
-//      instead of closing the drawer.
+//      instead of closing the drawer. This module owns only the STATE
+//      (edgePinStore) and the capture-phase click that flips it — DockTab
+//      renders the glyph off `api.location`, so there is no DOM swap to race
+//      React's portal commit and nothing to undo when a panel leaves the strip.
 //
 // When #1295 ships this whole module can be replaced by the native `pinned`
 // flag on EdgeGroupOptions.
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview';
+import { FOOTER_PANEL_ID_LIST } from './builtinWorkbenches';
+import { clearEdgePins, EDGE_PIN_CLASS, pinnedPanelIdIn, setEdgePin } from './edgePinStore';
 
 const OPEN_CLASS = 'fx-edge-drawer-open';
 /** Toggled to (re)start the wipe-in animation — on first open AND on same-strip tab switch. */
 const ANIM_CLASS = 'fx-edge-drawer-animating';
-const PIN_BTN_CLASS = 'fx-edge-pin';
-const PIN_ON_CLASS = 'fx-edge-pin--on';
-const TAB_PINNED_CLASS = 'fx-edge-tab-pinned';
 const EDGE_POSITIONS = ['left', 'right', 'top', 'bottom'] as const;
 type EdgePosition = (typeof EDGE_POSITIONS)[number];
 /** Slots always registered so root-edge drop / "Move to Side" work even when
  *  the default layout keeps panels in the grid (no edgeGroups in JSON). */
 const ENSURED_EDGE_SLOTS = ['left', 'right', 'bottom'] as const;
-
-/** Lucide `Pin` (24×24 stroke) — matches the rest of the studio icon set.
-   Replaces dockview's close X on edge tabs. */
-const PIN_SVG = `<svg class="fx-edge-pin-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`;
 
 /** All edge groups, including EMPTY ones (zero panels). Must walk `api.groups`
  *  — collecting via panels misses strips whose last tab was closed, which is
@@ -67,19 +65,19 @@ function edgeGroupFromElement(api: DockviewApi, el: Element): DockviewGroupPanel
  */
 export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => void {
   let openGroup: DockviewGroupPanel | null = null;
-  // UE: pin is per-TAB, and at most ONE pin per edge group (mutual exclusion).
-  // Map: groupId → pinned panelId.
-  const pinnedByGroup = new Map<string, string>();
 
+  // UE: pin is per-TAB, and at most ONE pin per edge group (mutual exclusion).
+  // State lives in edgePinStore so DockTab can RENDER the toggle; this module
+  // owns the rules and the click that flips it.
   const pinnedPanelId = (group: DockviewGroupPanel): string | undefined =>
-    pinnedByGroup.get(group.id);
+    pinnedPanelIdIn(group.id);
 
   const findPanel = (group: DockviewGroupPanel, id: string): IDockviewPanel | undefined =>
     group.panels.find((p) => p.id === id);
 
   const activeIsPinned = (group: DockviewGroupPanel): boolean => {
     const active = group.activePanel;
-    return !!active && pinnedByGroup.get(group.id) === active.id;
+    return !!active && pinnedPanelId(group) === active.id;
   };
 
   // Which edge the strip lives on decides which way the drawer grows and which
@@ -156,8 +154,8 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   // clear() when the bottom group is the ACTUAL drop target; dragging a bottom
   // tab OUT to another group drops elsewhere, so the bottom tab's droptarget
   // only sees dragleave (which, with an override target, intentionally does NOT
-  // clear) — leaving a stale lime rectangle in the footer. A global dragend/drop
-  // backstop wipes it.
+  // clear) — leaving a stale lime rectangle in the footer. Driven by the global
+  // dragover watcher below (during the drag) and the dragend/drop backstop.
   const clearDropAnchor = (): void => {
     if (!dropAnchorModel) return;
     try { dropAnchorModel.root.parentElement?.removeChild(dropAnchorModel.root); } catch { /* noop */ }
@@ -202,49 +200,6 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
         model.dropTargetContainer = bottomDropContainer;
       }
     } catch { /* dockview internals moved — footer drop keeps working sans overlay */ }
-  };
-
-  // Per-tab pin chrome: only the pinned tab's button lights up.
-  const syncPinUi = (group: DockviewGroupPanel): void => {
-    const pinnedId = pinnedPanelId(group);
-    const tabs = tabsRootOf(group).querySelectorAll('.dv-tabs-container > .dv-tab');
-    tabs.forEach((tabEl, i) => {
-      const panel = group.panels[i];
-      const on = !!panel && panel.id === pinnedId;
-      tabEl.classList.toggle(TAB_PINNED_CLASS, on);
-      const btn = tabEl.querySelector(`.${PIN_BTN_CLASS}`);
-      if (!btn) return;
-      btn.classList.toggle(PIN_ON_CLASS, on);
-      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-      btn.setAttribute('title', on ? 'Unpin' : 'Pin');
-      btn.setAttribute('aria-label', on ? 'Unpin tab' : 'Pin tab');
-    });
-  };
-
-  // Replace dockview's close (X) action with our Pin toggle on every edge tab.
-  // Idempotent: already-wired actions keep their listener via data flag.
-  const wirePinButtons = (): void => {
-    for (const group of edgeGroups(api)) {
-      const tabs = tabsRootOf(group).querySelectorAll('.dv-tabs-container > .dv-tab');
-      tabs.forEach((tabEl, i) => {
-        const panel = group.panels[i];
-        if (!panel) return;
-        const action = tabEl.querySelector('.dv-default-tab-action') as HTMLElement | null;
-        if (!action) return;
-        // Always refresh panel id + glyph (tabs reshuffle; icon SVG may change).
-        action.dataset.fxEdgePinPanel = panel.id;
-        action.classList.add(PIN_BTN_CLASS);
-        action.innerHTML = PIN_SVG;
-        if (action.dataset.fxEdgePin === '1') return;
-        action.dataset.fxEdgePin = '1';
-        // Block dockview's DefaultTab close handler (it bails on defaultPrevented).
-        action.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }, true);
-      });
-      syncPinUi(group);
-    }
   };
 
   // Our own resize handle — a thin fixed bar riding the drawer's far edge. Native
@@ -397,13 +352,12 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   const togglePin = (group: DockviewGroupPanel, panel: IDockviewPanel): void => {
     const cur = pinnedPanelId(group);
     if (cur === panel.id) {
-      pinnedByGroup.delete(group.id);
+      setEdgePin(group.id, undefined);
     } else {
-      pinnedByGroup.set(group.id, panel.id);
+      setEdgePin(group.id, panel.id);
       try { panel.api.setActive(); } catch { /* noop */ }
       if (openGroup !== group) open(group);
     }
-    syncPinUi(group);
   };
 
   // Drag the grip → rewrite the size var (clamped). Pointer capture keeps the drag
@@ -476,8 +430,8 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     e.preventDefault();
     e.stopPropagation();
 
-    // Pin button (ex-close action): toggle THIS tab's pin.
-    const pinBtn = target?.closest(`.${PIN_BTN_CLASS}`) as HTMLElement | null;
+    // Pin toggle (rendered by DockTab in place of close): flip THIS tab's pin.
+    const pinBtn = target?.closest(`.${EDGE_PIN_CLASS}`) as HTMLElement | null;
     if (pinBtn) {
       const panelId = pinBtn.dataset.fxEdgePinPanel;
       const panel = panelId ? findPanel(group, panelId) : undefined;
@@ -539,7 +493,7 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
         group.element.classList.toggle('fx-edge-empty', !hasItems);
       }
       if (!hasItems && group) {
-        pinnedByGroup.delete(group.id);
+        setEdgePin(group.id, undefined);
         if (openGroup === group) forceClose();
       }
     }
@@ -652,6 +606,66 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     } catch { /* dockview internals moved — empty band is cosmetic */ }
   };
 
+  // ── Global footer-chrome owner ───────────────────────────────────────────
+  // The footer panels (Info / Checkpoints / Events) are interface-level chrome
+  // that must exist under EVERY layout — every workbench AND every Page — not be
+  // re-seeded into each layout's JSON. This reconciler is that single owner:
+  // installEdgeDrawer runs once per DockShell region and persists across every
+  // workbench / Page switch, so after each layout change we ensure any missing
+  // footer panel is (re)added into the bottom edge group. Panels are inserted
+  // straight into the edge group (position.referenceGroup) so they never detour
+  // through the grid.
+  //
+  // `ensuringFooter` does double duty: reentrancy guard AND a "batch in progress"
+  // flag the layout/panel event handlers below check to STAY QUIET. Adding a panel
+  // (and the moveTo fallback) each fire onDidAddPanel / onDidActivePanelChange /
+  // onDidLayoutChange, so without suppression every insert would re-run relocate
+  // and each new panel would momentarily steal the active tab — the "tabs randomly
+  // focus" churn seen on page switch. Instead we do all inserts silently, restore
+  // the pre-existing active panel so the footer never steals focus from the page
+  // content, and let the SINGLE post-ensure reconcile relocate the strip once.
+  let ensuringFooter = false;
+  const ensureFooterPanels = (): void => {
+    if (ensuringFooter) return;
+    const bottom = edgeGroupAt('bottom');
+    if (!bottom) return; // ensureEdgeSlots creates it; a later tick retries
+    // Steady state (footer already complete): do nothing — onDidLayoutChange fires
+    // on every resize/drag, so a no-op fast-path keeps those churn-free.
+    if (FOOTER_PANEL_ID_LIST.every((id) => api.getPanel(id))) return;
+    ensuringFooter = true;
+    // Preserve whatever the page had focused so a freshly-added footer tab (an
+    // empty group's first panel is force-active; moveTo also activates) can't grab
+    // the active group.
+    const prevActive = api.activePanel;
+    try {
+      FOOTER_PANEL_ID_LIST.forEach((id, index) => {
+        // Only ADD a fully-absent footer panel — never relocate one the user has
+        // dragged elsewhere (respecting a user who moved Info into the grid).
+        if (api.getPanel(id)) return;
+        try {
+          api.addPanel({
+            id,
+            component: id,
+            title: id,
+            position: { referenceGroup: bottom, direction: 'within', index },
+            inactive: true,
+          });
+          // Guarantee it landed in the bottom edge group: referenceGroup targeting
+          // can fall back to a fresh grid group on some dockview builds. Moving it
+          // in the SAME tick (before paint) keeps the add flash-free. moveTo-into-
+          // edge is the proven path (see willDropSub).
+          const panel = api.getPanel(id);
+          if (panel && panel.group !== bottom) {
+            try { panel.api.moveTo({ group: bottom, position: 'center' }); } catch { /* noop */ }
+          }
+        } catch { /* component not registered in this host — skip */ }
+      });
+      try { prevActive?.api.setActive(); } catch { /* prevActive was closed — noop */ }
+    } finally {
+      ensuringFooter = false;
+    }
+  };
+
   // Normalize to collapsed on install. In our model an edge group is ALWAYS
   // collapsed (a narrow strip); "expansion" is the fixed drawer overlay, never a
   // splitview resize. A previously-persisted expanded state (collapsed:false)
@@ -679,10 +693,10 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   };
 
   ensureEdgeSlots();
+  ensureFooterPanels();
   normalize();
   rebindCollapseGuards();
   relocateBottomStrip();
-  wirePinButtons();
   syncEmptyEdges();
 
   // The StatusBar footer host may mount well after the dock, and the layout is
@@ -732,7 +746,29 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     // ended on a group other than the bottom edge.
     clearDropAnchor();
   };
+  // Keep the "exactly one live drop overlay" invariant. dockview can rely on
+  // `onDragLeave` doing NOTHING for an override target because its own anchor
+  // container is SHARED by every droptarget in the instance: whoever becomes the
+  // target next repositions that single overlay. Our footer shim is a SECOND,
+  // group-exclusive container, so nothing ever took the footer's overlay down —
+  // dragging a footer tab up into the grid painted the grid's zone while the
+  // footer's lime rectangle stayed, two live drop zones at once. Wipe ours as
+  // soon as the drag is over anything outside the strip; coming back fires a
+  // real `dragenter`, which rebuilds it through `getElements()`.
+  const overBottomStrip = (node: Node | null): boolean => {
+    if (!node) return false;
+    if (bottomStripEl?.contains(node)) return true;
+    // Before the footer relocation lands, the strip is still inside its group.
+    const bottom = edgeGroupAt('bottom');
+    return !!bottom && bottom.element.contains(node);
+  };
+  const onAnyDragOver = (e: DragEvent): void => {
+    if (!dropAnchorModel) return;
+    if (overBottomStrip(e.target as Node | null)) return;
+    clearDropAnchor();
+  };
   window.addEventListener('dragstart', onAnyDragStart, true);
+  window.addEventListener('dragover', onAnyDragOver, true);
   window.addEventListener('dragend', clearDragClass, true);
   window.addEventListener('drop', clearDragClass, true);
 
@@ -759,20 +795,23 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   };
   window.addEventListener('forgeax:edge-drawer', onEdgeDrawerCmd);
   const layoutSub = api.onDidLayoutChange(() => {
+    // Silent while ensureFooterPanels is batching — its addPanel/moveTo calls fire
+    // this; the caller does the single reconcile once the batch completes.
+    if (ensuringFooter) return;
     reposition();
     // fromJSON / reset may drop edge slots — re-create empty ones for drop.
     ensureEdgeSlots();
+    // …then re-assert the global footer chrome for the new layout.
+    ensureFooterPanels();
     normalize();
     rebindCollapseGuards();
     // Reset/fromJSON disposes+recreates the bottom group → re-relocate its strip.
     relocateBottomStrip();
-    // Tabs remount after fromJSON / panel moves — re-swap close → pin.
-    wirePinButtons();
     syncEmptyEdges();
   });
   // Panel add/remove is the precise moment an edge can become empty / non-empty;
   // layout-change alone can miss it depending on dockview's event ordering.
-  const addPanelSub = api.onDidAddPanel(() => { relocateBottomStrip(); wirePinButtons(); syncEmptyEdges(); });
+  const addPanelSub = api.onDidAddPanel(() => { if (ensuringFooter) return; relocateBottomStrip(); syncEmptyEdges(); });
   const remPanelSub = api.onDidRemovePanel(() => { syncEmptyEdges(); });
   // fromJSON hydration fires ONLY `onDidLayoutFromJSON` — NOT `onDidLayoutChange`
   // (a gridview AsapEvent that ignores edge groups, which live in the shell
@@ -782,16 +821,16 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   // the "shows only after clicking dockview" bug. Reconcile here explicitly.
   const fromJsonSub = api.onDidLayoutFromJSON(() => {
     ensureEdgeSlots();
+    ensureFooterPanels();
     normalize();
     rebindCollapseGuards();
     relocateBottomStrip();
-    wirePinButtons();
     syncEmptyEdges();
   });
   // Active-panel changes fire during hydration once a restored bottom panel is
   // made active — a cheap extra beat to catch strips the layout-change path may
   // have relocated before their tabs were fully populated.
-  const activeSub = api.onDidActivePanelChange(() => { relocateBottomStrip(); syncBottomFocusMarker(); });
+  const activeSub = api.onDidActivePanelChange(() => { if (ensuringFooter) return; relocateBottomStrip(); syncBottomFocusMarker(); });
 
   // Root edge drop (the thin outermost overlay) normally orthogonalizes into a
   // NEW grid group. When we already own an edge-group slot at that position,
@@ -818,13 +857,12 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     } catch { /* noop */ }
     try { edgeGroup.api.collapse(); } catch { /* noop */ }
     open(edgeGroup);
-    wirePinButtons();
     syncEmptyEdges();
   });
 
   return () => {
     forceClose();
-    pinnedByGroup.clear();
+    clearEdgePins();
     // Return the relocated strip to nowhere-in-particular; dockview disposes it
     // with the group. Just drop our footer marker so a stale strip can't linger.
     try { bottomStripEl?.remove(); } catch { /* noop */ }
@@ -837,6 +875,7 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     document.removeEventListener('pointerdown', onPointerDownCapture, true);
     window.removeEventListener('resize', reposition);
     window.removeEventListener('dragstart', onAnyDragStart, true);
+    window.removeEventListener('dragover', onAnyDragOver, true);
     window.removeEventListener('dragend', clearDragClass, true);
     window.removeEventListener('drop', clearDragClass, true);
     window.removeEventListener('forgeax:edge-drawer', onEdgeDrawerCmd);

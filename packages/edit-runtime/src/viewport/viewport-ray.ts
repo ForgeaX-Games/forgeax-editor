@@ -8,7 +8,7 @@
 // re-export barrel in viewport.ts — viewport.test.ts needs zero changes.
 
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
-import { ray, vec3 } from '@forgeax/engine-math';
+import { box3, ray, vec3 } from '@forgeax/engine-math';
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -126,5 +126,20 @@ export function entityBox(t: { x?: number; y?: number; z?: number; scaleX?: numb
   return {
     center: [num(t.x, 0), num(t.y, 0), num(t.z, 0)],
     half: [Math.max(sx / 2, pad), Math.max(sy / 2, pad), Math.max(sz / 2, pad)],
+  };
+}
+
+/** Mesh-local AABB ([minX,minY,minZ,maxX,maxY,maxZ]) × world mat4 → world-space
+ *  axis-aligned box (center + half). 8-corner transform via box3.transformBox3,
+ *  so rotation and non-uniform scale stay conservative-correct — the same math
+ *  the engine pick applies (picking/src/pick.ts), kept here because the
+ *  editor's cross-world fallback cannot call that pick (harness feedback
+ *  2026-08-06-pick-needs-camera-source-decoupled-from-geometry-world). */
+export function aabbToWorldBox(localAabb: ArrayLike<number>, worldMat: ArrayLike<number>): { center: Vec3; half: Vec3 } {
+  const out = box3.create();
+  box3.transformBox3(out, localAabb, worldMat as Parameters<typeof box3.transformBox3>[2]);
+  return {
+    center: [(out[0]! + out[3]!) / 2, (out[1]! + out[4]!) / 2, (out[2]! + out[5]!) / 2],
+    half: [(out[3]! - out[0]!) / 2, (out[4]! - out[1]!) / 2, (out[5]! - out[2]!) / 2],
   };
 }

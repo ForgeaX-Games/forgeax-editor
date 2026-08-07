@@ -35,6 +35,7 @@ import {
 import { isUserExistingGame, resolveProjectName, toGameSlug } from './project-name';
 import { latchTourShellDefaults, prepareTourShell } from './prepareTourShell';
 import { loadWorkbenchList, subscribeWorkbenchList } from '../../lib/workbenches';
+import { listGameTemplates, type GameTemplate } from '../../lib/game-templates';
 import './Onboarding.css';
 
 type CheckResult = '' | 'ok' | 'fail';
@@ -43,9 +44,6 @@ type CheckResult = '' | 'ok' | 'fail';
 // so hardcoding literals here would silently drop newly-registered kernels
 // (that was the codebuddy-missing bug). Kept as a named alias for readability.
 type CliId = string;
-
-/** A built-in game usable as a first-run template (GET /api/workbench/templates). */
-interface TemplateInfo { slug: string; name: string }
 
 /** A game already present in the active instance (GET /api/workbench/games).
  *  Non-empty ⇒ the project step ALSO offers "open an existing project" — a
@@ -173,7 +171,7 @@ export function OnboardingController() {
   const [projName, setProjName] = useState('');
   const [fsOpen, setFsOpen] = useState(false);
   const [tmplOpen, setTmplOpen] = useState(false);
-  const [templates, setTemplates] = useState<TemplateInfo[] | null>(null);
+  const [templates, setTemplates] = useState<GameTemplate[] | null>(null);
   const [tmplSlug, setTmplSlug] = useState<string | null>(null);
   const [projBusy, setProjBusy] = useState(false);
   // Which action is in-flight — drives a specific "creating…/copying…/opening…"
@@ -357,9 +355,8 @@ export function OnboardingController() {
   useEffect(() => {
     if (!tmplOpen || templates) return;
     let cancelled = false;
-    fetch('/api/workbench/templates')
-      .then((r) => r.json() as Promise<{ templates?: TemplateInfo[] }>)
-      .then((j) => { if (!cancelled) setTemplates(j.templates ?? []); })
+    void listGameTemplates()
+      .then((items) => { if (!cancelled) setTemplates(items); })
       .catch(() => { if (!cancelled) setTemplates([]); });
     return () => { cancelled = true; };
   }, [tmplOpen, templates]);
@@ -863,7 +860,7 @@ function ProjectView(props: {
 }
 
 function TemplateModal(props: {
-  t: TFn; templates: TemplateInfo[] | null; selected: string | null;
+  t: TFn; templates: GameTemplate[] | null; selected: string | null;
   onSelect: (slug: string) => void; onCancel: () => void; onConfirm: () => void; busy: boolean;
 }) {
   const { t } = props;

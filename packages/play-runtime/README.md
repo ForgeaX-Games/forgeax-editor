@@ -1,6 +1,6 @@
 # `@forgeax/editor-play-runtime`
 
-> ForgeaX 独立 Play 模式厚 host：负责游戏预览的输入、physics gate、pack-index、加载/诊断遮罩、VAG 协议桥接，以及引擎拥有的 VFX 粒子运行时接入。
+> ForgeaX 独立 Play 模式厚 host：负责一个 active game runtime realm 的输入、physics gate、scoped Pack 资产、加载/诊断遮罩、VAG 协议桥接，以及引擎拥有的 VFX 粒子运行时接入。
 
 ## 功能
 
@@ -8,7 +8,7 @@
 |:--|:--|
 | FPS 鼠标捕获 | 根据 `forge.json` 的 `pointerLock` / `input` opt-in，通过 `window.parent.postMessage({ type: 'fx-pointer-capture' })` 与 Tauri 壳通信 |
 | Physics gate | 根据 `forge.json` 的 `physics` opt-in（`rapier-3d` / `rapier-2d`）在 `createApp` 时装配 |
-| 按游戏 pack-index | 每个游戏使用独立的 `pack-index/<slug>.json` |
+| 单 realm 资产 | 只接收一个 exact `FORGEAX_GAME_DIR`，catalog/import/package 共用 `scopeId + generation` |
 | 加载遮罩 | 冷启动渐变遮罩在首帧渲染后淡出 |
 | 诊断遮罩 | WebGPU 不可用或 `createApp` 失败时展示带 `code`、`expected`、`hint` 的结构化诊断 |
 | VAG_CONSOLE 桥接 | 劫持 console、展示 `Error.detail`，并转发 Vite HMR build error |
@@ -22,7 +22,10 @@ import type { GameContext } from '@forgeax/editor-play-runtime';
 ```
 
 > [!NOTE]
-> Play runtime 是 iframe 内的独立 Vite 应用（开发端口通常为 `15173`；`bun fx` 编排时为 `15273`）。AppKit 通过 `http://127.0.0.1:15173/preview/?game=<slug>` 嵌入 iframe；独立 Play 不直接重建编辑器的 World 或状态 store。
+> Play runtime 是 iframe 内的独立 Vite 应用（开发端口通常为 `15173`；`bun fx` 编排时为 `15273`）。Host 通过 `/preview` 代理嵌入 iframe；active game 由 server-authoritative binding 选择，`?game=<slug>` 只能作为与 binding 比对的预期身份，不能选择磁盘目录或绕过 scope。
+
+> [!IMPORTANT]
+> 运行时不接受 games parent directory，不枚举 sibling games，也不提供无 scope 的 catalog、lazy-import 或 DDC route。未绑定、错误 scope/generation 以及 degraded catalog 均 fail closed。
 
 ## VFX 运行时边界
 

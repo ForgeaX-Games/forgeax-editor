@@ -18,6 +18,10 @@ export const allowedApiRules: ApiCallRule[] = [
     pattern: /^\/api\/game-host\/games\/\$\{[^}]+\}\/package\/(?:initialize|status)$/,
     source: "src/lib/game-host-api.ts",
   },
+  {
+    pattern: /^\/api\/game-templates$/,
+    source: "src/lib/game-templates.ts",
+  },
   { pattern: /^\/api\/health$/ },
   { pattern: /^\/api\/logs$/ },
   { pattern: /^\/api\/narrative\/history$/ },

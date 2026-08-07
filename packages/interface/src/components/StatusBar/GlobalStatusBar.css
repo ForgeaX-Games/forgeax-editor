@@ -139,6 +139,16 @@
 .fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab:hover {
   background: var(--color-background-base);
 }
+/* Closed footer strip: the bottom edge group always keeps one `.dv-active-tab`
+   (dockview never lets a group go active-less). This strip is relocated OUT of
+   .fx-dockwrap so the edge-group neutralizer in DockShell.css can't reach it —
+   restate it here so a closed footer shows NO selected tab (matches the open-only
+   highlight rule above). `:not(:hover)` so the footer hover rule below still gives
+   feedback on the (neutralized) active tab. */
+.fx-bottom-edge-strip:not(.fx-bottom-edge-open) .dv-tab.dv-active-tab:not(:hover) {
+  background: transparent;
+  color: inherit;
+}
 /* UE focus流光 on the footer active tab (drawer open) — mirrors the grid-group
    accent in DockShell.css. Bottom strip: put the bar on the TOP edge (the side
    the drawer rises from). Brightest at center, fading to both ends. */
@@ -197,8 +207,9 @@ html.fx-edge-drag .fx-bottom-edge-strip .dv-void-container {
   flex: 1 1 auto;
   min-width: 140px;
 }
-/* Pin toggle (swapped for close by edgeDrawer): the `.dv-groupview-edge`-scoped
-   rules don't reach here, so re-declare the footer variant. Hidden by default —
+/* Pin toggle (rendered by DockTab for any edge-located tab): the
+   `.dv-groupview-edge`-scoped rules don't reach the relocated footer strip, so
+   re-declare the footer variant here. Hidden by default —
    dockview always keeps one panel "active" per group, and a persistently shown
    pin made that tab read like it was selected. Reveal on hover, or on the
    active tab while the drawer is open; pinned tabs stay lit unconditionally. */
@@ -214,8 +225,7 @@ html.fx-edge-drag .fx-bottom-edge-strip .dv-void-container {
 .fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
   opacity: 0.85;
 }
-.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
-.fx-bottom-edge-strip .dv-tab.fx-edge-tab-pinned .dv-default-tab-action.fx-edge-pin {
+.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on {
   opacity: 1;
   color: var(--lime, #7ee04a);
 }

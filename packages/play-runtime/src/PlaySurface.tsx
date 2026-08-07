@@ -22,6 +22,7 @@ import {
   VagCarrierHandshakeSchema,
   VagCarrierHeartbeatSchema,
 } from '@forgeax/editor-core/protocol';
+import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -85,11 +86,27 @@ function fatalReason(text: string): string | null {
 
 export interface PlaySurfaceProps {
   slug: string;
+  /** Server-confirmed binding; a slug alone cannot select a runtime realm. */
+  runtimeBinding?: RuntimeAssetBinding;
+}
+
+interface LoadedRealm {
+  readonly slug: string;
+  readonly runtimeBinding?: RuntimeAssetBinding;
+}
+
+function previewUrl(realm: LoadedRealm): string {
+  const params = new URLSearchParams({ game: realm.slug });
+  if (realm.runtimeBinding !== undefined) {
+    params.set('runtimeScopeId', realm.runtimeBinding.scopeId);
+    params.set('runtimeGeneration', String(realm.runtimeBinding.generation));
+  }
+  return `/preview/?${params.toString()}`;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export function PlaySurface({ slug }: PlaySurfaceProps) {
+export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
   const [fps, setFps] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -110,18 +127,19 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   // at once (one visible, one display:none'd). If we drove the iframe src straight
   // from `slug`, switching GAMES would cold-boot the new game in this hidden iframe
   // AND in the visible Edit iframe simultaneously → two concurrent WebGPU boots wedge
-  // the WKWebView GPU process. So the iframe loads
-  // `loadedSlug`, which only advances to the latest `slug` while this surface is
-  // VISIBLE — a hidden surface defers the new game until it's shown (one boot at a
-  // time). `slug` still loads immediately on first mount (loadedSlug seeded = slug).
-  const [loadedSlug, setLoadedSlug] = useState(slug);
+  // the WKWebView GPU process. So the iframe loads `loadedRealm`, which only
+  // advances to the latest slug+binding while this surface is VISIBLE — a hidden
+  // surface defers the new generation until it's shown (one boot at a time).
+  const [loadedRealm, setLoadedRealm] = useState<LoadedRealm>({ slug, runtimeBinding });
   const slugRef = useRef(slug);
   slugRef.current = slug;
+  const runtimeBindingRef = useRef(runtimeBinding);
+  runtimeBindingRef.current = runtimeBinding;
   const visibleRef = useRef(true);
   // slug changed while visible → load now; while hidden → defer to the IO show flush.
   useEffect(() => {
-    if (visibleRef.current) setLoadedSlug(slug);
-  }, [slug]);
+    if (visibleRef.current) setLoadedRealm({ slug, runtimeBinding });
+  }, [slug, runtimeBinding?.scopeId, runtimeBinding?.generation]);
 
   const device = useMemo(() => DEVICES.find((d) => d.id === deviceId) ?? DEFAULT_DEVICE, [deviceId]);
   const screen = useMemo(
@@ -264,12 +282,12 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
   }, []);
 
   // ── Loaded-game switch → reset loading state ───────────────────────────────
-  // Keyed on loadedSlug (the game actually in the iframe), not slug — a hidden
-  // surface whose slug changed but hasn't loaded yet must not reset/probe.
+  // Keyed on loadedRealm (the exact generation actually in the iframe), not the
+  // current slug — a hidden surface whose binding changed must not reset/probe.
   useEffect(() => {
     setIsFirstFrameLoading(true);
     hasReceivedFpsRef.current = false;
-  }, [loadedSlug]);
+  }, [loadedRealm]);
 
   // ── Release the native FPS cursor grab when leaving Play ────────────────────
   // The Play game grabs the OS cursor via the Tauri `set_pointer_capture` bridge
@@ -311,7 +329,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       if (!visible) releasePointerCapture(); // switch-away while locked → free the OS cursor
       // Becoming visible flushes any game switch deferred while hidden — boots the
       // new game now (and only now, so it never collides with the other surface).
-      if (visible) setLoadedSlug(slugRef.current);
+      if (visible) setLoadedRealm({ slug: slugRef.current, runtimeBinding: runtimeBindingRef.current });
       setIsPlaying(visible);
     });
     io.observe(el);
@@ -328,7 +346,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       if (elapsed > FPS_STALL_MS) setIsFirstFrameLoading(true);
     }, 100);
     return () => clearInterval(id);
-  }, [loadedSlug, isPlaying]);
+  }, [loadedRealm, isPlaying]);
 
   // ── Vite restart probe ────────────────────────────────────────────────────
   useEffect(() => {
@@ -350,7 +368,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
       }
       let up = false;
       try {
-        const r = await fetch(`/preview/?game=${encodeURIComponent(loadedSlug)}`, {
+        const r = await fetch(previewUrl(loadedRealm), {
           method: 'GET',
           cache: 'no-store',
         });
@@ -390,7 +408,7 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
 
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [loadedSlug]);
+  }, [loadedRealm]);
 
   // ── Fullscreen ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -499,10 +517,13 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
             </button>
           </div>
         )}
-        {mode === 'desktop' ? (
+        {loadedRealm.runtimeBinding === undefined ? (
+          <div className="preview-loading-text">Active runtime is not bound.</div>
+        ) : mode === 'desktop' ? (
           <iframe
+            key={previewUrl(loadedRealm)}
             ref={iframeRef}
-            src={`/preview/?game=${encodeURIComponent(loadedSlug)}`}
+            src={previewUrl(loadedRealm)}
             className="preview-iframe"
             title={`game preview: ${slug}`}
             // `pointer-lock *` is REQUIRED for the FPS Click→requestPointerLock
@@ -519,8 +540,9 @@ export function PlaySurface({ slug }: PlaySurfaceProps) {
           <div className="preview-mobile-wrap">
             <div className="preview-mobile-frame" style={{ width: screen.w, height: screen.h }}>
               <iframe
+                key={previewUrl(loadedRealm)}
                 ref={iframeRef}
-                src={`/preview/?game=${encodeURIComponent(loadedSlug)}`}
+                src={previewUrl(loadedRealm)}
                 className="preview-iframe-mobile"
                 title={`game preview: ${slug}`}
                 // pointer-lock *: see the desktop iframe above — required for the

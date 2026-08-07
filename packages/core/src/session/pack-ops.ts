@@ -26,6 +26,7 @@ import {
 } from './authored-asset-write';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Materials } from '@forgeax/engine-render';
+import { defineParticleEffectSource } from '@forgeax/engine-vfx';
 import { classifyUiAuthoring } from '@forgeax/engine-ui/authoring';
 import { encodeMaterialPackRefs } from '../io/material-pack-refs';
 import {
@@ -461,7 +462,10 @@ registerApplier('document', 'restoreAsset', applyRestoreAsset as unknown as Appl
  *  like per kind. UI/AI never carry payloads; the applier constructs them here.
  *  switch has NO default branch — TS enforces that every CreatableAssetKind member
  *  has a case (future extensions must add one here or fail to compile). */
-function defaultPayloadFor(kind: CreatableAssetKind): Record<string, unknown> {
+function defaultPayloadFor(
+  kind: CreatableAssetKind,
+  particleMaterialGuid?: string,
+): Record<string, unknown> {
   switch (kind) {
     case 'scene': {
       const scene: SceneAsset = { kind: 'scene', entities: [] };
@@ -477,21 +481,89 @@ function defaultPayloadFor(kind: CreatableAssetKind): Record<string, unknown> {
         'material-instance assets must be created via the createMaterialInstance op, not createAsset — ' +
         'createMaterialInstance requires a parentGuid and builds the editor MI payload schema',
       );
+    case 'particle-effect': {
+      if (particleMaterialGuid === undefined) {
+        throw new Error('particle-effect creation requires its generated material GUID');
+      }
+      const source = defineParticleEffectSource({
+        schemaVersion: 1,
+        emitters: [{
+          id: 'default',
+          capacity: 32,
+          space: 'world',
+          schedule: { rate: 8, bursts: [] },
+          bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+          backendPolicy: { kind: 'required', backend: 'cpu' },
+          operators: {
+            spawn: [
+              { kind: 'shape', version: 1, params: { shape: 'sphere', radius: 0.2 } },
+            ],
+            initialize: [
+              { kind: 'lifetime', version: 1, params: { seconds: 2 } },
+              { kind: 'initial-velocity', version: 1, params: { velocity: [0, 0.8, 0] } },
+            ],
+            update: [
+              { kind: 'gravity', version: 1, params: { acceleration: [0, -0.4, 0] } },
+              { kind: 'drag', version: 1, params: { coefficient: 0.1 } },
+              {
+                kind: 'size-over-life',
+                version: 1,
+                params: { curve: { points: [{ time: 0, value: 0.22 }, { time: 1, value: 0.04 }] } },
+              },
+              {
+                kind: 'color-over-life',
+                version: 1,
+                params: {
+                  gradient: {
+                    stops: [
+                      { time: 0, color: [0.2, 0.6, 1, 1] },
+                      { time: 1, color: [0.05, 0.2, 1, 0] },
+                    ],
+                  },
+                },
+              },
+            ],
+            output: [{ kind: 'billboard', version: 1, params: {} }],
+          },
+          output: { kind: 'billboard', material: particleMaterialGuid },
+        }],
+      });
+      if (!source.ok) throw new Error(source.error.hint);
+      return source.value as unknown as Record<string, unknown>;
+    }
   }
 }
 
-function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
+export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   const { packPath, guid, assetKind, name, refs } = cmd as {
     packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[];
   };
-  const payload = defaultPayloadFor(assetKind);
+  const execution = assetKind === 'particle-effect' ? 'cooked' : undefined;
+
+  const extraAssets: Array<{ guid: string; kind: string; name: string; payload: unknown; refs?: string[] }> = [];
+  const particleMaterialGuid = assetKind === 'particle-effect' ? generateAssetGuid() : undefined;
+  if (assetKind === 'particle-effect') {
+    if (particleMaterialGuid === undefined) throw new Error('particle-effect material GUID was not generated');
+    const matPayload = Materials.standard({ baseColor: [1, 1, 1, 1] }) as unknown as Record<string, unknown>;
+    extraAssets.push({ guid: particleMaterialGuid, kind: 'material', name: `${name}_Mat`, payload: matPayload, refs: [] });
+  }
+  const payload = defaultPayloadFor(assetKind, particleMaterialGuid);
+  // The native VFX cooker derives refs from the authored output material/mesh.
+  // Keep the authored particle row aligned with the engine Pack contract rather
+  // than duplicating those derived references in the source entry.
+  const assetRefs = assetKind === 'particle-effect' ? [] : refs;
+
   // Fire-and-forget async IO through the asset gate (symmetrical to destroyAsset).
   // The document-applier contract is synchronous: return inverse immediately,
   // IO completes in background. The write result is CHECKED — a failed write is
   // broadcast as an assetsError so the UI does not show an asset that never
   // reached disk (same discipline as createMaterial; no completion tracking
   // here because nothing binds to a fresh blank scene asset).
-  void ctx.assetIO.createAssetInPack({ packPath, asset: { guid, kind: assetKind, name, payload, refs } })
+  void ctx.assetIO.createAssetInPack({
+    packPath,
+    asset: { guid, kind: assetKind, name, payload, refs: assetRefs, execution },
+    extraAssets: extraAssets.length > 0 ? extraAssets : undefined,
+  })
     .then((r) => {
       if (!r.ok) {
         console.error('[editor-core] createAsset write failed:', { guid, packPath, reason: r.reason, hint: r.hint });

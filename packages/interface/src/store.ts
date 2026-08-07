@@ -5,7 +5,12 @@ import { alertDialog } from './lib/dialog';
 import { createObservabilityState } from './store-parts/observability';
 import { createShellState } from './store-parts/shell';
 import { getSessionClient } from './store-parts/session-client';
-import { getWorkbenchClient, hasWorkbenchClient } from './store-parts/workbench-client';
+import {
+  getWorkbenchClient,
+  hasWorkbenchClient,
+  type ActiveGameSelection,
+  type RuntimeScopeState,
+} from './store-parts/workbench-client';
 import { mostRecentSid, pickActiveSid } from './store-parts/session-pick';
 import {
   cleanupLegacySessionKeys,
@@ -20,7 +25,6 @@ import { getWindowManager, surfaceKey, type SurfaceDescriptor } from './lib/plat
 import { STORAGE_KEYS } from './lib/storageKeys';
 import { getLastModel } from './lib/model-prefs';
 import { resolveKernelForAgent } from './lib/agent-cli-provider';
-import { waitForEngineSettled } from './lib/game-reload';
 import { setCurrentProject } from './lib/workbenches';
 
 export { configureSessionClient, type SessionClient } from './store-parts/session-client';
@@ -38,6 +42,9 @@ export {
   type HistoryRecord,
   type CleanPackageResult,
   type ActiveGameSelection,
+  type RuntimeAssetBinding,
+  type RuntimeAssetDiagnostic,
+  type RuntimeScopeState,
 } from './store-parts/workbench-client';
 
 // ③ PreviewFile 已移到 @forgeax/ai-workbench/file-preview（interface foundation 不再持有文件预览态）。
@@ -347,9 +354,10 @@ export interface AppState {
 
   // ── Active game projection. The server binding is authoritative. ──
   activeGameSlug: string | null;
+  activeGameRuntime: RuntimeScopeState;
   activeGameResolved: boolean;
   initActiveGame: () => Promise<void>;
-  applyActiveGame: (slug: string | null) => Promise<void>;
+  applyActiveGame: (selection: ActiveGameSelection) => Promise<void>;
 
   // ── Current chat session id (bug #2 fix). null = let server auto-generate
   //    a fresh `sess-<timestamp>` for the next message. Set when we receive
@@ -607,8 +615,9 @@ function patchTabField(
 let _initSessionsPending: Promise<void> | null = null;
 let _sessionsInitialized = false;
 let _activeGameUnsubscribe: (() => void) | null = null;
-let _activeGameTransition: { slug: string | null; promise: Promise<void> } | null = null;
+let _activeGameTransition: { key: string; promise: Promise<void> } | null = null;
 let _activeGameTransitionRevision = 0;
+const _activeGameGenerationByScope = new Map<string, number>();
 const _busyMutationVersionBySid = new Map<string, number>();
 const _runningSyncGenerationBySid = new Map<string, number>();
 
@@ -830,6 +839,7 @@ export const useShellStore = create<AppState>((set, get) => ({
   }),
 
   activeGameSlug: null,
+  activeGameRuntime: { status: 'unbound' },
   activeGameResolved: false,
   initActiveGame: async () => {
     if (!hasWorkbenchClient()) {
@@ -839,26 +849,46 @@ export const useShellStore = create<AppState>((set, get) => ({
     const client = getWorkbenchClient();
     if (!_activeGameUnsubscribe) {
       _activeGameUnsubscribe = client.subscribeActiveGame((selection) => {
-        void get().applyActiveGame(selection.activeSlug);
+        void get().applyActiveGame(selection);
       });
     }
     const selection = await client.getActiveGame();
     if (!get().activeGameResolved) {
-      set({ activeGameSlug: selection.activeSlug, activeGameResolved: true });
+      const initialBinding = selection.runtime?.binding;
+      if (initialBinding !== undefined) {
+        _activeGameGenerationByScope.set(initialBinding.scopeId, initialBinding.generation);
+      }
+      set({
+        activeGameSlug: selection.activeSlug,
+        activeGameRuntime: selection.runtime ?? { status: 'unbound' },
+        activeGameResolved: true,
+      });
       setCurrentProject(selection.activeSlug ?? 'default');
       try { localStorage.removeItem('forgeax.pinnedSlug'); } catch { /* legacy cleanup */ }
       return;
     }
-    await get().applyActiveGame(selection.activeSlug);
+    await get().applyActiveGame(selection);
   },
-  applyActiveGame: async (slug) => {
-    if (get().activeGameResolved && get().activeGameSlug === slug) return;
-    if (_activeGameTransition?.slug === slug) return _activeGameTransition.promise;
+  applyActiveGame: async (selection) => {
+    const slug = selection.activeSlug;
+    const runtime = selection.runtime ?? { status: 'unbound' as const };
+    const incomingBinding = runtime.binding;
+    if (incomingBinding !== undefined) {
+      const knownGeneration = _activeGameGenerationByScope.get(incomingBinding.scopeId);
+      if (knownGeneration !== undefined && incomingBinding.generation < knownGeneration) return;
+      if (knownGeneration === undefined || incomingBinding.generation > knownGeneration) {
+        _activeGameGenerationByScope.set(incomingBinding.scopeId, incomingBinding.generation);
+      }
+    }
+    const key = `${slug ?? '_none'}:${runtime.binding?.scopeId ?? '_unbound'}:${runtime.binding?.generation ?? 0}:${runtime.status}`;
+    const currentRuntime = get().activeGameRuntime;
+    const currentKey = `${get().activeGameSlug ?? '_none'}:${currentRuntime.binding?.scopeId ?? '_unbound'}:${currentRuntime.binding?.generation ?? 0}:${currentRuntime.status}`;
+    if (get().activeGameResolved && currentKey === key) return;
+    if (_activeGameTransition?.key === key) return _activeGameTransition.promise;
     const revision = ++_activeGameTransitionRevision;
     const promise = (async () => {
-      if (get().activeGameResolved) await waitForEngineSettled(slug ?? undefined);
       if (revision !== _activeGameTransitionRevision) return;
-      set({ activeGameSlug: slug, activeGameResolved: true });
+      set({ activeGameSlug: slug, activeGameRuntime: runtime, activeGameResolved: true });
       setCurrentProject(slug ?? 'default');
       if (!_sessionsInitialized) return;
       await get().refreshSessions();
@@ -875,7 +905,7 @@ export const useShellStore = create<AppState>((set, get) => ({
       const recent = mostRecentSid(tabs);
       if (recent) await get().switchToSession(recent);
     })();
-    _activeGameTransition = { slug, promise };
+    _activeGameTransition = { key, promise };
     try {
       await promise;
     } finally {
@@ -991,7 +1021,7 @@ export const useShellStore = create<AppState>((set, get) => ({
   setActiveGame: async (slug) => {
     try {
       const selection = await getWorkbenchClient().setActiveGame(slug);
-      await get().applyActiveGame(selection.activeSlug);
+      await get().applyActiveGame(selection);
     } catch (e) {
       void alertDialog({
         title: t('gameSwitcher.activateFailedTitle'),
