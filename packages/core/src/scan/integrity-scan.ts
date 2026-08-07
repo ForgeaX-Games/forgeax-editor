@@ -139,7 +139,7 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
   }
 
   // Reverse check: meta files whose source doesn't exist.
-  // Note: engine-side cleanOrphanMetas (engine-vite-preset.ts) already runs before
+  // Note: engine-side cleanOrphanMetas (runtime-vite-preset.ts) already runs before
   // pluginPack, so most of these should be cleaned up. We detect any remaining ones.
   for (const metaPath of metaFiles) {
     const expectedSource = metaPath.replace(/\.meta\.json$/, '');

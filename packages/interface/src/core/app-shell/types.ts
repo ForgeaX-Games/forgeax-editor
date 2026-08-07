@@ -31,39 +31,10 @@ export interface AppShellPillPayload {
   tooltip: { title: string; lines: string[] };
 }
 
-/**
- * A request to LOCATE something in the Content Browser (navigate to its parent
- * folder + select + scroll into view). Neutral interface-level contract: the
- * trigger (any app, e.g. an editor page tab) emits `content-browser:reveal`
- * with this payload and the mounted Content Browser resolves it — neither side
- * imports the other. The CB owns the actual navigation/selection writes (through
- * its own gateway door), so this carries only the target identity.
- */
-export interface ContentBrowserRevealTarget {
-  /** Asset identity (scene / mesh / material / texture …). */
-  readonly guid?: string;
-  /** Game-relative pack path — folder fallback when `guid` isn't in the catalog
-   *  yet, and the SelectedAsset packPath. */
-  readonly packPath?: string;
-  /** Source file / folder path (non-asset targets). */
-  readonly path?: string;
-  /** Whether `path` is a directory or a file (drives the selection kind). */
-  readonly pathKind?: 'dir' | 'file';
-  /** Asset kind, forwarded into the selection (best-effort). */
-  readonly assetKind?: string;
-  /** Display name, forwarded into the selection (best-effort). */
-  readonly name?: string;
-}
-
 export interface AppBusEventMap extends Record<string, unknown> {
   'panel:open':          { id: string; source?: string };
   'panel:focus':         { id: string };
-  /** Reveal a panel wherever it lives: activate it in the grid, reopen it if
-   *  closed, or expand its edge/footer drawer. Superset of `panel:open`. */
-  'panel:reveal':        { id: string };
   'panel:close':         { id: string };
-  /** Locate a target in the Content Browser (see ContentBrowserRevealTarget). */
-  'content-browser:reveal': { target: ContentBrowserRevealTarget };
   'dock:reset':          Record<string, never>;
   'dock:layout-toggle':  { workbenchId?: string; rect?: { top: number; bottom: number; left: number; right: number } };
   'anim:handoff':        { fromSurface: string; toSurface: string };

@@ -26,8 +26,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename, join } from 'node:path';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
-import { engineVitePreset } from './engine-vite-preset';
-import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
+import { engineVitePreset } from './packages/edit-runtime/src/viewport/runtime-vite-preset';
 import { resolveWorktreePorts } from './scripts/lib/worktree-ports.ts';
 import tailwindcss from 'tailwindcss';
 import autoprefixer from 'autoprefixer';
@@ -60,25 +59,6 @@ const GAME_DIR = process.env.FORGEAX_GAME_DIR
   ? resolve(process.env.FORGEAX_GAME_DIR)
   : null;
 const GAME_SLUG = GAME_DIR ? basename(GAME_DIR) : null;
-const STANDALONE_SCOPE_ID = process.env.FORGEAX_RUNTIME_SCOPE_ID
-  ?? (GAME_SLUG === null ? '' : `standalone-${GAME_SLUG}`);
-const STANDALONE_GENERATION = Number(process.env.FORGEAX_RUNTIME_GENERATION ?? 1);
-const STANDALONE_RUNTIME_BINDING: RuntimeAssetBinding | undefined = (
-  GAME_DIR !== null
-  && GAME_SLUG !== null
-  && /^[a-zA-Z0-9._:-]{1,256}$/.test(STANDALONE_SCOPE_ID)
-  && Number.isSafeInteger(STANDALONE_GENERATION)
-  && STANDALONE_GENERATION > 0
-) ? {
-  schemaVersion: 'runtime-asset-binding-v1',
-  gameId: GAME_SLUG,
-  scopeId: STANDALONE_SCOPE_ID,
-  generation: STANDALONE_GENERATION,
-  status: 'ready',
-  catalogUrl: runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'catalog.json'),
-  importUrlBase: runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'import'),
-  packageUrlBase: runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'asset'),
-} : undefined;
 const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? WORKTREE_PORTS.gameApi);
 // The standalone host owns the editor chrome, while the pure engine preview is
 // served by the separate play-runtime. Keep the proxy target on the same port
@@ -100,12 +80,7 @@ const STANDALONE_PORT = Number(process.env.FORGEAX_STANDALONE_PORT ?? WORKTREE_P
 // deps, 500-ing the whole shell. The host relies on realpath dedupe instead
 // (resolve.dedupe still collapses the @forgeax family to one instance). null
 // (no --game) -> demo seed, shader plugin alone serves the manifest.
-const enginePreset = engineVitePreset({
-  base: '/',
-  gameDirAbs: GAME_DIR,
-  preserveSymlinks: false,
-  ...(STANDALONE_RUNTIME_BINDING === undefined ? {} : { runtimeBinding: STANDALONE_RUNTIME_BINDING }),
-});
+const enginePreset = engineVitePreset({ base: '/', gameDirAbs: GAME_DIR, preserveSymlinks: false });
 
 // Keep the standalone host on one engine checkout. The host root lives above
 // the workspace packages and does not have a direct node_modules link for every
@@ -233,7 +208,6 @@ export default defineConfig({
   define: {
     __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
     __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR),
-    __FORGEAX_RUNTIME_BINDING__: JSON.stringify(STANDALONE_RUNTIME_BINDING ?? null),
     // The Vite preset derives this from the same package.json roots it passes to
     // pluginPack. Content Browser uses the projection to classify catalog
     // sourcePath values without knowing where @shared roots live on disk.
@@ -330,6 +304,8 @@ export default defineConfig({
       // a pure play-runtime page, never the editor SPA fallback. Proxy its
       // engine-owned transport paths to the dedicated play-runtime server.
       '/preview': { target: `http://127.0.0.1:${PLAY_RUNTIME_PORT}`, changeOrigin: true, ws: true },
+      '/__import': { target: `http://127.0.0.1:${PLAY_RUNTIME_PORT}`, changeOrigin: true },
+      '/__forgeax-ddc': { target: `http://127.0.0.1:${PLAY_RUNTIME_PORT}`, changeOrigin: true },
       //
       // --game: proxy /api → the standalone game-backend bun process (R3), which
       // mounts the real @forgeax/platform-io createFilesRouter confined to the

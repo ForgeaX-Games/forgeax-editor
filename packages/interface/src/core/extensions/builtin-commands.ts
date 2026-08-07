@@ -54,17 +54,6 @@ export const builtinCommandsExtension: AppExtension = {
     }));
 
     cleanups.push(registerCommand({
-      id: 'app.panel.reveal',
-      title: 'Reveal a dock panel wherever it lives (grid, closed, or edge drawer)',
-      execute: (args) => {
-        const id = (args as { id?: string })?.id;
-        if (!id) throw new Error('app.panel.reveal: missing { id }');
-        ctx.bus.emit('panel:reveal', { id });
-        return { status: 'completed' as const };
-      },
-    }));
-
-    cleanups.push(registerCommand({
       id: 'app.panel.focus',
       title: 'Focus an existing dock panel by id (no reopen)',
       execute: (args) => {
