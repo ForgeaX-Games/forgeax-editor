@@ -1,225 +1,126 @@
-<!-- LANG-SWITCH -->
-**Language**: **English** · [简体中文](README.zh-CN.md)
+# ForgeaX Studio — forgeax-engine
 
-> [!IMPORTANT]
-> README is maintained in two languages ([`README.md`](README.md) canonical · [`README.zh-CN.md`](README.zh-CN.md) mirror). **Any change must update both in the same commit.**
+[English](./README.md) · [简体中文](./README.zh-CN.md) · [↑ studio](https://github.com/ForgeaX-Games/forgeax-studio)
 
----
+> **An AI-first TypeScript game engine, built from scratch on WebGPU — designed to surpass Three.js.**
 
-# forgeax-engine
+`forgeax-engine` is the real engine that runs your game inside the ForgeaX Studio
+preview — not a wrapper around an existing renderer. It is a ground-up **Entity-Component-System
+(ECS) + WebGPU** engine written in strict TypeScript, with its hottest paths (the GPU
+abstraction and the shader pipeline) compiled from **Rust → WebAssembly**. Its primary user is
+not a human reading a tutorial; it is an **AI agent** writing game code, so every API is shaped
+to be called correctly from structured knowledge alone.
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.base.json)
-[![WebGPU](https://img.shields.io/badge/WebGPU-native-005A9C?logo=webgpu&logoColor=white)](./packages/rhi)
-[![Rust](https://img.shields.io/badge/Rust-wgpu_29_+_naga_29-000000?logo=rust&logoColor=white)](./packages/wgpu-wasm)
-[![ESM](https://img.shields.io/badge/module-ESM_only-f7df1e?logo=javascript&logoColor=black)](./AGENTS.md)
-[![Packages](https://img.shields.io/badge/packages-37-6E56CF)](./packages)
+## Why it's different
 
-> **AI-first TypeScript game engine, built to surpass Three.js.**
+Most web engines are built for humans first and bolt on tooling later. ForgeaX inverts that.
+Its design creed makes the engine *legible to a machine*, which — not coincidentally — also
+makes it predictable for humans:
 
-The primary user of this engine is not a human developer — it is an **AI agent**. Every API is a machine-readable contract: schema-typed, `Result`-returning, self-describing. Whenever AI-friendly and human-friendly conflict, **AI wins**. See the [AI User Charter](.claude/skills/forgeax-closed-loop/agents/ai-user-charter.md).
-
----
-
-## ✨ Why forgeax
-
-- 🤖 **AI-first, not AI-retrofitted** — every surface is a machine-readable contract (schema / manifest / typed union). An agent calls it correctly without reading a tutorial.
-- 🧊 **Native WebGPU, twice over** — a single spec-aligned RHI with **two independent backends**: browser-native WebGPU *and* a Rust `wgpu 29` core compiled to WebAssembly.
-- 🦀 **Rust + WASM shader core** — merged `wgpu 29 + naga 29 + naga_oil 0.22` wasm-bindgen crate in **one ~1.17 MB gzip artefact**.
-- 🧩 **Declarative RenderGraph** — resources + passes as data; the graph owns lifetime and barrier insertion. No hand-written `beginRenderPass` bookkeeping.
-- 🎬 **Scriptable Render Pipelines (SRP)** — register a named pipeline, drive it with config; the engine's own forward pipeline is written in the *same public vocabulary* it exposes to you (true dogfood).
-- 🖌️ **WGSL "ShaderLab" composition** — Bevy-convention `#import namespace::path` module graph, `#ifdef` variants, 16 engine-shipped composable modules (PBR / IBL / tonemap).
-- 🎞️ **RenderDoc-inspired RHI debugger** — record a frame to tape, replay it deterministically on a fresh device, inspect per-draw bindings + render-target PNGs offline.
-- 🧮 **Archetype ECS** — SoA columns, declarative systems, deferred commands, relationships, three-layer reflection.
-- ⚙️ **Batteries included** — Rapier 2D/3D physics, Web Audio, glTF/FBX/image/font import, typed state machines, immediate-mode debug draw, a kubectl-style live inspector.
-- 🛡️ **Structured failure everywhere** — `Result<T, E>` with closed `.code` unions, `.expected` / `.hint` / `.detail`; no thrown surprises, no `err.message.match()`.
-
-## Design creed
-
-| Principle | Meaning |
+| Principle | What it buys you |
 |---|---|
-| **Machine-readable > prose** | API self-describes via schema / manifest / structured types; an AI can call it correctly without reading a tutorial |
-| **Explicit failure > silent behavior** | `Result<T, E>` with `.code` / `.expected` / `.hint`; no string-encoded semantics, no swallowed errors |
-| **Uniform abstraction > leaked internals** | One interface up front, performance knobs opt-in |
-| **Context economy** | Small API surface, self-explanatory names, types are the documentation |
+| **Machine-readable > prose** | Every API self-describes via schema / manifest / typed surface. You (or an agent) can call it correctly from the types — the types *are* the documentation. |
+| **Explicit failure > silent behavior** | Fallible calls return `Result<T, E>` carrying `.code` / `.expected` / `.hint`. No thrown surprises, no string-encoded semantics, no swallowed errors. |
+| **Uniform abstraction > leaked internals** | One clean interface up front; performance knobs are opt-in, not mandatory ceremony. |
+| **Context economy** | Small API surface, self-explanatory names — the whole engine family is discoverable by IDE autocomplete on the `@forgeax/engine-` prefix. |
 
-> Compression == intelligence. The metric is not lines of code — it is **the number of concepts a reader must hold to follow any single piece**. See [`architecture-principles.md`](../forgeax-harness/rules/architecture-principles.md).
+The guiding axiom is **"compression == intelligence"**: the smaller and more uniform the
+surface needed to express a capability, the better — for the agent that writes against it and
+for the human who reads it.
 
----
+## Architecture
 
-## 🗺️ Architecture at a glance
+The engine ships as a family of focused packages under two independent dependency chains —
+a **runtime chain** rooted at `@forgeax/engine-runtime` and a **build-time chain** rooted at
+`@forgeax/engine-vite-plugin-shader`. Highlights:
 
-Two independent dependency chains meet at the **RHI seam** — the pure interface every backend implements.
+**Rendering & GPU**
+- [`packages/rhi`](packages/rhi) — the **RHI** (Render Hardware Interface): a pure, math-free
+  interface shape-aligned with `@webgpu/types`, with opaque handles and a capability-gated
+  op-set (a wgpu superset). It ships **two interchangeable implementations** side by side:
+  `rhi-webgpu` (a thin shim over the browser's native WebGPU) and `rhi-wgpu` (a TS shell over
+  the Rust `wgpu` bindings).
+- `packages/wgpu-wasm` — a **merged wgpu 29 + naga 29 `wasm-bindgen` crate**: the Rust→wasm
+  hot path that backs `rhi-wgpu` and the shader toolchain.
+- [`packages/render-graph`](packages/render-graph) — a declarative render graph
+  (resource/pass declaration → `compile()` → `execute()`), depending only on RHI + math.
+- `packages/rhi-debug` — a RenderDoc-inspired frame recorder with **deterministic replay** and
+  offline inspection (first user: an AI subagent debugging a frame).
 
-```mermaid
-flowchart TD
-    subgraph GAME["🎮 Game layer"]
-        APP["@forgeax/engine-app<br/>rAF loop · input · state"]
-        ECS["@forgeax/engine-ecs<br/>archetype World"]
-        FEAT["physics · audio · debug-draw · math"]
-    end
+**Shaders** — a build-time triple (`shader-compiler` WGSL → wgsl/glsl/bindings + reflection,
+`naga` parse/validate, `wgpu-wasm`) feeds a runtime, content-addressable `shader` registry,
+wired into Vite by `vite-plugin-shader`.
 
-    subgraph RUNTIME["🖼️ Runtime chain"]
-        RT["@forgeax/engine-runtime<br/>Renderer + SRP registry"]
-        RG["@forgeax/engine-render-graph<br/>declarative passes"]
-    end
+**Simulation core**
+- [`packages/ecs`](packages/ecs) — an **archetype ECS** (`World` / `Entity` / `Component` /
+  `Query` / `System` / `Schedule`) with managed component buffers and a kubectl-style inspector
+  plugin (entities / components / systems / resources / world).
+- `packages/math` — SoA-friendly `Vec` / `Mat` / `Quat`. `packages/types` — the project-wide
+  `Result<T, E>` SSOT. `packages/state` — a zero-intrusion typed state machine with
+  state-scoped entity lifecycle.
 
-    subgraph SEAM["🧊 RHI seam (pure interface)"]
-        RHI["@forgeax/engine-rhi<br/>opaque handles · math-free · spec-aligned"]
-    end
+**Asset pipeline** — an explicit **import (build-time) / load (runtime) split** governed by a
+GUID "import-stable iron law":
+- [`packages/pack`](packages/pack) — the on-disk asset-package schema, GUID tools, and scanner;
+  `vite-plugin-pack` serves it with dev HMR.
+- `packages/import` — the build-time runner + `ImporterRegistry` that turns a `*.meta.json`
+  sidecar into a compiled DDC (`.pack.json` / `.bin`). Importers: [`gltf`](packages/gltf)
+  (runtime glTF 2.0), `fbx` (Autodesk FBX SDK), `image`, and `font` (MSDF atlas baking).
+  At runtime you `loadByGuid` a payload and `allocSharedRef` it into the world.
 
-    subgraph BACKENDS["Dual implementation"]
-        WEBGPU["@forgeax/engine-rhi-webgpu<br/>browser-native WebGPU"]
-        WGPU["@forgeax/engine-rhi-wgpu<br/>Rust wgpu 29 via WASM"]
-    end
+**Gameplay services** — [`physics`](packages/physics) (interface) with Rapier 2D/3D WASM
+backends (SIMD-detected, three-phase `syncBackend` / `stepSimulation` / `writeback` tick,
+raycast, collision events); `audio` (interface) + a Web Audio backend; `input` (a frozen,
+frame-start `InputSnapshot` resource + PointerLock); `debug-draw` (immediate-mode lines /
+spheres / AABBs / frustums).
 
-    subgraph BUILD["🛠️ Build-time shader chain"]
-        SC["@forgeax/engine-shader-compiler<br/>WGSL compose + reflect"]
-        NAGA["@forgeax/engine-naga"]
-        WASM["@forgeax/engine-wgpu-wasm<br/>🦀 wgpu 29 + naga 29 + naga_oil"]
-    end
+**Project contract** — `packages/engine-project` is the SSOT for **`forge.json`**, the
+authoritative game manifest (a zod schema + injectable loader). `packages/app` provides the app
+shell + game loop (rAF, start/stop/pause, auto input).
 
-    GAME --> RUNTIME --> RG --> SEAM
-    SEAM --> WEBGPU
-    SEAM --> WGPU
-    WGPU --> WASM
-    SC --> NAGA --> WASM
-    RT -. "runtime shader registry" .-> SC
-```
+## What you actually get
 
----
+- **WebGPU-native rendering with a WebGL2 fallback path** — `@forgeax/engine-runtime` is a
+  `Renderer + Backend (WebGPU / WebGL2)` async factory.
+- **Rust-grade hot paths** without leaving the web — the GPU and shader cores are real wgpu/naga
+  compiled to wasm.
+- **Errors you can act on** — `Result<T, E>` with codes and hints instead of stack traces.
+- **A held quality bar** — every engine change must pass headless dawn-node smokes (300 frames),
+  browser tests, and a **pixel-parity bench against Three.js** (ε ≤ 0.05). The `apps/learn-render`
+  suite tracks rendering features against the LearnOpenGL curriculum; `apps/parity` holds the
+  three.js comparison; `apps/hello/*` are minimal runnable demos.
 
-## 🔬 Feature deep-dive
+## Key concepts
 
-<details>
-<summary><b>🧊 RHI — the pure rendering seam</b></summary>
+`World` / `Component` / `Query` (ECS) · `Handle` / `allocSharedRef` (shared GPU/asset resources)
+· `createApp` / `createRenderer` (entry points) · `loadByGuid` → payload → `instantiate`
+(assets) · `pack` / `catalog` (asset packages) · `forge.json` via `@forgeax/engine-project`
+(the game manifest) · `Result<T, E>` (the universal error model).
 
-A **spec-aligned, math-free interface** shaped after `@webgpu/types`, exposing 14 opaque handle types and a capability-gated op-set (a wgpu superset). It is deliberately **implementation-free** so two backends can co-exist byte-for-byte:
+## How it fits the studio
 
-| Backend | Path | Runs on |
-|---|---|---|
-| `rhi-webgpu` | thin shim over the browser's `GPUDevice` | native WebGPU browsers |
-| `rhi-wgpu` | TS shell over the Rust `wgpu 29` WASM core | anywhere WASM runs |
-| `rhi-null` | headless no-op | structural unit tests (zero GPU/DOM) |
+Studio embeds the engine in a live preview iframe: the server writes your game's source, the
+engine hot-reloads it, and you see the result instantly. Games are consumed through
+`createApp` + `loadByGuid`/`instantiate` against the same `forge.json` contract the editor and
+build pipeline read — one engine, identical behavior in Play and Edit.
 
-Every call returns `Result<T, RhiError>`; capabilities are queried via `device.caps`, never assumed.
-</details>
+## Build & run (standalone)
 
-<details>
-<summary><b>🦀 WASM — Rust wgpu + naga in one artefact</b></summary>
-
-`@forgeax/engine-wgpu-wasm` is a merged **`wgpu 29` + `naga 29` + `naga_oil 0.22`** wasm-bindgen crate. One `~1.17 MB gzip` artefact carries **two independent surfaces**:
-
-- **RHI raw bindings** (`rhi.rs`) → 14 opaque handles + 17 descriptors + queue/command-encoder segments, wrapped by `rhi-wgpu`.
-- **Shader pipeline bindings** → `parse` / `validate` / `emit_reflection` + a `naga_oil::Composer`, wrapped by `naga` + `shader-compiler`.
-
-AI users never import it directly — the two thin TS shells above are the public surface.
-</details>
-
-<details>
-<summary><b>🧩 RenderGraph — declarative frames</b></summary>
-
-Replace *"open a 2000-line record file, copy texture lazy-alloc templates, hand-write `beginRenderPass` + bind groups"* with a handful of declarations:
-
-```ts
-graph.addPass({ reads, writes, execute });
-```
-
-`compile()` resolves resource lifetimes and **inserts barriers automatically**; your `execute` closure is the only custom logic. The package is RHI-pure — it depends on `@forgeax/engine-rhi` + `@forgeax/engine-math` only, never the runtime.
-</details>
-
-<details>
-<summary><b>🎬 SRP — Scriptable Render Pipelines</b></summary>
-
-```mermaid
-flowchart LR
-    REG["registerPipeline(id, impl)"] --> INST["installPipeline({ pipelineId, config })"]
-    INST --> BUILD["buildGraph(ctx, data)"]
-    BUILD --> EXEC["execute → RenderGraph"]
-    CFG["config.passCount / postEffects"] -.-> BUILD
-```
-
-One logic id + different `config` → different pass topology. The engine's built-in forward pipeline `forgeax::urp` (a 9-pass chain: shadow → skybox → main → 4× bloom → tonemap → fxaa) is written through the **exact same public vocabulary** (`addScenePass` / `addShadowPass` / `addBloomPasses` / `addTonemapPass` …) it hands you. To write a custom pipeline, copy the dogfood.
-</details>
-
-<details>
-<summary><b>🖌️ Shader authoring — WGSL "ShaderLab" composition</b></summary>
-
-You write your own `.wgsl`; the engine ships **16 composable modules** (PBR BRDF, IBL, lighting, tonemapping, helpers). Composition follows Bevy's convention so you can paste Bevy shader snippets unmodified:
-
-```wgsl
-#import forgeax_pbr::brdf::{specular_ggx}
-#import forgeax_view::common::{View}
-```
-
-The build-time `compileShader(source, options)` is a **pure function** returning `Result<CompileResult, ShaderError>` — a 7-member error taxonomy with typed `.detail` (import-not-found, circular-import pre-detected via DFS, …). Runtime materials register via `ShaderRegistry.registerMaterialShader`, the single source of truth for wgsl source + param schema + binding layout.
-</details>
-
-<details>
-<summary><b>🎞️ RHI-debug — a RenderDoc for the web engine</b></summary>
-
-Record → replay → inspect, driven first by an AI subagent (exposed over `WS:5732` JSON-RPC, CLI, and direct import):
-
-- **Record** an RHI frame to a self-contained tape.
-- **Replay** it deterministically on a fresh device.
-- **Inspect** offline: per-draw bindings, draw-call params, and render-target PNG readback — to localize black-screen / wrong-texture / wrong-binding symptoms.
-</details>
-
----
-
-## 📦 Package family
-
-37 packages under the discoverable `@forgeax/engine-` prefix. AI users find them via IDE autocomplete.
-
-| Cluster | Packages | Role |
-|:--|:--|:--|
-| **RHI seam** | `rhi` · `rhi-webgpu` · `rhi-wgpu` · `rhi-null` · `wgpu-wasm` | Pure interface + dual impl + headless + 🦀 WASM core |
-| **Rendering** | `runtime` · `render-graph` · `shader` · `shader-compiler` · `naga` | Renderer, SRP, RenderGraph, WGSL compose + reflect |
-| **Core** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` · `animation` | Archetype World, game loop, math, `Result` SSOT, FSM |
-| **Simulation** | `physics` · `physics-rapier2d` · `physics-rapier3d` · `audio` · `audio-webaudio` | Rapier 2D/3D, Web Audio |
-| **Assets** | `pack` · `import` · `gltf` · `fbx` · `image` · `font` · `engine-project` | GUID sidecar pipeline, importers, `forge.json` manifest |
-| **Tooling** | `rhi-debug` · `debug-draw` · `remote` · `console` · `vite-plugin-*` | Frame debugger, live inspector, Vite integration |
-
-> [!NOTE]
-> Public packages share the `@forgeax/engine-` prefix; bare `@forgeax/engine` is a placeholder — install **`@forgeax/engine-runtime`**. Each `packages/<pkg>/README.md` is the SSOT for its API, error codes, and capability gates.
-> `animation` uses one animation-target model for ordinary `Transform` entities and skin joints.
-
-## Layout
-
-| Path | Contents |
-|:--|:--|
-| [`packages/`](packages/) | Engine packages (runtime / build-time chains, RHI dual-impl, inspector, Rust wasm crate) |
-| [`apps/`](apps/) | Demo + smoke + parity-bench applications |
-| [`.forgeax-harness/knowledge-base/wiki/`](.forgeax-harness/knowledge-base/wiki/) | Design baselines (RHI / shader strategy, vs-threejs roadmap SSOT) |
-| [`.claude/skills/`](.claude/skills/) | Agentic collaboration skills (charter + closed-loop workflows) |
-| [`.forgeax-harness/`](.forgeax-harness/) | Closed-loop artefacts (plan / research / verify per feat/bug) |
-| `forgeax-engine-assets/` | Git submodule — binary evidence (private, artefact sidecar) |
-
-Package-level contracts, error unions, RHI form rules, metric registry, smoke gate, and evolution rules all live in [AGENTS.md](./AGENTS.md). The README is intentionally thin.
-
----
-
-## 🚀 Quick start
-
-> [!IMPORTANT]
-> Requires **Node ≥ 22.13.0**, **pnpm ≥ 11.1.3**, **Bun ≥ 1.2.0** (SSOT: `.nvmrc` / `.pnpm-version` / `.bun-version`). First-time clone: `git clone --recurse-submodules <url>`.
+Requires **Node ≥ 22.13**, **pnpm ≥ 11.1.3**, **Bun ≥ 1.2** (and a Rust toolchain to rebuild
+the wasm crate). Clone with `--recurse-submodules`.
 
 ```bash
-pnpm install && pnpm build            # complete incremental package + app fleet + tsc build
-pnpm build:engine                     # package + shared shader inputs + incremental tsc
-pnpm build:app hello/triangle         # one app; package/shared receipts are reused
-pnpm build:clean                      # declared output roots removed, then full build
+pnpm install && pnpm build      # tsup (.mjs) + tsc -b (.d.ts)
 pnpm test
-pnpm dev                              # → http://localhost:5173
+pnpm dev                        # demos at http://localhost:5173
+pnpm -F @forgeax/engine-wgpu-wasm build   # rebuild the Rust → wasm crate
 ```
 
-`pnpm build` is the complete deployable-fleet path. `pnpm build:engine` is the
-normal feedback loop for engine/package changes; use `pnpm build:app <path>` for
-an app-only iteration. A fast path does not replace the browser, Dawn, smoke, or
-full-fleet gates required by the change.
+Each `packages/<pkg>/README.md` is the SSOT for that package's API, error codes, and
+capability gates.
 
-Commands, smoke gate, Bun pipeline, Rust toolchain — see [AGENTS.md §Commands](./AGENTS.md#commands).
+---
 
-## License
-
-Apache-2.0. See [LICENSE](./LICENSE).
+Part of the **ForgeaX Studio** monorepo. This repo is a submodule of
+[`ForgeaX-Games/forgeax-studio`](https://github.com/ForgeaX-Games/forgeax-studio) — clone that
+with `--recurse-submodules` to run the full studio. License: Apache-2.0.
