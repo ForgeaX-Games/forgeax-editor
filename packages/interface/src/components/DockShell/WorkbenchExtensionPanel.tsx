@@ -6,6 +6,8 @@ import { useExtensionManifest } from '../../lib/use-extension-manifest';
 import { getWindowManager, type SurfaceDescriptor, type SurfacePane } from '../../lib/platform';
 import { useShellStore } from '../../store';
 import { usePanelRenderers } from './panelRenderers';
+import { WorkbenchRuntimeFrame } from './WorkbenchRuntimeFrame';
+import { isWorkbenchHostExtension, useWorkbenchCatalogEntry } from './workbenchRuntime';
 
 // Keep host-sdk out of standalone DockShell's static import graph. Catalog
 // Pages load this runtime only when an iframe-backed placement is mounted.
@@ -20,11 +22,87 @@ interface Props {
   pane?: SurfacePane;
 }
 
+function LegacyStandalonePanel({
+  manifest,
+  label,
+  pane,
+}: {
+  manifest: Exclude<ReturnType<typeof useExtensionManifest>, null | 'loading'>;
+  label: string;
+  pane?: SurfacePane;
+}) {
+  const { t } = useTranslation();
+  const detachSurface = useShellStore((state) => state.detachSurface);
+  const descriptor: SurfaceDescriptor = { kind: 'plugin', id: manifest.id, ...(pane ? { pane } : {}) };
+  return (
+    <div className="wb-dock-panel wb-dock-standalone">
+      {getWindowManager().canDetach() && (
+        <button
+          type="button"
+          className="wb-dock-popout-btn"
+          title={t('wbExtensionDock.popoutTitle')}
+          onClick={() => void detachSurface(descriptor, { title: label })}
+        >
+          <ExternalLink size={12} /> {t('wbExtensionDock.popoutLabel')}
+        </button>
+      )}
+      <Suspense fallback={<div className="wb-dock-loading">{t('wbExtensionDock.loadingExtensionGeneric')}</div>}>
+        <StandaloneExtensionIframe plugin={manifest} pane={pane} active />
+      </Suspense>
+    </div>
+  );
+}
+
+function WorkbenchHostPanel({
+  extensionId,
+  pane,
+}: {
+  extensionId: string;
+  pane?: SurfacePane;
+}) {
+  const { t } = useTranslation();
+  const activeGameSlug = useShellStore((state) => state.activeGameSlug);
+  const activeGameResolved = useShellStore((state) => state.activeGameResolved);
+  const runtime = useWorkbenchCatalogEntry(extensionId, activeGameSlug, activeGameResolved);
+
+  if (runtime.loading) {
+    return <div className="wb-dock-loading">{t('wbExtensionDock.loadingWorkbenchHost')}</div>;
+  }
+  if (runtime.error) {
+    return (
+      <div className="wb-dock-loading wb-dock-error" role="alert">
+        <div>{t('wbExtensionDock.workbenchHostFailed', { error: runtime.error.message })}</div>
+        <button type="button" onClick={runtime.retry}>{t('wbExtensionDock.retry')}</button>
+      </div>
+    );
+  }
+  if (runtime.descriptor && activeGameSlug) {
+    return (
+      <div className="wb-dock-panel wb-dock-standalone">
+        <WorkbenchRuntimeFrame
+          descriptor={runtime.descriptor}
+          gameId={activeGameSlug}
+          pane={pane}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="wb-dock-loading wb-dock-error" role="alert">
+      <div>
+        {activeGameSlug
+          ? t('wbExtensionDock.workbenchExtensionMissing', { extensionId })
+          : t('wbExtensionDock.workbenchGameRequired')}
+      </div>
+      <button type="button" onClick={runtime.retry}>{t('wbExtensionDock.retry')}</button>
+    </div>
+  );
+}
+
 /** Render one Page placement for a Workbench extension. The Page owns panel
  * availability and position; `pane` only selects the extension's content mode. */
 export function WorkbenchExtensionPanel({ extensionId, pane }: Props) {
   const { t, i18n } = useTranslation();
-  const detachSurface = useShellStore((state) => state.detachSurface);
   const manifest = useExtensionManifest(extensionId);
   const { workbenchPanels } = usePanelRenderers();
 
@@ -47,23 +125,14 @@ export function WorkbenchExtensionPanel({ extensionId, pane }: Props) {
 
   const label = pickLang(manifest.displayName, i18n.language, manifest.id);
   if (manifest.entry?.standalone) {
-    const descriptor: SurfaceDescriptor = { kind: 'plugin', id: manifest.id, ...(pane ? { pane } : {}) };
+    if (!isWorkbenchHostExtension(manifest.id)) {
+      return <LegacyStandalonePanel manifest={manifest} label={label} pane={pane} />;
+    }
     return (
-      <div className="wb-dock-panel wb-dock-standalone">
-        {getWindowManager().canDetach() && (
-          <button
-            type="button"
-            className="wb-dock-popout-btn"
-            title={t('wbExtensionDock.popoutTitle')}
-            onClick={() => void detachSurface(descriptor, { title: label })}
-          >
-            <ExternalLink size={12} /> {t('wbExtensionDock.popoutLabel')}
-          </button>
-        )}
-        <Suspense fallback={<div className="wb-dock-loading">{t('wbExtensionDock.loadingExtensionGeneric')}</div>}>
-          <StandaloneExtensionIframe plugin={manifest} pane={pane} active />
-        </Suspense>
-      </div>
+      <WorkbenchHostPanel
+        extensionId={extensionId}
+        pane={pane}
+      />
     );
   }
 

@@ -7,6 +7,7 @@
     "pageMenu": {
       "copyPath": "Copy Path",
       "revealInExplorer": "Reveal in File Explorer",
+      "locateInContentBrowser": "Locate in Content Browser",
       "referenceToChat": "Reference in Chat",
       "save": "Save"
     },

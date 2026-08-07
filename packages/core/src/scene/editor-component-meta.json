@@ -3,6 +3,12 @@
   "Children": { "hidden": true },
   "ChildOf": { "hidden": true },
   "Disabled": { "hidden": true },
+  "Transform": {
+    "bespoke": {
+      "editorId": "socket-calibration",
+      "hint": "Socket calibration — pick the parent bone this prop attaches to. Only shown for props inside a skinned character."
+    }
+  },
   "AnimationPlayer": {
     "bespoke": {
       "editorId": "animation-transport",

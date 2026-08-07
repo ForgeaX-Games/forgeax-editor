@@ -198,9 +198,8 @@ export interface HostSession {
   stopSimulation(): void;
   /**
    * Tear down the session's global side effects (disk-watch socket, flush
-   * beacons, VAG flush handler). A multi-game host calls this on a cross-game
-   * switch before disposing the engine; a single-game host (standalone) never
-   * calls it (teardown = page navigation).
+   * beacons, VAG flush handler). The active-game host calls this before a realm
+   * switch; a standalone host never calls it (teardown = page navigation).
    */
   dispose(options?: { flushPendingSave?: boolean }): void;
   /** The live play world while playing, else null. */
@@ -511,20 +510,6 @@ export function createHostSession(deps: HostSessionDeps): {
 
     setBootStage('loadDoc');
     await renderer.ready.catch(() => null);
-
-    // Wait for play-runtime's pack catalog to include this game (covers the
-    // gap between game creation and forgeaxGameRescan's Vite restart).
-    const slug = getSceneId();
-    if (slug && slug !== 'default') {
-      const packIndexUrl = `/preview/pack-index/${slug}.json`;
-      for (let attempt = 0; attempt < 15; attempt++) {
-        try {
-          const r = await deps.fetch(packIndexUrl, { cache: 'no-store' });
-          if (r.ok) break;
-        } catch { /* server restarting */ }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    }
 
     await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
     emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
@@ -855,9 +840,9 @@ export function createHostSession(deps: HostSessionDeps): {
     void installPreviewSkinHook({ world, engine, renderer, viewport });
 
     // ── Disk-watch + flush beacons (was bootEditor :1368) ───────────────────────
-    // Capture each teardown handle so a multi-game host (studio single-realm) can
-    // dispose this session on a cross-game switch — otherwise the previous game's
-    // disk-watch socket + flush beacons keep firing against the new game's world.
+    // Capture each teardown handle so the active-game host can dispose this
+    // session before a realm switch; otherwise the previous disk-watch socket
+    // + flush beacons keep firing against the new game's world.
     // The window pagehide/visibilitychange wiring is lifted behind
     // deps.installSaveBeaconListeners (the boot tail's one DOM boundary), so this
     // path is headless-testable; the flush target is deps.flushPendingSaveBeacon.

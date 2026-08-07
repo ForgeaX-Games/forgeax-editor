@@ -16,7 +16,13 @@
  * expectations about which panels each built-in workbench seeds.
  */
 import { describe, it, expect } from 'bun:test';
-import { BUILTIN_WORKBENCHES, filterLayoutByMembership, buildDefault } from '../builtinWorkbenches';
+import {
+  BUILTIN_WORKBENCHES,
+  filterLayoutByMembership,
+  buildDefault,
+  FOOTER_PANEL_IDS,
+  FOOTER_PANEL_ID_LIST,
+} from '../builtinWorkbenches';
 
 /** Collect every panel id referenced by the grid's leaves. */
 function leafPanelIds(layout: { grid: { root: unknown } }): string[] {
@@ -93,6 +99,13 @@ describe('BUILTIN_WORKBENCHES layout data integrity', () => {
     expect(() => buildDefault(api, 'ai')).not.toThrow();
     expect(() => buildDefault(api, 'custom-xyz')).not.toThrow();
     expect(captured.length).toBe(3);
+  });
+});
+
+describe('footer chrome SSOT', () => {
+  it('FOOTER_PANEL_ID_LIST is the ordered footer chrome set; FOOTER_PANEL_IDS mirrors it', () => {
+    expect(FOOTER_PANEL_ID_LIST).toEqual(['info', 'checkpoints', 'events']);
+    expect(new Set(FOOTER_PANEL_IDS)).toEqual(new Set(FOOTER_PANEL_ID_LIST));
   });
 });
 

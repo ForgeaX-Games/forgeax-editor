@@ -55,6 +55,35 @@ export interface WorkbenchAgentsResponse {
 
 export interface ActiveGameSelection {
   activeSlug: string | null;
+  runtime?: RuntimeScopeState;
+}
+
+export type RuntimeScopeStatus = 'unbound' | 'transitioning' | 'ready' | 'degraded' | 'unavailable';
+
+export interface RuntimeAssetDiagnostic {
+  code: string;
+  severity: 'info' | 'warning' | 'blocking';
+  message?: string;
+  hint?: string;
+}
+
+export interface RuntimeAssetBinding {
+  schemaVersion: 'runtime-asset-binding-v1';
+  gameId: string;
+  scopeId: string;
+  generation: number;
+  status: RuntimeScopeStatus;
+  catalogUrl: string;
+  importUrlBase: string;
+  packageUrlBase: string;
+  authority?: 'authoritative' | 'degraded';
+  diagnostics?: readonly RuntimeAssetDiagnostic[];
+}
+
+export interface RuntimeScopeState {
+  status: RuntimeScopeStatus;
+  binding?: RuntimeAssetBinding;
+  error?: string;
 }
 
 // 服务端语义:ok = targets.every(t => !t.existed || t.removed)。任何"存在但未
@@ -77,7 +106,7 @@ export interface WorkbenchClient {
   setActiveGame(slug: string): Promise<ActiveGameSelection>;
   subscribeActiveGame(listener: (selection: ActiveGameSelection) => void): () => void;
   listGames(): Promise<{ games: GameRow[]; activeSlug: string | null }>;
-  createGame(input: { slug: string; name: string; brief: string }): Promise<{ ok: boolean; error?: string }>;
+  createGame(input: { slug: string; name: string; brief: string; template?: string }): Promise<{ ok: boolean; error?: string }>;
   deleteGame(slug: string): Promise<void>;
   packageGame(slug: string, options?: PackageGameOptions): Promise<{ jobId?: string; async?: boolean; ok?: boolean; [key: string]: unknown }>;
   pollPackageJob(jobId: string): Promise<PackageJobStatus>;

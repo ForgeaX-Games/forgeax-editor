@@ -126,7 +126,9 @@ export function cameraGizmoPoints(
   cam: Record<string, unknown>, center: Vec3, t: Record<string, number> | undefined, dist: number, aspect: number,
 ): Vec3[] {
   const pts: Vec3[] = [];
-  const fov = num(cam.fov as number, 60) * DEG2RAD;
+  // Camera.fov is engine-native radians. Only Transform Euler overlays use
+  // degrees; converting this field again makes the camera gizmo almost flat.
+  const fov = num(cam.fov as number, Math.PI / 3);
   const near = num(cam.near as number, 0.1);
   const far = Math.min(num(cam.far as number, 1000), dist * 4 + 30); // clamp so it stays on-screen
   const fwd = forwardOf(t);
