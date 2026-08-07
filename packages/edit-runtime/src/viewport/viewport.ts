@@ -87,11 +87,10 @@ import { createGizmoPool, type GizmoAnchor } from './viewport-gizmo';
 import { createParamGizmo } from './viewport-param-gizmo';
 import { buildDragGroup, translatedMemberTarget, type DragGroupMember } from './viewport-drag-group';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
-import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, type EditorTransform } from './viewport-entity-read';
-import { pickMeshFallback } from './viewport-pick-fallback';
+import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, isEntEffectivelyHidden, type EditorTransform } from './viewport-entity-read';
 
 import type { EditorOp, OpHandle, EngineFacade } from '@forgeax/editor-core';
-import { entExists, entComponents } from '@forgeax/editor-core';
+import { worldEntityHandles, entExists, entComponents } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
 // (a document continuous op) uses the gateway lifecycle begin/update*/commit so
@@ -487,17 +486,24 @@ export function createViewport({
       }
     }
 
-    // 2) Super value-move pick: editor-camera-basis ray vs sceneWorld geometry.
-    //    bug-20260806 (GLB 选不中): the sweep moved to viewport-pick-fallback —
-    //    mesh-aabb-precise (MeshAsset.aabb × Transform.world) and enumerates
-    //    renderables WITHOUT requiring Name, so unnamed GLB mount nodes are
-    //    candidates. The raw hit may be a mount-internal node, so resolve it to
-    //    the editor-level entity exactly like the engine path above (UE: click
-    //    a component, select the actor).
+    // 2) Super value-move pick: editor-camera-basis ray vs sceneWorld Transform-AABB.
+    //    Only test entities that carry MeshFilter + MeshRenderer — lights,
+    //    cameras, and empty group nodes have no visual representation and
+    //    must not be selectable via the fallback (matches engine pick's
+    //    candidate set). See feedback 2026-07-07.
     const { origin, dir } = rayAt(clientX, clientY);
-    const fallbackHit = pickMeshFallback(activeWorld, origin, dir);
-    if (fallbackHit === null) return null;
-    return resolveEditorEntity(activeWorld, fallbackHit) ?? fallbackHit;
+    let best: EntityHandle | null = null, bestT = Infinity;
+    for (const id of worldEntityHandles(activeWorld)) {
+      if (isEntEffectivelyHidden(activeWorld, id)) continue;
+      const comps = entComponents(activeWorld, id);
+      if (!('MeshFilter' in comps) || !('MeshRenderer' in comps)) continue;
+      const t = readWorldTransform(activeWorld, id);
+      if (!t) continue;
+      const { center, half } = entityBox(t);
+      const hit = rayAABB(origin, dir, center, half);
+      if (hit !== null && hit < bestT) { bestT = hit; best = id; }
+    }
+    return best;
   }
 
   // ── pointer interaction ──

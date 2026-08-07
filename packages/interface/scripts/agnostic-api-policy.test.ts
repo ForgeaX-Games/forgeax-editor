@@ -48,18 +48,6 @@ describe("agnostic API policy", () => {
     ).toContain("unallowlisted API endpoint");
   });
 
-  test("confines the game template catalog to its centralized client", () => {
-    expect(
-      validateApiCall("/api/game-templates", "src/lib/game-templates.ts"),
-    ).toBeNull();
-    expect(
-      validateApiCall(
-        "/api/game-templates",
-        "src/components/TopBar/GameSwitcher.tsx",
-      ),
-    ).toContain("must be called from src/lib/game-templates.ts");
-  });
-
   test("allows the project version endpoints", () => {
     expect(
       validateApiCall(

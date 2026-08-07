@@ -6,8 +6,7 @@
 //   - dispatching importAsset returns a correlated accepted/running OperationRun.
 //   - executeAssetImport routes EVERY disk write through the assetIO gate — proven
 //     by observing the exact HTTP endpoints (/api/files/upload → /api/files →
-//     the active generation-scoped import route) the gate methods hit, with
-//     fetch stubbed (no server).
+//     /__import) the gate methods hit, with fetch stubbed (no server).
 //
 // The applier itself is fire-and-forget (async session-op contract, trace.ts F-2),
 // so the executor — the shared body it wraps — is what we assert against directly.
@@ -23,23 +22,8 @@ import { getImportFormat } from '../scan/ext-importer-map';
 import { executeAssetImport, registerPostAssetWriteCatalogSync } from '../index';
 import { panelBridge } from '../io/panel-bridge';
 import type { EditSession } from '../types';
-import { assetIO } from '../io/asset-io-facade';
-import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 
 const originalFetch = globalThis.fetch;
-
-function testRuntimeBinding(): RuntimeAssetBinding {
-  return {
-    schemaVersion: 'runtime-asset-binding-v1',
-    gameId: 'demo',
-    scopeId: 'test-scope',
-    generation: 1,
-    status: 'ready',
-    catalogUrl: '/preview/__pack/scopes/test-scope/1/catalog.json',
-    importUrlBase: '/preview/__pack/scopes/test-scope/1/import',
-    packageUrlBase: '/preview/__pack/scopes/test-scope/1/asset',
-  };
-}
 
 describe('importAsset op registration (catalog SSOT)', () => {
   it('importAsset is a cataloged SESSION op (AI-discoverable)', () => {
@@ -65,7 +49,6 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
   let calls: Array<{ url: string; method: string }>;
 
   beforeEach(() => {
-    assetIO.setRuntimeBinding(testRuntimeBinding());
     calls = [];
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
       const method = opts?.method ?? 'GET';
@@ -76,7 +59,6 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
   });
 
   afterEach(() => {
-    assetIO.setRuntimeBinding(undefined);
     (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
   });
 
@@ -97,7 +79,7 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     // writeMetaSidecar (.meta.json)
     expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
     // triggerCook (image importer goes through the simple sidecar + cook path)
-    expect(urls.some((u) => u.includes('/__pack/scopes/test-scope/1/import/'))).toBe(true);
+    expect(urls.some((u) => u.includes('/__import/'))).toBe(true);
     expect(phases).toEqual(['uploading', 'sidecar', 'cooking']);
   });
 
@@ -148,11 +130,11 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(sidecarPaths.length).toBe(1);
     // The sidecar body is written via fetch; we assert the importer is correct
     // and the cook endpoint was triggered.
-    const cookRequests = calls.filter((c) => c.url.includes('/__pack/scopes/test-scope/1/import/'));
+    const cookRequests = calls.filter((c) => c.url.includes('/__import/'));
     expect(cookRequests.length).toBe(1);
   });
 
-  it('audio import: upload → sidecar, no scoped cook', async () => {
+  it('audio import: upload → sidecar, no /__import cook', async () => {
     const r = await executeAssetImport({
       destPath: '/games/demo/assets/test_mp3.mp3',
       sourceName: 'test_mp3.mp3',
@@ -164,7 +146,7 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     const urls = calls.map((c) => c.url);
     expect(urls.some((u) => u.includes('/api/files/upload'))).toBe(true);
     expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
-    expect(urls.some((u) => u.includes('/__pack/scopes/test-scope/1/import/'))).toBe(false);
+    expect(urls.some((u) => u.includes('/__import/'))).toBe(false);
   });
 });
 
@@ -172,7 +154,6 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
   let gw: EditGateway;
 
   beforeEach(() => {
-    assetIO.setRuntimeBinding(testRuntimeBinding());
     (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
       Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
     // The applier resolves game-relative destPath through the host resolver.
@@ -183,7 +164,6 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
   });
 
   afterEach(() => {
-    assetIO.setRuntimeBinding(undefined);
     (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
     setPathResolver(null);
   });

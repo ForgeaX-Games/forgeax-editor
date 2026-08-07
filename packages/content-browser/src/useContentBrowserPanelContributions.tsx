@@ -82,13 +82,6 @@ export function useContentBrowserPanelContributions(): void {
             icon: 'Paintbrush',
             order: 30,
           },
-          {
-            id: 'contentBrowser.create.particle-effect',
-            command: 'contentBrowser.createAsset.particle-effect',
-            title: 'Particle Effect',
-            icon: 'Star',
-            order: 40,
-          },
         ],
       },
       {

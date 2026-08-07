@@ -27,8 +27,8 @@
 
 import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@forgeax/platform-io';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
 if (!gameDir) {
@@ -38,151 +38,6 @@ if (!gameDir) {
 
 const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
 const gameSlug = basename(resolve(gameDir));
-const engineTemplatesRoot = resolve(import.meta.dir, '../packages/engine/templates');
-
-const GAME_TEMPLATE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
-
-/** Read the standalone catalog from the same engine-owned template directory as Studio. */
-async function listGameTemplates(): Promise<Array<{ slug: string; name: string }>> {
-  const entries = await readdir(engineTemplatesRoot, { withFileTypes: true });
-  const templates: Array<{ slug: string; name: string }> = [];
-  for (const entry of entries) {
-    if (
-      !entry.isDirectory()
-      || entry.name.startsWith('.')
-      || entry.name.startsWith('_')
-      || entry.name === 'node_modules'
-      || !GAME_TEMPLATE_SLUG_RE.test(entry.name)
-    ) continue;
-    try {
-      const manifest = JSON.parse(await readFile(join(engineTemplatesRoot, entry.name, 'forge.json'), 'utf8')) as { name?: unknown };
-      if (typeof manifest.name === 'string' && manifest.name.trim().length > 0) {
-        templates.push({ slug: entry.name, name: manifest.name });
-      }
-    } catch {
-      // A template without a valid forge.json is not launchable and is omitted.
-    }
-  }
-  return templates.sort((a, b) => a.slug.localeCompare(b.slug));
-}
-
-interface GameManifest {
-  id?: unknown;
-  name?: unknown;
-  [key: string]: unknown;
-}
-
-async function readCurrentGameManifest(): Promise<GameManifest | null> {
-  try {
-    return JSON.parse(await readFile(join(gameDir, 'forge.json'), 'utf8')) as GameManifest;
-  } catch {
-    return null;
-  }
-}
-
-async function listStandaloneGames(): Promise<{ games: Array<{ slug: string; name: string; fileCount: number; mtime: number }>; activeSlug: string | null }> {
-  const manifest = await readCurrentGameManifest();
-  if (manifest === null) return { games: [], activeSlug: null };
-  const [entries, manifestStat] = await Promise.all([
-    readdir(gameDir, { withFileTypes: true }),
-    stat(join(gameDir, 'forge.json')),
-  ]);
-  return {
-    games: [{
-      slug: gameSlug,
-      name: typeof manifest.name === 'string' && manifest.name.trim() ? manifest.name : gameSlug,
-      fileCount: entries.length,
-      mtime: manifestStat.mtimeMs,
-    }],
-    activeSlug: gameSlug,
-  };
-}
-
-async function createStandaloneGame(input: { slug?: unknown; name?: unknown; brief?: unknown; template?: unknown }): Promise<Response> {
-  const slug = typeof input.slug === 'string' ? input.slug.trim() : '';
-  if (!GAME_TEMPLATE_SLUG_RE.test(slug)) {
-    return new Response(JSON.stringify({ ok: false, error: 'slug must be lowercase ASCII / digits / hyphens' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  if (slug !== gameSlug) {
-    return new Response(JSON.stringify({ ok: false, error: `standalone game slot is '${gameSlug}', received '${slug}'` }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  if (await readCurrentGameManifest() !== null) {
-    return new Response(JSON.stringify({ ok: false, error: `game '${slug}' already exists` }), {
-      status: 409,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  const template = typeof input.template === 'string' && input.template.trim()
-    ? input.template.trim()
-    : 'game-default';
-  if (!GAME_TEMPLATE_SLUG_RE.test(template)) {
-    return new Response(JSON.stringify({ ok: false, error: `invalid template '${template}'` }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  const templateDir = join(engineTemplatesRoot, template);
-  let templateManifest: GameManifest;
-  try {
-    templateManifest = JSON.parse(await readFile(join(templateDir, 'forge.json'), 'utf8')) as GameManifest;
-    await stat(join(templateDir, 'main.ts'));
-  } catch {
-    return new Response(JSON.stringify({ ok: false, error: `template not found: ${template}` }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  const existingEntries = await readdir(gameDir, { withFileTypes: true }).catch(() => []);
-  const isEmptyHostScaffold = existingEntries.length === 2
-    && existingEntries.some((entry) => entry.name === 'package.json' && entry.isFile())
-    && existingEntries.some((entry) => entry.name === 'assets' && entry.isDirectory())
-    && (await readdir(join(gameDir, 'assets')).catch(() => [])).length === 0;
-  if (existingEntries.length > 0 && !isEmptyHostScaffold) {
-    return new Response(JSON.stringify({ ok: false, error: `game slot '${slug}' is not empty` }), {
-      status: 409,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  try {
-    await mkdir(gameDir, { recursive: true });
-    await cp(templateDir, gameDir, {
-      recursive: true,
-      filter: (source) => !['.git', 'node_modules', 'sessions'].includes(basename(source)),
-    });
-    const manifest = {
-      ...templateManifest,
-      id: slug,
-      name: typeof input.name === 'string' && input.name.trim() ? input.name.trim() : slug,
-    };
-    await writeFile(join(gameDir, 'forge.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    const brief = typeof input.brief === 'string' ? input.brief.trim() : '';
-    await writeFile(
-      join(gameDir, 'FORGE.md'),
-      `# ${manifest.name}\n\n${brief ? `${brief}\n` : '_(no brief yet)_\n'}`,
-      'utf8',
-    );
-    return new Response(JSON.stringify({ ok: true, slug, template }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (error) {
-    await rm(gameDir, { recursive: true, force: true });
-    await mkdir(gameDir, { recursive: true });
-    return new Response(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-}
 
 /**
  * Engine catalog rows can retain Studio's project-space `games/<slug>/...`
@@ -300,109 +155,8 @@ const server = Bun.serve({
         headers: { 'Content-Type': 'application/json' },
       });
     }
-    if (url.pathname === '/api/game-templates' && req.method === 'GET') {
-      try {
-        return new Response(JSON.stringify({ templates: await listGameTemplates() }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-    }
-    if (url.pathname === '/api/games' && req.method === 'GET') {
-      try {
-        return new Response(JSON.stringify(await listStandaloneGames()), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-    }
-    if (url.pathname === '/api/games' && req.method === 'POST') {
-      let body: { slug?: unknown; name?: unknown; brief?: unknown; template?: unknown };
-      try {
-        body = await req.json() as typeof body;
-      } catch {
-        return new Response(JSON.stringify({ ok: false, error: 'invalid json' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return createStandaloneGame(body);
-    }
-    if (url.pathname === '/api/games/active' && req.method === 'GET') {
-      return new Response(JSON.stringify({ activeSlug: (await readCurrentGameManifest()) ? gameSlug : null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    if (url.pathname === '/api/games/active' && req.method === 'PUT') {
-      let body: { slug?: unknown };
-      try {
-        body = await req.json() as typeof body;
-      } catch {
-        return new Response(JSON.stringify({ error: 'invalid json' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      const activeSlug = typeof body.slug === 'string' ? body.slug : '';
-      if (activeSlug !== gameSlug || (await readCurrentGameManifest()) === null) {
-        return new Response(JSON.stringify({ error: `game '${activeSlug}' is unavailable` }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify({ activeSlug }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
     if (url.pathname === '/api/events/stream') {
       return emptyEventStream();
-    }
-    if (url.pathname === '/api/validation/project' && req.method === 'POST') {
-      let options: { maxBytes?: number; maxEntities?: number } = {};
-      try {
-        const body = await req.clone().json() as Record<string, unknown>;
-        options = {
-          ...(typeof body.maxBytes === 'number' ? { maxBytes: body.maxBytes } : {}),
-          ...(typeof body.maxEntities === 'number' ? { maxEntities: body.maxEntities } : {}),
-        };
-      } catch {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: { code: 'INVALID_ARGS', hint: 'project validation options must be a JSON object' },
-        }), { status: 400, headers: { 'content-type': 'application/json' } });
-      }
-      try {
-        // The existing validator is the producer-owned J5 fact source. Keep it
-        // in the Bun host because it reads the confined game filesystem.
-        const { validateGameProject } = await import('../scripts/game-validation.mjs');
-        const result = validateGameProject(gameDir, options);
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: {
-            code: 'project-validation-unavailable',
-            hint: error instanceof Error ? error.message : String(error),
-            retryable: true,
-            recoveryActions: ['run.retry', 'editor.discover'],
-          },
-        }), { status: 503, headers: { 'content-type': 'application/json' } });
-      }
     }
 
     for (const { prefix, router, isFiles } of PREFIXES) {
@@ -461,7 +215,7 @@ const server = Bun.serve({
     return new Response(JSON.stringify({
       unavailable: true,
       reason: 'standalone',
-      hint: 'standalone mounts /api/files /api/prefs /api/version /api/health /api/game-templates /api/games /api/events/stream',
+      hint: 'studio-only endpoint; standalone mounts /api/files /api/prefs /api/version /api/health /api/events/stream',
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

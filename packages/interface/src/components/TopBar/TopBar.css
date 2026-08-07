@@ -517,22 +517,6 @@
 }
 .tb-modal-input:focus, .tb-modal-textarea:focus { border-color: var(--primary); }
 .tb-modal-textarea { resize: vertical; }
-.tb-modal-select {
-  background: rgba(0,0,0,0.3);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: var(--text-primary);
-  font-size: 12px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  outline: none;
-  font-family: inherit;
-}
-.tb-modal-select:focus { border-color: var(--primary); }
-.tb-modal-help {
-  font-size: 11px;
-  color: var(--text-muted, rgba(255,255,255,0.4));
-  padding: 2px 0;
-}
 .tb-modal-error {
   font-size: 11px;
   color: var(--accent-error);

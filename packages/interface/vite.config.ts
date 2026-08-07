@@ -7,7 +7,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { vitePluginBrand } from './vite-plugin-brand';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
-const WB_GAME_VIDEO_WORKSPACE = resolve(PACKAGE_DIR, '../marketplace/extensions/wb-game-video');
 const ROOT_ENV = resolve(PACKAGE_DIR, '../../.env');
 if (existsSync(ROOT_ENV)) {
   for (const line of readFileSync(ROOT_ENV, 'utf-8').split('\n')) {
@@ -89,7 +88,7 @@ const httpsServerOption = useCustomCert
   ? { cert: readFileSync(tlsCertPath), key: readFileSync(tlsKeyPath) }
   : undefined;
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   plugins: [
     vitePluginBrand({ packageDir: PACKAGE_DIR }),
     react(),
@@ -106,10 +105,6 @@ export default defineConfig(({ command }) => ({
     // null". Force a single react instance for all imports (incl. dockview).
     dedupe: ['react', 'react-dom'],
     alias: {
-      ...(command === 'serve' && existsSync(resolve(WB_GAME_VIDEO_WORKSPACE, 'package.json')) ? {
-        '@forgeax-extension/wb-game-video/styles.css': resolve(WB_GAME_VIDEO_WORKSPACE, 'src/styles.css'),
-        '@forgeax-extension/wb-game-video': resolve(WB_GAME_VIDEO_WORKSPACE, 'src/mount.tsx'),
-      } : {}),
       // More specific subpaths first — Vite matches string aliases by prefix
       // and uses the first hit, so '@forgeax/design' must come last.
       '@/': `${resolve(PACKAGE_DIR, 'src')}/`,
@@ -185,8 +180,18 @@ export default defineConfig(({ command }) => ({
       // games/*, node_modules/.vite/deps/*, @vite, @id, @fs) and the
       // interface's own /node_modules deps stay un-proxied — no collision.
       '/preview': { target: ENGINE, changeOrigin: true, ws: true },
-      // All catalog/import/package traffic is scoped and lives below /preview;
-      // there is deliberately no root-level asset proxy or global fallback.
+      // createDevImportTransport (engine runtime) POSTs a root-absolute
+      // `/__import/<guid>` on a loadByGuid miss to lazily cook a texture into
+      // the RGBA .bin the runtime requires (e.g. the template's sky.hdr
+      // cube-texture). It is NOT under /preview, so route it to the Play engine
+      // explicitly. Only the Play preview iframe issues it; the editor runtime
+      // wires no import transport.
+      '/__import': { target: ENGINE, changeOrigin: true },
+      // After /__import returns a row, the runtime fetches the pack body at
+      // `/__forgeax-ddc/<glb-bytes-guid>.pack.json` (vite-plugin-pack DDC seam).
+      // It is also outside /preview, so it must be proxied explicitly or the
+      // SPA falls back to index.html and the runtime parses HTML as JSON.
+      '/__forgeax-ddc': { target: ENGINE, changeOrigin: true },
       // Editor runtime vite has `base: '/editor/'`; one proxy catches all its
       // asset/dep URLs (forgeax/engine/*, node_modules/.vite/deps/*, @vite,
       // @id, @fs) just like /preview. Mirrors the preview-runtime wiring.
@@ -210,4 +215,4 @@ export default defineConfig(({ command }) => ({
       ...standalonePluginProxies(),
     },
   },
-}));
+});

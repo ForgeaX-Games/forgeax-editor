@@ -1,0 +1,303 @@
+/* Tab-rules manual — ported from the studio-demo dtr-* manual. Theme tokens
+   only; brand-soft → --color-interaction-selected-brand, brand-line →
+   --color-brand-primary-soft. The Dialog primitive supplies the mask, sizing
+   (via utility overrides at the call site) and the close button. */
+.page-rules {
+  grid-template-columns: 186px 1fr;
+  background: var(--color-background-base);
+}
+
+.page-rules .pr-nav {
+  border-right: 1px solid var(--color-divider-default);
+  background: var(--color-background-canvas);
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.page-rules .pr-brand {
+  padding: 4px 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-brand-primary);
+}
+.page-rules .pr-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.page-rules .pr-nav button:hover {
+  background: var(--color-interaction-hover);
+  color: var(--color-text-primary);
+}
+.page-rules .pr-nav button.on {
+  background: var(--color-interaction-selected-brand);
+  color: var(--color-brand-primary);
+}
+.page-rules .pr-nav button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.page-rules .pr-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-rules .pr-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-divider-default);
+  flex-shrink: 0;
+}
+.page-rules .pr-h {
+  font-size: 13px;
+  font-weight: 700;
+}
+.page-rules .pr-bar-sp {
+  flex: 1;
+}
+/* Bar-aligned close (demo dtr-x). The primitive's own corner close is hidden
+   below so we don't show two, and this one carries proper button chrome. */
+.page-rules .pr-x {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  opacity: 1;
+}
+.page-rules .pr-x:hover {
+  background: var(--color-interaction-hover);
+  color: var(--color-text-primary);
+}
+.page-rules .pr-x svg {
+  width: 14px;
+  height: 14px;
+}
+/* Hide DialogContent's built-in corner close — the only direct-child <button>. */
+.page-rules > button {
+  display: none;
+}
+.page-rules .pr-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px;
+}
+.page-rules .pr-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.page-rules .pr-lead {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.65;
+}
+.page-rules .pr-lead code {
+  font-family: var(--prim-font-mono);
+  font-size: 11px;
+  color: var(--color-brand-primary);
+}
+
+.page-rules .pr-card {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-background-elevated);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.page-rules .pr-card-h {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.page-rules .pr-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.page-rules .pr-tbl th,
+.page-rules .pr-tbl td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--color-divider-subtle);
+  vertical-align: top;
+}
+.page-rules .pr-tbl th {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  font-weight: 700;
+}
+.page-rules .pr-tbl td code,
+.page-rules .pr-lead b {
+  font-family: var(--prim-font-mono);
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+}
+.page-rules .pr-tbl tr:last-child td {
+  border-bottom: none;
+}
+
+.page-rules .pr-yes,
+.page-rules .pr-no {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.page-rules .pr-yes {
+  background: var(--color-interaction-selected-brand);
+  color: var(--color-brand-primary);
+}
+.page-rules .pr-no {
+  background: var(--color-interaction-hover);
+  color: var(--color-text-tertiary);
+}
+
+.page-rules .pr-tree {
+  font-family: var(--prim-font-mono);
+  font-size: 11.5px;
+  line-height: 1.9;
+  color: var(--color-text-secondary);
+  white-space: pre;
+  margin: 0;
+  overflow-x: auto;
+}
+.page-rules .pr-tree b {
+  color: var(--color-brand-primary);
+  font-weight: 700;
+}
+.page-rules .pr-tree i {
+  color: var(--color-text-tertiary);
+  font-style: normal;
+}
+
+.page-rules .pr-flow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.page-rules .pr-node {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--color-background-base);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.page-rules .pr-node.brand {
+  border-color: var(--color-brand-primary-soft);
+}
+.page-rules .pr-node .n-t {
+  font-size: 12px;
+  font-weight: 700;
+}
+.page-rules .pr-node .n-d {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  line-height: 1.6;
+}
+
+.page-rules .pr-arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.page-rules .pr-arrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.page-rules .pr-arrow .a-k {
+  flex-shrink: 0;
+  font-family: var(--prim-font-mono);
+  font-size: 10.5px;
+  color: var(--color-brand-primary);
+  background: var(--color-interaction-selected-brand);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.page-rules .pr-kbd {
+  font-family: var(--prim-font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-background-floating);
+  color: var(--color-text-secondary);
+}
+
+.page-rules .pr-phase {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.page-rules .pr-ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.85;
+}
+.page-rules .pr-ul li::marker {
+  color: var(--color-text-tertiary);
+}
+
+.page-rules .pr-q {
+  border-left: 2px solid var(--color-brand-primary);
+  padding: 2px 0 2px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.page-rules .pr-q .q-t {
+  font-size: 12px;
+  font-weight: 600;
+}
+.page-rules .pr-q .q-a {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.page-rules .pr-q .q-a em {
+  color: var(--color-brand-primary);
+  font-style: normal;
+  font-weight: 600;
+}
