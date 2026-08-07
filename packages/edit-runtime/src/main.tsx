@@ -19,7 +19,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ViewportComponent } from './viewport/ViewportComponent';
-import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 import { installShortcutForwarder } from '@forgeax/editor-core/shortcut-forwarder';
 import './theme.css';
 
@@ -30,18 +29,13 @@ export interface EditRuntimeHostInjection {
   readonly root?: HTMLElement;
   readonly gameSlug: string | null;
   readonly gameRoot?: string;
-  readonly runtimeBinding?: RuntimeAssetBinding;
 }
 
 export function mountEditRuntime(host: EditRuntimeHostInjection): void {
   const appRoot = host.root ?? document.getElementById('app') ?? document.body;
   createRoot(appRoot).render(
     <StrictMode>
-      <ViewportComponent
-        gameSlug={host.gameSlug}
-        gameRoot={host.gameRoot ?? host.gameSlug ?? undefined}
-        runtimeBinding={host.runtimeBinding}
-      />
+      <ViewportComponent gameSlug={host.gameSlug} gameRoot={host.gameRoot ?? host.gameSlug ?? undefined} />
     </StrictMode>,
   );
 }
@@ -55,5 +49,5 @@ installShortcutForwarder();
   // The active game comes from the --game dir (basename === slug), injected at
   // build time as __FORGEAX_GAME_SLUG__; game files are addressed by <slug>/<rel>
   // so gameRoot === slug. Passed as props (NOT `?scene=`/`?gameRoot=` URL params).
-  mountEditRuntime({ gameSlug: __FORGEAX_GAME_SLUG__, runtimeBinding: __FORGEAX_RUNTIME_BINDING__ ?? undefined });
+  mountEditRuntime({ gameSlug: __FORGEAX_GAME_SLUG__ });
 }

@@ -170,30 +170,18 @@ export const ActivityContributionSchema = z
     message: 'activity must declare exactly one of pageType or commandId',
   });
 
-/**
- * A resource editor either TARGETS resources (scheme/extension/mime/kind) or
- * declares itself the default editor for whatever nothing else claims. The two
- * are mutually exclusive so a targeted matcher can never silently double as a
- * catch-all: `asset.kind` is an open string in pack.schema.json, so enumerating
- * every kind is impossible and a missing entry must degrade to the default
- * editor rather than to "nothing opens".
- */
 export const ResourceSelectorSchema = z
   .object({
     schemes: z.array(z.string().min(1)).optional(),
     extensions: z.array(z.string().min(1)).optional(),
     mimeTypes: z.array(z.string().min(1)).optional(),
     kinds: z.array(z.string().min(1)).optional(),
-    fallback: z.literal(true).optional(),
   })
   .strict()
-  .refine((selector) => {
-    const targeted = Boolean(
-      selector.schemes?.length || selector.extensions?.length || selector.mimeTypes?.length || selector.kinds?.length,
-    );
-    return selector.fallback === true ? !targeted : targeted;
-  }, {
-    message: 'resource selector must declare either targeted matchers (scheme, extension, mime type, or kind) or fallback: true, never both',
+  .refine((selector) => Boolean(
+    selector.schemes?.length || selector.extensions?.length || selector.mimeTypes?.length || selector.kinds?.length,
+  ), {
+    message: 'resource selector must declare at least one scheme, extension, mime type, or kind',
   });
 
 export const ResourceEditorContributionSchema = z

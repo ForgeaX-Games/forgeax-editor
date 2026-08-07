@@ -37,7 +37,7 @@ import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/pa
 import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
 import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
-import { configureWorkbenchClient, useShellStore } from '@forgeax/interface/store';
+import { useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
@@ -94,7 +94,6 @@ import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-r
 import { projectGatewayOps } from '@forgeax/editor-edit-runtime';
 import { gateway } from '@forgeax/editor-core';
 import { installSettingsPanelRedirect } from './settings-redirect';
-import { createStandaloneGameClient } from './game-service-client';
 
 // lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
 // (AC-C1 / T5-1): entity and asset forward-selects each advance it; clear() does
@@ -131,13 +130,6 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
 // null when the stack was started without `cli.mjs run --game <dir>` — in that
 // case no game is served and the editor opens on an empty scene.
 declare const __FORGEAX_GAME_SLUG__: string | null;
-
-// The standalone build is one game slot per host. A New Game submission
-// materializes into that slot, then reloads the document so the compile-time
-// engine/game-root wiring consumes the newly-created files on the next boot.
-configureWorkbenchClient(createStandaloneGameClient(() => {
-  window.setTimeout(() => window.location.reload(), 0);
-}));
 
 // ── panel renderer injection (single realm, PanelRenderers v9 shape) ──────────
 // v9 (2026-07-08) reclassified PanelRenderers into structural category slots:
@@ -188,13 +180,7 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
 // as props (NOT `?scene=`/`?gameRoot=` URL params — the single realm removed the
 // iframe those addressed, so a stale URL can no longer override the CLI intent).
 function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
-  return (
-    <ViewportComponent
-      gameSlug={__FORGEAX_GAME_SLUG__}
-      gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
-      runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
-    />
-  );
+  return <ViewportComponent gameSlug={__FORGEAX_GAME_SLUG__} gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined} />;
 }
 
 /** Fields no interface factory covers: the workbench layout seed and the

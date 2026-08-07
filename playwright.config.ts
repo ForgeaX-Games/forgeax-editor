@@ -1,6 +1,6 @@
 // Playwright config for @forgeax/editor — single-realm e2e gate.
 //
-// The :15290 host boots the engine in-process (engine-vite-preset serves the
+// The :15290 host boots the engine in-process (runtime-vite-preset serves the
 // shader manifest + pack catalog locally) and renders the viewport + panels as
 // in-process components — no /editor iframe is needed. Servers used here:
 //   - :15290 — the standalone host (`bun run dev`, cwd '.'). The single
@@ -16,8 +16,7 @@
 
 import { defineConfig } from '@playwright/test';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 // The fixed defaults preserve the normal developer entry points. CI/fix-up
 // evidence may supply private ports so a fresh current-HEAD server never
@@ -25,29 +24,13 @@ import { basename, join, resolve } from 'node:path';
 const e2eHostPort = process.env.FORGEAX_E2E_PORT ?? '15290';
 const e2eApiPort = process.env.FORGEAX_E2E_API_PORT ?? '15281';
 const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
-const e2eTemplateHostPort = process.env.FORGEAX_E2E_TEMPLATE_PORT ?? '15490';
-const e2eTemplateApiPort = process.env.FORGEAX_E2E_TEMPLATE_API_PORT ?? '15481';
 const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
-const e2eRuntimeScopeId = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'standalone-sample';
-const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
 // Save E2E must exercise real file IO without rewriting the tracked sample.
 // The copy is exact, isolated to this Playwright process, and removed only at
 // process exit; the browser still addresses it as the game slug "sample".
-const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
+const e2eTempRoot = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'forgeax-save-e2e-'));
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
-// New-game template journey (docs/2026-08-06-new-game-template-journey-e2e-plan
-// D-1): a FRESH copy of the engine's canonical template, initialized into the
-// same isolated temp root — the editor-side equivalent of "user clicks New
-// Game" in studio. Copied at config time because webServers capture the game
-// dir at boot. node_modules is excluded: the host aliases every
-// @forgeax/engine-* import to this workspace (vite.config.ts
-// engineWorktreeResolve), so the copied tree needs no bundled deps.
-const e2eTemplateGameDir = join(e2eTempRoot, 'new-game-template');
-cpSync(resolve('packages/engine/templates/game-default'), e2eTemplateGameDir, {
-  recursive: true,
-  filter: (src) => basename(src) !== 'node_modules',
-});
 // Stage the real producer input before any fresh backend/catalog process starts.
 // J1's disposable source fixture must exist before all three webServers start:
 // the browser/backend import path reads the isolated game directory that is
@@ -86,7 +69,7 @@ export default defineConfig({
       // editor standalone chrome host on :15290 — renders <DockShell
       // hideChatAndForge /> and boots the engine IN-PROCESS on module load
       // (single realm). Started via `bun run dev` so the root vite.config.ts
-      // (root=standalone/, port=15290, engine-vite-preset serve) applies.
+      // (root=standalone/, port=15290, runtime-vite-preset serve) applies.
       // This is the ONLY document the e2e specs load.
       //
       // Injects FORGEAX_GAME_DIR=games/sample so the standalone host boots with
@@ -103,8 +86,6 @@ export default defineConfig({
         FORGEAX_INTERFACE_PORT: e2eHostPort,
         FORGEAX_STANDALONE_PORT: e2eHostPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
-        FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
-        FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
       },
       url: `http://127.0.0.1:${e2eHostPort}`,
@@ -122,10 +103,7 @@ export default defineConfig({
       env: {
         ...process.env,
         FORGEAX_ENGINE_PORT: e2eEnginePort,
-        FORGEAX_GAME_DIR: e2eGameDir,
-        FORGEAX_GAME_ID: 'sample',
-        FORGEAX_RUNTIME_SCOPE_ID: 'e2e-sample',
-        FORGEAX_RUNTIME_GENERATION: '1',
+        FORGEAX_PREVIEW_GAMES_DIR: e2eTempRoot,
         FORGEAX_GAMES_URL_PREFIX: 'e2e-games',
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
@@ -145,43 +123,6 @@ export default defineConfig({
       cwd: '.',
       env: { ...process.env, FORGEAX_GAME_DIR: e2eGameDir, FORGEAX_GAME_API_PORT: e2eApiPort },
       url: `http://127.0.0.1:${e2eApiPort}/api/health`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-    },
-    {
-      // New-game template journey (docs/2026-08-06-new-game-template-journey-e2e-plan
-      // D-2): a SECOND standalone host on :15490 booted against the fresh
-      // canonical-template copy — same `bun run dev` shape as webServer #1 with
-      // its own port pair, so the template journey never perturbs the sample
-      // host's specs. Only e2e/new-game-template-journey.spec.ts loads it.
-      command: 'bun run dev',
-      cwd: '.',
-      env: {
-        ...process.env as Record<string, string>,
-        FORGEAX_GAME_DIR: e2eTemplateGameDir,
-        FORGEAX_ENGINE_PORT: e2eEnginePort,
-        FORGEAX_INTERFACE_PORT: e2eTemplateHostPort,
-        FORGEAX_STANDALONE_PORT: e2eTemplateHostPort,
-        FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
-        FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
-        FORGEAX_RUNTIME_GENERATION: '1',
-        FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
-      },
-      url: `http://127.0.0.1:${e2eTemplateHostPort}`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      // The template host's /api backend pair (same game-backend.ts shape as
-      // webServer #3, confined to the template copy) — without it the host's
-      // /api proxy fails at boot and the spec's L1 clean-console assertion
-      // would red on proxy noise instead of product errors.
-      command: 'bun standalone/game-backend.ts',
-      cwd: '.',
-      env: { ...process.env, FORGEAX_GAME_DIR: e2eTemplateGameDir, FORGEAX_GAME_API_PORT: e2eTemplateApiPort },
-      url: `http://127.0.0.1:${e2eTemplateApiPort}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
     },

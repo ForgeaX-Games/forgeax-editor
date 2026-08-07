@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "kind": "external-asset-package",
+  "source": "acceptance.particle.json",
+  "importer": "particle-effect",
+  "revision": {
+    "digest": "sha256:acceptance-r1",
+    "observedAt": 1,
+    "rootId": "sample/assets"
+  },
+  "importSettings": {},
+  "subAssets": [
+    {
+      "guid": "019f56f2-0ac0-776a-9d28-50eb5a9edeb9",
+      "sourceIndex": 0,
+      "kind": "particle-effect"
+    }
+  ]
+}

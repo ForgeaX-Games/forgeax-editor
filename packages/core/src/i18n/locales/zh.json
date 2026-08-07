@@ -7,7 +7,6 @@
     "pageMenu": {
       "copyPath": "复制路径",
       "revealInExplorer": "在文件资源管理器中显示",
-      "locateInContentBrowser": "在内容浏览器中定位",
       "referenceToChat": "引用到对话流",
       "save": "保存"
     },

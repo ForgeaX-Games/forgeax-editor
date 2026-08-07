@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
 
-const source = readFileSync(new URL('../viewport/ViewportComponent.tsx', import.meta.url), 'utf8');
+import { resolveViewportPackIndexUrl } from '../viewport/ViewportComponent';
 
 describe('viewport asset catalog identity', () => {
-  it('requires a host runtime binding instead of deriving a catalog from slug', () => {
-    expect(source).toContain('runtimeBinding?: RuntimeAssetBinding');
-    expect(source).toContain('expectedScope: binding');
-    expect(source).not.toContain('resolveViewportPackIndexUrl');
-    expect(source).not.toContain('/pack-index/');
+  it('uses the host game slug and never the active scene id', () => {
+    expect(resolveViewportPackIndexUrl({
+      gameSlug: 'game-2048', selfHostPack: false, base: '/preview',
+    })).toBe('/preview/pack-index/game-2048.json');
   });
 
-  it('does not construct a default import URL', () => {
-    expect(source).not.toContain('/__import/');
+  it('preserves an explicitly injected host catalog URL', () => {
+    expect(resolveViewportPackIndexUrl({
+      gameSlug: 'game-2048', injectedUrl: 'https://assets.example/game.json',
+      selfHostPack: false, base: '/preview',
+    })).toBe('https://assets.example/game.json');
+  });
+
+  it('uses the host-local global catalog for self-hosted and empty sessions', () => {
+    expect(resolveViewportPackIndexUrl({
+      gameSlug: 'game-2048', selfHostPack: true, base: '/preview',
+    })).toBe('/preview/pack-index.json');
+    expect(resolveViewportPackIndexUrl({
+      gameSlug: null, selfHostPack: false, base: '/preview',
+    })).toBe('/preview/pack-index.json');
   });
 });
