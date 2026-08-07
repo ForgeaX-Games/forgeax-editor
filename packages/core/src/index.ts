@@ -147,6 +147,23 @@ export type {
   RuntimeDiagnosticProjectionFact,
   RuntimeDiagnosticsProvider,
 } from './io/diagnostics';
+export {
+  getProjectValidationProvider,
+  normalizeProjectValidationResult,
+  projectValidationDiagnostics,
+  registerProjectValidationProvider,
+  PROJECT_VALIDATION_MAX_ISSUES,
+  PROJECT_VALIDATION_OPERATION,
+  PROJECT_VALIDATION_SCHEMA_VERSION,
+} from './io/project-validation';
+export type {
+  ProjectValidationIssue,
+  ProjectValidationOptions,
+  ProjectValidationProvider,
+  ProjectValidationResult,
+  ProjectValidationResultEnvelope,
+  ProjectValidationStats,
+} from './io/project-validation';
 export { createRuntimeReadiness, RUNTIME_READINESS_STATES, runtimeReadinessDiagnostic } from './public/gateway';
 export type {
   CreateRuntimeReadinessInput,
@@ -202,6 +219,7 @@ export {
   entComponentsPresent,
   worldComponentNames,
   worldEntityHandles,
+  worldRenderableHandles,
   worldRootHandles,
   registerActiveReadBinding,
   getActiveReadBinding,
@@ -264,6 +282,14 @@ export type {
 } from './scene/schema';
 export { planArrayEdit } from './scene/array-edit';
 export type { ArrayEditAction, ArrayEditRequest, ArrayEditPlan } from './scene/array-edit';
+// socket-calibration M1 (doc §3.2): read face for a skinned character's joint
+// names — the parent-bone dropdown source. Pure read over activeWorld.
+export {
+  findSkinEntity,
+  listSkinJoints,
+  listSkinJointsFor,
+} from './scene/skin-joints';
+export type { SkinJoint } from './scene/skin-joints';
 // Editor-owned component metadata overlay (SSOT), injected into
 // `Component.meta.editor` post-registration; the engine stays agnostic.
 export {
@@ -612,6 +638,7 @@ export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-na
 // notifications live under assets/. Side-effect import registers scan session
 // appliers at module eval time.
 import './scan/scan-ops';
+import './io/project-validation-ops';
 export type {
   ScanState,
   DirEntry,

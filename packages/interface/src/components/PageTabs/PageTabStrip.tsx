@@ -9,9 +9,9 @@ import {
 } from 'react';
 import {
   AtSign,
-  BookOpen,
   ChevronsRight,
   Copy,
+  Crosshair,
   File,
   FolderSearch,
   Minus,
@@ -39,7 +39,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { PageRulesDialog } from './PageRulesDialog';
 import './PageTabStrip.css';
 
 // Lucide glyphs for controller-contributed menu items (kebab name → component),
@@ -47,6 +46,7 @@ import './PageTabStrip.css';
 const MENU_ICON: Record<string, LucideIcon> = {
   copy: Copy,
   'folder-search': FolderSearch,
+  crosshair: Crosshair,
   'at-sign': AtSign,
   save: Save,
 };
@@ -95,7 +95,6 @@ export function PageTabStrip(): ReactElement | null {
   const dragKeyRef = useRef<string | null>(null);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [overflowing, setOverflowing] = useState(false);
-  const [rulesOpen, setRulesOpen] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; key: string } | null>(null);
   // Dirty state lives outside the page snapshot — a registered probe (e.g. the
   // Material Instance staging buffer) owns it, so re-render on its signal.
@@ -330,15 +329,6 @@ export function PageTabStrip(): ReactElement | null {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <button
-            type="button"
-            className="page-tab-btn page-tab-rules no-motion-lift"
-            title={t('pageTabs.rulesManual')}
-            onClick={() => setRulesOpen(true)}
-          >
-            <BookOpen className="page-tab-btn__icon" aria-hidden />
-            <span>{t('pageTabs.rulesButton')}</span>
-          </button>
         </div>
       </div>
 
@@ -377,8 +367,6 @@ export function PageTabStrip(): ReactElement | null {
           </DropdownMenuContent>
         )}
       </DropdownMenu>
-
-      <PageRulesDialog open={rulesOpen} onOpenChange={setRulesOpen} />
     </div>
   );
 }

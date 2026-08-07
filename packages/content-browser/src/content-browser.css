@@ -462,6 +462,18 @@
   border-color: var(--color-brand-line, rgba(212, 255, 72, 0.38));
   box-shadow: 0 0 0 1px var(--color-brand-line, rgba(212, 255, 72, 0.38));
 }
+/* Transient "locate in content browser" pulse — draws the eye to the just
+   revealed card, then fades. Applied briefly by ContentBrowser's reveal handler. */
+.cb-grid-item.cb-reveal-flash {
+  animation: cb-reveal-flash 1.2s ease-out;
+}
+@keyframes cb-reveal-flash {
+  0%   { box-shadow: 0 0 0 2px var(--color-brand-primary, #d4ff48); }
+  100% { box-shadow: 0 0 0 1px var(--color-brand-line, rgba(212, 255, 72, 0.38)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cb-grid-item.cb-reveal-flash { animation: none; }
+}
 .cb-grid-thumb {
   display: flex;
   align-items: center;

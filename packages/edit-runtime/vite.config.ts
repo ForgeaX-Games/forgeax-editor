@@ -1,9 +1,10 @@
 // edit-runtime vite config — the Edit-mode iframe/dev server (:15280, base
 // '/editor/'). Independent dev + e2e webServer entry (`bun -F edit-runtime dev`).
 //
-// The engine-serve mechanism (forgeaxShader emit, pluginPack pack-index /
-// __import middleware, base-strip, preserveSymlinks, optimizeDeps.exclude
-// @forgeax family, build.target esnext) lives in runtime-vite-preset so the
+// The engine-serve mechanism (forgeaxShader emit, scoped pluginPack middleware,
+// base-strip, preserveSymlinks, optimizeDeps.exclude
+// @forgeax family, build.target esnext) lives in the editor-level
+// engine-vite-preset so the
 // :15290 host config can serve the engine in-process too. This config CONSUMES
 // that preset and keeps only its edit-runtime-specific parts: root,
 // base '/editor/', hmr.clientPort, the --game /api + /preview proxies, and the
@@ -13,8 +14,9 @@ import { defineConfig } from 'vite';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { engineVitePreset } from './src/viewport/runtime-vite-preset';
+import { engineVitePreset } from '../../engine-vite-preset';
 import { readWorktreePorts, resolveWorktreePorts } from '../../scripts/lib/worktree-ports';
+import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const worktreeRoot = resolve(here, '../..');
@@ -40,11 +42,34 @@ const GAME_DIR_ABS = process.env.FORGEAX_GAME_DIR
 // (no --game / embedded studio) -> empty scene.
 const GAME_SLUG = GAME_DIR_ABS ? basename(GAME_DIR_ABS) : null;
 const SELF_HOST_PACK = GAME_DIR_ABS !== null;
+const STANDALONE_SCOPE_ID = process.env.FORGEAX_RUNTIME_SCOPE_ID
+  ?? (GAME_SLUG === null ? '' : `edit-${GAME_SLUG}`);
+const STANDALONE_GENERATION = Number(process.env.FORGEAX_RUNTIME_GENERATION ?? 1);
+const STANDALONE_RUNTIME_BINDING: RuntimeAssetBinding | undefined = (
+  GAME_DIR_ABS !== null
+  && GAME_SLUG !== null
+  && /^[a-zA-Z0-9._:-]{1,256}$/.test(STANDALONE_SCOPE_ID)
+  && Number.isSafeInteger(STANDALONE_GENERATION)
+  && STANDALONE_GENERATION > 0
+) ? {
+  schemaVersion: 'runtime-asset-binding-v1',
+  gameId: GAME_SLUG,
+  scopeId: STANDALONE_SCOPE_ID,
+  generation: STANDALONE_GENERATION,
+  status: 'ready',
+  catalogUrl: `${BASE}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'catalog.json')}`,
+  importUrlBase: `${BASE}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'import')}`,
+  packageUrlBase: `${BASE}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'asset')}`,
+} : undefined;
 
 // D7: the shared engine-serve fragment (shader/pack serve + optimizeDeps.exclude
 // + preserveSymlinks + build.target esnext). base '/editor/' so its base-strip
 // middleware is included; gameDirAbs threads the self-hosted pluginPack catalog.
-const enginePreset = engineVitePreset({ base: BASE, gameDirAbs: GAME_DIR_ABS });
+const enginePreset = engineVitePreset({
+  base: BASE,
+  gameDirAbs: GAME_DIR_ABS,
+  ...(STANDALONE_RUNTIME_BINDING === undefined ? {} : { runtimeBinding: STANDALONE_RUNTIME_BINDING }),
+});
 
 export default defineConfig({
   root: here,
@@ -57,6 +82,7 @@ export default defineConfig({
   define: {
     __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR_ABS),
     __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
+    __FORGEAX_RUNTIME_BINDING__: JSON.stringify(STANDALONE_RUNTIME_BINDING ?? null),
     __FORGEAX_CATALOG_ASSET_ROOTS__: JSON.stringify(enginePreset.catalogRoots),
   },
   plugins: [
@@ -96,16 +122,12 @@ export default defineConfig({
     // it's same-origin already; this proxy makes a DIRECT :15280 visit work too.
     proxy: {
       '/api': { target: `http://127.0.0.1:${process.env.FORGEAX_SERVER_PORT ?? 18900}`, changeOrigin: true },
-      // Studio-embedded ONLY: skinned-mesh preview (witch.glb sub-assets) lives in
-      // the play engine's per-game pluginPack catalog. /preview/* serves catalog +
-      // DDC bodies; /__import + /__forgeax-ddc are the gltfImporter cook + read
-      // endpoints. Standalone (SELF_HOST_PACK) registers its OWN pluginPack over the
-      // injected game dir (via the preset) and serves these under /editor/* locally,
-      // so the :15173 proxy is skipped — there is no play-runtime in standalone --game.
+      // Studio-embedded ONLY: the active game's scoped pluginPack lives behind
+      // the play engine's /preview namespace. Standalone (SELF_HOST_PACK)
+      // registers its own exact-game pluginPack via the preset and serves the
+      // scoped routes under /editor/* locally, so the :15173 proxy is skipped.
       ...(SELF_HOST_PACK ? {} : {
         '/preview': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true, ws: true },
-        '/__import': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
-        '/__forgeax-ddc': { target: `http://127.0.0.1:${process.env.FORGEAX_ENGINE_PORT ?? 15173}`, changeOrigin: true },
       }),
     },
   },

@@ -75,7 +75,8 @@
     "lint:dep": "depcruise -c .dependency-cruiser.cjs src"
   },
   "dependencies": {
-    "@forgeax/extension-platform": "0.0.2",
+    "@forgeax/extension-platform": "0.0.3",
+    "@forgeax/workbench-host": "0.2.6",
     "@google/model-viewer": "^4.2.0",
     "@radix-ui/react-alert-dialog": "^1.1.20",
     "@radix-ui/react-checkbox": "^1",

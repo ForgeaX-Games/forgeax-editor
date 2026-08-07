@@ -228,9 +228,9 @@ describe('defaultComponentData field values match engine defaults', () => {
     expect(data.castShadow).toBe(true);
   });
 
-  it('Camera.fov defaults to 60 (editor override)', () => {
+  it('Camera.fov defaults to π/3 radians (editor override)', () => {
     const data = defaultComponentData('Camera');
-    expect(data.fov).toBe(60);
+    expect(data.fov).toBe(Math.PI / 3);
   });
 
   it('Camera.clearColor defaults to [0,0,0,1]', () => {

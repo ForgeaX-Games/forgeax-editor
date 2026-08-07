@@ -9,6 +9,7 @@
 import type { ComponentType } from 'react';
 import type { EntityHandle } from '@forgeax/editor-core';
 import AnimationTransportBar from './AnimationTransportBar';
+import SocketCalibrationBar from './SocketCalibrationBar';
 
 export interface BespokeEditorProps {
   /** The inspected entity handle (active edit world). */
@@ -29,3 +30,4 @@ export function getBespokeEditor(editorId: string): ComponentType<BespokeEditorP
 
 // ── Builtin editors ─────────────────────────────────────────────────────────
 registerBespokeEditor('animation-transport', AnimationTransportBar);
+registerBespokeEditor('socket-calibration', SocketCalibrationBar);

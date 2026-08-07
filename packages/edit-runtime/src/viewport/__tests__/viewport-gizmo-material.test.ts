@@ -71,7 +71,7 @@ describe('viewport gizmo material contract', () => {
       editorEngine,
       spawnHandleCube: () => nextEntity++ as never,
       getSelection: () => 29 as never,
-      getSelectionComponents: () => ({ Camera: { fov: 60, near: 0.1, far: 100 } }),
+      getSelectionComponents: () => ({ Camera: { fov: Math.PI / 3, near: 0.1, far: 100 } }),
       getSelectionWorldTransform: () => ({
         x: 0, y: 0, z: 0,
         rotX: 0, rotY: 0, rotZ: 0,

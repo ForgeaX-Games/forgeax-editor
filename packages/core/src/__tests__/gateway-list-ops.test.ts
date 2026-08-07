@@ -287,7 +287,7 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
   it('does not add run metadata or change the domain of unrelated operations', () => {
     const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
     for (const op of gw.listOps()) {
-      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'asset.preflight' || op.id === 'previewAssetSourceMutation' || op.id === 'saveAssetSourceOverride' || op.id === 'discardSourceOverridesAndReimport' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame' || op.id === 'catalog.reconcile') continue;
+      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'asset.preflight' || op.id === 'previewAssetSourceMutation' || op.id === 'saveAssetSourceOverride' || op.id === 'discardSourceOverridesAndReimport' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame' || op.id === 'catalog.reconcile' || op.id === 'validateGameProject') continue;
       expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
       expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
     }
