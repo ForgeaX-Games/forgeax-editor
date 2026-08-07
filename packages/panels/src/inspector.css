@@ -100,6 +100,12 @@
 .fx-inspector .anim-transport .anim-speed:disabled { opacity: 0.45; }
 .fx-inspector .anim-transport .anim-hint { font-size: 10.5px; color: var(--color-text-tertiary); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ════════════════ Socket calibration (bespoke editor) ════════════════ */
+.fx-inspector .socket-calib { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 26px; border-bottom: 1px solid var(--color-border-subtle); }
+.fx-inspector .socket-calib .socket-calib-label { flex: 0 0 auto; font-size: 11px; color: var(--color-text-tertiary); }
+.fx-inspector .socket-calib .socket-calib-select { flex: 1 1 80px; min-width: 0; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 5px; color: var(--color-text-primary); font-size: 11px; font-family: var(--prim-font-mono); padding: 2px 4px; outline: none; }
+.fx-inspector .socket-calib .socket-calib-select:hover { border-color: var(--color-brand-line); }
+
 /* ════════════════ Field rows ════════════════ */
 .fx-inspector .f-row { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 26px; min-height: 26px; }
 .fx-inspector .f-row:hover { background: var(--color-interaction-hover); }

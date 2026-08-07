@@ -69,7 +69,7 @@
   ],
   "scripts": {
     "harness:sync": "node scripts/sync-harness.mjs",
-    "postinstall": "node scripts/sync-harness.mjs",
+    "postinstall": "node scripts/sync-harness.mjs && node scripts/sync-radix-hoist.mjs",
     "typecheck": "bun run typecheck:root; r1=$?; bun run typecheck:scripts; r2=$?; bun run --filter '@forgeax/editor-*' typecheck; r3=$?; exit $((r1||r2||r3))",
     "typecheck:root": "tsc --noEmit",
     "typecheck:scripts": "tsc --noEmit -p scripts/tsconfig.json",
@@ -88,7 +88,7 @@
     "ci:fast": "bun fx ci --fast",
     "ci:full": "bun fx ci --full",
     "bootstrap-worktree": "node scripts/bootstrap-worktree.mjs",
-    "test:scripts": "bun test scripts/lib/*.test.mjs scripts/chrome-performance.test.mjs scripts/game-validation.test.mjs scripts/regression-manifest.test.ts standalone/settings-redirect.test.ts skills/forgeax-editor-gateway/scripts/*.test.mjs",
+    "test:scripts": "bun test scripts/lib/*.test.mjs scripts/chrome-performance.test.mjs scripts/game-validation.test.mjs scripts/regression-manifest.test.ts scripts/ci/check-runner-pool-labels.test.mjs standalone/settings-redirect.test.ts skills/forgeax-editor-gateway/scripts/*.test.mjs",
     "perf:chrome": "bun scripts/chrome-performance.mjs",
     "lint": "bun run test:scripts && node scripts/lint-sync-channel-panels.mjs && node scripts/lint-no-bare-engine-shim.mjs && node scripts/lint-no-second-world.mjs && node scripts/lint-no-any-in-store.mjs && node scripts/lint-play-vag-boundary.mjs && node scripts/lint-gameplay-carrier-boundary.mjs && node scripts/lint-readme-bilingual.mjs && node scripts/lint-op-via-gateway.mjs && node scripts/lint-unique-mutator.mjs && node scripts/lint-single-keydown-router.mjs && node scripts/lint-no-ui-file-mutation.mjs && node scripts/lint-no-store-setter-sugar.mjs && node scripts/lint-wasm-before-dist.mjs && node scripts/lint-clean-preserves-wasm.mjs && node scripts/lint-no-direct-pack-crud.mjs && node scripts/lint-fx-no-studio-port.mjs",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",

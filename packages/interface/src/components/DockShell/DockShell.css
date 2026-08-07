@@ -410,15 +410,8 @@
   margin-bottom: 6px;
 }
 
-/* Raw close X (dockview's default action, before edgeDrawer swaps it to a Pin):
-   opacity-gate it out of sight — same as the pin below, never a hard delete — so
-   the transient X between (re)render and swap doesn't flash. pointer-events:none
-   so an invisible X can't be clicked-to-close. */
-.dv-groupview-edge .dv-default-tab-action:not(.fx-edge-pin) {
-  opacity: 0;
-  pointer-events: none;
-}
-/* Edge tabs: close (X) is swapped for a per-TAB Pin toggle (see edgeDrawer.ts).
+/* Edge tabs render a per-TAB Pin toggle in place of close (X) — DockTab picks the
+   glyph off `api.location`, so an edge tab never has a raw X to hide.
    Gated exactly like the active-tab highlight: HIDDEN by default (dockview keeps
    one tab "active" per group even while the drawer is closed, so a persistent pin
    read like a selection). Revealed on hover, or on the active tab WHILE THE DRAWER
@@ -434,8 +427,7 @@
 .dv-groupview-edge.fx-edge-drawer-open .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
   opacity: 0.85;
 }
-.dv-groupview-edge .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
-.dv-groupview-edge .dv-tab.fx-edge-tab-pinned .dv-default-tab-action.fx-edge-pin {
+.dv-groupview-edge .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on {
   opacity: 1;
   color: var(--lime, #7ee04a);
 }
@@ -618,10 +610,21 @@
    IMPORTANT: disable the body CHILDREN (.dv-react-part > *), NOT .dv-react-part
    itself — dockview's per-panel drop detection lives on the content wrapper;
    disabling the wrapper breaks docking onto NON-iframe panels (chat / workbench).
-   Global on <html> since dockview portals floating groups to <body>. */
+   Global on <html> since dockview portals floating groups to <body>.
+
+   The tab strip must be SUBTRACTED: `dv-react-part` is dockview's class for EVERY
+   React mount point, not just panel bodies — tab renderers (ReactPanelHeaderPart →
+   .dv-tab > .dv-react-part > .dv-default-tab) and header actions
+   (ReactHeaderActionsRendererPart → .fx-dock-popout) use it too. Without the
+   :not(), a plain click inside the strip is fatal: DockRegion lights
+   fx-dock-dragging on the capture-phase `pointerdown`, the strip's contents lose
+   hit-testing before `pointerup` is targeted, so `click` retargets to the
+   .dv-react-part ancestor and never reaches the close (X) / pop-out handlers. */
 html.fx-dock-dragging iframe,
 html.fx-dock-dragging .fx-surface-keepalive-item { pointer-events: none !important; }
-html.fx-dock-dragging .fx-dockshell .dv-react-part > * { pointer-events: none !important; }
+html.fx-dock-dragging
+  .fx-dockshell
+  .dv-react-part:not(.dv-tabs-and-actions-container *) > * { pointer-events: none !important; }
 
 /* Per-group "pop out to OS window" button (rightHeaderActionsComponent). */
 .fx-dock-popout {

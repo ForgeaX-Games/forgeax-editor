@@ -282,6 +282,14 @@ export type {
 } from './scene/schema';
 export { planArrayEdit } from './scene/array-edit';
 export type { ArrayEditAction, ArrayEditRequest, ArrayEditPlan } from './scene/array-edit';
+// socket-calibration M1 (doc §3.2): read face for a skinned character's joint
+// names — the parent-bone dropdown source. Pure read over activeWorld.
+export {
+  findSkinEntity,
+  listSkinJoints,
+  listSkinJointsFor,
+} from './scene/skin-joints';
+export type { SkinJoint } from './scene/skin-joints';
 // Editor-owned component metadata overlay (SSOT), injected into
 // `Component.meta.editor` post-registration; the engine stays agnostic.
 export {

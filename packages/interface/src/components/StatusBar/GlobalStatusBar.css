@@ -207,16 +207,9 @@ html.fx-edge-drag .fx-bottom-edge-strip .dv-void-container {
   flex: 1 1 auto;
   min-width: 140px;
 }
-/* Raw close X (dockview's default action, before edgeDrawer swaps it to a Pin):
-   opacity-gate it out of sight — same as the pin below, never a hard delete — so
-   the transient X between (re)render and swap doesn't flash. pointer-events:none
-   so an invisible X can't be clicked-to-close. */
-.fx-bottom-edge-strip .dv-default-tab-action:not(.fx-edge-pin) {
-  opacity: 0;
-  pointer-events: none;
-}
-/* Pin toggle (swapped for close by edgeDrawer): the `.dv-groupview-edge`-scoped
-   rules don't reach here, so re-declare the footer variant. Hidden by default —
+/* Pin toggle (rendered by DockTab for any edge-located tab): the
+   `.dv-groupview-edge`-scoped rules don't reach the relocated footer strip, so
+   re-declare the footer variant here. Hidden by default —
    dockview always keeps one panel "active" per group, and a persistently shown
    pin made that tab read like it was selected. Reveal on hover, or on the
    active tab while the drawer is open; pinned tabs stay lit unconditionally. */
@@ -232,8 +225,7 @@ html.fx-edge-drag .fx-bottom-edge-strip .dv-void-container {
 .fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
   opacity: 0.85;
 }
-.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
-.fx-bottom-edge-strip .dv-tab.fx-edge-tab-pinned .dv-default-tab-action.fx-edge-pin {
+.fx-bottom-edge-strip .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on {
   opacity: 1;
   color: var(--lime, #7ee04a);
 }

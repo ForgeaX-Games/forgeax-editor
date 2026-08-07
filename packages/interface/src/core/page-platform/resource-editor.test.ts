@@ -47,6 +47,33 @@ describe('ResourceEditorResolver', () => {
     expect(resolver.resolve(resource)?.id).toBe(selected.id);
   });
 
+  it('reserves the fallback tier for resources no targeted editor claims', () => {
+    const contributions = createContributionRegistry<PagePlatformContribution>();
+    const resolver = createResourceEditorResolver(contributions, {} as PagePort);
+    const targeted = editor('mesh-view', { selector: { kinds: ['mesh'] } });
+    // Deliberately the highest source layer: tier beats layer, so a default
+    // editor can never shadow an editor that actually claims the resource.
+    const fallback = editor('default-view', { selector: { fallback: true }, priority: 'default', sourceLayer: 'user' });
+    contributions.contribute(owner, { resourceEditors: [fallback, targeted] });
+
+    expect(resolver.list(resource).map((item) => item.id)).toEqual([targeted.id, fallback.id]);
+    // `asset.kind` is an open string; an engine kind nobody declared must still
+    // open somewhere rather than raise RESOURCE_EDITOR_NOT_FOUND.
+    const undeclared = { canonicalId: 'asset:two', uri: 'forgeax-asset://two', kind: 'particle-effect' };
+    expect(resolver.resolve(undeclared)?.id).toBe(fallback.id);
+  });
+
+  it('lets a user association lift the default editor above a targeted one', () => {
+    const contributions = createContributionRegistry<PagePlatformContribution>();
+    const resolver = createResourceEditorResolver(contributions, {} as PagePort);
+    const targeted = editor('mesh-view', { selector: { kinds: ['mesh'] }, priority: 'default', sourceLayer: 'builtin' });
+    const fallback = editor('default-view', { selector: { fallback: true } });
+    contributions.contribute(owner, { resourceEditors: [targeted, fallback] });
+
+    resolver.setUserAssociation(resource, fallback.id);
+    expect(resolver.resolve(resource)?.id).toBe(fallback.id);
+  });
+
   it('opens the selected page with the canonical descriptor', async () => {
     const contributions = createContributionRegistry<PagePlatformContribution>();
     const opened: unknown[] = [];

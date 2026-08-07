@@ -256,13 +256,6 @@ function page(
   };
 }
 
-function pageForAsset(asset: SelectedAsset): PageTypeRegistration['id'] {
-  if (asset.kind === 'mesh') return MESH_PAGE;
-  if (asset.kind === 'material-instance') return MATERIAL_INSTANCE_PAGE;
-  if (asset.kind === 'material') return MATERIAL_PAGE;
-  return ASSET_PAGE;
-}
-
 export function createEditorPageExtension(
   renderPanel: (id: string) => ReactNode,
 ): AppExtension {
@@ -309,11 +302,14 @@ export function createEditorPageExtension(
           priority: 'default',
           sourceLayer: 'builtin',
         },
+        // The default editor. Enumerating kinds here was a latent bug: it listed
+        // the retired `cube-texture` while never covering equirect /
+        // animation-graph / video / particle-effect, and nothing caught it
+        // because the shell's own kind switch fell back on its own. `asset.kind`
+        // is an open string, so any kind without a dedicated page belongs here.
         {
           id: editorId('asset'),
-          selector: {
-            kinds: ['texture', 'cube-texture', 'sampler', 'scene', 'shader', 'skeleton', 'skin', 'animation-clip', 'audio', 'font', 'render-pipeline', 'tileset'],
-          },
+          selector: { fallback: true },
           pageTypeId: ASSET_PAGE,
           priority: 'default',
           sourceLayer: 'builtin',
@@ -330,15 +326,15 @@ export function createEditorPageExtension(
       };
       const resetNavigation = configureEditorPageNavigation({
         async openAsset(asset) {
-          await ctx.host.pages.open({
-            typeId: pageForAsset(asset),
-            resource: {
-              canonicalId: asset.guid,
-              uri: `forgeax-asset://${asset.guid}`,
-              displayPath: asset.name,
-              kind: asset.kind,
-              metadata: { asset },
-            },
+          // architecture.md forbids a consumer-side asset kind switch: the
+          // resolver owns association > source layer > priority, so a user
+          // association or an installed extension's editor wins here for free.
+          await ctx.host.resourceEditors.open({
+            canonicalId: asset.guid,
+            uri: `forgeax-asset://${asset.guid}`,
+            displayPath: asset.name,
+            kind: asset.kind,
+            metadata: { asset },
           });
         },
         getActiveAsset: activeAsset,

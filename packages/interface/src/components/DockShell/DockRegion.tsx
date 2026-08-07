@@ -49,6 +49,19 @@ import { installEdgeDrawer } from './edgeDrawer';
 import { isOnSideEdge, nearerSideEdge, type SideEdge } from './sideEdgeMove';
 import './DockShell.css';
 
+// Anchor for `addPanel({ position: { referencePanel } })`. MUST exclude non-grid
+// panels: `api.panels` also lists the edge groups' occupants (the footer chrome
+// seeded by installEdgeDrawer is appended last), and anchoring to one of those
+// drops the new panel INTO the collapsed side strip instead of the grid — the
+// "close a panel, reopen it, and it comes back tucked in the side menu" bug.
+function lastGridPanelId(api: DockviewApi): string | undefined {
+  for (let i = api.panels.length - 1; i >= 0; i--) {
+    const panel = api.panels[i];
+    if (panel?.api.location.type === 'grid') return panel.id;
+  }
+  return undefined;
+}
+
 // Strip panels whose `contentComponent` is not in the known component set.
 // Prevents dockview's `fromJSON` from throwing when a saved layout references
 // a component that no longer exists (retired keys, disabled extensions, etc.).
@@ -720,7 +733,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           if (!isMemberRef.current(id)) return;
           if (api.getPanel(id)) return;
           if (panelLocations[id] !== region) return; // no explicit override → leave to buildDefault
-          const ref = api.panels[api.panels.length - 1]?.id;
+          const ref = lastGridPanelId(api);
           try {
             api.addPanel({
               id,
@@ -1104,7 +1117,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     if (!api || api.getPanel(id)) return;
     // Region-scoped: refuse to reopen a panel that doesn't belong here.
     if (!isMemberRef.current(id)) return;
-    const ref = api.panels[api.panels.length - 1]?.id;
+    const ref = lastGridPanelId(api);
     const component = id;
     const title = titleFor(id);
     api.addPanel({ id, component, title, position: ref ? { referencePanel: ref, direction: 'right' } : undefined });
@@ -1205,7 +1218,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // Floating-GROUP moves (dragging the window's tab bar) are POINTER-based, not
     // HTML5 dragstart — so catch pointerdown on the tab bar (`.dv-tabs-and-actions-
     // container`) too, else a floating window can't be merged back over an iframe
-    // panel. Native tab drags also begin with this pointerdown; harmless on clicks.
+    // panel. Native tab drags also begin with this pointerdown, so EVERY click in
+    // the strip flips the flag for its pointerdown→pointerup window. That is only
+    // survivable because the `fx-dock-dragging` pointer-events kill in DockShell.css
+    // subtracts the strip: were the strip's own contents disabled mid-click, the
+    // `click` would retarget to an ancestor and the tab's close (X) / pop-out
+    // buttons would silently stop firing.
     const onPointerDown = (e: PointerEvent): void => {
       const t = e.target as Element | null;
       if (t && t.closest('.dv-tabs-and-actions-container')) on();
