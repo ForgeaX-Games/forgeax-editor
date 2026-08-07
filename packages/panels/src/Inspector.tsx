@@ -1638,10 +1638,6 @@ export function InspectorPanel() {
                       const renderer = inspectorFieldRendererKind(fs ?? (inferredType ? { type: inferredType } : undefined));
                       if (isVectorRendererKind(renderer)) continue;
                       if (renderer === 'asset-ref' && (Array.isArray(v) || ArrayBuffer.isView(v))) continue;
-                      // Skip derived arrays with no schema entry (e.g. Transform.world,
-                      // reflected as transient and excluded from ComponentSchema.fields,
-                      // but present in runtime data and resurfaced by mergedFieldKeys).
-                      if (!fs && (Array.isArray(v) || ArrayBuffer.isView(v))) continue;
                       if (isUnsupportedRendererKind(renderer)) {
                         out.push(<UnsupportedField component={comp} field={k} kind={fs?.shape ?? renderer} key={k} />);
                         continue;
