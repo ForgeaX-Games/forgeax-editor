@@ -34,10 +34,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Transform } from '@forgeax/engine-scene';
-import { Camera, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import {
+  Camera,
+  CAMERA_PROJECTION_PERSPECTIVE,
+  perspective,
+  TONEMAP_REINHARD_EXTENDED,
+} from '@forgeax/engine-render';
 import { setActiveCamera } from '@forgeax/engine-render/internal';
 import { Entity, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
 import {
   attachBrowserInputBackend,
   createCanvasInputBoundary,
@@ -45,6 +51,7 @@ import {
   INPUT_SNAPSHOT_RESOURCE_KEY,
 } from '@forgeax/engine-input';
 import {
+  assetIO,
   gateway,
   panelBridge,
   getSceneId,
@@ -70,6 +77,7 @@ import {
 import { createSourceAuthoringRuntime, installCatalogReconcileProvider } from '../runtime/source-authoring-runtime';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
+import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 import {
   sendVagMessage,
   VagCarrierHandshakeSchema,
@@ -109,6 +117,7 @@ import { registerEditorVisualHost } from './visual-source';
 import { _syncDisplayMode, isAuxVisible } from './display-bus';
 import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
+import { validatePerspectiveFov } from './render-diagnostics';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
 import { registerViewportSessionAppliers } from './viewport-session-appliers';
 import { createEditVfxRuntimeBridge, createParticleCameraSource } from './vfx-runtime-bridge';
@@ -117,12 +126,12 @@ import '../theme.css';
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
 let bootStarted = false;
 
-// ── per-boot teardown registry (single-realm multi-game host) ──────────────────
+// ── per-boot teardown registry (single active-game realm) ──────────────────────
 // The standalone editor boots once and tears down only by page navigation, so it
-// never needs these. A MULTI-game host (studio single-realm) switches games at
-// runtime; because the physics backend + pack roots are bound once at createApp,
-// a cross-game switch must DESTROY this realm (GPU device + world + session +
-// window listeners) and re-boot fresh. bootViewport pushes each per-boot teardown
+// never needs these. Studio may rebind the active game at runtime; because the
+// physics backend + pack roots are bound once at createApp, a switch must
+// DESTROY this realm (GPU device + world + session + window listeners) and
+// re-boot fresh. bootViewport pushes each per-boot teardown
 // handle here; resetEditRealm() runs them LIFO, disposes the engine, and clears
 // the latch so the next mount re-boots. Everything a boot installs GLOBALLY and
 // engine-scoped must register here or it leaks/duplicates across a switch.
@@ -302,26 +311,10 @@ export interface ViewportComponentProps {
   readonly gameSlug?: string | null;
   /** Host game->disk layout root. Required when gameSlug names a real game. */
   readonly gameRoot?: string;
-  /** Host-owned asset catalog URL for this game. */
-  readonly packIndexUrl?: string;
+  /** Host-authoritative scoped asset binding for this game. */
+  readonly runtimeBinding?: RuntimeAssetBinding;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
-}
-
-/** Resolve the asset catalog from the host-owned game identity. Scene ids are
- * intentionally absent: switching level inside one game must not switch asset
- * roots or fall through to the global catalog. */
-export function resolveViewportPackIndexUrl(input: {
-  readonly gameSlug: string | null;
-  readonly injectedUrl?: string;
-  readonly selfHostPack: boolean;
-  readonly base: string;
-}): string {
-  if (input.injectedUrl !== undefined) return input.injectedUrl;
-  if (!input.selfHostPack && input.gameSlug && input.gameSlug !== 'default') {
-    return `/preview/pack-index/${input.gameSlug}.json`;
-  }
-  return `${input.base}/pack-index.json`;
 }
 
 /**
@@ -334,7 +327,7 @@ export function resolveViewportPackIndexUrl(input: {
 export function ViewportComponent({
   gameSlug = null,
   gameRoot,
-  packIndexUrl,
+  runtimeBinding,
   selectedSceneGuid,
 }: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -352,7 +345,7 @@ export function ViewportComponent({
     void bootViewport(container, actionsRef, setFpsState, {
       slug: gameSlug,
       gameRoot,
-      packIndexUrl,
+      runtimeBinding,
       selectedSceneGuid,
     });
     // No cleanup returned: the viewport lifecycle is NOT managed by React.
@@ -402,6 +395,13 @@ async function bootViewport(
   gameSession: HostGameSession,
 ): Promise<Viewport | null> {
   const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+
+  // AssetIOFacade is shared by editor-core's gateway/import operations. Bind it
+  // to this exact generation before session configuration can run an integrity
+  // repair/cook, and clear it before the realm is torn down so the next game
+  // cannot reuse the previous game's import endpoint.
+  assetIO.setRuntimeBinding(gameSession.runtimeBinding);
+  registerTeardown(() => assetIO.setRuntimeBinding(undefined));
 
   // Configure the session (scene id + game->disk path resolver + scene manifest)
   // from the host-supplied game BEFORE anything reads a game file. In the single-
@@ -505,6 +505,15 @@ async function bootViewport(
   // (dispatch/query/listOps/describeComponent) only need the ECS world; the
   // viewport won't render but the eval channel still mounts. Dynamic import
   // so the null RHI is never bundled into production builds.
+  if (gameSession.slug && gameSession.slug !== 'default' && gameSession.runtimeBinding === undefined) {
+    const error = new Error('[editor] active game has no runtime asset binding');
+    console.error(error);
+    paintDiagnosticMessage(container, error);
+    return null;
+  }
+  const devImportTransport = gameSession.runtimeBinding === undefined
+    ? undefined
+    : createDevImportTransport(gameSession.runtimeBinding);
   const createAppResult = await createApp(canvas, {
     features: [vfxBridge.host.feature],
     input: canvasInput.editor,
@@ -513,23 +522,7 @@ async function bootViewport(
     profiler,
   }, {
     shaderManifestUrl: `${BASE}/shaders/manifest.json`,
-    importTransport: {
-      async fetchPack(guid: string) {
-        const importBase = (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__)
-          ? `${BASE}/__import` : '/__import';
-        try {
-          const response = await fetch(`${importBase}/${guid}`, { method: 'POST' });
-          if (!response.ok) return { ok: false };
-          try {
-            const body = await response.json();
-            if (Array.isArray(body)) return { ok: true, entries: body };
-          } catch { /* empty/non-JSON body */ }
-          return { ok: true };
-        } catch {
-          return { ok: false };
-        }
-      },
-    },
+    ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
   });
 
   let app = createAppResult;
@@ -550,23 +543,7 @@ async function bootViewport(
         rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
       }, {
         shaderManifestUrl: `${BASE}/shaders/manifest.json`,
-        importTransport: {
-          async fetchPack(guid: string) {
-            const importBase = (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__)
-              ? `${BASE}/__import` : '/__import';
-            try {
-              const response = await fetch(`${importBase}/${guid}`, { method: 'POST' });
-              if (!response.ok) return { ok: false };
-              try {
-                const body = await response.json();
-                if (Array.isArray(body)) return { ok: true, entries: body };
-              } catch { /* empty/non-JSON body */ }
-              return { ok: true };
-            } catch {
-              return { ok: false };
-            }
-          },
-        },
+        ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
       });
     }
   }
@@ -578,6 +555,9 @@ async function bootViewport(
   }
   const editorApp = app.value;
   const { world, renderer } = editorApp;
+  if (gameSession.runtimeBinding !== undefined) {
+    renderer.assets.configureRuntimeBinding(gameSession.runtimeBinding);
+  }
   const vfxAttached = await vfxBridge.attachWorld(world, renderer.assets);
   if (!vfxAttached.ok) {
     console.error('[editor] Edit VFX host attach failed:', vfxAttached.error);
@@ -601,31 +581,31 @@ async function bootViewport(
     isEditMode: () => getViewportQuadrant().run === 'edit',
   });
 
-  // The host owns asset delivery. Its configured pack-index URL is the base the
-  // registry uses for every catalog entry, which keeps Studio dev asset traffic
-  // on the play-engine origin without a global fetch patch. Standalone hosts that
-  // do not inject a URL retain their local pack-index convention.
-  const selfHostPack = typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && !!__FORGEAX_GAME_DIR_ABS__;
-  const resolvedPackIndexUrl = resolveViewportPackIndexUrl({
-    gameSlug: gameSession.slug,
-    ...(gameSession.packIndexUrl === undefined ? {} : { injectedUrl: gameSession.packIndexUrl }),
-    selfHostPack,
-    base: BASE,
-  });
-  renderer.assets.configurePackIndex(resolvedPackIndexUrl);
-  const catalogClient = createCatalogClient(
-    async () => {
-      const response = await fetch(resolvedPackIndexUrl);
-      if (!response.ok) throw new Error(`catalog request failed: ${response.status}`);
-      return (await response.json()) as readonly import('@forgeax/engine-types').CatalogEntry[];
-    },
-    import.meta.hot,
-  );
-  renderer.assets.setCatalogSource(createCatalogSource({
-    url: resolvedPackIndexUrl,
-    subscribe: catalogClient.subscribe,
-  }));
-  await renderer.assets.enumerateCatalog();
+  // A real game gets exactly one host-authoritative binding. Empty scenes keep
+  // the registry unconfigured; they must not invent a global catalog URL.
+  if (gameSession.runtimeBinding !== undefined) {
+    const binding = gameSession.runtimeBinding;
+    const catalogClient = createCatalogClient(
+      async () => {
+        const response = await fetch(binding.catalogUrl, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`scoped catalog request failed: ${response.status}`);
+        const body = await response.json() as unknown;
+        return Array.isArray(body)
+          ? body as readonly import('@forgeax/engine-types').CatalogEntry[]
+          : (body as { entries?: readonly import('@forgeax/engine-types').CatalogEntry[] }).entries ?? [];
+      },
+      import.meta.hot,
+    );
+    renderer.assets.setCatalogSource(createCatalogSource({
+      url: binding.catalogUrl,
+      expectedScope: binding,
+      subscribe: catalogClient.subscribe,
+    }));
+    const catalogResult = await renderer.assets.enumerateCatalog();
+    if (!catalogResult.ok) {
+      console.warn('[editor] scoped catalog unavailable:', catalogResult.error);
+    }
+  }
 
   // Inject the engine World + AssetRegistry into the editor session (was :410).
   // The createApp world IS the sceneWorld (authored content, save's only source —
@@ -886,6 +866,16 @@ async function bootViewport(
         // `packed` belongs to cameraWorld. Never compare it with the editor
         // camera's numeric handle: identical numbers in different Worlds are
         // unrelated entities (especially across the fresh Play World boundary).
+        const cameraResult = cameraWorld.get(packed as unknown as EntityHandle, Camera);
+        if (cameraResult.ok && cameraResult.value.projection === CAMERA_PROJECTION_PERSPECTIVE) {
+          const diagnostic = validatePerspectiveFov(cameraResult.value.fov);
+          if (diagnostic !== undefined) {
+            console.error('[editor] render camera contract violation:', {
+              ...diagnostic,
+              entity: packed,
+            });
+          }
+        }
         setGameCameraEntity(packed as unknown as number);
         return;
       }
@@ -1151,6 +1141,12 @@ async function bootViewport(
   }));
 
   // start the live render loop + reporters (was :895).
+  registerTeardown(editorApp.onError((error) => {
+    // App.onError is the engine's structured runtime/render failure channel.
+    // Surface it as console.error so the browser smoke cannot pass over a
+    // renderer failure that only reached the in-process error overlay.
+    console.error('[editor] runtime error:', error);
+  }));
   editorApp.start();
   // W1-L1H producer: a managed Studio page is the editor viewport carrier.
   // Publish identity/readiness from this same canvas/renderer and keep the
