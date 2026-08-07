@@ -7,30 +7,14 @@
 // (node_modules/dockview .../dockview/defaultTab.js): it forwards the pointer
 // handlers dockview injects for drag/activate and preserves the exact
 // `.dv-default-tab` / `.dv-default-tab-content` / `.dv-default-tab-action` DOM
-// hooks the stylesheets and `edgeDrawer.ts`'s click routing key off. The
-// additions are a leading `.fx-dock-tab-icon` (inside `.dv-default-tab`, so the
-// whole tab stays draggable/clickable), a Lucide `X` close glyph (design-system
-// on-brand, avoids a deep `dockview/.../svg` import), and a Lucide `Pin` that
-// takes the X's place on edge-strip tabs (see `useEdgePin` below).
-//
-// CLOSE BUTTON: React synthetic events and native mousedown/click are
-// unreliable here because calling preventDefault() on pointerdown (needed to
-// prevent tab activation) suppresses subsequent mousedown/click per the W3C
-// Pointer Events spec. We bypass React entirely and handle close directly on
-// a native `pointerdown` listener via ref+useEffect.
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type PointerEvent,
-  type ReactElement,
-} from 'react';
-import { Pin, X } from 'lucide-react';
+// hooks that `edgeDrawer.ts` mutates (pin-button injection). The only additions
+// are a leading `.fx-dock-tab-icon` (inside `.dv-default-tab`, so the whole tab
+// stays draggable/clickable) and a Lucide `X` close glyph (design-system on-brand,
+// avoids a deep `dockview/.../svg` import).
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactElement } from 'react';
+import { X } from 'lucide-react';
 import type { IDockviewDefaultTabProps } from 'dockview';
 import { barePanelId, iconForDockPanel } from '../../lib/panel-tab-icons';
-import { EDGE_PIN_CLASS, pinnedPanelIdIn, subscribeEdgePins } from './edgePinStore';
 import { useTranslation } from '@/i18n';
 
 /** Track the live tab title (dockview mutates it via `api.setTitle`). */
@@ -63,36 +47,6 @@ function useDockTabName(api: IDockviewDefaultTabProps['api']): string | undefine
   return localized !== key ? localized : stored;
 }
 
-/**
- * Edge-strip tabs show a per-tab Pin toggle where a grid tab shows close (X) —
- * see edgeDrawer.ts for the rules. Both bits are DERIVED from live dockview
- * state, so the first paint after a refresh is already correct:
- * `onDidLocationChange` fires on any group change (dockviewPanelApi sets it from
- * the `group` setter), which covers dragging a panel into or out of a strip.
- */
-function useEdgePin(api: IDockviewDefaultTabProps['api']): { isEdge: boolean; pinned: boolean } {
-  const readHome = useCallback(
-    () => ({ isEdge: api.location.type === 'edge', groupId: api.group.id }),
-    [api],
-  );
-  const [home, setHome] = useState(readHome);
-  useEffect(() => {
-    const sync = (): void =>
-      setHome((prev) => {
-        const next = readHome();
-        return prev.isEdge === next.isEdge && prev.groupId === next.groupId ? prev : next;
-      });
-    sync();
-    const disposable = api.onDidLocationChange(sync);
-    return () => disposable.dispose();
-  }, [api, readHome]);
-  const pinned = useSyncExternalStore(
-    subscribeEdgePins,
-    () => pinnedPanelIdIn(home.groupId) === api.id,
-  );
-  return { isEdge: home.isEdge, pinned };
-}
-
 export function DockTab({
   api,
   containerApi: _containerApi,
@@ -107,33 +61,16 @@ export function DockTab({
 }: IDockviewDefaultTabProps): ReactElement {
   const title = useDockTabName(api);
   const Icon = iconForDockPanel(api.id);
-  const { isEdge, pinned } = useEdgePin(api);
   const isMiddleMouseButton = useRef(false);
-  const closeRef = useRef<HTMLDivElement>(null);
 
-  // Native DOM listener on the close button — bypasses React event delegation
-  // which is unreliable inside dockview's vanilla-JS portal container.
-  // Must handle close on `pointerdown` because calling preventDefault() on
-  // pointerdown suppresses subsequent mousedown/click (W3C Pointer Events spec).
-  useEffect(() => {
-    const el = closeRef.current;
-    if (!el) return;
-
-    const onPointerDownClose = (ev: globalThis.PointerEvent): void => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      try {
-        if (closeActionOverride) closeActionOverride();
-        else api.close();
-      } catch { /* panel may already be disposed */ }
-    };
-
-    el.addEventListener('pointerdown', onPointerDownClose);
-    return () => {
-      el.removeEventListener('pointerdown', onPointerDownClose);
-    };
-  }, [api, closeActionOverride]);
-
+  const onClose = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      if (closeActionOverride) closeActionOverride();
+      else api.close();
+    },
+    [api, closeActionOverride],
+  );
   const onBtnPointerDown = useCallback((event: PointerEvent) => event.preventDefault(), []);
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -146,12 +83,11 @@ export function DockTab({
     (event: PointerEvent<HTMLDivElement>) => {
       if (isMiddleMouseButton.current && event.button === 1 && !hideClose) {
         isMiddleMouseButton.current = false;
-        if (closeActionOverride) closeActionOverride();
-        else api.close();
+        onClose(event);
       }
       onPointerUp?.(event);
     },
-    [onPointerUp, api, closeActionOverride, hideClose],
+    [onPointerUp, onClose, hideClose],
   );
   const handlePointerLeave = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -172,28 +108,11 @@ export function DockTab({
     >
       <Icon className="fx-dock-tab-icon" size={14} aria-hidden />
       <span className="dv-default-tab-content">{title}</span>
-      {!hideClose &&
-        (isEdge ? (
-          // The toggle itself is driven by edgeDrawer's capture-phase click
-          // handler (it must preventDefault dockview's native expand before the
-          // event ever reaches React), so this renders state and carries the
-          // panel id that handler reads back — no onClick of its own.
-          <div
-            className={`dv-default-tab-action ${EDGE_PIN_CLASS}${pinned ? ` ${EDGE_PIN_CLASS}--on` : ''}`}
-            data-fx-edge-pin-panel={api.id}
-            role="button"
-            aria-pressed={pinned}
-            aria-label={pinned ? 'Unpin tab' : 'Pin tab'}
-            title={pinned ? 'Unpin' : 'Pin'}
-            onPointerDown={onBtnPointerDown}
-          >
-            <Pin className="fx-edge-pin-icon" size={12} aria-hidden />
-          </div>
-        ) : (
-          <div ref={closeRef} className="dv-default-tab-action">
-            <X size={14} aria-hidden />
-          </div>
-        ))}
+      {!hideClose && (
+        <div className="dv-default-tab-action" onPointerDown={onBtnPointerDown} onClick={onClose}>
+          <X size={14} aria-hidden />
+        </div>
+      )}
     </div>
   );
 }

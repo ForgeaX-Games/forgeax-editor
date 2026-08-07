@@ -1506,35 +1506,6 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Request Reimport',
   },
-  { id: 'validateGameProject', domain: 'session',
-    argsSchema: {
-      type: 'object',
-      properties: {
-        requestId: {
-          type: 'string', minLength: 1, maxLength: 128,
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
-          description: 'Caller-minted correlation id for the accepted/running/terminal project validation run.',
-        },
-        maxBytes: { type: 'number', minimum: 0, description: 'Optional producer validator build-byte budget override.' },
-        maxEntities: { type: 'number', minimum: 0, description: 'Optional producer validator entity budget override.' },
-        retryOfRequestId: {
-          type: 'string', minLength: 1, maxLength: 128,
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
-          description: 'Optional failed validation run being retried with this new requestId.',
-        },
-      },
-      required: ['requestId'],
-    },
-    title: 'Validate Game Project',
-    operationRun: {
-      acceptedStatuses: ['accepted', 'running'],
-      terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
-      retry: { requiresNewRequestId: true },
-      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
-      cancellable: false,
-    },
-  },
 ];
 
 for (const op of builtinOps) {

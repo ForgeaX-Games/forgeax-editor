@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "emitters": [
+    {
+      "id": "acceptance-spark",
+      "capacity": 32,
+      "space": "world",
+      "schedule": { "rate": 12, "bursts": [] },
+      "bounds": { "min": [-1, -1, -1], "max": [1, 1, 1] },
+      "backendPolicy": { "kind": "required", "backend": "cpu" },
+      "operators": {
+        "spawn": [
+          { "kind": "shape", "version": 1, "params": { "shape": "sphere", "radius": 0.2 } }
+        ],
+        "initialize": [
+          { "kind": "lifetime", "version": 1, "params": { "seconds": 2 } },
+          { "kind": "initial-velocity", "version": 1, "params": { "velocity": [0, 0.8, 0] } }
+        ],
+        "update": [
+          { "kind": "gravity", "version": 1, "params": { "acceleration": [0, -0.4, 0] } },
+          { "kind": "drag", "version": 1, "params": { "coefficient": 0.1 } },
+          {
+            "kind": "size-over-life",
+            "version": 1,
+            "params": { "curve": { "points": [
+              { "time": 0, "value": 0.22 },
+              { "time": 1, "value": 0.04 }
+            ] } }
+          },
+          {
+            "kind": "color-over-life",
+            "version": 1,
+            "params": { "gradient": { "stops": [
+              { "time": 0, "color": [0.2, 0.6, 1, 1] },
+              { "time": 1, "color": [0.05, 0.2, 1, 0] }
+            ] } }
+          }
+        ],
+        "output": [
+          { "kind": "billboard", "version": 1, "params": {} }
+        ]
+      },
+      "output": {
+        "kind": "billboard",
+        "material": "3a000003-0000-5000-8000-000000000003"
+      }
+    }
+  ]
+}

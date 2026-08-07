@@ -12,7 +12,6 @@ import { useShellStore } from '../../store';
 import { getSessionClient } from '../../store-parts/session-client';
 import { getWorkbenchClient } from '../../store';
 import { confirmDialog, alertDialog } from '../../lib/dialog';
-import { listGameTemplates, type GameTemplate } from '../../lib/game-templates';
 import { useTranslation } from '@/i18n';
 import './TopBar.css';
 
@@ -122,23 +121,9 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [brief, setBrief] = useState('');
-  const [templates, setTemplates] = useState<GameTemplate[] | null>(null);
-  const [templateSlug, setTemplateSlug] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const setActiveGame = useShellStore((s) => s.setActiveGame);
-
-  useEffect(() => {
-    let cancelled = false;
-    void listGameTemplates()
-      .then((items) => {
-        if (cancelled) return;
-        setTemplates(items);
-        setTemplateSlug((current) => items.some((item) => item.slug === current) ? current : items[0]?.slug ?? '');
-      })
-      .catch(() => { if (!cancelled) setTemplates([]); });
-    return () => { cancelled = true; };
-  }, []);
 
   const submit = async () => {
     const cleaned = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
@@ -149,12 +134,7 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      const j = await getWorkbenchClient().createGame({
-        slug: cleaned,
-        name: name.trim() || cleaned,
-        brief: brief.trim(),
-        ...(templateSlug ? { template: templateSlug } : {}),
-      });
+      const j = await getWorkbenchClient().createGame({ slug: cleaned, name: name.trim() || cleaned, brief: brief.trim() });
       if (!j.ok) {
         setErr(j.error ?? 'create failed');
         setBusy(false);
@@ -199,21 +179,6 @@ function NewGameModal({ onClose }: { onClose: () => void }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <label className="tb-modal-label">{t('gameSwitcher.templateLabel')}</label>
-        {templates === null && <div className="tb-modal-help">{t('gameSwitcher.templateLoading')}</div>}
-        {templates !== null && templates.length > 0 && (
-          <select
-            className="tb-modal-select"
-            value={templateSlug}
-            onChange={(e) => setTemplateSlug(e.target.value)}
-            disabled={busy}
-          >
-            {templates.map((template) => (
-              <option key={template.slug} value={template.slug}>{template.name}</option>
-            ))}
-          </select>
-        )}
-        {templates !== null && templates.length === 0 && <div className="tb-modal-help">{t('gameSwitcher.templateEmpty')}</div>}
         <label className="tb-modal-label">{t('gameSwitcher.briefLabel')}</label>
         <textarea
           className="tb-modal-textarea"

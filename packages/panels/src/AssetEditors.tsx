@@ -22,7 +22,7 @@ const KIND_BADGE: Record<string, string> = {
   mesh: '◫', texture: '🖼', 'cube-texture': '🧊g', sampler: '⚙',
   material: '🎨', 'material-instance': '🎛', scene: '🗺', shader: '📜', skeleton: '🦴',
   skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱', 'particle-effect': '✨',
+  'render-pipeline': '🔧', tileset: '🧱',
 };
 
 function useDocumentAsset(): SelectedAsset | null {
