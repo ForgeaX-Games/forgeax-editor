@@ -332,6 +332,7 @@ export function buildBlankAreaContextMenu(
   onCreateDirectory: (parentPath: string) => void,
   onCreateMaterial?: () => void,
   onCreateMaterialInstance?: () => void,
+  onCreateParticleEffect?: () => void,
 ): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
     {
@@ -352,6 +353,13 @@ export function buildBlankAreaContextMenu(
       id: 'new-material-instance',
       label: 'Material Instance（材质实例）',
       action: onCreateMaterialInstance,
+    });
+  }
+  if (onCreateParticleEffect) {
+    items.push({
+      id: 'new-particle-effect',
+      label: 'Particle Effect',
+      action: onCreateParticleEffect,
     });
   }
   return items;

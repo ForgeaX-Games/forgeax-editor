@@ -13,3 +13,7 @@ declare const __FORGEAX_GAME_DIR_ABS__: string | null;
 // it to ViewportComponent as props so the engine boots the right game. null when
 // no --game (empty scene) or embedded in studio (studio supplies its own slug).
 declare const __FORGEAX_GAME_SLUG__: string | null;
+
+// Standalone --game hosts inject one fixed scoped binding. Embedded Studio
+// supplies its binding through ViewportComponent props instead.
+declare const __FORGEAX_RUNTIME_BINDING__: import('@forgeax/engine-types').RuntimeAssetBinding | null;

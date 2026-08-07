@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { resolveGameEngineEntry } from './runtime-vite-preset';
+import {
+  engineRhiDebugPlugins,
+  isEditorBuildOnlyPackPath,
+  resolveGameEngineEntry,
+} from '../../../../engine-vite-preset';
 
 const EDIT_RUNTIME = resolve(import.meta.dir, '..', '..');
 const GAME_TEMPLATE = resolve(EDIT_RUNTIME, '..', 'engine', 'templates', 'game-default');
@@ -47,7 +51,7 @@ describe('resolveGameEngineEntry', () => {
           exports: { '.': { import: './dist/index.js' } },
         }),
       );
-      expect(resolveGameEngineEntry('@forgeax/npc-client', hostRoot)).toBe(
+      expect(resolveGameEngineEntry('@forgeax/npc-client', { packageRoots: [hostRoot] })).toBe(
         resolve(packageDir, 'dist/index.js'),
       );
     } finally {
@@ -64,5 +68,36 @@ describe('resolveGameEngineEntry', () => {
     const unresolved = gameTemplateEngineImports(GAME_TEMPLATE)
       .filter((specifier) => resolveGameEngineEntry(specifier) === null);
     expect(unresolved).toEqual([]);
+  });
+});
+
+describe('engineRhiDebugPlugins', () => {
+  test('gates the capture middleware on the shared start flag', () => {
+    expect(engineRhiDebugPlugins({})).toEqual([]);
+    expect(engineRhiDebugPlugins({ FORGEAX_ENGINE_RHI_DEBUG: '0' })).toEqual([]);
+    expect(engineRhiDebugPlugins({ FORGEAX_ENGINE_RHI_DEBUG: '1' })).toMatchObject([
+      { name: 'forgeax:rhi-debug' },
+    ]);
+  });
+});
+
+describe('isEditorBuildOnlyPackPath', () => {
+  test('filters shader metadata sidecars without hiding runtime assets', () => {
+    const root = mkdtempSync(join(tmpdir(), 'forgeax-pack-path-'));
+    try {
+      const shaderMeta = join(root, 'animated-target.wgsl.meta.json');
+      const imageMeta = join(root, 'sky.hdr.meta.json');
+      const malformedShaderMeta = join(root, 'broken.wgsl.meta.json');
+      writeFileSync(shaderMeta, JSON.stringify({ importer: 'shader' }));
+      writeFileSync(imageMeta, JSON.stringify({ importer: 'equirect' }));
+      writeFileSync(malformedShaderMeta, '{');
+
+      expect(isEditorBuildOnlyPackPath(shaderMeta)).toBe(true);
+      expect(isEditorBuildOnlyPackPath(imageMeta)).toBe(false);
+      expect(isEditorBuildOnlyPackPath(malformedShaderMeta)).toBe(true);
+      expect(isEditorBuildOnlyPackPath(join(root, 'animated-target.wgsl'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

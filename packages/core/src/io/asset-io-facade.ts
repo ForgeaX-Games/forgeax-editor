@@ -13,6 +13,8 @@
 //   feat (keyboard-router convergence) M2 T2-1: AssetIOFacade encapsulates the
 //     pack-ops low-level primitives readPack / writePack / deleteAsset.
 import { normalizePackForRuntime, type PackFile } from '../scene/scene-pack';
+import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import { resolveGamePath } from '../util/path-resolver';
 import {
   readPack, writePack, deleteAsset, generateAssetGuid,
   readPackDetailed, writePackDetailed,
@@ -192,6 +194,7 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
  */
 export class AssetIOFacade {
   private resourceTransaction: AssetResourceTransactionPort | undefined;
+  private runtimeBinding: RuntimeAssetBinding | undefined;
   /** Per-path serialization chains for read-modify-write pack operations.
    *  Every RMW method (createAssetInPack / writePackEntry / renamePackEntry /
    *  cloneAssetInPack / deletePackEntry) runs its read+mutate+write INSIDE the
@@ -223,6 +226,15 @@ export class AssetIOFacade {
 
   hasResourceTransactionPort(): boolean {
     return this.resourceTransaction !== undefined;
+  }
+
+  /**
+   * Install the current host-authoritative runtime binding for lazy cooks.
+   * A missing binding is intentional fail-closed state: editor-core must never
+   * guess a root-level import route or retain the previous game's generation.
+   */
+  setRuntimeBinding(binding: RuntimeAssetBinding | undefined): void {
+    this.runtimeBinding = binding;
   }
 
   async prepareResourceTransaction(input: unknown): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
@@ -422,24 +434,27 @@ export class AssetIOFacade {
    *  network). Only `ok:true` may be treated as "the asset is on disk". */
   createAssetInPack(opts: {
     packPath: string;
-    asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[] };
+    asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[]; execution?: string };
+    extraAssets?: Array<{ guid: string; kind: string; name: string; payload: unknown; refs?: string[] }>;
   }): Promise<CreateAssetInPackResult> {
     recordAssetLeaf('assetIO.createAssetInPack');
-    return this.runExclusivePackWrite(opts.packPath, async () => {
-      const read = await readPackDetailed(opts.packPath);
+    let resolvedPackPath: string;
+    try {
+      resolvedPackPath = resolveGamePath(opts.packPath);
+    } catch {
+      resolvedPackPath = opts.packPath;
+    }
+    return this.runExclusivePackWrite(resolvedPackPath, async () => {
+      const read = await readPackDetailed(resolvedPackPath);
       let pack: PackFile;
       if (read.status === 'error') {
         return {
           ok: false as const,
           reason: 'read-failed' as const,
-          hint: `refusing to overwrite existing pack ${opts.packPath}: ${read.hint}`,
+          hint: `refusing to overwrite existing pack ${resolvedPackPath}: ${read.hint}`,
         };
       }
       if (read.status === 'missing') {
-        // Create the pack file on first asset.
-        // The engine runtime's loadByGuid boundary accepts Pack v2 only. The
-        // editor's read validator intentionally keeps accepting legacy string
-        // versions, but every authored write must emit the runtime envelope.
         pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
       } else {
         pack = read.pack;
@@ -448,7 +463,7 @@ export class AssetIOFacade {
         return {
           ok: false as const,
           reason: 'write-failed' as const,
-          hint: `asset ${opts.asset.guid} already exists in ${opts.packPath}`,
+          hint: `asset ${opts.asset.guid} already exists in ${resolvedPackPath}`,
         };
       }
       pack.assets.push({
@@ -457,13 +472,21 @@ export class AssetIOFacade {
         name: opts.asset.name,
         payload: opts.asset.payload as Record<string, unknown>,
         refs: opts.asset.refs ?? [],
+        ...(opts.asset.execution ? { execution: opts.asset.execution } : {}),
       });
-      // Upgrade legacy editor-created packs and add the asset-local artifact
-      // map required by the Pack v2 loader. normalizePackForRuntime preserves
-      // unknown fields, so this remains a lossless repair at the shared write
-      // gate for both human UI and AI dispatches.
+      if (opts.extraAssets) {
+        for (const extra of opts.extraAssets) {
+          pack.assets.push({
+            guid: extra.guid,
+            kind: extra.kind,
+            name: extra.name,
+            payload: extra.payload as Record<string, unknown>,
+            refs: extra.refs ?? [],
+          });
+        }
+      }
       pack = normalizePackForRuntime(pack as unknown as Record<string, unknown>) as PackFile;
-      const written = await writePackDetailed(opts.packPath, pack);
+      const written = await writePackDetailed(resolvedPackPath, pack);
       return written.ok
         ? { ok: true as const }
         : { ok: false as const, reason: 'write-failed' as const, hint: written.hint };
@@ -608,14 +631,22 @@ export class AssetIOFacade {
     }
   }
 
-  /** Best-effort cook trigger for a freshly-written sidecar. `POST /__import/:guid`.
+  /** Best-effort cook trigger for a freshly-written sidecar.
+   *  The host binding supplies the only valid generation-scoped import route.
    *  Returns a structured success/failure result so the executor preserves the
    *  first decisive boundary instead of collapsing it into a generic error. */
   async triggerCook(guid: string, signal?: AbortSignal): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.triggerCook');
     console.info('[import-diag] triggerCook', { guid });
+    const importUrlBase = this.runtimeBinding?.importUrlBase;
+    if (importUrlBase === undefined) {
+      const hint = 'asset cook refused: no active runtime asset binding';
+      console.warn('[import-diag] triggerCook FAILED', { guid, reason: hint });
+      return { ok: false, error: { kind: 'network', hint } };
+    }
     try {
-      const res = await fetch(`/__import/${guid}`, { method: 'POST', signal });
+      const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}`;
+      const res = await fetch(url, { method: 'POST', signal });
       console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: res.ok });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string; reason?: string; hint?: string };

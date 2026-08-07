@@ -31,6 +31,7 @@
 //   research Finding 13: current entComponent returns undefined for stale ids (P3)
 
 import { Name, ChildOf, Transform } from '@forgeax/engine-scene';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 // EditorHidden is editor-core's own marker component (plan-strategy §2 D-7), NOT
 // an engine export — importing it from @forgeax/engine-runtime is the exact
 // `Socket`-class regression AGENTS.md anti-pattern #5 warns about (would trip
@@ -263,6 +264,21 @@ export function worldEntityHandles(world: World): EntityHandle[] {
   if (!hasWorld(world)) return [];
   const out: EntityHandle[] = [];
   queryEachIncludingDisabled(world, [Name, Entity], (h) => out.push(h as EntityHandle));
+  return out;
+}
+
+/** Every live entity carrying MeshFilter + MeshRenderer — the viewport pick
+ *  candidate set (bug-20260806 GLB 选不中). Unlike worldEntityHandles (Name
+ *  query), this covers GLB mount-internal mesh nodes that carry NO Name —
+ *  the glTF bridge only stamps Name on nodes with a non-empty glTF name, so a
+ *  Name-keyed enumeration makes unnamed mesh nodes unpickable. Hidden
+ *  (Disabled / EditorHidden-chain) entities are INCLUDED here; visibility
+ *  filtering is the consumer's job (the pick sweep applies
+ *  isEntEffectivelyHidden per candidate). */
+export function worldRenderableHandles(world: World): EntityHandle[] {
+  if (!hasWorld(world)) return [];
+  const out: EntityHandle[] = [];
+  queryEachIncludingDisabled(world, [MeshFilter, MeshRenderer, Entity], (h) => out.push(h as EntityHandle));
   return out;
 }
 
