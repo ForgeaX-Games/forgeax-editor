@@ -93,8 +93,7 @@ const EDITOR_FIELD_OVERRIDES: Record<string, Partial<FieldSchema>> = {
   // Editor defaults where engine has none (engine schema omits defaults that
   // the runtime fills via factory functions, e.g. perspective() / orthographic())
   'MeshFilter.assetHandle': { default: 1, tooltip: 'shared mesh asset handle (built-in or imported)' }, // HANDLE_CUBE
-  // Engine Camera.fov is a vertical field of view in radians, not degrees.
-  'Camera.fov': { default: Math.PI / 3, tooltip: 'vertical field of view (radians)' },
+  'Camera.fov': { default: 60 },
   'Camera.near': { default: 0.1 },
   'Camera.far': { default: 1000 },
   'DirectionalLight.direction': { default: [-0.4, -1, -0.3] },

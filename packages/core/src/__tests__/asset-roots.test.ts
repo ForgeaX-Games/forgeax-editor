@@ -18,7 +18,7 @@ import { resolve, join } from 'node:path';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { resolveGameAssetRoots, readDeclaredRoots, SHARED_ROOT_PREFIX, expandPackRootsExcludingShaderSources } from '../asset-roots';
+import { resolveGameAssetRoots, readDeclaredRoots, SHARED_ROOT_PREFIX } from '../asset-roots';
 
 let tmpRoot: string;
 let gameDir: string;
@@ -88,64 +88,5 @@ describe('resolveGameAssetRoots — @shared alias classification', () => {
       implicitSharedSubs: ['template-game-default'],
     });
     expect(roots2.filter((r) => r.sub === 'template-game-default').length).toBe(1);
-  });
-});
-
-describe('expandPackRootsExcludingShaderSources — build-only shader boundary', () => {
-  // The engine catalog fails closed (whole catalog empties) when a scanned
-  // root contains `importer: 'shader'` sidecars; the canonical template ships
-  // them under assets/shaders next to runtime packs. These gates pin the
-  // editor-layer boundary that keeps such games loadable.
-
-  function makeGameAssets(): string {
-    const assets = join(gameDir, 'assets');
-    mkdirSync(assets, { recursive: true });
-    return assets;
-  }
-
-  it('keeps a clean directory root in directory form (live discovery preserved)', () => {
-    const assets = makeGameAssets();
-    writeFileSync(join(assets, 'scene.pack.json'), '{}');
-    const expansion = expandPackRootsExcludingShaderSources([assets]);
-    expect(expansion.excludedShaderSidecars).toEqual([]);
-    expect(expansion.roots).toEqual([assets]);
-  });
-
-  it('expands a shader-tainted root to explicit file roots, excluding shader sidecars', () => {
-    const assets = makeGameAssets();
-    writeFileSync(join(assets, 'scene.pack.json'), '{}');
-    writeFileSync(
-      join(assets, 'target-profile.json.meta.json'),
-      JSON.stringify({ importer: 'target-profile', subAssets: [] }),
-    );
-    mkdirSync(join(assets, 'shaders'), { recursive: true });
-    writeFileSync(
-      join(assets, 'shaders', 'hit-flash.wgsl.meta.json'),
-      JSON.stringify({ importer: 'shader', subAssets: [] }),
-    );
-
-    const expansion = expandPackRootsExcludingShaderSources([assets]);
-    expect(expansion.excludedShaderSidecars).toEqual([join(assets, 'shaders', 'hit-flash.wgsl.meta.json')]);
-    expect(expansion.roots).not.toContain(assets);
-    expect(expansion.roots).toContain(join(assets, 'scene.pack.json'));
-    expect(expansion.roots).toContain(join(assets, 'target-profile.json.meta.json'));
-    expect(expansion.roots.some((r) => r.includes('hit-flash'))).toBe(false);
-  });
-
-  it('collects pack files from nested dirs and skips blacklisted dirs', () => {
-    const assets = makeGameAssets();
-    mkdirSync(join(assets, 'ui'), { recursive: true });
-    writeFileSync(join(assets, 'ui', 'hud.pack.json'), '{}');
-    mkdirSync(join(assets, 'node_modules'), { recursive: true });
-    writeFileSync(join(assets, 'node_modules', 'stray.pack.json'), '{}');
-    mkdirSync(join(assets, 'shaders'), { recursive: true });
-    writeFileSync(
-      join(assets, 'shaders', 'x.wgsl.meta.json'),
-      JSON.stringify({ importer: 'shader', subAssets: [] }),
-    );
-
-    const expansion = expandPackRootsExcludingShaderSources([assets]);
-    expect(expansion.roots).toContain(join(assets, 'ui', 'hud.pack.json'));
-    expect(expansion.roots.some((r) => r.includes('node_modules'))).toBe(false);
   });
 });

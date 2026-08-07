@@ -200,58 +200,6 @@
   );
 }
 
-/* dockview keeps EXACTLY ONE active panel per group — no group can have zero — so
-   a collapsed edge group's selected tab always carries `.dv-active-tab`, and the
-   base theme's generic rule (dockview.css: `.dv-groupview.dv-{active,inactive}-
-   group > … > .dv-tab.dv-active-tab`) paints it a distinct "visible panel"
-   background. On a closed edge strip that reads as a phantom "selected" tab with
-   no drawer open. An edge group should only look active WHILE its drawer is open
-   (`.fx-edge-drawer-open`), so until then render the active tab exactly like its
-   hidden-panel siblings — the strip becomes a row of equal launchers, no selection.
-   Higher specificity than the base rule (extra classes), so no `!important`. */
-.fx-dockwrap
-  .dv-groupview-edge.dv-active-group:not(.fx-edge-drawer-open)
-  > .dv-tabs-and-actions-container
-  .dv-tabs-container
-  > .dv-tab.dv-active-tab {
-  background-color: var(--dv-activegroup-hiddenpanel-tab-background-color);
-  color: var(--dv-activegroup-hiddenpanel-tab-color);
-}
-.fx-dockwrap
-  .dv-groupview-edge.dv-inactive-group:not(.fx-edge-drawer-open)
-  > .dv-tabs-and-actions-container
-  .dv-tabs-container
-  > .dv-tab.dv-active-tab {
-  background-color: var(--dv-inactivegroup-hiddenpanel-tab-background-color);
-  color: var(--dv-inactivegroup-hiddenpanel-tab-color);
-}
-/* The leading lucide glyph (`.fx-dock-tab-icon`) has its OWN active/hover color
-   rule (brightens to --color-text-primary), which the neutralizers above don't
-   touch — so a closed edge group's active tab still lit its icon. Dim it back to
-   the tertiary (idle) color unless the drawer is open, matching the tab text. */
-.fx-dockwrap
-  .dv-groupview-edge:not(.fx-edge-drawer-open)
-  > .dv-tabs-and-actions-container
-  .dv-tabs-container
-  > .dv-tab.dv-active-tab:not(:hover)
-  .fx-dock-tab-icon {
-  color: var(--color-text-tertiary, #6b7078);
-}
-/* Uniform hover feedback for EVERY tab in a closed edge group — active AND
-   inactive. The base hover rule (`.fx-dockshell .dv-tab:not(.dv-active-tab):hover`)
-   can't reach edge groups (ShellManager hoists them into `.dv-shell`, outside the
-   inner `.fx-dockshell`) AND deliberately skips the active tab, so left/right side
-   strips got the wrong hover on inactive tabs and none on the (neutralized) active
-   tab. This single `.fx-dockwrap`-anchored rule (the ancestor edge groups DO live
-   under, same as the neutralizers) restores a consistent hover for both.
-   `!important` to beat the neutralizers above and the base theme. */
-.fx-dockwrap
-  .dv-groupview-edge:not(.fx-edge-drawer-open)
-  .dv-tab:hover {
-  background-color: var(--color-interaction-selected-neutral) !important;
-  color: var(--color-text-primary) !important;
-}
-
 /* Declarative single-tab strategies. Dockview owns tab counting and adds
    `.dv-single-tab`; panel descriptors only declare the preferred presentation.
    `data-fx-dock-title-state="visible"` is the user override used by the
@@ -410,24 +358,21 @@
   margin-bottom: 6px;
 }
 
-/* Edge tabs render a per-TAB Pin toggle in place of close (X) — DockTab picks the
-   glyph off `api.location`, so an edge tab never has a raw X to hide.
-   Gated exactly like the active-tab highlight: HIDDEN by default (dockview keeps
-   one tab "active" per group even while the drawer is closed, so a persistent pin
-   read like a selection). Revealed on hover, or on the active tab WHILE THE DRAWER
-   IS OPEN (`.fx-edge-drawer-open`); pinned tabs stay lit unconditionally. */
+/* Edge tabs: close (X) is swapped for a per-TAB Pin toggle (see edgeDrawer.ts).
+   Always show the action; only the pinned tab's button lights lime. */
 .dv-groupview-edge .dv-default-tab-action.fx-edge-pin {
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
-  opacity: 0;
+  opacity: 0.55;
   color: var(--dv-activegroup-hiddenpanel-tab-color, #9aa0aa);
 }
 .dv-groupview-edge .dv-tab:hover .dv-default-tab-action.fx-edge-pin,
-.dv-groupview-edge.fx-edge-drawer-open .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
+.dv-groupview-edge .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
   opacity: 0.85;
 }
-.dv-groupview-edge .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on {
+.dv-groupview-edge .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
+.dv-groupview-edge .dv-tab.fx-edge-tab-pinned .dv-default-tab-action.fx-edge-pin {
   opacity: 1;
   color: var(--lime, #7ee04a);
 }
@@ -610,21 +555,10 @@
    IMPORTANT: disable the body CHILDREN (.dv-react-part > *), NOT .dv-react-part
    itself — dockview's per-panel drop detection lives on the content wrapper;
    disabling the wrapper breaks docking onto NON-iframe panels (chat / workbench).
-   Global on <html> since dockview portals floating groups to <body>.
-
-   The tab strip must be SUBTRACTED: `dv-react-part` is dockview's class for EVERY
-   React mount point, not just panel bodies — tab renderers (ReactPanelHeaderPart →
-   .dv-tab > .dv-react-part > .dv-default-tab) and header actions
-   (ReactHeaderActionsRendererPart → .fx-dock-popout) use it too. Without the
-   :not(), a plain click inside the strip is fatal: DockRegion lights
-   fx-dock-dragging on the capture-phase `pointerdown`, the strip's contents lose
-   hit-testing before `pointerup` is targeted, so `click` retargets to the
-   .dv-react-part ancestor and never reaches the close (X) / pop-out handlers. */
+   Global on <html> since dockview portals floating groups to <body>. */
 html.fx-dock-dragging iframe,
 html.fx-dock-dragging .fx-surface-keepalive-item { pointer-events: none !important; }
-html.fx-dock-dragging
-  .fx-dockshell
-  .dv-react-part:not(.dv-tabs-and-actions-container *) > * { pointer-events: none !important; }
+html.fx-dock-dragging .fx-dockshell .dv-react-part > * { pointer-events: none !important; }
 
 /* Per-group "pop out to OS window" button (rightHeaderActionsComponent). */
 .fx-dock-popout {
@@ -705,8 +639,6 @@ html.fx-dock-dragging
 }
 .wb-dock-popout-btn:hover { opacity: 1; color: var(--color-text-primary, #eee); }
 .wb-dock-loading, .wb-dock-placeholder { padding: 16px; font-size: 13px; color: var(--color-text-secondary, #aaa); }
-.wb-dock-error { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-.wb-dock-error button { color: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 4px 10px; }
 .wb-dock-name { font-weight: 700; color: var(--color-text-primary, #eee); margin-bottom: 4px; }
 .wb-dock-desc { font-size: 12px; margin-bottom: 8px; }
 .wb-dock-id { font-family: monospace; font-size: 10px; opacity: 0.5; }

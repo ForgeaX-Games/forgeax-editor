@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import { gateway } from '@forgeax/editor-core';
 import { createEditorPageExtension } from './page-extension';
 
 describe('Editor Page contribution', () => {
@@ -51,52 +50,6 @@ describe('Editor Page contribution', () => {
       .toBe('@forgeax/editor#page/material');
     expect(editors.find((editor) => editor.selector.kinds?.includes('material-instance'))?.pageTypeId)
       .toBe('@forgeax/editor#page/material-instance');
-    // The generic page is the DEFAULT editor, not a hand-maintained kind list:
-    // that list had rotted (it still claimed the retired `cube-texture` and
-    // never covered equirect / animation-graph / video / particle-effect).
-    const generic = editors.find((editor) => editor.pageTypeId === '@forgeax/editor#page/asset');
-    expect(generic?.selector).toEqual({ fallback: true });
-  });
-
-  it('hands a double-clicked asset to the resolver, whatever its kind', async () => {
-    // The regression this locks: openAsset used to pick the page itself with a
-    // kind switch, which architecture.md forbids (ResourceEditorResolver owns
-    // association > source layer > priority) and which silently hid the rotten
-    // kind list above behind its own `return ASSET_PAGE` default.
-    const opened: { kind?: string; canonicalId?: string }[] = [];
-    const pageKey = { cardinality: 'resource', typeId: '@forgeax/editor#page/asset', resourceId: 'stub' };
-    const host = {
-      pages: {
-        open: async () => pageKey,
-        getSnapshot: () => ({ generation: 0, instances: [] }),
-        subscribe: () => () => {},
-      },
-      resourceEditors: {
-        open: async (resource: { kind?: string; canonicalId?: string }) => {
-          opened.push(resource);
-          return pageKey;
-        },
-      },
-    };
-    const extension = createEditorPageExtension(() => null);
-    const dispose = await extension.setup?.({ host } as never);
-    try {
-      // 'mesh' has a dedicated page; 'particle-effect' is an engine kind nobody
-      // declares. Both must reach the resolver identically.
-      for (const kind of ['mesh', 'particle-effect']) {
-        const result = gateway.dispatch({
-          kind: 'openAssetEditor',
-          asset: { guid: `guid-${kind}`, kind, name: `${kind}-asset`, payload: {}, packPath: 'assets/demo.pack.json' },
-        } as never, 'human');
-        expect(result.ok, kind).toBe(true);
-      }
-      await new Promise((resolve) => { setTimeout(resolve, 0); });
-    } finally {
-      if (typeof dispose === 'function') dispose();
-    }
-
-    expect(opened.map((resource) => resource.kind)).toEqual(['mesh', 'particle-effect']);
-    expect(opened.map((resource) => resource.canonicalId)).toEqual(['guid-mesh', 'guid-particle-effect']);
   });
 
   it('attaches a PageController factory to the material-instance page (M4/B2)', () => {

@@ -1442,7 +1442,7 @@ export class EditGateway {
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
-    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame' || kind === 'validateGameProject'
+    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame'
       || kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport'
       ? (cmd as { readonly requestId?: unknown }).requestId
       : undefined;
@@ -1456,7 +1456,6 @@ export class EditGateway {
     const isRequestCorrelatedDefaultScene = kind === 'setDefaultScene' && typeof requestId === 'string';
     const isRequestCorrelatedSceneDelete = kind === 'deleteScene' && typeof requestId === 'string';
     const isRequestCorrelatedCapture = kind === 'captureFrame' && typeof requestId === 'string';
-    const isRequestCorrelatedValidation = kind === 'validateGameProject' && typeof requestId === 'string';
     const isRequestCorrelatedSource = (kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport') && typeof requestId === 'string';
     let acceptedRun: OperationRunReadResult | null = null;
     if (isRequestCorrelatedSave) {
@@ -1637,21 +1636,6 @@ export class EditGateway {
       if (accepted.reused) {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
       }
-      acceptedRun = { ok: true, value: accepted.run };
-    } else if (isRequestCorrelatedValidation) {
-      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
-      const accepted = acceptOperationRun({
-        registry: this.operationRuns,
-        command: cmd,
-        origin,
-        operationId: kind,
-        requestId: requestId as string,
-        cancellable: false,
-        retryable: true,
-        ...(typeof retryOfRequestId === 'string' ? { retryOfRequestId } : {}),
-      });
-      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
-      if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
       acceptedRun = { ok: true, value: accepted.run };
     } else if (isRequestCorrelatedSource) {
       const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;

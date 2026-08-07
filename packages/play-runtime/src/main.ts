@@ -13,7 +13,6 @@ import { Transform } from '@forgeax/engine-scene';
 import { createCylinderGeometry } from '@forgeax/engine-geometry';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { ParticleEffectPlayer } from '@forgeax/engine-vfx';
-import { createDevImportTransport } from '@forgeax/engine-runtime';
 import {
   sendVagMessage,
   onVagMessage,
@@ -34,7 +33,7 @@ import {
   FORGE_JSON,
 } from '@forgeax/engine-project';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { SceneAsset, AssetError, RuntimeAssetBinding } from '@forgeax/engine-types';
+import type { SceneAsset, AssetError } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
 import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
@@ -101,69 +100,7 @@ declare const __FORGEAX_STATIC_GAME_ID__: string;
 const qp = new URLSearchParams(location.search);
 const rawGameId = qp.get('game') ?? qp.get('slug');
 const requestedGameId = rawGameId ?? (__FORGEAX_STATIC_BUILD__ ? __FORGEAX_STATIC_GAME_ID__ : null);
-const requestedGameIdValidated = requestedGameId && GAME_ID_RE.test(requestedGameId)
-  ? requestedGameId
-  : null;
-const expectedScopeId = qp.get('runtimeScopeId');
-const expectedGenerationText = qp.get('runtimeGeneration');
-const expectedGeneration = expectedGenerationText === null ? null : Number(expectedGenerationText);
-
-async function loadRuntimeBinding(): Promise<RuntimeAssetBinding | undefined> {
-  if (__FORGEAX_STATIC_BUILD__) return undefined;
-  const bindingUrl = `${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/__pack/runtime-binding.json`;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(bindingUrl, { cache: 'no-store' });
-      if (response.status === 503) {
-        const unavailable = await response.json().catch(() => null) as { status?: unknown } | null;
-        if (unavailable?.status === 'unbound') return undefined;
-      }
-      if (response.ok) {
-        const candidate = await response.json() as Partial<RuntimeAssetBinding>;
-        if (
-          candidate.schemaVersion === 'runtime-asset-binding-v1'
-          && typeof candidate.gameId === 'string'
-          && typeof candidate.scopeId === 'string'
-          && Number.isSafeInteger(candidate.generation)
-          && (candidate.status === 'ready' || candidate.status === 'degraded')
-          && typeof candidate.catalogUrl === 'string'
-          && typeof candidate.importUrlBase === 'string'
-          && typeof candidate.packageUrlBase === 'string'
-        ) {
-          return candidate as RuntimeAssetBinding;
-        }
-      }
-    } catch {
-      // The sidecar may still be starting or rebinding.
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error('[engine] no authoritative runtime asset binding became ready');
-}
-
-const runtimeBinding = await loadRuntimeBinding();
-if (runtimeBinding !== undefined && requestedGameIdValidated !== null && runtimeBinding.gameId !== requestedGameIdValidated) {
-  throw new Error(
-    `[engine] requested game ${requestedGameIdValidated} does not match active runtime scope ${runtimeBinding.gameId}`,
-  );
-}
-if (
-  expectedScopeId !== null
-  || expectedGeneration !== null
-) {
-  if (
-    expectedScopeId === null
-    || expectedGeneration === null
-    || !Number.isSafeInteger(expectedGeneration)
-    || expectedGeneration < 1
-    || runtimeBinding === undefined
-    || runtimeBinding.scopeId !== expectedScopeId
-    || runtimeBinding.generation !== expectedGeneration
-  ) {
-    throw new Error('[engine] requested runtime generation does not match the active binding');
-  }
-}
-const gameId = runtimeBinding?.gameId ?? requestedGameIdValidated ?? '_template';
+const gameId = (requestedGameId && GAME_ID_RE.test(requestedGameId)) ? requestedGameId : '_template';
 const carrierRuntimeId = qp.get('runtimeId')?.trim() || null;
 const carrierOwnershipChallenge = qp.get('ownershipChallenge')?.trim() || null;
 let carrierScope: { projectId: string; gameId: string | null } | null = null;
@@ -308,9 +245,6 @@ const post = (capture: boolean): void => {
 // fx-pointer-capture bridge above. The engine backend routes onCanvasClick
 // through requestLock()/exitLock() when a lockProvider is present (D-2), gated by
 // the game-driven setPointerLockAllowed (D-3) wired onto ctx below.
-const devImportTransport = runtimeBinding === undefined
-  ? undefined
-  : createDevImportTransport(runtimeBinding);
 const app = await createApp(canvas, {
   ...(physics ? { plugins: [physicsPlugin(physics)] } : {}),
   features: [vfxRuntime.host.feature],
@@ -320,7 +254,29 @@ const app = await createApp(canvas, {
   },
 }, {
   shaderManifestUrl: '/preview/shaders/manifest.json',
-  ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
+  // Dev-mode import transport with explicit URL that matches the engine
+  // pluginPack middleware's literal route. The default
+  // createDevImportTransport() also uses `/__import/<guid>` — but here we
+  // spell it out to make the contract local + obvious. play-runtime runs
+  // under base `/preview/`, BUT pluginPack registers its dev middleware
+  // against the BARE `/__import/…` path (no base awareness), so the
+  // transport must NOT prefix the URL. Interface (port 18920) proxies all
+  // unknown paths to :15173, so this works in both direct + Studio modes.
+  importTransport: {
+    async fetchPack(guid: string) {
+      try {
+        const response = await fetch(`/__import/${guid}`, { method: 'POST' });
+        if (!response.ok) return { ok: false };
+        try {
+          const body = await response.json();
+          if (Array.isArray(body)) return { ok: true, entries: body };
+        } catch { /* empty/non-JSON body — re-resolve from cache */ }
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+  },
 });
 
 if (!app.ok) {
@@ -330,9 +286,6 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
-if (runtimeBinding !== undefined) {
-  renderer.assets.configureRuntimeBinding(runtimeBinding);
-}
 runtimeWorld = world;
 const vfxAttached = await vfxRuntime.attachWorld(world, renderer.assets);
 if (!vfxAttached.ok) {
@@ -365,7 +318,7 @@ carrierRendererId = rendererGeneration === null
 // host's asset-first startup (ctx.defaultSceneRoot) never gets the chance: the
 // host resolves + instantiates defaultScene BEFORE the game's entry() runs, so
 // loadByGuid(scene) recurses into the cylinder ref, finds it absent (and
-// the unscoped asset route is sidecar-only → 404), and fails with `asset-not-imported` →
+// /__import is sidecar-only → 404), and fails with `asset-not-imported` →
 // resolveDefaultScene fails → the game falls back to a bare ground (cow-level's
 // "only a few lights"). Register the cylinder HERE, right after createApp and before
 // any scene resolves, so every host-startup game with a cylinder resolves.
@@ -378,10 +331,31 @@ const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
   }
 }
 
-// ── Pack catalog (prod or bound dev realm) ──
+// ── Pack index (prod loadByGuid path) ──
+// Per-game index URL: /preview/pack-index/<gameId>.json
+// Falls back to global /pack-index.json when the per-game index 404s
+// (old games or _template that have no per-game catalog).
 const packBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+const perGameUrl = `${packBase}/pack-index/${gameId}.json`;
 const globalUrl = `${packBase}/pack-index.json`;
-if (__FORGEAX_STATIC_BUILD__) renderer.assets.configurePackIndex(globalUrl);
+renderer.assets.configurePackIndex(__FORGEAX_STATIC_BUILD__ ? globalUrl : perGameUrl);
+// The static artifact has one authoritative cooked catalog. The development
+// host keeps its per-game index because it can discover newly-added assets
+// without rebuilding; a static site cannot resolve the dev-only source paths.
+if (!__FORGEAX_STATIC_BUILD__) {
+  // Prefetch the per-game index to detect 404; fall back to global on failure.
+  (async () => {
+    try {
+      const res = await fetch(perGameUrl, { method: 'HEAD' });
+      if (!res.ok && gameId !== '_template') {
+        console.log(`[engine] per-game pack-index ${perGameUrl} returned ${res.status}, falling back to global index`);
+        renderer.assets.configurePackIndex(globalUrl);
+      }
+    } catch {
+      // Network error: keep the per-game URL and let the runtime retry.
+    }
+  })();
+}
 
 // Asset-resident game plugins must register their component tokens before the
 // host instantiates defaultScene. The editor Play path discovers the same files
@@ -626,7 +600,7 @@ if (entry) {
   console.log('[engine] using fallback scene; write games/<id>/main.ts to override');
   world.spawn(
     { component: Transform, data: { pos: [0, 0.6, 5] } },
-    { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: window.innerWidth / window.innerHeight, far: 1000 }) },
+    { component: Camera, data: perspective({ fov: 60, aspect: window.innerWidth / window.innerHeight, far: 1000 }) },
   );
 }
 
@@ -655,11 +629,6 @@ try {
 // engine runs its cleanup funnel).
 let deviceLostSent = false;
 app.value.onError((err) => {
-  // App.onError is the engine's structured runtime/render failure channel.
-  // Keep it visible to browser smoke and to users inspecting the console;
-  // transporting it to the host alone would make a failed renderer look like
-  // a healthy Preview page.
-  console.error('[engine] runtime error:', err);
   const code = typeof err.code === 'string' ? err.code : 'renderer-error';
   const detail = err as unknown as { hint?: unknown; message?: unknown };
   carrierFailure = {
@@ -839,7 +808,7 @@ if (import.meta.hot) {
 
 // ── Network bridge (VAG_NETWORK postMessage) ──
 // Mirror the console bridge for fetch / XHR / WebSocket so the Studio Network
-// panel can show the game's HTTP/WS activity (asset loads, scoped import 4xx/5xx,
+// panel can show the game's HTTP/WS activity (asset loads, /__import 404s,
 // plugin backend 503s, …). Best-effort + swallow all errors so it never breaks
 // the game. Each request → one VAG_NETWORK summary forwarded up to the shell.
 (() => {

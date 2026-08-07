@@ -78,13 +78,6 @@ export const ENTITY_PRESETS: EntityPreset[] = [
       Collider: { shape: 2, radius: 0.35, halfHeight: 0.55 },
     },
   },
-  {
-    label: 'Particle Effect',
-    components: {
-      Transform: {},
-      ParticleEffectPlayer: {},
-    },
-  },
 ];
 
 /** Build a preset's components payload for spawnEntity consumption.

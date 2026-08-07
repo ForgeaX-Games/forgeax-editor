@@ -27,7 +27,7 @@ import type { AssetSourceMutationScope } from '@forgeax/editor-product';
  *  kinds can be blank-created, SSOT in `packages/content-browser/src/creatable-asset-kinds.ts`.
  *
  *  To extend: add one literal, its spec row, and the applier switch case. */
-export type CreatableAssetKind = 'scene' | 'material' | 'material-instance' | 'particle-effect';
+export type CreatableAssetKind = 'scene' | 'material' | 'material-instance';
 // Future examples: 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
 
 /** Builtin editor ops — the closed discriminated union of all 25 editor primitives.
@@ -230,10 +230,6 @@ export type BuiltinEditorOp =
   | { kind: 'assetOrphanDetected'; sourcePath: string; metaPath: string }
   | { kind: 'assetValidationFailed'; diagnostics: import('./scan/scan-diagnostic').ScanDiagnostic[] }
   | { kind: 'requestReimport'; paths: string[] }
-  // validateGameProject is a host-owned session operation. The producer
-  // validator remains scripts/game-validation.mjs; the host supplies its
-  // project access and the Gateway owns only the correlated run/result door.
-  | { kind: 'validateGameProject'; requestId: string; maxBytes?: number; maxEntities?: number; retryOfRequestId?: string }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
@@ -424,10 +420,6 @@ export interface CommandError extends CommandErrorContext {
     // discovery + invocation while a fresh play world is live; it never imports
     // game state tokens or reaches into a game World directly.
     | 'game-projection-unavailable'
-    // R2-04: the host-installed project validator provider is unavailable or
-    // returned an envelope the Gateway cannot safely project.
-    | 'project-validation-unavailable'
-    | 'project-validation-invalid-result'
     | 'game-projection-id-conflict'
     | 'unknown-game-projection'
     | 'game-action-failed'

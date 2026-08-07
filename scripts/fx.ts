@@ -44,7 +44,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   die,
@@ -674,7 +674,7 @@ async function run(argv: string[]): Promise<void> {
     ok(`reusing platform-io for game '${gameDir.split(/[/\\]/).pop()}' from ${gameDir}`);
   }
   // --rhi-debug: opt-in the engine's RHI frame capture. Setting the env for every
-  // spawned vite process makes engine-vite-preset register vite-plugin-rhi-debug
+  // spawned vite process makes runtime-vite-preset register vite-plugin-rhi-debug
   // (which injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG=1 + the dev-server
   // /__forgeax-debug endpoints), flipping createApp's guard so the browser gets
   // window.__forgeax.captureFrame(n). Unset by default → zero injection, tree-shaken.
@@ -699,15 +699,17 @@ async function run(argv: string[]): Promise<void> {
     ...portEnvironment(WORKTREE_PORTS),
     ...bridgeEnv,
     FORGEAX_GAME_DIR: gameDir,
+    // play-runtime serves games as sibling slugs under host-games; --game
+    // supplies one slug directory, so inject its parent as the scan root.
+    FORGEAX_PREVIEW_GAMES_DIR: gameDir ? dirname(gameDir) : '',
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
     // The pure preview is proxied through the standalone host. Play Runtime
-    // receives one exact game root and exposes it through a stable URL mount;
-    // no parent directory is ever an asset producer input.
+    // serves game files from an in-root `host-games/<slug>` farm, so a direct
+    // --game path is exposed through its parent directory and the stable URL
+    // prefix instead of falling through to the preview SPA HTML.
     ...(gameDir
       ? {
-          FORGEAX_GAME_ID: basename(gameDir),
-          FORGEAX_RUNTIME_SCOPE_ID: `standalone-${basename(gameDir)}`,
-          FORGEAX_RUNTIME_GENERATION: '1',
+          FORGEAX_PREVIEW_GAMES_DIR: dirname(gameDir),
           FORGEAX_GAMES_URL_PREFIX: 'host-games',
         }
       : {}),
@@ -902,8 +904,7 @@ function build(argv: string[]): void {
   sh('bun', ['-F', '@forgeax/editor-play-runtime', 'build'], {
     env: {
       ...process.env,
-      FORGEAX_GAME_DIR: gameDir,
-      FORGEAX_GAME_ID: gameId,
+      FORGEAX_PREVIEW_GAMES_DIR: dirname(gameDir),
       FORGEAX_GAMES_URL_PREFIX: 'host-games',
       FORGEAX_STATIC_GAME_DIR: gameDir,
       FORGEAX_STATIC_GAME_ID: gameId,
