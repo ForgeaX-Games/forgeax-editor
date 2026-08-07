@@ -8,6 +8,7 @@ import {
   DEFAULT_ASSET_EDITOR_DOCK_LAYOUT,
   DEFAULT_EDITOR_DOCK_LAYOUT,
   DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
+  DEFAULT_MI_EDITOR_DOCK_LAYOUT,
 } from './default-dock-layout';
 
 function collectViews(node: unknown): string[] {
@@ -102,5 +103,18 @@ describe('DEFAULT_ASSET_EDITOR_DOCK_LAYOUT', () => {
     expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeDefined();
     expect(DEFAULT_ASSET_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
     expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
+  });
+});
+
+describe('DEFAULT_MI_EDITOR_DOCK_LAYOUT', () => {
+  test('owns preview + properties panels independent of Level/Mesh', () => {
+    expect(collectViews(DEFAULT_MI_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
+      'ep:mi-preview',
+      'ep:mi-properties',
+    ]);
+    expect(DEFAULT_MI_EDITOR_DOCK_LAYOUT.panels['ep:mi-preview']).toBeDefined();
+    expect(DEFAULT_MI_EDITOR_DOCK_LAYOUT.panels['ep:mi-properties']).toBeDefined();
+    expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mi-preview']).toBeUndefined();
+    expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mi-properties']).toBeUndefined();
   });
 });

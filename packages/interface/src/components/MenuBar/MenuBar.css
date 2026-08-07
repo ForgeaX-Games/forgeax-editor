@@ -12,15 +12,18 @@
 }
 
 .fx-menubar-btn {
-  /* Geometry mirrors the product prototype's `.ed-menubar .mb`: a padding-sized
-     rounded pill (3px 9px / radius 5px), not a fixed-height full-bar cell — so
-     the hover highlight reads as a snug inset chip. */
+  /* Full-bar-height cell: the hover/open highlight fills the whole menubar
+     height instead of a short chip. Only horizontal padding (9px); the label
+     stays vertically centred via align-items, so its position doesn't shift. */
   display: inline-flex;
   align-items: center;
-  padding: 3px 9px;
+  height: 100%;
+  padding: 0 9px;
   background: transparent;
   border: none;
-  border-radius: 5px;
+  /* Square hover/open highlight (no 倒角) to match the flush, square-cornered
+     top bar + dock chrome. */
+  border-radius: 0;
   color: var(--color-text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -30,10 +33,20 @@
     background var(--motion-duration-instant) var(--motion-ease-standard),
     color var(--motion-duration-instant) var(--motion-ease-standard);
 }
-.fx-menubar-btn:hover,
-.fx-menubar-btn[data-state="open"] {
-  background: var(--color-interaction-hover);
+.fx-menubar-btn:hover {
+  /* Bumped from --color-interaction-hover (0.05) to the neutral-selected surface
+     (0.10) so the top-level pill highlight is legible against TopBar — the 0.05
+     overlay read as almost invisible here. */
+  background: var(--color-interaction-selected-neutral, var(--color-interaction-hover));
   color: var(--color-text-primary);
+}
+/* Open menu (UE-style): the trigger whose panel is showing stays lit in the
+   brand theme colour, so it's obvious which top-level menu owns the open panel
+   even while you sweep the pointer across siblings. Placed after :hover so the
+   brand tint wins when the open trigger is also hovered. */
+.fx-menubar-btn[data-state="open"] {
+  background: var(--color-interaction-selected-brand);
+  color: var(--color-brand-primary);
 }
 
 /* Brand entry — mirrors the prototype `.mb-brand`: a glowing rounded mark plus

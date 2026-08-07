@@ -9,9 +9,9 @@ import {
 } from 'react';
 import {
   AtSign,
-  BookOpen,
   ChevronsRight,
   Copy,
+  Crosshair,
   File,
   FolderSearch,
   Minus,
@@ -22,8 +22,16 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useHost } from '../../core/app-shell';
-import type { PageInstance, PageMenuItem } from '../../core/page-platform';
+import {
+  PagePlatformError,
+  isPageDirty,
+  subscribePageDirty,
+  type PageInstance,
+  type PageMenuItem,
+} from '../../core/page-platform';
+import { unsavedChangesDialog } from '../../lib/dialog';
 import { iconForPage } from '../../lib/page-tab-icons';
+import { useTranslation } from '@/i18n';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,7 +39,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { PageRulesDialog } from './PageRulesDialog';
 import './PageTabStrip.css';
 
 // Lucide glyphs for controller-contributed menu items (kebab name → component),
@@ -39,6 +46,7 @@ import './PageTabStrip.css';
 const MENU_ICON: Record<string, LucideIcon> = {
   copy: Copy,
   'folder-search': FolderSearch,
+  crosshair: Crosshair,
   'at-sign': AtSign,
   save: Save,
 };
@@ -75,6 +83,7 @@ function tabTitle(page: PageInstance, fallbackTitle: string | undefined): string
 
 export function PageTabStrip(): ReactElement | null {
   const host = useHost();
+  const { t } = useTranslation();
   const snapshot = useSyncExternalStore(host.pages.subscribe, host.pages.getSnapshot, host.pages.getSnapshot);
   const registry = useSyncExternalStore(
     host.pageRegistry.subscribe,
@@ -86,8 +95,10 @@ export function PageTabStrip(): ReactElement | null {
   const dragKeyRef = useRef<string | null>(null);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [overflowing, setOverflowing] = useState(false);
-  const [rulesOpen, setRulesOpen] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; key: string } | null>(null);
+  // Dirty state lives outside the page snapshot — a registered probe (e.g. the
+  // Material Instance staging buffer) owns it, so re-render on its signal.
+  const [, setDirtyTick] = useState(0);
 
   const { instances, activeKey } = snapshot;
 
@@ -98,7 +109,37 @@ export function PageTabStrip(): ReactElement | null {
     .map((t) => ({ typeId: t.definition.id, title: t.definition.title }));
 
   const focus = useCallback((key: string) => void host.pages.focus(key).catch(() => {}), [host]);
-  const closeKey = useCallback((key: string) => void host.pages.close(key).catch(() => {}), [host]);
+
+  // A page may refuse to close with unsaved staging; ask save / discard / cancel
+  // and retry with the decision the platform expects.
+  const closeKey = useCallback(
+    (key: string) => {
+      void (async () => {
+        try {
+          await host.pages.close(key);
+        } catch (error) {
+          if (!(error instanceof PagePlatformError) || error.code !== 'PAGE_CLOSE_REQUIRES_DECISION') return;
+          const page = host.pages.getSnapshot().instances.find((p) => p.encodedKey === key);
+          const resolved = page ? host.pageRegistry.get(page.typeId) : undefined;
+          const title = page
+            ? tabTitle(page, resolved?.status === 'available' ? resolved.definition.title : undefined)
+            : key;
+          const decision = await unsavedChangesDialog({
+            title: t('dialog.unsavedTitle'),
+            body: error.message || t('dialog.unsavedBody', { title }),
+            saveText: t('common.save'),
+            discardText: t('dialog.discardChanges'),
+            cancelText: t('common.cancel'),
+          });
+          if (decision === 'cancel') return;
+          await host.pages.close(key, { decision }).catch(() => {});
+        }
+      })();
+    },
+    [host, t],
+  );
+
+  useEffect(() => subscribePageDirty(() => setDirtyTick((n) => n + 1)), []);
 
   // Keep the active tab in view when the selection changes under overflow.
   useEffect(() => {
@@ -171,13 +212,14 @@ export function PageTabStrip(): ReactElement | null {
           ref={listRef}
           className="page-tab-list"
           role="tablist"
-          aria-label="Open pages"
+          aria-label={t('pageTabs.openPages')}
           onPointerMove={handlePointerMove}
         >
           {instances.map((page) => {
             const resolved = host.pageRegistry.get(page.typeId);
             const title = tabTitle(page, resolved?.status === 'available' ? resolved.definition.title : undefined);
             const active = activeKey === page.encodedKey;
+            const dirty = isPageDirty(page);
             const Icon = iconForPage({ typeId: page.typeId, resource: page.resource });
             const path = page.resource?.displayPath ?? page.resource?.uri;
             const classes = [
@@ -185,6 +227,7 @@ export function PageTabStrip(): ReactElement | null {
               'no-motion-lift',
               active ? 'is-active' : '',
               page.closable ? '' : 'is-pinned',
+              dirty ? 'is-dirty' : '',
               draggingKey === page.encodedKey ? 'is-drag' : '',
             ]
               .filter(Boolean)
@@ -197,6 +240,7 @@ export function PageTabStrip(): ReactElement | null {
                 role="tab"
                 aria-selected={active}
                 data-page-key={page.encodedKey}
+                data-dirty={dirty ? '1' : undefined}
                 title={path ?? title}
                 onClick={() => handleTabClick(page.encodedKey)}
                 onAuxClick={(e) => {
@@ -213,11 +257,12 @@ export function PageTabStrip(): ReactElement | null {
               >
                 <Icon className="page-tab__icon" aria-hidden />
                 <span className="page-tab__label">{title}</span>
+                {dirty && <span className="page-tab__dirty" aria-hidden>*</span>}
                 {page.closable ? (
                   <span
                     className="page-tab__close no-motion-lift"
                     role="button"
-                    aria-label={`Close ${title}`}
+                    aria-label={t('pageTabs.closeTab', { title })}
                     data-page-close={page.encodedKey}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -236,13 +281,13 @@ export function PageTabStrip(): ReactElement | null {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="page-tab-btn page-tab-new no-motion-lift" title="New page" aria-label="New page">
+            <button type="button" className="page-tab-btn page-tab-new no-motion-lift" title={t('pageTabs.newPage')} aria-label={t('pageTabs.newPage')}>
               <Plus className="page-tab-btn__icon" aria-hidden />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-[200px]">
             {openableTypes.length === 0 ? (
-              <DropdownMenuItem disabled>No openable page types</DropdownMenuItem>
+              <DropdownMenuItem disabled>{t('pageTabs.noOpenableTypes')}</DropdownMenuItem>
             ) : (
               openableTypes.map((t) => {
                 const Icon = iconForPage({ typeId: t.typeId });
@@ -261,7 +306,7 @@ export function PageTabStrip(): ReactElement | null {
           {overflowing && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className="page-tab-btn no-motion-lift" title="All pages">
+                <button type="button" className="page-tab-btn no-motion-lift" title={t('pageTabs.allPages')}>
                   <ChevronsRight className="page-tab-btn__icon" aria-hidden />
                   <span>{instances.length}</span>
                 </button>
@@ -275,22 +320,15 @@ export function PageTabStrip(): ReactElement | null {
                     <DropdownMenuItem key={page.encodedKey} onSelect={() => focus(page.encodedKey)}>
                       <Icon aria-hidden />
                       <span className="page-tab-menu__mark">{activeKey === page.encodedKey ? '●' : '○'}</span>
-                      <span className="page-tab-menu__label">{title}</span>
+                      <span className="page-tab-menu__label">
+                        {isPageDirty(page) ? `${title} *` : title}
+                      </span>
                     </DropdownMenuItem>
                   );
                 })}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <button
-            type="button"
-            className="page-tab-btn page-tab-rules no-motion-lift"
-            title="Tab rules manual"
-            onClick={() => setRulesOpen(true)}
-          >
-            <BookOpen className="page-tab-btn__icon" aria-hidden />
-            <span>页签规则</span>
-          </button>
         </div>
       </div>
 
@@ -306,7 +344,7 @@ export function PageTabStrip(): ReactElement | null {
           <DropdownMenuContent align="start" className="min-w-[186px]" onContextMenu={(e) => e.preventDefault()}>
             <DropdownMenuItem disabled={!menuPage.closable} onSelect={() => closeKey(menu.key)}>
               <X aria-hidden />
-              关闭
+              {t('pageTabs.context.close')}
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
@@ -315,7 +353,7 @@ export function PageTabStrip(): ReactElement | null {
               }}
             >
               <Minus aria-hidden />
-              关闭其他
+              {t('pageTabs.context.closeOthers')}
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
@@ -323,14 +361,12 @@ export function PageTabStrip(): ReactElement | null {
               }}
             >
               <ChevronsRight aria-hidden />
-              关闭右侧全部
+              {t('pageTabs.context.closeToRight')}
             </DropdownMenuItem>
             {renderMenuItems(menuItems)}
           </DropdownMenuContent>
         )}
       </DropdownMenu>
-
-      <PageRulesDialog open={rulesOpen} onOpenChange={setRulesOpen} />
     </div>
   );
 }

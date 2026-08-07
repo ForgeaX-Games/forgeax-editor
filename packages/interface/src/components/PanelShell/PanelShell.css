@@ -21,6 +21,53 @@
   background: rgba(0, 0, 0, 0.16);
 }
 
+/* When a panel hides its dockview tab (single-tab "hideTitle", e.g. the
+   viewport), this header IS the group's top row and sits level with neighbouring
+   groups' 35px tab strips (--dv-tabs-and-actions-container-height). Match that
+   height exactly — and shrink the inner action buttons + vertical padding — so
+   there's no step between this toolbar and adjacent tab bars. Scoped to
+   hideTitle panels only; normal panel headers (which sit BELOW their own tab
+   strip) keep the taller 38px. */
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header {
+  box-sizing: border-box;
+  min-height: 0;
+  height: var(--dv-tabs-and-actions-container-height, 35px);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-action {
+  height: 24px;
+}
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-action[data-has-label="false"] {
+  width: 24px;
+  padding: 4px;
+}
+/* The `control` family (dropdown fields, search box, thumb slider, FPS readout)
+   are the other fixed-26px elements in this row — bring them down to 24px too so
+   every button in the compact viewport header shares one height. */
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-control-field,
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-search-control,
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-thumb-slider {
+  height: 24px;
+}
+/* Some header controls are rendered by the editor via `host.panelControls`, so
+   their inner buttons carry the editor's own classes (not .fx-panel-*) and kept
+   their taller default here. Constrain the interactive element inside ANY
+   `.fx-panel-control` wrapper from the interface side — class-agnostic — so the
+   editor-contributed dropdowns/toggles/readouts also land on 24px. */
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-control {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-control button,
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-control select,
+.fx-panel[data-dock-single-tab="hideTitle"] > .fx-panel-header .fx-panel-control [role="button"] {
+  height: 24px;
+  min-height: 24px;
+  box-sizing: border-box;
+}
+
 .fx-panel-header-zone {
   position: relative;
   min-width: 0;

@@ -1,105 +1,32 @@
 import { defineConfig } from 'vite';
-import { resolve, dirname, join, relative } from 'node:path';
+import { resolve, dirname, join, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync, readFileSync } from 'node:fs';
-import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
-import { standaloneRhiDebugPlugins } from './rhi-debug-config';
+import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync, readFileSync, mkdirSync } from 'node:fs';
+import {
+  engineVitePreset,
+  resolveGameEngineEntry as resolveSharedGameEngineEntry,
+  type EngineVitePreset,
+} from '../../engine-vite-preset';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
 import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
-import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
-import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { gltfImporter } from '@forgeax/engine-gltf';
-import { fbxImporter } from '@forgeax/engine-fbx';
-import {
-  createStockParticleOperatorRegistry,
-  particleEffectImporter,
-} from '@forgeax/engine-vfx-compiler';
-import { buildPerGameCatalog } from './pack-catalog.js';
 import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy';
+import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const PLAY_PACKAGE_ROOT = resolve(here, 'node_modules');
 
-interface PackageExports {
-  readonly [subpath: string]: string | { readonly import?: string } | undefined;
-}
-
-// Game sources are mounted from a host-owned directory rather than living in a
-// workspace package. Their normal node_modules walk-up therefore misses this
-// runtime's isolated Bun workspace links. Resolve @forgeax imports from the
-// Play Runtime's own public exports map, just as Edit Runtime does for ▶ Play.
-// Keeping this in the preview host is essential: /preview/ has an independent
-// Vite server and does not inherit Edit Runtime's plugin chain.
-const HOST_GAMES_DIR = ['.', 'forgeax', 'games'].join('/').replace('./', '.');
-// The in-root game mount is host-injected for parallel dev stacks. The default
-// remains `host-games`; an isolated test or another host can choose a distinct
-// prefix without competing for one shared symlink.
-const HOST_GAMES_FARM = process.env.FORGEAX_GAMES_URL_PREFIX ?? 'host-games';
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-const MULTI_GAME_PATH_RE = new RegExp(
-  `/(?:${escapeRegex(HOST_GAMES_DIR)}|${escapeRegex(HOST_GAMES_FARM)}|packages\\/games|forgeax-games)/[^/]+/`,
-);
-
-function normalizeGameFilePath(raw: string, viteRoot: string): string {
-  let path = raw.replace(/\\/g, '/');
-  if (path.startsWith('/@fs/')) path = path.slice('/@fs/'.length);
-  if (!path.startsWith('/')) path = resolve(viteRoot, path).replace(/\\/g, '/');
-  return process.platform === 'win32' ? path.toLowerCase() : path;
-}
-
+// Keep the public Play test seam while making the actual resolver shared. Play
+// owns a small set of host-only packages (notably engine-npc), so it contributes
+// its package graph as data rather than carrying a second resolver algorithm.
 export function resolveGameEngineEntry(id: string): string | null {
-  const rest = id.slice('@forgeax/'.length);
-  const [packageName, ...subpath] = rest.split('/');
-  if (!packageName) return null;
-  const packageRoots = [resolve(here, 'node_modules')];
-  if (HOST_PACKAGE_ROOT) {
-    const hostRoot = resolve(HOST_PACKAGE_ROOT);
-    packageRoots.push(hostRoot, resolve(hostRoot, 'node_modules'), resolve(hostRoot, 'packages'));
-  }
-  for (let cursor = dirname(here); cursor !== dirname(cursor); cursor = dirname(cursor)) {
-    packageRoots.push(resolve(cursor, 'node_modules'), resolve(cursor, 'packages'));
-  }
-  for (const root of packageRoots) {
-    for (const packageDir of [resolve(root, '@forgeax', packageName), resolve(root, packageName)]) {
-      try {
-        const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
-          name?: string;
-          exports?: PackageExports;
-        };
-        if (manifest.name !== id.split('/').slice(0, 2).join('/')) continue;
-        const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
-        const entry = manifest.exports?.[exportKey];
-        const importPath = typeof entry === 'string' ? entry : entry?.import;
-        if (typeof importPath === 'string') return resolve(packageDir, importPath);
-      } catch { /* try the next host-owned package root */ }
-    }
-  }
-  return null;
+  return resolveSharedGameEngineEntry(id, { packageRoots: [PLAY_PACKAGE_ROOT] });
 }
 
-function gameEngineResolve() {
-  let viteRoot = process.cwd();
-  const isGameImporter = (importer: string): boolean => {
-    const normalized = normalizeGameFilePath(importer, viteRoot);
-    return MULTI_GAME_PATH_RE.test(normalized)
-      || (STATIC_GAME_DIR.length > 0 && normalized.startsWith(normalizeGameFilePath(STATIC_GAME_DIR, viteRoot)));
-  };
-  return {
-    name: 'forgeax:game-engine-resolve',
-    configResolved(config: { root: string }) {
-      viteRoot = config.root;
-    },
-    resolveId(id: string, importer?: string) {
-      if (!importer || !id.startsWith('@forgeax/')) return null;
-      return isGameImporter(importer)
-        ? resolveGameEngineEntry(id) ?? null
-        : null;
-    },
-  };
-}
+// The active game mount is host-injected for parallel dev stacks. The default
+// remains `host-games`; the mount contains only the exact active game, never a
+// parent directory containing sibling games.
+const HOST_GAMES_FARM = process.env.FORGEAX_GAMES_URL_PREFIX ?? 'host-games';
 
 // The shared/external asset submodule (forgeax-editor-assets) resolved to its
 // REAL path, two levels up from this package. `@shared/<sub>` roots declared in
@@ -124,13 +51,19 @@ const ENGINE_TEMPLATE_UI_BASE = resolve(
   'ui',
 );
 
-// Games stay a host concern: a standalone/desktop/studio host injects the
-// physical directory.  When it does not supply a public URL prefix, mount it
-// under this generated in-root name so Vite can serve it without an ambient
-// sibling-repository convention.
-const PREVIEW_GAMES_DIR = process.env.FORGEAX_PREVIEW_GAMES_DIR;
+// Games stay a host concern: a standalone/desktop/studio host injects one
+// exact physical game directory. No parent games directory is accepted as an
+// asset producer input.
+const INITIAL_GAME_DIR = process.env.FORGEAX_GAME_DIR
+  ? resolve(process.env.FORGEAX_GAME_DIR)
+  : '';
+const INITIAL_GAME_ID = process.env.FORGEAX_GAME_ID
+  ?? (INITIAL_GAME_DIR ? basename(INITIAL_GAME_DIR) : '');
+const RUNTIME_SCOPE_SECRET = process.env.FORGEAX_RUNTIME_SCOPE_SECRET;
+const INITIAL_SCOPE_ID = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? INITIAL_GAME_ID;
+const INITIAL_GENERATION = Number(process.env.FORGEAX_RUNTIME_GENERATION ?? 1);
 const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX
-  ?? (PREVIEW_GAMES_DIR ? HOST_GAMES_FARM : '');
+  ?? (INITIAL_GAME_DIR ? HOST_GAMES_FARM : '');
 const GAME_API_PORT = process.env.FORGEAX_GAME_API_PORT;
 const STATIC_GAME_DIR = process.env.FORGEAX_STATIC_GAME_DIR
   ? resolve(process.env.FORGEAX_STATIC_GAME_DIR)
@@ -145,15 +78,15 @@ const STATIC_GAME_RESOLVED_ID = `\0${STATIC_GAME_VIRTUAL_ID}`;
 const STATIC_PLUGINS_VIRTUAL_ID = 'virtual:forgeax-static-game-plugins';
 const STATIC_PLUGINS_RESOLVED_ID = `\0${STATIC_PLUGINS_VIRTUAL_ID}`;
 
-// Implicit `template-game-default` shared scope. The demo-seed default template's
+// Explicit non-game `template-game-default` roots for the active game realm. The demo-seed default template's
 // scene references the shared sky.hdr equirect GUID (81eec382) but its own assets/
 // has no sky.hdr and its package.json declares only `["assets"]` — never
 // `@shared/template-game-default` (that would leak the editor's `@shared/`
 // convention into the engine submodule's template). play-runtime injects the
-// scope for EVERY game so the template sky folds into the pack catalog, matching
-// edit-runtime's runtime-vite-preset (they share this via editor-core's
+// active realm so the template sky folds into that realm's pack catalog, matching
+// editor-level engine-vite-preset (they share this via editor-core's
 // resolveGameAssetRoots.implicitSharedSubs — architecture-principles §1 SSOT).
-// Without it, /__import/<sky-guid> 404s `meta-not-found` and the skylight falls
+// Without it, the scoped import route for the sky GUID returns `meta-not-found` and the skylight falls
 // back to a solid color. existsSync-filtered, so an absent submodule degrades to
 // game-only.
 const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
@@ -164,8 +97,8 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
 //
 // WHY A SYMLINK IS STILL REQUIRED (not just an abs path in roots):
 //   play-runtime's process.cwd() == viteRoot == this package dir, and every
-//   catalog entry's packageUrl = withBase('/preview', relative(cwd, assetAbs))
-//   (pack-catalog.ts). withBase does posix.resolve('/', rel), which CLAMPS
+//   catalog entry's packageUrl = withBase('/preview', relative(cwd, assetAbs)).
+//   withBase does posix.resolve('/', rel), which CLAMPS
 //   leading `../` — so an external abs path (forgeax-editor-assets lives ABOVE
 //   viteRoot) yields a mangled `/preview/forgeax-editor-assets/...` URL that
 //   resolves under viteRoot and 404s. The symlink makes the whole submodule
@@ -209,7 +142,7 @@ setupExternalRootFarm('engine-assets', ENGINE_ASSETS_BASE);
 // Local game roots also need to be scanned through the in-root host-games farm.
 // Keeping their real absolute path here produces catalog packageUrls such as
 // `/preview/forgeax-gta/...`, which Vite cannot serve and which makes authored
-// Pack v2 scenes fall back to POST /__import/<scene-guid> with a 404. The
+// Pack v2 scenes fall back to an incorrectly addressed import request. The
 // browser-visible URL must use the same host-games mount as the game entry.
 function farmGamePath(root: ResolvedRoot, gameDir: string, slug: string): string {
   if (root.shared && root.sub !== undefined) return resolve(here, 'shared-assets', root.sub);
@@ -233,126 +166,75 @@ function templateAudioRoots(): string[] {
   ].filter(existsSync);
 }
 
-// Self-contained vite root: the engine directory itself. Pre-2026-05-13 the
-// root was the parent dir (packages/forgeax/), which forced an
-// engine-host-specific index.html to live one level up. With root = here,
-// engine-src/ (studio) and packages/forgeax/engine/ (release) are both
-// self-contained vite roots — a single index.html serves /preview/, and the
-// host-injected games dir (FORGEAX_PREVIEW_GAMES_DIR) is served under the vite
-// root so its games resolve; run.sh symlinks it to the instance's actual dir.
+// game-default's optional asset demonstrations are part of the template's
+// normal bootstrap, so the standalone Preview host must expose the same
+// engine-assets sources as the engine's own apps/preview host.
+function templateGameDefaultRuntimeRoots(gameDir: string): string[] {
+  try {
+    const packageJson = JSON.parse(readFileSync(join(gameDir, 'package.json'), 'utf8')) as { name?: unknown };
+    if (packageJson.name !== '@forgeax/template-game-default') return [];
+  } catch {
+    return [];
+  }
+  return [
+    resolve(here, 'engine-assets', 'vendor', 'fbx-test'),
+    resolve(here, 'engine-assets', 'khronos-gltf-samples', 'BoxTextured'),
+    resolve(here, 'engine-assets', 'demo-assets', 'hello-sprite', 'wood-container.jpg.meta.json'),
+    resolve(here, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.ttf.meta.json'),
+    resolve(here, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.atlas.png.meta.json'),
+    resolve(here, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.font.pack.json'),
+    resolve(here, 'engine-assets', 'demo-assets', 'hello-sprite-atlas'),
+  ].filter(existsSync);
+}
+
+// Self-contained vite root: the engine directory itself. Only one exact game
+// is mounted below it at a time; the sidecar never receives a parent games dir.
 const viteRoot = here;
 
-// Vite only serves files below its root. The games directory is deliberately
-// external and host-injected, so make a generated, stable in-root junction for
-// the default URL namespace. An explicit FORGEAX_GAMES_URL_PREFIX remains an
-// advanced host-owned mount contract; do not create arbitrary paths from it.
-(function setupGamesRootFarm() {
-  if (!PREVIEW_GAMES_DIR || GAMES_URL_PREFIX !== HOST_GAMES_FARM) return;
-  const targetPath = resolve(PREVIEW_GAMES_DIR);
+let mountedGameLink: string | undefined;
+function setupSingleGameRootFarm(gameDir: string, gameId: string): void {
+  const targetPath = resolve(gameDir);
+  const mountRoot = resolve(here, HOST_GAMES_FARM);
   if (!existsSync(targetPath)) {
-    console.warn(`[forgeax] FORGEAX_PREVIEW_GAMES_DIR does not exist: ${targetPath}`);
-    return;
+    throw new Error(`active game directory does not exist: ${targetPath}`);
   }
-  const linkPath = resolve(here, HOST_GAMES_FARM);
-  let linkStat;
-  try {
-    linkStat = lstatSync(linkPath);
-  } catch {
-    linkStat = undefined;
-  }
-  if (linkStat !== undefined) {
-    const stat = linkStat;
-    if (!stat.isSymbolicLink()) {
-      console.warn(`[forgeax] refusing to replace non-symlink games mount: ${linkPath}`);
-      return;
-    }
+  mkdirSync(mountRoot, { recursive: true });
+  const linkPath = resolve(mountRoot, gameId);
+  if (mountedGameLink !== undefined && mountedGameLink !== linkPath) {
     try {
-      if (realpathSync(linkPath) === realpathSync(targetPath)) return;
-    } catch { /* replace a stale/broken generated link below */ }
-    try { unlinkSync(linkPath); } catch (e) {
-      console.warn(`[forgeax] failed to replace games junction:`, e);
+      if (lstatSync(mountedGameLink).isSymbolicLink()) unlinkSync(mountedGameLink);
+    } catch { /* the previous exact mount may already be gone */ }
+  }
+  try {
+    const existing = lstatSync(linkPath);
+    if (!existing.isSymbolicLink()) {
+      throw new Error(`refusing to replace non-symlink active game mount: ${linkPath}`);
+    }
+    if (realpathSync(linkPath) === realpathSync(targetPath)) {
+      mountedGameLink = linkPath;
       return;
     }
+    unlinkSync(linkPath);
+  } catch (error) {
+    if (error instanceof Error && !error.message.includes('ENOENT')) throw error;
   }
-  // `existsSync` is false for a broken generated symlink after an earlier
-  // short-lived host deleted its temp games directory. lstatSync still sees
-  // that link, so remove it before creating the next isolated mount.
+  // Remove a broken generated junction before recreating the exact active-game mount.
   try {
     const stale = lstatSync(linkPath);
     if (stale.isSymbolicLink()) unlinkSync(linkPath);
   } catch {
     // No existing mount.
   }
-  try {
-    symlinkSync(targetPath, linkPath, 'junction');
-  } catch (e) {
-    console.warn(`[forgeax] failed to create games junction:`, e);
-  }
-})();
-
-// ── @forgeax packages to exclude from pre-bundle (SSOT-derived, no hand list) ──
-// SSOT = THIS root's node_modules/@forgeax, i.e. exactly the @forgeax packages
-// Vite can resolve natively here. Excluding precisely that set is correct on both
-// sides:
-//   - Pre-bundling any of them risks the OOM: under preserveSymlinks:true Vite's
-//     esbuild pre-bundle crawls the nested workspace symlink graph
-//     (packages/engine/packages/*/node_modules/@forgeax/* → ../../../*), where one
-//     source file reached via combinatorially-many distinct symlink paths becomes
-//     a distinct module → esbuild blew past 70 GB the moment a game imported the
-//     un-excluded @forgeax/engine-physics (it also drags in the Rapier WASM).
-//   - They are all present here, so excluding them (→ served as native ESM) still
-//     resolves. We must NOT over-exclude: transitive-only packages absent from
-//     node_modules (e.g. @forgeax/engine-plugin / engine-debug-draw, imported by
-//     engine-app / engine-runtime) have to stay pre-bundlable, or native import
-//     analysis fails with "Failed to resolve import". So derive ONLY from what's
-//     actually here — never the full engine/packages source tree.
-// Hand-listing was the original bug: it named ~10 packages and missed physics.
-// @forgeax/scene shares the engine module subgraph; keep it excluded as before.
-function forgeaxWorkspacePackages(): string[] {
-  const out = new Set<string>(['@forgeax/scene']);
-  try {
-    for (const name of readdirSync(resolve(here, 'node_modules/@forgeax'))) {
-      out.add(`@forgeax/${name}`);
-    }
-  } catch { /* node_modules not materialised yet — fall through */ }
-  return [...out];
+  symlinkSync(targetPath, linkPath, 'junction');
+  mountedGameLink = linkPath;
 }
-const FORGEAX_WS_PKGS = forgeaxWorkspacePackages();
 
-// Studio-owned game SDK packages are resolved from an injected host package
-// root. This keeps standalone editor install independent from unpublished SDKs
-// while letting embedded Studio games import them through the same resolver.
-const HOST_PACKAGE_ROOT = process.env.FORGEAX_HOST_PACKAGE_ROOT;
+if (INITIAL_GAME_DIR && /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID)) {
+  setupSingleGameRootFarm(INITIAL_GAME_DIR, INITIAL_GAME_ID);
+}
 
 const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
 const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
-
-// pluginPack's dev middleware matches the pack-index route literally as
-// `/pack-index.json` (no base awareness), but this vite root uses
-// `base: '/preview/'` so the proxied request arrives as
-// `/preview/pack-index.json`. Mirror forgeaxShaderBaseStrip: strip the base
-// prefix before pluginPack's middleware (registered after) sees the request.
-// (Individual pack-file URLs do NOT need stripping — pluginPack serves them by
-// matching the base-prefixed catalog `packageUrl`, which equals the proxied
-// req.url verbatim.)
-function forgeaxPackBaseStrip() {
-  const PREFIX = '/preview/';
-  const ROUTES = ['/pack-index.json', '/pack-index/', '/game-plugins/', '/__import/', '/__forgeax-ddc/', '/__pack/'];
-  return {
-    name: 'forgeax:pack-base-strip',
-    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
-        if (req.url?.startsWith(PREFIX)) {
-          const stripped = req.url.slice(PREFIX.length - 1);
-          if (ROUTES.some((route) => stripped === route || stripped.startsWith(route))) {
-            req.url = stripped;
-          }
-        }
-        next();
-      });
-    },
-  };
-}
 
 /** Project-bound identity used by local orchestration clients before opening preview. */
 function forgeaxRuntimeIdentity() {
@@ -387,84 +269,32 @@ function forgeaxRuntimeIdentity() {
   };
 }
 
-// Reject backup/snapshot dirs and hidden dot-dirs from being treated as games.
-// Game optimize/migration tooling drops sibling backups like
-// `<slug>.bak-1782212746` (a FULL copy, including `assets/`) under the games
-// dir. Without this filter gameAssetRoots()/gameSlugs() count those
-// as real games → the asset-root set differs from the boot snapshot →
-// forgeaxGameRescan fires server.restart() (repeatedly, as more backups/tsconfig
-// changes land) → the preview iframe gets ECONNREFUSED on :15173 during each
-// restart window and sticks on "Loading game" forever.
-const GAME_SLUG_REJECT_RE = /(^\.)|(\.bak(-|\.|$))/i;
-function isRealGameSlug(slug: string): boolean {
-  return !GAME_SLUG_REJECT_RE.test(slug);
-}
+let activeGameDir = INITIAL_GAME_DIR;
+let activeGameId = INITIAL_GAME_ID;
 
-// Games dir the pack scan walks. HOST-INJECTED via FORGEAX_PREVIEW_GAMES_DIR — the
-// play-runtime holds ZERO on-disk layout convention; the host (studio run.ts /
-// desktop build / editor standalone) points this at wherever it lays games out.
-// Unset → empty (degraded: no roots scanned), never a baked layout literal.
-function gamesDirRoot(): string {
-  return PREVIEW_GAMES_DIR ? resolve(PREVIEW_GAMES_DIR) : '';
-}
-
-// URL-space games prefix the CLIENT (src/main.ts) prepends to build a game's
-// served URL (`<base>/<prefix>/<id>/…`). Separate from gamesDirRoot() because the
-// disk dir is symlinked UNDER the vite root, so the served URL reflects that mount
-// point, not the abs disk path. Hosts may inject FORGEAX_GAMES_URL_PREFIX; with
-// an injected games dir but no prefix, the generated host-games farm above is
-// used. With neither, it is '' (game served directly under base).
-
-// Scan every game's declared asset roots as pack roots. Uses the SSOT
-// (package.json#forgeax.assets.roots via resolveGameAssetRoots, which also
-// expands `@shared/<sub>` external roots) instead of hardcoding 'assets'.
-// One-level glob over <gamesDir>/<slug>/<root> deliberately excludes nested
-// dirs like shoot/backup/assets, whose .pack.json files reuse the same GUIDs
-// and would trip the scanner's duplicate-guid guard (collapsing the catalog).
-function gameAssetRoots(): string[] {
-  const gamesDir = gamesDirRoot();
-  if (!gamesDir) return [];
-  if (!existsSync(gamesDir)) return [];
-  // Deduplicate by absolute path. Every game gets the same implicit
-  // `@shared/template-game-default` root; pushing it once per slug makes
-  // scan() see sky.hdr.meta.json N times → pack-guid-collision → the
-  // union catalog degrades → installCatalogProjection fails closed to []
-  // → /__import 422 → defaultScene never instantiates (hellforge camp).
+// The Pack producer receives one exact game root plus explicit product roots.
+// Shared roots are host-owned inputs in this realm; sibling game directories
+// are never discovered here.
+function singleGamePackRoots(gameDir: string, gameId: string): string[] {
   const seen = new Set<string>();
   const roots: string[] = [];
-  const push = (abs: string): void => {
-    if (seen.has(abs)) return;
-    seen.add(abs);
-    roots.push(abs);
+  const push = (root: string): void => {
+    if (!seen.has(root)) {
+      seen.add(root);
+      roots.push(root);
+    }
   };
   if (existsSync(engineTemplateUiFarmPath())) push(engineTemplateUiFarmPath());
   for (const root of templateAudioRoots()) push(root);
-  for (const slug of readdirSync(gamesDir).filter(isRealGameSlug)) {
-    const gameDir = join(gamesDir, slug);
-    // resolveGameAssetRoots reads package.json#forgeax.assets.roots (SSOT),
-    // resolves `@shared/<sub>` external roots against SHARED_BASE, and
-    // existsSync-filters. farmGamePath redirects local and shared roots through
-    // in-viteRoot mounts so their scanned paths and packageUrls stay serveable.
-    for (const r of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })) {
-      push(farmGamePath(r, gameDir, slug));
-    }
+  for (const root of templateGameDefaultRuntimeRoots(gameDir)) push(root);
+  if (!gameDir) return roots;
+  for (const root of resolveGameAssetRoots(gameDir, {
+    sharedBase: SHARED_BASE,
+    implicitSharedSubs: IMPLICIT_SHARED_SUBS,
+  })) {
+    push(farmGamePath(root, gameDir, gameId));
   }
   return roots;
-}
-
-// Per-game pack roots: the game's declared asset roots (local + `@shared/…`)
-// from package.json#forgeax.assets.roots (SSOT), farm-rewritten so shared roots
-// serve from under viteRoot. Scene packs live alongside other assets under the
-// declared roots (A2/A3: scenes are ordinary assets).
-function perGamePackRoots(slug: string): string[] {
-  const gameDir = join(gamesDirRoot(), slug);
-  const roots = resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })
-    .map((root) => farmGamePath(root, gameDir, slug));
-  return [
-    ...(existsSync(engineTemplateUiFarmPath()) ? [engineTemplateUiFarmPath()] : []),
-    ...templateAudioRoots(),
-    ...roots,
-  ];
 }
 
 function collectPluginFiles(root: string, out: string[]): void {
@@ -488,8 +318,7 @@ function collectPluginFiles(root: string, out: string[]): void {
 // preview host publishes a tiny URL manifest from the same local game roots
 // used by its pack catalog. The browser imports these URLs in the play-runtime
 // realm before defaultScene instantiation.
-function gamePluginModules(slug: string): Array<{ clientPath: string; url: string }> {
-  const gameDir = join(gamesDirRoot(), slug);
+function gamePluginModules(gameDir: string, slug: string): Array<{ clientPath: string; url: string }> {
   const files: string[] = [];
   for (const root of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })) {
     if (!root.shared) collectPluginFiles(root.abs, files);
@@ -581,17 +410,7 @@ function forgeaxStaticGame() {
   };
 }
 
-// Return slugs for every game directory under the host-injected games dir that
-// has at least one (existing) declared asset root. Mirrors gameAssetRoots().
-function gameSlugs(): string[] {
-  const gamesDir = gamesDirRoot();
-  if (!gamesDir || !existsSync(gamesDir)) return [];
-  return readdirSync(gamesDir)
-    .filter(isRealGameSlug)
-    .filter((slug) => resolveGameAssetRoots(join(gamesDir, slug), { sharedBase: SHARED_BASE }).length > 0);
-}
-
-export function forgeaxGamePluginIndex() {
+export function forgeaxGamePluginIndex(pack: NonNullable<EngineVitePreset['pack']>) {
   const ROUTE_RE = /^\/game-plugins\/([a-z0-9][a-z0-9-]{1,40})\.json$/;
   return {
     name: 'forgeax:game-plugin-index',
@@ -599,219 +418,64 @@ export function forgeaxGamePluginIndex() {
       server.middlewares.use((req: { url?: string }, res: { statusCode: number; setHeader(k: string, v: string): void; end(data: string): void }, next: () => void) => {
         const match = req.url?.match(ROUTE_RE);
         if (!match || match[1] === undefined) { next(); return; }
+        const binding = pack.runtimeBinding();
+        if (binding === undefined || binding.gameId !== match[1] || activeGameId !== match[1]) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: 'runtime-scope-not-found' }));
+          return;
+        }
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ modules: gamePluginModules(match[1]) }));
+        res.end(JSON.stringify({ modules: gamePluginModules(activeGameDir, match[1]) }));
       });
     },
   };
 }
 
-// Per-game base-strip: pluginPack's middleware matches per-game routes as
-// /pack-index/<slug>.json. With base '/preview/' this becomes
-// /preview/pack-index/<slug>.json. Strip the base prefix before pluginPack's
-// middleware (or our own) sees the request. Placed after forgeaxPackBaseStrip
-// so the literal /pack-index.json (no slug) is still handled by existing
-// global route.
-function forgeaxPerGamePackBaseStrip() {
-  const PER_GAME_PREFIX = '/preview/pack-index/';
-  return {
-    name: 'forgeax:per-game-pack-base-strip',
-    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
-        if (req.url?.startsWith(PER_GAME_PREFIX)) {
-          req.url = '/pack-index/' + req.url.slice(PER_GAME_PREFIX.length);
-        }
-        next();
-      });
-    },
-  };
-}
+const initialScopeCommand: RuntimeScopeCommand | undefined = (
+  INITIAL_GAME_DIR
+  && /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID)
+  && /^[a-zA-Z0-9._:-]{1,256}$/.test(INITIAL_SCOPE_ID)
+  && Number.isSafeInteger(INITIAL_GENERATION)
+  && INITIAL_GENERATION > 0
+) ? {
+  gameId: INITIAL_GAME_ID,
+  scopeId: INITIAL_SCOPE_ID,
+  generation: INITIAL_GENERATION,
+  gameDir: INITIAL_GAME_DIR,
+} : undefined;
 
-// Decode percent-encoded request URLs before pluginPack's dev middleware runs
-// its urlToAbs lookup. The map is keyed by catalog packageUrl values verbatim
-// (literal spaces / non-ASCII, e.g. "GT_MC_Large Building.glb"), while the
-// runtime's fetch arrives percent-encoded (%20). Without decoding, the lookup
-// misses and the request falls through to Vite's SPA fallback — the runtime
-// then receives text/html where it expected a zstd .bin, surfacing as
-// `asset-parse-failed: zstd decompression` and a failed Add-to-Scene.
-// Editor-side workaround for the engine bug tracked in
-// forgeax-engine-harness/feedbacks/2026-07-22-vite-plugin-pack-unicode-url-mismatch.md
-// (engine fix pending release); prescribed by
-// Forgeax-editor-harness/feedbacks/2026-07-22-editor-url-decode-middleware-workaround.md.
-// Dev-only and additive: URLs without '%' pass through untouched, and a
-// malformed escape is left verbatim for downstream middleware to handle.
-function forgeaxDecodeAssetUrl() {
-  return {
-    name: 'forgeax:decode-asset-url',
-    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
-        if (req.url !== undefined && req.url.includes('%')) {
-          try {
-            req.url = decodeURIComponent(req.url);
-          } catch {
-            // Malformed escape — leave the URL untouched.
-          }
-        }
-        next();
-      });
-    },
-  };
-}
+// Play owns one active game realm. The engine plumbing itself is shared with
+// Edit/Standalone; this host contributes only the exact roots and the dynamic
+// scope controller.
+const enginePreset = engineVitePreset({
+  base: '/preview/',
+  gameDirAbs: INITIAL_GAME_DIR || null,
+  gameSource: {
+    gameDirProvider: () => activeGameDir || null,
+    staticGameDir: STATIC_GAME_DIR,
+    packageRoots: [PLAY_PACKAGE_ROOT],
+  },
+  pack: {
+    roots: singleGamePackRoots(INITIAL_GAME_DIR, INITIAL_GAME_ID),
+    cleanOrphanMetas: false,
+  },
+});
+const playPackPlugin = enginePreset.pack;
+if (!playPackPlugin) throw new Error('Play Runtime must own a Pack producer');
 
-// Per-game pack-index plugin: dev middleware serves /pack-index/<slug>.json
-// by calling buildPerGameCatalog; prod generateBundle emits independent
-// per-game pack-index files.
-export function forgeaxPerGamePackIndex() {
-  const PER_GAME_ROUTE_RE = /^\/pack-index\/([a-z0-9][a-z0-9-]{1,40})\.json$/;
-  return {
-    name: 'forgeax:per-game-pack-index',
-    configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use(async (req: { url?: string }, res: { statusCode: number; setHeader(k: string, v: string): void; end(data: string): void }, next: () => void) => {
-        const match = req.url?.match(PER_GAME_ROUTE_RE);
-        if (!match) { next(); return; }
-        const slug = match[1];
-        if (slug === undefined) { next(); return; }
-        const roots = perGamePackRoots(slug);
-        if (roots.length === 0) { next(); return; }
-        try {
-          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1)]);
-          res.setHeader('Content-Type', 'application/json');
-          res.statusCode = 200;
-          res.end(JSON.stringify(catalog));
-        } catch (err) {
-          res.statusCode = 500;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'per-game catalog build failed', slug, detail: err instanceof Error ? err.message : String(err) }));
-        }
-      });
-    },
-    async generateBundle(this: { emitFile(opts: { type: string; fileName: string; source: string }): void }, _opts: unknown, _bundle: unknown) {
-      // Prod: emit per-game pack-index files. The existing pluginPack
-      // (registered before us) already emits the global /pack-index.json
-      // and cooks textures. We add per-game sidecars.
-      for (const slug of gameSlugs()) {
-        const roots = perGamePackRoots(slug);
-        if (roots.length === 0) continue;
-        try {
-          const catalog = await buildPerGameCatalog(roots[0]!, '/preview', [...roots.slice(1)]);
-          const fileName = `pack-index/${slug}.json`;
-          this.emitFile({
-            type: 'asset',
-            fileName,
-            source: JSON.stringify(catalog),
-          });
-        } catch (err) {
-          console.warn(`[forgeax:per-game-pack-index] failed to build catalog for ${slug}:`, err instanceof Error ? err.message : String(err));
-        }
-      }
-    },
-  };
-}
-
-// gameAssetRoots() is evaluated once at config load, so a game scaffolded /
-// given assets AFTER server start is absent from pluginPack's catalog and its
-// textures/meshes 404 in the preview. This dev-only plugin watches the games
-// tree and, when the set of asset roots changes (a new game gains an assets/
-// dir or a *.pack.json lands), restarts vite — which re-runs the config and
-// re-seeds pluginPack with the new roots. Debounced + change-gated so ordinary
-// edits inside existing games (already HMR'd) never trigger a restart, and so
-// the burst of writes during scaffolding collapses into a single restart.
-function forgeaxGameRescan() {
-  return {
-    name: 'forgeax:game-rescan',
-    configureServer(server: any) {
-      const gamesDir = gamesDirRoot();
-      if (!gamesDir) return; // host injected no games dir → nothing to watch
-      const gamesDirNorm = gamesDir.split('\\').join('/');
-      // Gate the restart on the set of GAME SLUG directories, NOT on asset-root
-      // materialization. Importing an asset into the game the user is actively
-      // editing can create / first-populate that game's declared `assets/` root;
-      // the old `gameAssetRoots()` comparison then saw the root set grow and fired
-      // server.restart(), which drops :15173 /preview mid-edit → the Studio host
-      // page reloads and every unsaved scene edit / undo history / panel state is
-      // lost (this is the second, independent reload path besides pluginPack's
-      // full-reload). A restart is only truly needed when a brand-new game APPEARS
-      // (or is removed) so pluginPack can seed its roots at config time; assets
-      // added inside an already-known game are picked up by pluginPack's own
-      // watcher and served fresh by the per-game pack-index middleware, so they
-      // need no restart. Comparing slug sets restarts on game create/delete only.
-      const gameSlugSet = (): Set<string> =>
-        new Set(existsSync(gamesDir) ? readdirSync(gamesDir).filter(isRealGameSlug) : []);
-      let known = gameSlugSet();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const maybeRestart = (p: string) => {
-        if (!p.split('\\').join('/').startsWith(gamesDirNorm)) return;
-        const next = gameSlugSet();
-        const changed = next.size !== known.size || [...next].some((s) => !known.has(s));
-        if (!changed) return;
-        known = next;
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          // Vite 6 bug: concurrent server.restart() calls race and deadlock the server
-          // (https://github.com/vitejs/vite/issues/21636). Use a global lock on the
-          // process to guarantee we never trigger a restart while one is already in flight.
-          if ((process as any).__forgeax_restarting) return;
-          console.log('[forgeax:game-rescan] asset roots changed → restarting vite');
-          (process as any).__forgeax_restarting = true;
-          server.restart().finally(() => {
-            // Add a small debounce after restart completes before allowing another
-            setTimeout(() => {
-              (process as any).__forgeax_restarting = false;
-            }, 1000);
-          });
-        }, 400);
-      };
-      server.watcher.on('addDir', (p: string) => maybeRestart(p));
-      server.watcher.on('add', (p: string) => { if (p.endsWith('.pack.json')) maybeRestart(p); });
-      server.watcher.on('unlinkDir', (p: string) => maybeRestart(p));
-      try { server.watcher.add(gamesDir); } catch { /* games dir may not exist yet */ }
-    },
-  };
-}
-
-// Wrap forgeaxShader() to silence vite's "emitFile() is not supported in serve
-// mode" warnings: the upstream plugin calls this.emitFile() in buildStart and
-// transform to feed rollup's bundle phase (production build). In serve mode
-// the manifest is served via configureServer middleware instead, so emitFile
-// is functionally a no-op — vite 6+ logs a noisy warning per call (27+ during
-// startup). This wrapper proxies the plugin context to swallow emitFile when
-// command === 'serve'. Build mode delegates unchanged.
-function silenceShaderEmitInServe(plugin: any) {
-  let isServe = false;
-  const orig = plugin;
-  return {
-    ...orig,
-    configResolved(config: { command: string }) {
-      isServe = config.command === 'serve';
-      if (typeof orig.configResolved === 'function') return orig.configResolved.call(this, config);
-    },
-    buildStart(this: any) {
-      if (!isServe || typeof orig.buildStart !== 'function') {
-        return orig.buildStart?.call(this);
-      }
-      const proxy = new Proxy(this, {
-        get(target, prop) {
-          if (prop === 'emitFile') return () => '';
-          return (target as any)[prop];
-        },
-      });
-      return orig.buildStart.call(proxy);
-    },
-    transform(this: any, code: string, id: string) {
-      if (typeof orig.transform !== 'function') return undefined;
-      if (!isServe) return orig.transform.call(this, code, id);
-      const proxy = new Proxy(this, {
-        get(target, prop) {
-          if (prop === 'emitFile') return () => '';
-          return (target as any)[prop];
-        },
-      });
-      return orig.transform.call(proxy, code, id);
-    },
-  };
-}
-
+const runtimeScopeController = createRuntimeScopeController({
+  pack: playPackPlugin,
+  base: '/preview',
+  secret: RUNTIME_SCOPE_SECRET,
+  initial: initialScopeCommand,
+  prepareGameMount: (gameDir, gameId) => {
+    setupSingleGameRootFarm(gameDir, gameId);
+    activeGameDir = resolve(gameDir);
+    activeGameId = gameId;
+  },
+  resolveRoots: (gameDir, gameId) => singleGamePackRoots(gameDir, gameId),
+});
 export default defineConfig({
   root: viteRoot,
   // base: '/preview/' namespaces every URL Vite emits (deps, /@vite, /@id, etc).
@@ -828,108 +492,18 @@ export default defineConfig({
     __FORGEAX_STATIC_GAME_ID__: JSON.stringify(STATIC_GAME_ID),
   },
   plugins: [
-    gameEngineResolve() as never,
     forgeaxStaticGame() as never,
     forgeaxRuntimeIdentity() as never,
-    forgeaxPackBaseStrip() as never,
-    forgeaxPerGamePackBaseStrip() as never,
-    // URL-decode MUST precede pluginPack: its urlToAbs keys are verbatim
-    // catalog packageUrls (literal spaces), requests arrive percent-encoded.
-    forgeaxDecodeAssetUrl() as never,
-    forgeaxGamePluginIndex() as never,
-    // SINGLE pluginPack instance over every game's roots — LOCAL and `@shared/…`
-    // alike (gameAssetRoots() now farm-rewrites shared roots into this one list;
-    // there is no longer a separate sharedAssetRoots() appender — §1 SSOT).
-    // It was once TWO instances (game roots, then shared) — but both register a
-    // vite plugin named 'forgeax:pack', each mounting its OWN `/__import/:guid`
-    // dev middleware. Middlewares run in registration order, and the handler
-    // 404s (`meta-not-found`) + RETURNS on a GUID absent from its own catalog
-    // instead of `next()`-ing. So the first (game-roots) instance swallowed
-    // every request for a shared-asset GUID (the template sky.hdr equirect) →
-    // the shared instance never saw it → `/__import/<sky>` 404 → solid-color
-    // skylight fallback. ONE instance with the UNION of roots puts every GUID in
-    // a single catalog + single middleware, so the cold-import cook path resolves
-    // shared + per-game GUIDs alike. imageImporter is needed for the .hdr equirect
-    // sidecar (else the bare .hdr is mislabeled rgba8unorm and
-    // uploadCubemapFromEquirect rejects with `invalid-source-format`);
-    // gltfImporter for per-game .glb cooks. gameAssetRoots() de-dupes shared
-    // roots so the union scan stays authoritative; a true cross-root GUID
-    // collision still fails closed so duplicate authored GUIDs remain visible.
-    pluginPack({
-      roots: gameAssetRoots(),
-      base: '/preview/',
-      importers: [
-        audioImporter,
-        imageImporter,
-        gltfImporter,
-        fbxImporter,
-        particleEffectImporter(createStockParticleOperatorRegistry()),
-      ],
-      // No-op host refresh: importing an asset in the editor MUST NOT full-reload
-      // the page. In Studio single-realm the editor + engine boot IN the :18920
-      // window, and this play engine (:15173) is proxied in via /preview (ws:true),
-      // so pluginPack's default watcher answer — server.ws.send({type:'full-reload'})
-      // on a watched source/sidecar change — reaches the host window and reloads it,
-      // wiping unsaved scene edits, undo history, selection and panel state. (The
-      // reload fires on the source-only debounce batch: an import writes bytes +
-      // .meta.json, and a source-only batch hits the `!catalogChanged &&
-      // !hasCatalogSidecar` full-reload branch.) The imported asset still appears
-      // without a reload: the Content Browser refreshes via import-pipeline's
-      // broadcastAssetsChanged + the server /ws disk-watch channel, and pluginPack
-      // still emits its incremental catalog-delta / forgeax:asset-changed events.
-      refresh: () => {},
-    }) as never,
-    forgeaxPerGamePackIndex() as never,
-    forgeaxGameRescan() as never,
-    silenceShaderEmitInServe(forgeaxShader()) as never,
-    // `bun fx start --rhi-debug` already forwards this opt-in to Play Runtime.
-    // Registering the plugin is the compile-time define + artifact endpoint gate
-    // that makes createApp publish __forgeax.captureFrame and Remote debugAdapter.
-    ...standaloneRhiDebugPlugins().map((plugin) => plugin as never),
+    ...enginePreset.plugins,
+    forgeaxGamePluginIndex(playPackPlugin) as never,
+    runtimeScopeController as never,
   ],
-  optimizeDeps: {
-    // Exclude the ENTIRE @forgeax workspace family from Vite pre-bundling so each
-    // is loaded as native ESM .mjs (engine outputs ESM .mjs; pre-bundling would
-    // break source maps + module identity for the engine subgraph). Deriving the
-    // full list (see forgeaxWorkspacePackages) is load-bearing: a game's
-    // dynamically-imported main.ts (loadGame, not in the startup scan) may pull
-    // ANY engine package or subpath (@forgeax/engine-physics,
-    // @forgeax/engine-pack/guid, …); a missing entry lets Vite lazily pre-bundle
-    // it and OOM esbuild on the preserveSymlinks symlink-diamond, besides the
-    // new-game re-optimize flicker.
-    exclude: FORGEAX_WS_PKGS,
-    // Don't hold module requests until the static-import crawl finishes. With
-    // preserveSymlinks:true over the @forgeax symlink-diamond, that crawl can run
-    // very long / wedge — most visibly after an in-process server.restart()
-    // (forgeaxGameRescan fires one whenever the active-workspace symlink flips or
-    // a game is scaffolded). With holdUntilCrawlEnd:true (the default) Vite then
-    // holds ALL requests behind the never-finishing crawl → the engine vite binds
-    // :15173 but answers nothing (0% CPU) → the preview iframe never boots → Play
-    // sticks on "Loading game" / black screen. We exclude the whole @forgeax
-    // family anyway (nothing left to discover), so releasing after the scanner is
-    // strictly better here and removes the wedge.
-    holdUntilCrawlEnd: false,
-  },
+  optimizeDeps: enginePreset.optimizeDeps,
   resolve: {
     alias: {
       '@forgeax/game-types': resolve(here, 'src/types.ts'),
     },
-    // Dedupe the whole @forgeax family (same SSOT-derived list as optimizeDeps):
-    // every engine package must resolve to a single instance so ECS handles /
-    // component identities match across the game subgraph. A hand-listed subset
-    // had the same drift hazard as the old exclude list.
-    dedupe: FORGEAX_WS_PKGS,
-    // User game files live under the host-injected games dir, one dir per slug
-    // (entry is a root-level main.ts, extra modules under src/), reachable via
-    // run.sh's symlink of that dir under the vite root.
-    // With default preserveSymlinks: false, vite resolves the symlink first and
-    // walks up from <studio-root>, where node_modules/@forgeax/ doesn't exist
-    // (workspace symlinks live at engine-src/node_modules/@forgeax/*).
-    // preserveSymlinks: true keeps resolution rooted at engine-src so imports
-    // like '@forgeax/engine-runtime' from user game code find the workspace
-    // symlinks. fs.allow.strict=false still permits loading the actual file
-    // through the symlink.
-    preserveSymlinks: true,
+    ...enginePreset.resolve,
   },
   server: {
     port: PORT,
@@ -965,18 +539,11 @@ export default defineConfig({
       interval: 300,
       ignored: [
         ...PLAY_RUNTIME_STATIC_WATCH_IGNORES,
-        // Game backup snapshots (`<slug>.bak-<ts>` / `<slug>.bak`) are NOT games;
-        // ignore them so vite's tsconfig watcher won't force-reload on their
-        // tsconfig.json and forgeaxGameRescan won't restart-loop (preview black
-        // screen / stuck "Loading game"). Mirrors isRealGameSlug(). Derived from
-        // the host-injected games dir — no baked layout literal.
-        ...(gamesDirRoot() ? [
-          `${gamesDirRoot()}/*.bak-*/**`,
-          `${gamesDirRoot()}/*.bak/**`,
-          // Prevent Vite's internal watcher from triggering concurrent restarts
-          // when the workspace symlink flips and package.json/tsconfig.json change.
-          `${gamesDirRoot()}/**/package.json`,
-          `${gamesDirRoot()}/**/tsconfig.json`,
+        // The exact active game is watched by pluginPack after scope bind;
+        // sibling game directories are intentionally not mounted or watched.
+        ...(activeGameDir ? [
+          `${activeGameDir}/**/package.json`,
+          `${activeGameDir}/**/tsconfig.json`,
         ] : []),
       ],
     },
@@ -991,9 +558,8 @@ export default defineConfig({
       ),
     },
   },
-  // esnext: keep parity with edit-runtime — the engine host entry may use
-  // top-level await; vite's default build target (es2020/chrome87/safari14)
-  // forbids TLA. This runtime only runs in WKWebView/Chrome (TLA-capable) and
-  // dev serve already runs it untranspiled, so esnext is safe.
-  build: { outDir: process.env.FORGEAX_BUILD_OUT_DIR ? resolve(process.env.FORGEAX_BUILD_OUT_DIR) : resolve(here, 'dist'), target: 'esnext' },
+  build: {
+    ...enginePreset.build,
+    outDir: process.env.FORGEAX_BUILD_OUT_DIR ? resolve(process.env.FORGEAX_BUILD_OUT_DIR) : resolve(here, 'dist'),
+  },
 });

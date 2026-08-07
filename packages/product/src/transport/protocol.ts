@@ -30,6 +30,7 @@ function parseRequest(value: unknown): TransportRequest | undefined {
     || typeof value.correlationId !== 'string'
     || typeof value.scope !== 'string'
     || value.scope.length === 0
+    || ('timeoutMs' in value && (typeof value.timeoutMs !== 'number' || !Number.isInteger(value.timeoutMs) || value.timeoutMs < 1))
     || typeof value.method !== 'string'
     || !('params' in value)
   ) return undefined;

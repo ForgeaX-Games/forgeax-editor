@@ -11,7 +11,6 @@ import {
   Layers,
   Sun,
   Target,
-  Unlock,
   User,
   Video,
   type LucideIcon,
@@ -595,9 +594,6 @@ const Row = memo(function Row({
         >
           {nodeHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
         </span>
-        <span className="lock" title={t('editor.hierarchy.menu.lockUnavailable')} aria-disabled="true">
-          <Unlock size={12} aria-hidden="true" />
-        </span>
         <span className="name-cell" style={{ paddingLeft: depth * 15 }}>
           <span
             className="caret"
@@ -667,40 +663,10 @@ const Row = memo(function Row({
   );
 });
 
-// An always-present drop target at the top of the tree for "move to root"
-// (P0-5). Dragging a node onto it makes the node a sibling of the top-level
-// nodes — the reliable path when the tree is full and there is no reachable
-// empty area to drop into. Highlights only while a drag is in progress.
-function RootDropBar({ readOnly }: { readOnly: boolean }) {
-  const { t } = useTranslation();
-  const [over, setOver] = useState(false);
-  if (readOnly) return null;
-  return (
-    <div
-      className={`hier-root-bar${over ? ' over' : ''}`}
-      data-testid="hier-root-bar"
-      title={t('editor.hierarchy.menu.moveToRoot')}
-      onDragOver={(e) => {
-        if (draggingId === null) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        if (!over) setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setOver(false);
-        const ids = draggedIds();
-        moveRootDisplayOrder(ids, null, 'end');
-        if (ids.length > 1) reparentMany(ids, null);
-        else if (ids[0] !== undefined) reparent(ids[0], null);
-        draggingId = null;
-      }}
-    >
-    </div>
-  );
-}
+// Dropping onto the virtual "Scene" root folder (SceneFolderRow) is the single
+// "move to root" path now — it reparents the dragged node(s) to null exactly
+// like the old top-of-tree RootDropBar did, so no separate always-present bar
+// (and its empty band at the top of the panel) is needed.
 
 const SceneFolderRow = memo(function SceneFolderRow({
   childrenIds,
@@ -785,9 +751,6 @@ const SceneFolderRow = memo(function SceneFolderRow({
           }}
         >
           {folderHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
-        </span>
-        <span className="lock" title={t('editor.hierarchy.menu.folderDisplayOnly')}>
-          <Unlock size={12} aria-hidden="true" />
         </span>
         <span className="name-cell">
           <span className="caret" data-testid="hier-toggle-scene-folder">
@@ -1053,7 +1016,6 @@ export function HierarchyPanel() {
     items.push({ sep: true });
     items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', shortcut: 'H', onClick: () => gateway.dispatch({ kind: 'setHidden', entity: m.id, hidden: !hidden }), disabled: readOnly });
     items.push({ label: t('editor.hierarchy.menu.focusViewport'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport });
-    items.push({ label: t('editor.hierarchy.menu.lock'), icon: 'shield-check', disabled: true });
     items.push({ label: t('editor.hierarchy.menu.moveTo'), icon: 'folder', disabled: true });
     items.push({ sep: true });
     items.push({ label: t('editor.hierarchy.menu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => { multi ? deleteManyCascade(snapshot) : deleteEntity(m.id); } });
@@ -1124,7 +1086,6 @@ export function HierarchyPanel() {
     >
       <div className="ol-colhead" data-testid="hier-colhead">
         <span className="ch-eye" />
-        <span className="ch-lock" />
         <span className="ch-name sortable">{t('editor.hierarchy.columns.name')}</span>
         {view.columns.type && <span className="ch-type sortable col-type">{t('editor.hierarchy.columns.type')}</span>}
         {view.columns.mobility && <span className="ch-mob sortable col-mob">{t('editor.hierarchy.columns.mobilityShort')}</span>}
@@ -1211,7 +1172,6 @@ export function HierarchyPanel() {
             openBlankMenu(e.clientX, e.clientY);
           }}
         >
-          <RootDropBar readOnly={readOnly} />
           <SceneFolderRow
             childrenIds={roots}
             visibilityIds={roots}

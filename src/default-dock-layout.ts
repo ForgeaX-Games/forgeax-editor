@@ -208,3 +208,50 @@ export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
   },
   activeGroup: 'g-mesh-properties',
 };
+
+/** Material Instance editor: left preview viewport + right properties panel.
+ *  Independent of Mesh/Asset layouts (PRD FR-1.4). */
+export const DEFAULT_MI_EDITOR_DOCK_LAYOUT: SerializedDockview = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as Orientation,
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf',
+          size: 780,
+          data: {
+            views: ['ep:mi-preview'],
+            activeView: 'ep:mi-preview',
+            id: 'g-mi-preview',
+          },
+        },
+        {
+          type: 'leaf',
+          size: 420,
+          data: {
+            views: ['ep:mi-properties'],
+            activeView: 'ep:mi-properties',
+            id: 'g-mi-properties',
+          },
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:mi-preview': {
+      id: 'ep:mi-preview',
+      contentComponent: 'ep:mi-preview',
+      title: 'Preview',
+    },
+    'ep:mi-properties': {
+      id: 'ep:mi-properties',
+      contentComponent: 'ep:mi-properties',
+      title: 'Properties',
+    },
+  },
+  activeGroup: 'g-mi-properties',
+};

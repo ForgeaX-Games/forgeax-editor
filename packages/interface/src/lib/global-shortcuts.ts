@@ -73,6 +73,11 @@ export function isComposing(e: KeyboardEvent): boolean {
   return false;
 }
 
+/** IME / synthetic events may omit `key`; never call `.toLowerCase()` blindly. */
+function safeKeyLower(e: KeyboardEvent): string {
+  return typeof e.key === 'string' ? e.key.toLowerCase() : '';
+}
+
 // Ctrl-or-Cmd helper.
 function mod(e: KeyboardEvent): boolean {
   return e.ctrlKey || e.metaKey;
@@ -312,7 +317,7 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       group: 'edit',
       label: 'Duplicate selection',
       match: (e) => mod(e) && !e.shiftKey && !e.altKey
-        && (e.code === 'KeyD' || e.key.toLowerCase() === 'd'),
+        && (e.code === 'KeyD' || safeKeyLower(e) === 'd'),
       run: routeCtrlD,
     },
     {
@@ -320,7 +325,7 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       group: 'edit',
       label: 'Select all (entity / asset)',
       match: (e) => mod(e) && !e.shiftKey && !e.altKey
-        && (e.code === 'KeyA' || e.key.toLowerCase() === 'a'),
+        && (e.code === 'KeyA' || safeKeyLower(e) === 'a'),
       run: routeCtrlA,
     },
     {
@@ -365,28 +370,28 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       combo: 'Ctrl+Z',
       group: 'edit',
       label: 'Undo',
-      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyZ' || e.key.toLowerCase() === 'z'),
+      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyZ' || safeKeyLower(e) === 'z'),
       run: () => { deps.undo(); return true; },
     },
     {
       combo: 'Ctrl+Shift+Z',
       group: 'edit',
       label: 'Redo',
-      match: (e) => mod(e) && !e.altKey && e.shiftKey && (e.code === 'KeyZ' || e.key.toLowerCase() === 'z'),
+      match: (e) => mod(e) && !e.altKey && e.shiftKey && (e.code === 'KeyZ' || safeKeyLower(e) === 'z'),
       run: () => { deps.redo(); return true; },
     },
     {
       combo: 'Ctrl+Y',
       group: 'edit',
       label: 'Redo',
-      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyY' || e.key.toLowerCase() === 'y'),
+      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyY' || safeKeyLower(e) === 'y'),
       run: () => { deps.redo(); return true; },
     },
     {
       combo: 'Ctrl+S',
       group: 'edit',
       label: 'Save',
-      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's'),
+      match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyS' || safeKeyLower(e) === 's'),
       run: () => { deps.save(); return true; },
     },
     {
@@ -395,7 +400,8 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       label: 'Viewport navigation and gizmo mode',
       match: (e) => {
         if (deps.getInputTarget() === 'game' || e.altKey) return false;
-        const key = e.key.toLowerCase();
+        const key = safeKeyLower(e);
+        if (!key) return false;
         const plainCameraKey = !mod(e)
           && (['w', 'e', 'r', 'f', 'a', 's', 'd', 'q', 'v', 'z', 'c', 'escape', 'shift'].includes(key)
             || /^[1-9]$/.test(key));
@@ -579,7 +585,7 @@ export function buildShortcuts(): ShortcutDef[] {
     combo: 'Ctrl+K',
     group: 'general',
     label: 'Toggle command palette',
-    match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyK' || e.key.toLowerCase() === 'k'),
+    match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyK' || safeKeyLower(e) === 'k'),
     run: () => { toggleCommandPalette(); return true; },
   });
   return shortcuts;
@@ -601,13 +607,13 @@ export function useGlobalShortcuts(): void {
       if (isComposing(e)) return;
       // 1. Find first matching shortcut.
       for (const s of shortcuts) {
-        if (!s.match(e)) continue;
-        // 1a. Surface gate — edit-group keys only act while the scene editor is
+        // 1a. Typing target → skip before match() (match may call safeKeyLower).
+        if (isTypingTarget(e) && !s.allowInInput) continue;
+        // 1b. Surface gate — edit-group keys only act while the scene editor is
         // the foreground surface; otherwise let them escape (fall through to the
         // focused component / browser default). See isEditorSurfaceActive.
         if (s.group === 'edit' && !isEditorSurfaceActive()) continue;
-        // 2. Typing target → only allow shortcuts marked allowInInput.
-        if (isTypingTarget(e) && !s.allowInInput) return;
+        if (!s.match(e)) continue;
         const shouldPreventDefault = s.run(e) !== false;
         if (shouldPreventDefault) {
           e.preventDefault();

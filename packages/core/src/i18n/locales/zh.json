@@ -4,6 +4,13 @@
       "mainScene": "主场景",
       "title": "本窗口编辑的关卡/资产 — 在 Assets 面板双击其它条目可切换"
     },
+    "pageMenu": {
+      "copyPath": "复制路径",
+      "revealInExplorer": "在文件资源管理器中显示",
+      "locateInContentBrowser": "在内容浏览器中定位",
+      "referenceToChat": "引用到对话流",
+      "save": "保存"
+    },
     "sceneEntry": {
       "title": "场景",
       "selectLabel": "切换场景",
@@ -111,7 +118,6 @@
         "show": "显示",
         "hide": "隐藏",
         "focusViewport": "聚焦到视口",
-        "lock": "锁定",
         "moveTo": "移动到…",
         "paste": "粘贴",
         "selectAll": "全选",
@@ -126,10 +132,7 @@
         "showInViewport": "在视口中显示",
         "hideInViewport": "在视口中隐藏",
         "showFolderContents": "显示文件夹内容",
-        "hideFolderContents": "隐藏文件夹内容",
-        "lockUnavailable": "锁定尚未接入",
-        "folderDisplayOnly": "文件夹仅用于展示",
-        "moveToRoot": "拖到这里：移动到根层"
+        "hideFolderContents": "隐藏文件夹内容"
       }
     },
     "history": {
@@ -139,6 +142,27 @@
       "originHuman": "人",
       "diffApply": "应用",
       "diffUndo": "撤销"
+    },
+    "settings": {
+      "title": "设置",
+      "viewportInteraction": "视口交互",
+      "mouseSensitivity": "鼠标灵敏度",
+      "wheelSpeed": "滚轮速度",
+      "invertY": "反转 Y 轴",
+      "invertWheel": "反转滚轮方向",
+      "flight": "飞行",
+      "flySpeed": "飞行速度",
+      "boostMultiplier": "加速倍率（Shift）",
+      "camera": "相机",
+      "projection": "投影",
+      "perspective": "透视",
+      "orthographic": "正交",
+      "fov": "视野 FOV",
+      "bookmarks": "相机书签",
+      "bookmarkSlot": "槽位 {{slot}}",
+      "bookmarkEmpty": "空",
+      "clearBookmark": "清除",
+      "resetDefaults": "重置视口偏好为默认值"
     },
     "inspector": {
       "batchTitle": "Inspector · 批量 ({{count}})",
@@ -405,6 +429,39 @@
         "sceneCurrent": "这是当前场景，切换离开后才能删除。",
         "sceneDefault": "这是默认场景，重新指定默认场景后才能删除。",
         "sceneProtectedWarn": "该场景受到保护。请先处理上方影响，再执行删除。"
+      }
+    },
+    "materialInstance": {
+      "searchPlaceholder": "搜索参数…",
+      "group": {
+        "surface": "表面属性",
+        "general": "通用",
+        "lightmass": "Lightmass 设置",
+        "propertyOverrides": "材质属性覆盖"
+      },
+      "baseColor": "基础颜色",
+      "metallic": "金属度",
+      "roughness": "粗糙度",
+      "parent": "父材质",
+      "physMaterial": "物理材质",
+      "castShadowsAsMasked": "按遮罩投射阴影",
+      "emissiveBoost": "自发光增强",
+      "diffuseBoost": "漫反射增强",
+      "exportResolutionScale": "导出分辨率缩放",
+      "saveSibling": "保存同级",
+      "saveChild": "保存子级",
+      "nameLabel": "名称",
+      "createConfirm": "创建",
+      "cancel": "取消",
+      "override": "覆盖",
+      "inherited": "继承",
+      "propertyOverridesHint": "本期为静态白名单（基础颜色 / 金属度 / 粗糙度）。父材质暴露参数的动态发现将在后续里程碑完成。",
+      "previewMesh": {
+        "sphere": "球体",
+        "cube": "立方体",
+        "plane": "平面",
+        "custom": "自定义",
+        "customSoon": "自定义 Mesh 选择器将随后接入 AssetPicker"
       }
     }
   }

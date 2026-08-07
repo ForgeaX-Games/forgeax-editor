@@ -20,20 +20,24 @@
   --dv-group-view-background-color:                  var(--color-background-base, #0d0d0f);
   --dv-tabs-and-actions-container-background-color:  var(--color-background-elevated, #161619);
 
-  /* ── tab colours: same neutral palette, three shades
-        active group / active tab  →  darkest  (#0d0d0f)  fg=primary
-        active group / hidden tab  →  mid       (#161619)  fg=secondary
-        inactive group / active tab→  mid       (#161619)  fg=tertiary
-        inactive group / hidden tab→  lightest  (#1e1e22)  fg=muted
+  /* ── tab colours. The SELECTED tab (the one whose panel is showing) is the
+        DARKEST shade so it reads as connected to its content — this is true
+        whether or not its group has focus. Focus only adds the lime accent bar
+        (::before, active-group-only), so an "open but unfocused" tab looks like
+        a focused tab minus that top bar. Hidden/background tabs stay lighter.
+        active group / active tab   →  darkest  (#0d0d0f)  fg=primary  + accent bar
+        active group / hidden tab   →  mid      (#161619)  fg=secondary
+        inactive group / active tab →  darkest  (#0d0d0f)  fg=primary  (= "open")
+        inactive group / hidden tab →  lightest (#1e1e22)  fg=muted
      No blue. No abyss purple. Consistent with the rest of the studio UI. ── */
   --dv-activegroup-visiblepanel-tab-background-color:   var(--color-background-base, #0d0d0f);
   --dv-activegroup-hiddenpanel-tab-background-color:    var(--color-background-elevated, #161619);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-background-elevated, #161619);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-background-base, #0d0d0f);
   --dv-inactivegroup-hiddenpanel-tab-background-color:  var(--color-background-overlay, #1e1e22);
 
   --dv-activegroup-visiblepanel-tab-color:    var(--color-text-primary, #e8eaed);
   --dv-activegroup-hiddenpanel-tab-color:     var(--color-text-secondary, #9aa0aa);
-  --dv-inactivegroup-visiblepanel-tab-color:  var(--color-text-secondary, #9aa0aa);
+  --dv-inactivegroup-visiblepanel-tab-color:  var(--color-text-primary, #e8eaed);
   --dv-inactivegroup-hiddenpanel-tab-color:   var(--color-text-tertiary, #5f6368);
 
   /* ── borders / separators ── */
@@ -62,8 +66,40 @@
 .fx-dockshell .tab,
 .fx-dockshell .dv-tab { border-radius: 0 !important; }
 
-.fx-dockshell .dv-default-tab { padding: 0 10px; }
+/* Asymmetric padding: keep the label inset on the left, but trim the right so
+   the close (X) action sits close to the tab's right edge instead of floating
+   ~10px in. */
+.fx-dockshell .dv-default-tab { padding: 0 4px 0 10px; }
 .fx-dockshell .content-container { inset: 0; }
+
+/* Leading panel icon on every tab (DockTab → iconForDockPanel). Dimmed at rest,
+   brightens with the label on the active tab / hover so it never out-shouts the
+   title. `flex: 0 0 auto` keeps it from squishing when the tab strip overflows. */
+.fx-dockwrap .fx-dock-tab-icon {
+  flex: 0 0 auto;
+  margin-right: 6px;
+  color: var(--color-text-tertiary, #6b7078);
+}
+.fx-dockwrap .dv-tab.dv-active-tab .fx-dock-tab-icon,
+.fx-dockwrap .dv-tab:hover .fx-dock-tab-icon {
+  color: var(--color-text-primary, #e6e7ea);
+}
+/* The custom close (X) uses a lucide glyph; match the dimmed action treatment. */
+.fx-dockwrap .dv-default-tab-action { display: inline-flex; align-items: center; justify-content: center; }
+
+/* Hover feedback on tabs. Our neutral 3-shade tab palette (#0d0d0f / #161619 /
+   #1e1e22) sits too close together for dockview's default hover to register, so
+   paint an explicit overlay. The active tab already reads via its accent bar +
+   darkest bg, so only NON-active tabs take the hover lift.
+   dockview sets the resting tab background via very high-specificity selector
+   chains (group-active/inactive × panel-visible/hidden), which a plain
+   `.dv-tab:hover` can't beat — a static (0,5,0) resting rule wins over an
+   (0,3,0) hover rule regardless of :hover. `!important` is the pragmatic
+   override (same tactic as the border-radius reset above). */
+.fx-dockshell .dv-tab:not(.dv-active-tab):hover {
+  background-color: var(--color-interaction-selected-neutral) !important;
+  color: var(--color-text-primary) !important;
+}
 
 /* UE-style focus tab: thin accent bar on the focused group's active tab only.
    Inactive groups keep their selected tab without the bar (UE "which panel has
@@ -162,6 +198,58 @@
     color-mix(in srgb, var(--lime, #7ee04a) 55%, transparent) 78%,
     transparent 100%
   );
+}
+
+/* dockview keeps EXACTLY ONE active panel per group — no group can have zero — so
+   a collapsed edge group's selected tab always carries `.dv-active-tab`, and the
+   base theme's generic rule (dockview.css: `.dv-groupview.dv-{active,inactive}-
+   group > … > .dv-tab.dv-active-tab`) paints it a distinct "visible panel"
+   background. On a closed edge strip that reads as a phantom "selected" tab with
+   no drawer open. An edge group should only look active WHILE its drawer is open
+   (`.fx-edge-drawer-open`), so until then render the active tab exactly like its
+   hidden-panel siblings — the strip becomes a row of equal launchers, no selection.
+   Higher specificity than the base rule (extra classes), so no `!important`. */
+.fx-dockwrap
+  .dv-groupview-edge.dv-active-group:not(.fx-edge-drawer-open)
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab {
+  background-color: var(--dv-activegroup-hiddenpanel-tab-background-color);
+  color: var(--dv-activegroup-hiddenpanel-tab-color);
+}
+.fx-dockwrap
+  .dv-groupview-edge.dv-inactive-group:not(.fx-edge-drawer-open)
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab {
+  background-color: var(--dv-inactivegroup-hiddenpanel-tab-background-color);
+  color: var(--dv-inactivegroup-hiddenpanel-tab-color);
+}
+/* The leading lucide glyph (`.fx-dock-tab-icon`) has its OWN active/hover color
+   rule (brightens to --color-text-primary), which the neutralizers above don't
+   touch — so a closed edge group's active tab still lit its icon. Dim it back to
+   the tertiary (idle) color unless the drawer is open, matching the tab text. */
+.fx-dockwrap
+  .dv-groupview-edge:not(.fx-edge-drawer-open)
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-active-tab:not(:hover)
+  .fx-dock-tab-icon {
+  color: var(--color-text-tertiary, #6b7078);
+}
+/* Uniform hover feedback for EVERY tab in a closed edge group — active AND
+   inactive. The base hover rule (`.fx-dockshell .dv-tab:not(.dv-active-tab):hover`)
+   can't reach edge groups (ShellManager hoists them into `.dv-shell`, outside the
+   inner `.fx-dockshell`) AND deliberately skips the active tab, so left/right side
+   strips got the wrong hover on inactive tabs and none on the (neutralized) active
+   tab. This single `.fx-dockwrap`-anchored rule (the ancestor edge groups DO live
+   under, same as the neutralizers) restores a consistent hover for both.
+   `!important` to beat the neutralizers above and the base theme. */
+.fx-dockwrap
+  .dv-groupview-edge:not(.fx-edge-drawer-open)
+  .dv-tab:hover {
+  background-color: var(--color-interaction-selected-neutral) !important;
+  color: var(--color-text-primary) !important;
 }
 
 /* Declarative single-tab strategies. Dockview owns tab counting and adds
@@ -314,18 +402,36 @@
   margin: 0;
   padding: 2px 0;
 }
+/* Vertical edge strips rotate the label via writing-mode; keep the leading icon
+   upright (and give it a hair more breathing room) so it reads at the tab head. */
+.dv-groupview-edge .dv-tabs-container-vertical .fx-dock-tab-icon {
+  writing-mode: horizontal-tb;
+  margin-right: 0;
+  margin-bottom: 6px;
+}
 
+/* Raw close X (dockview's default action, before edgeDrawer swaps it to a Pin):
+   opacity-gate it out of sight — same as the pin below, never a hard delete — so
+   the transient X between (re)render and swap doesn't flash. pointer-events:none
+   so an invisible X can't be clicked-to-close. */
+.dv-groupview-edge .dv-default-tab-action:not(.fx-edge-pin) {
+  opacity: 0;
+  pointer-events: none;
+}
 /* Edge tabs: close (X) is swapped for a per-TAB Pin toggle (see edgeDrawer.ts).
-   Always show the action; only the pinned tab's button lights lime. */
+   Gated exactly like the active-tab highlight: HIDDEN by default (dockview keeps
+   one tab "active" per group even while the drawer is closed, so a persistent pin
+   read like a selection). Revealed on hover, or on the active tab WHILE THE DRAWER
+   IS OPEN (`.fx-edge-drawer-open`); pinned tabs stay lit unconditionally. */
 .dv-groupview-edge .dv-default-tab-action.fx-edge-pin {
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
-  opacity: 0.55;
+  opacity: 0;
   color: var(--dv-activegroup-hiddenpanel-tab-color, #9aa0aa);
 }
 .dv-groupview-edge .dv-tab:hover .dv-default-tab-action.fx-edge-pin,
-.dv-groupview-edge .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
+.dv-groupview-edge.fx-edge-drawer-open .dv-tab.dv-active-tab .dv-default-tab-action.fx-edge-pin {
   opacity: 0.85;
 }
 .dv-groupview-edge .dv-default-tab-action.fx-edge-pin.fx-edge-pin--on,
@@ -445,13 +551,13 @@
    — so this grip only rewrites the drawer size var. To match the app's native
    resize feel it must LOOK the same: this shell tints the active sash lime
    (`--dv-active-sash-color` + `.dv-sash-active`), so the grip shows the same lime
-   bar on hover / while dragging. */
+   bar — but only WHILE dragging, not on mere hover (the resize cursor already
+   signals it's grabbable; a bar-on-enter reads as a spurious focus line). */
 .fx-edge-drawer-grip {
   z-index: 61;
   background: transparent;
   transition: background 0.1s ease;
 }
-.fx-edge-drawer-grip:hover,
 .fx-edge-drawer-grip.fx-edge-drawer-grip--dragging {
   background: var(--lime, #7ee04a);
 }
@@ -558,6 +664,8 @@ html.fx-dock-dragging .fx-dockshell .dv-react-part > * { pointer-events: none !i
 .fx-dl-item:hover { background: var(--color-interaction-hover, #23262a); color: var(--color-text-primary, #fff); }
 .fx-dl-item.on { color: var(--color-text-primary, #fff); }
 .fx-dl-check { width: 12px; color: var(--lime, #7ee04a); }
+.fx-dl-icon { flex: 0 0 auto; color: var(--color-text-tertiary, #778); }
+.fx-dl-item:hover .fx-dl-icon, .fx-dl-item.on .fx-dl-icon { color: var(--color-text-primary, #fff); }
 .fx-dl-sep { height: 1px; background: var(--color-border-default, #2a2d30); margin: 3px 0; }
 .fx-dl-empty { font-size: 10px; color: var(--color-text-tertiary, #778); padding: 2px 8px; }
 .fx-dl-preset { display: flex; align-items: center; }
@@ -594,6 +702,8 @@ html.fx-dock-dragging .fx-dockshell .dv-react-part > * { pointer-events: none !i
 }
 .wb-dock-popout-btn:hover { opacity: 1; color: var(--color-text-primary, #eee); }
 .wb-dock-loading, .wb-dock-placeholder { padding: 16px; font-size: 13px; color: var(--color-text-secondary, #aaa); }
+.wb-dock-error { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.wb-dock-error button { color: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 4px 10px; }
 .wb-dock-name { font-weight: 700; color: var(--color-text-primary, #eee); margin-bottom: 4px; }
 .wb-dock-desc { font-size: 12px; margin-bottom: 8px; }
 .wb-dock-id { font-family: monospace; font-size: 10px; opacity: 0.5; }

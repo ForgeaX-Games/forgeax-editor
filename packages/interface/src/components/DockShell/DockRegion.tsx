@@ -4,7 +4,7 @@ import { FloatingMenu } from '../ui/FloatingMenu';
 import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type SerializedDockview } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
 import { getWindowManager } from '../../lib/platform';
-import { useTranslation, subscribeLocale, t as panelT } from '@/i18n';
+import { useTranslation, t as panelT } from '@/i18n';
 import { useShellStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
 import {
@@ -16,6 +16,8 @@ import {
   SURFACE_PANEL_IDS as SURFACE_PANELS,
 } from './panelRegistry';
 import { usePanelRenderers, type PanelDescriptor } from './panelRenderers';
+import { DockTab } from './DockTab';
+import { iconForDockPanel } from '../../lib/panel-tab-icons';
 import type { DockRegion as DockRegionId } from './regions';
 import { resolveRegion } from './resolveRegion';
 import { useActiveWorkbench, useWorkbenchActions } from '../../lib/useWorkbench';
@@ -39,7 +41,7 @@ import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { useHost } from '../../core/app-shell';
 import { pageLayoutStore, pageLayoutToDockview, type PageLayoutIdentity } from '../../core/page-platform';
 import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
-import { buildDefault } from './builtinWorkbenches';
+import { buildDefault, FOOTER_PANEL_IDS } from './builtinWorkbenches';
 import { shouldApplyHydratedWorkbenchLayout } from './workspace-hydration';
 import { getDockResetEpoch } from './dockResetEpoch';
 import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
@@ -274,8 +276,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     if (id === 'chat') return false;
     // A semantic editor document owns a closed panel domain. A mesh/material
     // page cannot accumulate Level panels (or vice versa) through restore,
-    // reopen, drag, or the layout menu.
-    if (pagePanelIds !== null && !pagePanelIds.has(id)) return false;
+    // reopen, drag, or the layout menu. EXCEPTION: footer chrome (Info /
+    // Checkpoints / Events) is global — present under every workbench AND every
+    // Page — so it is exempt from the closed-domain gate. edgeDrawer's
+    // ensureFooterPanels adds it into the bottom edge group; letting it pass
+    // membership here is what stops closeStrayPanels from evicting it again.
+    if (pagePanelIds !== null && !pagePanelIds.has(id) && !FOOTER_PANEL_IDS.has(id)) return false;
     // No descriptor registered → treat non-editor panels as belonging to the
     // DockShell region (matches the pre-refactor behavior).
     const desc = panels?.[id];
@@ -662,15 +668,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       }
     }
 
-    // Refresh interface-owned and host-injected panel titles after restoration.
-    const titleIds = new Set([
-      ...Object.keys(BASE_PANEL_TITLE),
-      ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
-      ...Object.keys(panelsRef.current ?? {}),
-    ]);
-    for (const id of titleIds) {
-      try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
-    }
+    // Tab names are DERIVED at render by DockTab (i18n key ← panel id), so a
+    // restore never needs to re-push titles — the baked title in the layout
+    // JSON is ignored for keyed panels and only used as the fallback for
+    // host-injected panels without a catalog key.
 
     // Edge groups (the collapsible side menu bar) expand as a drawer OVERLAY
     // instead of dockview's native splitview-push, so opening the sidebar never
@@ -775,16 +776,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // The layout is being completely replaced — reset toggle-hidden tracking so
     // sidebar/chat collapse effects start fresh for the new workspace.
     hiddenByToggleRef.current.clear();
-    const syncTitles = (): void => {
-      const titleIds = new Set([
-        ...Object.keys(BASE_PANEL_TITLE),
-        ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
-        ...Object.keys(panelsRef.current ?? {}),
-      ]);
-      for (const id of titleIds) {
-        try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
-      }
-    };
+    // Tab names are derived at render by DockTab (see useDockTabName) — no
+    // post-restore re-title pass is needed on a workspace switch.
     let saved: SerializedDockview | null = null;
     if (scope !== null) {
       saved = pageLayoutStore.load(pageLayoutKey(scope.layoutId), scope.identity);
@@ -827,7 +820,6 @@ export function DockRegion({ region }: { region: DockRegionId }) {
             if (scope !== null) {
               const mounted = new Set(api.panels.map((panel) => panel.id));
               if (hasMountedPagePlacement(scope.panelIds, mounted)) {
-                syncTitles();
                 return;
               }
               try { pageLayoutStore.remove(pageLayoutKey(scope.layoutId)); } catch { /* noop */ }
@@ -835,7 +827,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
               // fall through to the Page Type default
             } else {
             const anchor = newId === 'ai' ? 'main' : null;
-            if (!anchor || api.getPanel(anchor)) { syncTitles(); return; }
+            if (!anchor || api.getPanel(anchor)) { return; }
             // anchor missing — fall through to buildDefault
             }
           }
@@ -849,7 +841,6 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       isMemberRef.current,
       scope?.layout ?? builtinWorkbenchLayoutsRef.current?.[newId],
     );
-    syncTitles();
     // No injected chat surface — re-apply chat closure on workspace switch
     // because buildDefault re-mounts a chat panel for several layouts.
     if (hideChatRef.current) {
@@ -887,7 +878,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         if (cleaned) {
           api.fromJSON(cleaned);
           closeStrayPanels(api);
-          restored = api.panels.length > 0;
+          // edgeDrawer's ensureFooterPanels adds the global footer chrome into the
+          // bottom edge group on every layout change, so `panels.length > 0` would
+          // count a footer-only restore as success and defeat the empty-page
+          // rebuild. Gate on the PAGE's own placements instead.
+          const mounted = new Set(api.panels.map((panel) => panel.id));
+          restored = hasMountedPagePlacement(scope.panelIds, mounted);
         }
       }
     } catch { restored = false; }
@@ -896,16 +892,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       try { api.clear(); } catch { /* noop */ }
       buildDefault(api, 'scene', isMemberRef.current, scope.layout);
     }
-    const titleIds = new Set([
-      ...Object.keys(BASE_PANEL_TITLE),
-      ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
-      ...Object.keys(panelsRef.current ?? {}),
-    ]);
-    for (const id of titleIds) {
-      try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
-    }
+    // Tab names are derived at render by DockTab (see useDockTabName) — no
+    // post-restore re-title pass is needed on a page-scope switch.
     pingAnchorRelayout();
-  }, [closeStrayPanels, pageLayoutKey, titleFor]);
+  }, [closeStrayPanels, pageLayoutKey]);
 
   // Dock layout is a DERIVED view of the active workspace id (workbenches.ts is
   // the SSOT). Reconcile whenever that id changes — including when it changes
@@ -939,25 +929,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   }, [applyWorkspace]);
 
 
-  // Re-title every live panel when the language changes. dockview stores each
-  // tab's title imperatively (set at restore/build time), so a locale switch
-  // would otherwise leave stale titles until a layout reset. titleFor resolves
-  // the CURRENT locale at call time, so re-applying it here is all that's needed
-  // — no reload, no persisted-title dependency.
-  useEffect(() => {
-    return subscribeLocale(() => {
-      const api = apiRef.current;
-      if (!api) return;
-      const titleIds = new Set([
-        ...Object.keys(BASE_PANEL_TITLE),
-        ...editorPanelIdsRef.current.map((id) => `ep:${id}`),
-        ...Object.keys(panelsRef.current ?? {}),
-      ]);
-      for (const id of titleIds) {
-        try { api.getPanel(id)?.api.setTitle(titleFor(id)); } catch { /* noop */ }
-      }
-    });
-  }, [titleFor]);
+  // Language switches need no re-title pass: DockTab derives each tab name from
+  // its panel id through the i18n catalog and re-renders via useTranslation, so
+  // the label follows the locale live (see DockTab.useDockTabName).
 
   // Reset-layout hook — useLayoutEffect so a tour reset emitted in useEffect
   // (after all layout effects) still finds a subscribed listener.
@@ -1011,6 +985,31 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       const id = payload.id;
       if (!id) return;
       try { apiRef.current?.getPanel(id)?.api.setActive(); } catch { /* noop */ }
+    });
+  }, [host]);
+
+  // Reveal-anywhere: activate the panel in the grid, reopen it if it was closed,
+  // OR expand its edge/footer drawer (a collapsed edge group needs the drawer
+  // channel — setActive alone won't slide the flyout out). Superset of both
+  // panel:open (grid reopen) and app.drawer.open (edge flyout), so callers don't
+  // have to know where a panel currently lives.
+  useEffect(() => {
+    return host.bus.on('panel:reveal', (payload) => {
+      const id = payload.id;
+      if (!id) return;
+      if (!isMemberRef.current(id)) return; // another region owns it
+      const api = apiRef.current;
+      if (!api) return;
+      let panel = api.getPanel(id);
+      if (!panel) { reopenRef.current?.(id); panel = api.getPanel(id) ?? undefined; }
+      if (!panel) return;
+      if (panel.group?.api.location.type === 'edge') {
+        // edgeDrawer.ts listens on window for this (chrome-drawer emits the same
+        // literal); it setActives the panel AND opens the collapsed flyout.
+        window.dispatchEvent(new CustomEvent('forgeax:edge-drawer', { detail: { action: 'open', id } }));
+        return;
+      }
+      try { panel.api.setActive(); } catch { /* noop */ }
     });
   }, [host]);
 
@@ -1291,6 +1290,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       <DockviewReact
         className="dockview-theme-abyss fx-dockshell"
         components={components}
+        // Custom tab renders a leading Lucide icon (iconForDockPanel) before the
+        // title — applied globally so every group's tabs get it without per-panel
+        // registration. DockTab preserves the default tab's DOM hooks that
+        // edgeDrawer.ts depends on.
+        defaultTabComponent={DockTab}
         onReady={onReady}
         disableFloatingGroups={false}
         // Cross-instance drag & drop (§P2/T3): dockview 6.6.1 doesn't auto-move
@@ -1364,6 +1368,15 @@ export function DockRegion({ region }: { region: DockRegionId }) {
                   },
                 }
               : undefined,
+            {
+              onClose: () => { try { params.panel.api.close(); } catch { /* noop */ } },
+              onCloseOthers: () => {
+                for (const p of params.group.panels) {
+                  if (p.id === params.panel.id) continue;
+                  try { p.api.close(); } catch { /* noop */ }
+                }
+              },
+            },
           );
         }}
         // rightHeaderActionsComponent removed — the pop-out ⧉ button was
@@ -1431,7 +1444,12 @@ function LayoutControl({
       ]
     : [{
         title: t('dockShell.mainPanels'),
-        items: pagePanels.filter((panel) => isMember(panel.id)),
+        // Route page panels through titleFor() like the three sections above so
+        // the layout menu localizes (and re-titles on language switch) instead
+        // of echoing the baked English title from the persisted page layout.
+        items: pagePanels
+          .filter((panel) => isMember(panel.id))
+          .map((panel) => ({ id: panel.id, title: titleFor(panel.id) })),
       }];
 
   // FloatingMenu owns portal + top-layer z-index + click-outside + Esc, anchored
@@ -1447,12 +1465,17 @@ function LayoutControl({
           {panelSections.map((section) => (
             <Fragment key={section.title}>
               <div className="fx-dl-head">{section.title}</div>
-              {section.items.map((panel) => (
-                <button key={panel.id} type="button" className={`fx-dl-item${isOpen(panel.id) ? ' on' : ''}`}
-                  onClick={() => { if (isOpen(panel.id)) apiRef.current?.getPanel(panel.id)?.api.close(); else onReopen(panel.id); }}>
-                  <span className="fx-dl-check">{isOpen(panel.id) ? '✓' : '＋'}</span>{panel.title}
-                </button>
-              ))}
+              {section.items.map((panel) => {
+                const PanelIcon = iconForDockPanel(panel.id);
+                return (
+                  <button key={panel.id} type="button" className={`fx-dl-item${isOpen(panel.id) ? ' on' : ''}`}
+                    onClick={() => { if (isOpen(panel.id)) apiRef.current?.getPanel(panel.id)?.api.close(); else onReopen(panel.id); }}>
+                    <span className="fx-dl-check">{isOpen(panel.id) ? '✓' : '＋'}</span>
+                    <PanelIcon size={13} className="fx-dl-icon" aria-hidden />
+                    {panel.title}
+                  </button>
+                );
+              })}
             </Fragment>
           ))}
           {/* Reset panel positions (§P2/T5) — clears user panelLocations

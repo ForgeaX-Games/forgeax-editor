@@ -75,7 +75,7 @@
   /* ── interaction ────────────────────────────────────────────────────────── */
   --color-interaction-hover:            rgba(255, 255, 255, 0.05);
   --color-interaction-selected-brand:   rgba(212, 255, 72, 0.10);
-  --color-interaction-selected-neutral: rgba(255, 255, 255, 0.10);
+  --color-interaction-selected-neutral: rgba(255, 255, 255, 0.15);
   --color-interaction-disabled:         rgba(0, 0, 0, 0.50);
   --color-interaction-error:            rgba(255, 107, 107, 0.08);
   --color-interaction-error-strong:     rgba(255, 107, 107, 0.14);

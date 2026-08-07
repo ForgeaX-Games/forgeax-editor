@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
 
 import { createGatewayCapabilityAdapter } from '../product/gateway-executor';
-import { applyCreateMaterial, applyDestroyAsset, registerPostAssetWriteCatalogSync } from '../session/pack-ops';
+import { applyCreateMaterial, applyDestroyAsset } from '../session/pack-ops';
+import { registerPostAssetWriteCatalogSync } from '../session/authored-asset-write';
 import { setPathResolver } from '../util/path-resolver';
 
 const operationIds = [

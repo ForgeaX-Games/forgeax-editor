@@ -610,6 +610,9 @@
     "slugLabel": "slug（游戏目录名）",
     "nameLabel": "显示名（可选）",
     "namePlaceholder": "留空用 slug",
+    "templateLabel": "模板",
+    "templateLoading": "正在加载模板…",
+    "templateEmpty": "暂无可用模板，将使用默认模板。",
     "briefLabel": "brief（可选 — 留下 Forge 立刻派 Iori 立柱）",
     "briefPlaceholder": "e.g. 2D 卡牌肉鸽，每局 5-10 分钟，攒套牌轰爽快感",
     "creating": "创建中...",
@@ -1241,14 +1244,43 @@
     "moveToSide": "移动到侧边",
     "moveOffSide": "移出侧边",
     "moveToPrimaryDock": "移回主停靠区",
+    "tabContext": {
+      "close": "关闭",
+      "closeOthers": "关闭其他"
+    },
     "panelTitles": {
+      "tools": "工具",
+      "main": "Studio",
+      "viewport": "视口",
+      "chat": "ForgeaX CLI",
+      "agents": "智能体",
+      "files": "文件",
+      "console": "控制台",
+      "telemetry": "遥测",
       "hierarchy": "场景树",
       "assets": "文件资源管理器",
       "inspector": "物体属性",
-      "viewport": "视口",
+      "history": "历史",
+      "capabilities": "能力",
+      "launcher": "启动器",
+      "asset-overview": "资源总览",
+      "asset-properties": "资源属性",
+      "mesh-slots": "网格插槽",
       "info": "信息",
       "checkpoints": "检查点",
       "events": "事件"
+    }
+  },
+  "pageTabs": {
+    "openPages": "打开的页签",
+    "newPage": "新建页签",
+    "allPages": "全部页签",
+    "noOpenableTypes": "没有可新建的页签类型",
+    "closeTab": "关闭 {{title}}",
+    "context": {
+      "close": "关闭",
+      "closeOthers": "关闭其他",
+      "closeToRight": "关闭右侧全部"
     }
   },
   "firstRun": {
@@ -1341,7 +1373,12 @@
     "loadingExtension": "正在加载 {{extensionId}}…",
     "popoutTitle": "弹出为独立 OS 窗口",
     "popoutLabel": "独立窗口",
-    "loadingExtensionGeneric": "正在加载扩展…"
+    "loadingExtensionGeneric": "正在加载扩展…",
+    "loadingWorkbenchHost": "正在连接 Workbench 宿主…",
+    "workbenchHostFailed": "Workbench 宿主加载失败：{{error}}",
+    "workbenchExtensionMissing": "Workbench 宿主未注册 {{extensionId}}。",
+    "workbenchGameRequired": "请先打开游戏，再加载此 Workbench 扩展。",
+    "retry": "重试"
   },
   "chatAgentCapsule": {
     "prevPage": "上一页",
@@ -1430,7 +1467,10 @@
   },
   "dialog": {
     "confirmActionTitle": "确认操作",
-    "alertTitle": "提示"
+    "alertTitle": "提示",
+    "unsavedTitle": "未保存的更改",
+    "unsavedBody": "{{title}} 有未保存的更改。关闭前要保存吗？",
+    "discardChanges": "不保存"
   },
   "eventFormatter": {
     "filePart": "[文件: {{path}}]",

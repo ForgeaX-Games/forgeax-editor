@@ -25,6 +25,7 @@
 // editor imports.
 import { useEffect, useReducer, useRef, type ReactNode } from 'react';
 import { useActiveWorkbench } from '../../lib/useWorkbench';
+import { useHost } from '../../core/app-shell';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { FatalBanner } from '../StatusBar/FatalBanner';
 import {
@@ -47,10 +48,21 @@ function kindForMode(mode: AppMode): SurfaceKind | null {
 
 const ALL_KINDS: SurfaceKind[] = ['edit'];
 
+// The keep-alive surface lives in a fixed overlay OUTSIDE dockview's DOM tree, so
+// clicking it never reaches dockview's group-focus machinery (doSetGroupActive via
+// tab pointerdown / content onDidFocus). Result: the previously-focused panel group
+// keeps its `dv-active-group` focus accent (the lime bar) even after you click into
+// the viewport. Map each surface kind back to its in-dock panel id so a pointerdown
+// on the surface can re-emit `panel:focus` and hand dock focus to the viewport.
+const PANEL_ID_FOR_KIND: Partial<Record<SurfaceKind, string>> = {
+  edit: 'viewport',
+};
+
 export function SurfaceKeepAliveLayer(): ReactNode {
   // Derived from the active workspace (SSOT); 'scene' workspace → edit surface,
   // every other workspace → no kept-alive surface.
   const mode: AppMode = useActiveWorkbench()?.id === 'scene' ? 'scene' : 'ai';
+  const host = useHost();
   const { surfaces } = usePanelRenderers();
   const SceneEditor = surfaces?.SceneEditor;
   const activeKind = kindForMode(mode);
@@ -215,6 +227,14 @@ export function SurfaceKeepAliveLayer(): ReactNode {
           className="fx-surface-keepalive-item surface-region"
           data-surface-kind={kind}
           style={{ display: 'none' }}
+          // Capture-phase so it fires before the surface's own handlers, and never
+          // preventDefault/stopPropagation — we only mirror the click as dock focus.
+          // Moves `dv-active-group` (the lime focus accent) onto the viewport group,
+          // clearing the stale highlight left on whatever tab was focused before.
+          onPointerDownCapture={() => {
+            const panelId = PANEL_ID_FOR_KIND[kind];
+            if (panelId) host.bus.emit('panel:focus', { id: panelId });
+          }}
         >
           {/* ALL_KINDS is ['edit'] today — the only kept-alive surface is the edit
               viewport. FatalBanner is fixed to 'edit' accordingly. */}

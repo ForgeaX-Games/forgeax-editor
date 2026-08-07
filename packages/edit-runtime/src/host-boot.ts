@@ -66,6 +66,8 @@ import {
   resolveGamePath,
   scanAssetsIntegrity,
   repairAssets,
+  projectValidationDiagnostics,
+  registerProjectValidationProvider,
 } from '@forgeax/editor-core';
 import { installAssetHmrBridge } from '@forgeax/editor-core/assets/asset-hmr-bridge';
 import {
@@ -78,12 +80,47 @@ import {
   type HostSession,
   type PhysicsBackend,
 } from './viewport/host-session';
+import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 
 export type { HostSessionContext, HostSession, PhysicsBackend };
 
 // The persistence module owns the dirty bit. Bind that read model once to the
 // public Gateway so AI and UI use the same fact without importing store state.
 gateway.registerDirtyReadProvider(hasPendingDiskSave);
+
+// The host owns project access; the existing Node validator remains the only
+// producer of validation facts. Core owns the public Gateway operation and
+// normalizes its result, while this composition root binds the standalone (or
+// Studio-provided) same-origin validation endpoint.
+registerProjectValidationProvider({
+  validate: async (options) => {
+    const response = await fetch('/api/validation/project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'project-validation-unavailable',
+          hint: `The active host could not run project validation (HTTP ${response.status}).`,
+          retryable: true,
+          recoveryActions: ['run.retry', 'editor.discover'],
+        },
+      };
+    }
+    return response.json();
+  },
+});
+
+// Human Capabilities diagnostics are a projection of the same terminal run
+// result exposed to AI callers; no second validation state is retained here.
+gateway.registerRuntimeDiagnosticsProvider({
+  id: 'project-validation',
+  snapshot: () => projectValidationDiagnostics(gateway.operationRunSnapshot().runs),
+  subscribe: (listener) => gateway.subscribeOperationRuns(() => listener()),
+});
 
 /**
  * The active game a host wants the engine to boot. The host is the single source
@@ -102,12 +139,8 @@ export interface HostGameSession {
   readonly slug: string | null;
   /** Host game->disk layout root. Required when slug names a real game. */
   readonly gameRoot?: string;
-  /**
-   * Host-owned catalog URL for this game. An absolute dev URL deliberately
-   * selects the play engine's asset origin; a packaged host supplies its
-   * same-origin URL. The engine only consumes this catalog boundary.
-   */
-  readonly packIndexUrl?: string;
+  /** One host-authoritative asset binding; absent means no game realm. */
+  readonly runtimeBinding?: RuntimeAssetBinding;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
 }

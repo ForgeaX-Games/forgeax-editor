@@ -84,6 +84,15 @@
   text-overflow: ellipsis;
 }
 
+/* Unsaved-changes marker, driven by a registered page-dirty probe. */
+.page-tab.is-dirty .page-tab__label {
+  font-style: italic;
+}
+.page-tab__dirty {
+  color: var(--color-brand-primary);
+  flex-shrink: 0;
+}
+
 .page-tab__pin {
   width: 13px;
   height: 13px;
@@ -157,14 +166,6 @@
 .page-tab-btn__icon {
   width: 12px;
   height: 12px;
-}
-.page-tab-rules {
-  border-color: var(--color-brand-primary-soft);
-  color: var(--color-brand-primary);
-}
-.page-tab-rules:hover {
-  background: var(--color-interaction-selected-brand);
-  color: var(--color-brand-primary);
 }
 .page-tab-new.page-tab-btn {
   width: 24px;

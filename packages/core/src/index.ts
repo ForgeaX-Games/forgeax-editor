@@ -59,6 +59,7 @@ export type {
   OpHandle,
   OperationRun,
   SessionApplier,
+  SessionApplierMeta,
 } from './public/gateway';
 export type { GameplayIdentity } from './public/runtime';
 export type {
@@ -146,6 +147,23 @@ export type {
   RuntimeDiagnosticProjectionFact,
   RuntimeDiagnosticsProvider,
 } from './io/diagnostics';
+export {
+  getProjectValidationProvider,
+  normalizeProjectValidationResult,
+  projectValidationDiagnostics,
+  registerProjectValidationProvider,
+  PROJECT_VALIDATION_MAX_ISSUES,
+  PROJECT_VALIDATION_OPERATION,
+  PROJECT_VALIDATION_SCHEMA_VERSION,
+} from './io/project-validation';
+export type {
+  ProjectValidationIssue,
+  ProjectValidationOptions,
+  ProjectValidationProvider,
+  ProjectValidationResult,
+  ProjectValidationResultEnvelope,
+  ProjectValidationStats,
+} from './io/project-validation';
 export { createRuntimeReadiness, RUNTIME_READINESS_STATES, runtimeReadinessDiagnostic } from './public/gateway';
 export type {
   CreateRuntimeReadinessInput,
@@ -201,6 +219,7 @@ export {
   entComponentsPresent,
   worldComponentNames,
   worldEntityHandles,
+  worldRenderableHandles,
   worldRootHandles,
   registerActiveReadBinding,
   getActiveReadBinding,
@@ -321,6 +340,58 @@ import './session/source-file-ops';
 // ── Material ops — updateMaterialParams document applier registration ──
 // Side-effect import: registers the document applier into the gateway table.
 import './session/material-ops';
+// Material Instance ops (create/save/setParent/setOverride/setLightmass).
+import './session/material-instance-ops-register';
+
+export {
+  MATERIAL_INSTANCE_KIND,
+  SURFACE_PARAM_KEYS,
+  DEFAULT_LIGHTMASS,
+  createDefaultMaterialInstancePayload,
+  encodeMaterialInstancePackRefs,
+  normalizeMaterialInstancePackEntries,
+  isMaterialInstancePayload,
+  isGuid as isMaterialInstanceGuid,
+} from './assets/material-instance-schema';
+export type {
+  MaterialInstancePayload,
+  MaterialInstanceOverride,
+  MaterialInstanceLightmass,
+  SurfaceParamKey,
+} from './assets/material-instance-schema';
+export {
+  resolveOverrides,
+  wouldCreateParentCycle,
+  getInheritedValue,
+  enabledOverrideValues,
+} from './assets/material-instance-resolve';
+export type {
+  MaterialCatalogEntry,
+  MaterialCatalogLookup,
+} from './assets/material-instance-resolve';
+export {
+  materialCatalogLookup,
+  ensureMaterialChainCataloged,
+} from './assets/material-chain-catalog';
+export {
+  materialInstanceLoader,
+  registerMaterialInstanceLoader,
+} from './assets/material-instance-loader';
+export {
+  subscribeMiStaging,
+  getMiStaging,
+  isMiStagingDirty,
+  openMiStaging,
+  updateMiStaging,
+  commitMiStaging,
+  discardMiStaging,
+  closeMiStaging,
+} from './assets/mi-staging';
+export type { MiStagingEntry } from './assets/mi-staging';
+export {
+  registerActivePageSaveHandler,
+  trySaveActivePage,
+} from './assets/active-page-save';
 
 // ── Scene presets (blank-create templates) ──
 export {
@@ -450,6 +521,49 @@ export { assetsErrorRevision, broadcastAssetsError, recentAssetsErrors } from '.
 export type { AssetsErrorPayload } from './store/assets-error-bus';
 export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace, GizmoPivot, SessionDirtyAsset } from './store/store';
 
+// ── Viewport preferences (session-domain chrome state; setViewportPreferences op) ──
+// Same barrel rule as above: getters/hooks/subscribes + storage helpers + the
+// write-gate chrome mirror only — user-intent mutation is gateway.dispatch({
+// kind: 'setViewportPreferences' }).
+export {
+  getViewportPreferences,
+  onViewportPreferencesChange,
+  useViewportPreferences,
+  syncViewportPosePreferences,
+  defaultViewportPreferences,
+  readViewportPreferences,
+  normalizeViewportPreferences,
+  writeViewportPreferences,
+  VIEWPORT_PREFERENCES_STORAGE_KEY,
+} from './store/viewport-preferences';
+export type {
+  CameraBookmark,
+  CameraBookmarkSlot,
+  ViewportPreferences,
+  ViewportPreferencesPatch,
+  ViewportPreferencesStorage,
+} from './store/viewport-preferences';
+
+// ── Editor-camera view limits (SSOT shared by core prefs + edit-runtime camera math) ──
+export {
+  clampDist,
+  clampFov,
+  clampFlySpeed,
+  clampOrthoHalfHeight,
+  clampPitch,
+  FLY_BOOST_MULTIPLIER,
+  FLY_SPEED_DEFAULT,
+  FLY_SPEED_MAX,
+  FLY_SPEED_MIN,
+  FOV_DEFAULT,
+  FOV_MAX,
+  FOV_MIN,
+  ORTHO_HALF_HEIGHT_DEFAULT,
+  ORTHO_HALF_HEIGHT_MAX,
+  ORTHO_HALF_HEIGHT_MIN,
+} from './store/viewport-camera-limits';
+export type { CameraProjection } from './store/viewport-camera-limits';
+
 // ── Entity operations ──
 export {
   deleteEntityCascade,
@@ -516,6 +630,7 @@ export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-na
 // notifications live under assets/. Side-effect import registers scan session
 // appliers at module eval time.
 import './scan/scan-ops';
+import './io/project-validation-ops';
 export type {
   ScanState,
   DirEntry,

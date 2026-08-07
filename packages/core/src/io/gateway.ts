@@ -1262,6 +1262,22 @@ export class EditGateway {
       if (kind === 'updateMaterialParams') {
         this._preFillMaterialOp(cmd as { kind: 'updateMaterialParams'; guid: string; _oldPatch?: unknown; _oldRefs?: unknown; _oldEntry?: unknown; [k: string]: unknown });
       }
+      // Material Instance mutators: fill `_oldEntry` (+ optional parent-chain catalog
+      // stubs for cycle detection) from the live asset catalog.
+      if (
+        kind === 'saveMaterialInstance'
+        || kind === 'setMaterialInstanceParent'
+        || kind === 'setMaterialInstanceOverride'
+        || kind === 'setMaterialInstanceLightmass'
+      ) {
+        this._preFillMaterialInstanceOp(cmd as {
+          guid: string;
+          parentGuid?: string;
+          _oldEntry?: unknown;
+          _catalogEntries?: unknown[];
+          [k: string]: unknown;
+        });
+      }
 
       // Prepare this public document command before the executor writes. Nested
       // transaction duplicates pass through the same helper in dispatchSub above.
@@ -1426,7 +1442,7 @@ export class EditGateway {
     const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
-    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame'
+    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame' || kind === 'validateGameProject'
       || kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport'
       ? (cmd as { readonly requestId?: unknown }).requestId
       : undefined;
@@ -1440,6 +1456,7 @@ export class EditGateway {
     const isRequestCorrelatedDefaultScene = kind === 'setDefaultScene' && typeof requestId === 'string';
     const isRequestCorrelatedSceneDelete = kind === 'deleteScene' && typeof requestId === 'string';
     const isRequestCorrelatedCapture = kind === 'captureFrame' && typeof requestId === 'string';
+    const isRequestCorrelatedValidation = kind === 'validateGameProject' && typeof requestId === 'string';
     const isRequestCorrelatedSource = (kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport') && typeof requestId === 'string';
     let acceptedRun: OperationRunReadResult | null = null;
     if (isRequestCorrelatedSave) {
@@ -1620,6 +1637,21 @@ export class EditGateway {
       if (accepted.reused) {
         return { ok: true, result: { created: [], operationRun: accepted.run } };
       }
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (isRequestCorrelatedValidation) {
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const accepted = acceptOperationRun({
+        registry: this.operationRuns,
+        command: cmd,
+        origin,
+        operationId: kind,
+        requestId: requestId as string,
+        cancellable: false,
+        retryable: true,
+        ...(typeof retryOfRequestId === 'string' ? { retryOfRequestId } : {}),
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
       acceptedRun = { ok: true, value: accepted.run };
     } else if (isRequestCorrelatedSource) {
       const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
@@ -2191,6 +2223,63 @@ export class EditGateway {
     const refGuids = (envelope.refs ?? []).map((r: { guid: string } | string) => (typeof r === 'string' ? r : r.guid));
     cmd._oldRefs = refGuids;
     cmd._oldEntry = { guid: envelope.guid, kind: envelope.kind, name: (envelope as unknown as { name?: string }).name, payload, refs: [...refGuids] };
+  }
+
+  /** Pre-fill Material Instance mutator ops with `_oldEntry` (+ parent chain for
+   *  cycle checks). Idempotent when `_oldEntry` is already present. */
+  private _preFillMaterialInstanceOp(
+    cmd: {
+      guid: string;
+      parentGuid?: string;
+      _oldEntry?: unknown;
+      _catalogEntries?: unknown[];
+      [k: string]: unknown;
+    },
+  ): void {
+    if (cmd._oldEntry !== undefined) return;
+    const registry = this.doc.registry;
+    if (!registry) return;
+    const envelope = registry.assetCatalog.get(cmd.guid.toLowerCase());
+    if (!envelope) return;
+    const payload = envelope.payload as unknown as Record<string, unknown>;
+    const refGuids = (envelope.refs ?? []).map((r: { guid: string } | string) => (typeof r === 'string' ? r : r.guid));
+    cmd._oldEntry = {
+      guid: envelope.guid,
+      kind: envelope.kind,
+      name: (envelope as unknown as { name?: string }).name,
+      payload,
+      refs: [...refGuids],
+    };
+
+    // Collect a shallow parent-chain snapshot for cycle detection (setParent).
+    if (cmd._catalogEntries !== undefined) return;
+    const entries: Array<{ guid: string; kind: string; name?: string; payload: Record<string, unknown>; refs: string[] }> = [];
+    const seen = new Set<string>([cmd.guid.toLowerCase()]);
+    let walk: string | undefined =
+      typeof cmd.parentGuid === 'string'
+        ? cmd.parentGuid
+        : typeof payload.parent === 'string'
+          ? payload.parent
+          : undefined;
+    while (walk !== undefined) {
+      const key = walk.toLowerCase();
+      if (seen.has(key)) break;
+      seen.add(key);
+      const next = registry.assetCatalog.get(key);
+      if (!next) break;
+      const nextPayload = next.payload as unknown as Record<string, unknown>;
+      const nextRefs = (next.refs ?? []).map((r: { guid: string } | string) => (typeof r === 'string' ? r : r.guid));
+      entries.push({
+        guid: next.guid,
+        kind: next.kind,
+        name: (next as unknown as { name?: string }).name,
+        payload: nextPayload,
+        refs: [...nextRefs],
+      });
+      const parent = nextPayload.parent;
+      walk = typeof parent === 'string' && parent.length > 0 ? parent : undefined;
+    }
+    if (entries.length > 0) cmd._catalogEntries = entries;
   }
 
   // ── Asset read surface (Part 4) ────────────────────────────────────────────

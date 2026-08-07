@@ -16,6 +16,23 @@
 
 import { quat, vec3 } from '@forgeax/engine-math';
 import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
+// Camera view limits (FOV / fly-speed / ortho bounds + clamps) live in
+// @forgeax/editor-core (store/viewport-camera-limits.ts): core hosts the
+// viewport-preferences session store and cannot import this package (DAG), so
+// the SSOT moved there. This module re-exports the full set so existing
+// importers keep working unchanged.
+import {
+  clampDist, clampFov, clampFlySpeed, clampOrthoHalfHeight, clampPitch,
+  FLY_BOOST_MULTIPLIER, ORTHO_HALF_HEIGHT_MIN,
+  type CameraProjection,
+} from '@forgeax/editor-core';
+export {
+  clampDist, clampFov, clampFlySpeed, clampOrthoHalfHeight, clampPitch,
+  FLY_BOOST_MULTIPLIER, FLY_SPEED_DEFAULT, FLY_SPEED_MAX, FLY_SPEED_MIN,
+  FOV_DEFAULT, FOV_MAX, FOV_MIN,
+  ORTHO_HALF_HEIGHT_DEFAULT, ORTHO_HALF_HEIGHT_MAX, ORTHO_HALF_HEIGHT_MIN,
+  type CameraProjection,
+} from '@forgeax/editor-core';
 
 import type { Vec3 } from './viewport-ray';
 
@@ -28,7 +45,6 @@ export type RunMode = 'edit' | 'play';
 export type DisplayMode = 'scene' | 'game';
 export type InputTarget = 'editor' | 'game';
 export type ControlOwner = InputTarget;
-export type CameraProjection = 'perspective' | 'orthographic';
 
 /** Result of orbit camera pose computation — camera position + basis vectors + camera quaternion. */
 export interface OrbitCameraResult {
@@ -68,31 +84,11 @@ export interface FlyState {
   pitch: number;
 }
 
-/** 飞行速度常量（单位/秒）。 */
-export const FLY_SPEED_DEFAULT = 8;
-export const FLY_SPEED_MIN = 0.5;
-export const FLY_SPEED_MAX = 100;
 /** 滚轮每格速度倍率（UE5 标准）。 */
 export const FLY_SPEED_STEP = 1.15;
-/** Shift-held temporary flight multiplier. */
-export const FLY_BOOST_MULTIPLIER = 2;
 
-/** Perspective / orthographic editor-camera defaults and bounds. */
-export const FOV_DEFAULT = Math.PI / 3;
-export const FOV_MIN = (20 * Math.PI) / 180;
-export const FOV_MAX = (120 * Math.PI) / 180;
 export const FOV_STEP = (5 * Math.PI) / 180;
-export const ORTHO_HALF_HEIGHT_DEFAULT = 10;
-export const ORTHO_HALF_HEIGHT_MIN = 0.1;
-export const ORTHO_HALF_HEIGHT_MAX = 10000;
 export const ORTHO_ZOOM_STEP = 1.1;
-
-// ── clamp constants (from viewport.ts orbit handlers) ────────────────────────
-
-const PITCH_MIN = -1.5;  // ~-86 degrees
-const PITCH_MAX = 1.5;   // ~+86 degrees
-const DIST_MIN = 2;
-const DIST_MAX = 300;
 
 // ── shared buffer ────────────────────────────────────────────────────────────
 
@@ -107,36 +103,6 @@ const _tmpV3 = new Float32Array(3) as EngineVec3;
  */
 export function deriveInputTarget(run: RunMode, control: ControlOwner): InputTarget {
   return run === 'play' && control === 'game' ? 'game' : 'editor';
-}
-
-/** Clamp pitch to the allowed range for orbit camera (prevents gimbal lock). */
-export function clampPitch(pitch: number): number {
-  if (pitch > PITCH_MAX) return PITCH_MAX;
-  if (pitch < PITCH_MIN) return PITCH_MIN;
-  return pitch;
-}
-
-/** Clamp distance to the allowed range for orbit camera. */
-export function clampDist(dist: number): number {
-  if (dist > DIST_MAX) return DIST_MAX;
-  if (dist < DIST_MIN) return DIST_MIN;
-  return dist;
-}
-
-/** Clamp perspective FOV and reject non-finite inputs at the math boundary. */
-export function clampFov(fov: number): number {
-  if (!Number.isFinite(fov)) return FOV_DEFAULT;
-  if (fov > FOV_MAX) return FOV_MAX;
-  if (fov < FOV_MIN) return FOV_MIN;
-  return fov;
-}
-
-/** Clamp orthographic half-height and reject non-finite inputs. */
-export function clampOrthoHalfHeight(halfHeight: number): number {
-  if (!Number.isFinite(halfHeight)) return ORTHO_HALF_HEIGHT_DEFAULT;
-  if (halfHeight > ORTHO_HALF_HEIGHT_MAX) return ORTHO_HALF_HEIGHT_MAX;
-  if (halfHeight < ORTHO_HALF_HEIGHT_MIN) return ORTHO_HALF_HEIGHT_MIN;
-  return halfHeight;
 }
 
 /**
@@ -230,13 +196,6 @@ export function computeOrbitCamera(
 }
 
 // ── fly camera pure functions ────────────────────────────────────────────────
-
-/** 将飞行速度限制在 [FLY_SPEED_MIN, FLY_SPEED_MAX] 内。 */
-export function clampFlySpeed(speed: number): number {
-  if (speed > FLY_SPEED_MAX) return FLY_SPEED_MAX;
-  if (speed < FLY_SPEED_MIN) return FLY_SPEED_MIN;
-  return speed;
-}
 
 /** 应用滚轮 delta 到飞行速度（UE5：滚轮上加速、滚轮下减速）。
  *  wheelDelta > 0 加速（每格 * FLY_SPEED_STEP），wheelDelta < 0 减速。 */

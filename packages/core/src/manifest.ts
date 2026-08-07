@@ -19,6 +19,9 @@ export const EDITOR_PANELS = [
   'asset-overview',
   'asset-properties',
   'mesh-slots',
+  'mi-preview',
+  'mi-properties',
+  'settings',
 ] as const;
 
 /** Union type of all editor panel IDs — derived from EDITOR_PANELS. */

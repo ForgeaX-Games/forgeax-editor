@@ -13,6 +13,10 @@
 export { EDITOR_PANELS } from './manifest';
 export type { EditorPanelId } from './manifest';
 export { EDITOR_PANEL_COMPONENTS } from './manifest';
+export {
+  registerMaterialInstancePreview,
+  getMaterialInstancePreview,
+} from './mi-preview-slot';
 
 // ── Panel components ──
 export { AssetsPanel } from './Assets';
@@ -25,6 +29,7 @@ export type { AssetPickerProps } from './AssetPicker';
 // M6/M7 collapse: MaterialGraphPanel + TimelinePanel deleted (engine has no
 // MatGraph/Anim equivalent). See plan-strategy S2 D-3, requirements AC-13.
 export { LauncherPanel } from './Launcher';
+export { SettingsPanel } from './Settings';
 export { AssetOverviewPanel, AssetPropertiesPanel, MeshSlotsPanel } from './AssetEditors';
 export {
   buildDiagnosticsRows,

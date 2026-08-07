@@ -24,8 +24,10 @@ describe('live gameplay carrier bridge', () => {
     registry.registrar.registerRead({ id: 'world', title: 'World', read: () => ({ entities: [1] }) });
     gateway.enterPlay(new World());
     gateway.installGameProjection(registry);
-    const canvas = { toDataURL: () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' } as HTMLCanvasElement;
-    const capture = createGameplayCaptureGateway({ canvas, getProvenance: () => identity });
+    const capture = createGameplayCaptureGateway({
+      captureImage: async () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      getProvenance: () => identity,
+    });
     const bridge = createGameplayCarrierBridge(createGameplayOperations(gateway, capture), () => identity);
 
     await expect(bridge.execute({ version: 1, operation: 'describe' })).resolves.toMatchObject({

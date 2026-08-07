@@ -14,6 +14,8 @@ export interface TransportRequest {
   readonly correlationId: string;
   /** Carrier routing identity; method params must not be inspected to choose a page. */
   readonly scope: string;
+  /** Carrier deadline metadata; bounded by the server and ignored by the Editor service. */
+  readonly timeoutMs?: number;
   readonly method: string;
   readonly params: unknown;
 }
@@ -29,6 +31,8 @@ export interface TransportResponse {
 }
 
 export interface TransportError extends CommandError {
+  readonly outcome?: 'unknown';
+  readonly operationMayStillBeRunning?: boolean;
   readonly compatibility?: { readonly supportedVersions: readonly string[] };
   readonly authorization?: { readonly requiredPermission: string; readonly actorId?: string };
   readonly scope?: { readonly requested: string; readonly allowed: readonly string[] };

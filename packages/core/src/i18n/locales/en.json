@@ -4,6 +4,13 @@
       "mainScene": "Main scene",
       "title": "What this window is editing (level/asset) — double-click another item in the Assets panel to switch"
     },
+    "pageMenu": {
+      "copyPath": "Copy Path",
+      "revealInExplorer": "Reveal in File Explorer",
+      "locateInContentBrowser": "Locate in Content Browser",
+      "referenceToChat": "Reference in Chat",
+      "save": "Save"
+    },
     "sceneEntry": {
       "title": "Scene",
       "selectLabel": "Switch scene",
@@ -111,7 +118,6 @@
         "show": "Show",
         "hide": "Hide",
         "focusViewport": "Focus in Viewport",
-        "lock": "Lock",
         "moveTo": "Move To...",
         "paste": "Paste",
         "selectAll": "Select All",
@@ -126,10 +132,7 @@
         "showInViewport": "show in viewport",
         "hideInViewport": "hide in viewport",
         "showFolderContents": "show folder contents",
-        "hideFolderContents": "hide folder contents",
-        "lockUnavailable": "Lock is not wired yet",
-        "folderDisplayOnly": "Folders are display-only",
-        "moveToRoot": "Drop here: move to root"
+        "hideFolderContents": "hide folder contents"
       }
     },
     "history": {
@@ -139,6 +142,27 @@
       "originHuman": "Human",
       "diffApply": "apply",
       "diffUndo": "undo"
+    },
+    "settings": {
+      "title": "Settings",
+      "viewportInteraction": "Viewport Interaction",
+      "mouseSensitivity": "Mouse sensitivity",
+      "wheelSpeed": "Wheel speed",
+      "invertY": "Invert Y axis",
+      "invertWheel": "Invert wheel direction",
+      "flight": "Flight",
+      "flySpeed": "Fly speed",
+      "boostMultiplier": "Boost multiplier (Shift)",
+      "camera": "Camera",
+      "projection": "Projection",
+      "perspective": "Perspective",
+      "orthographic": "Orthographic",
+      "fov": "Field of view",
+      "bookmarks": "Camera Bookmarks",
+      "bookmarkSlot": "Slot {{slot}}",
+      "bookmarkEmpty": "Empty",
+      "clearBookmark": "Clear",
+      "resetDefaults": "Reset viewport preferences to defaults"
     },
     "inspector": {
       "batchTitle": "Inspector · Batch ({{count}})",
@@ -405,6 +429,39 @@
         "sceneCurrent": "This is the current scene and must be switched away before deletion.",
         "sceneDefault": "This is the default scene and must be reassigned before deletion.",
         "sceneProtectedWarn": "This scene is protected. Resolve the impact above before deleting it."
+      }
+    },
+    "materialInstance": {
+      "searchPlaceholder": "Search parameters…",
+      "group": {
+        "surface": "Surface Properties",
+        "general": "General",
+        "lightmass": "Lightmass Settings",
+        "propertyOverrides": "Material Property Overrides"
+      },
+      "baseColor": "Base Color",
+      "metallic": "Metallic",
+      "roughness": "Roughness",
+      "parent": "Parent",
+      "physMaterial": "Phys Material",
+      "castShadowsAsMasked": "Cast Shadows as Masked",
+      "emissiveBoost": "Emissive Boost",
+      "diffuseBoost": "Diffuse Boost",
+      "exportResolutionScale": "Export Resolution Scale",
+      "saveSibling": "Save Sibling",
+      "saveChild": "Save Child",
+      "nameLabel": "Name",
+      "createConfirm": "Create",
+      "cancel": "Cancel",
+      "override": "Override",
+      "inherited": "Inherited",
+      "propertyOverridesHint": "Static whitelist (Base Color / Metallic / Roughness). Dynamic parent-parameter discovery is planned for a later milestone.",
+      "previewMesh": {
+        "sphere": "Sphere",
+        "cube": "Cube",
+        "plane": "Plane",
+        "custom": "Custom",
+        "customSoon": "Custom mesh picker lands with AssetPicker wiring next"
       }
     }
   }

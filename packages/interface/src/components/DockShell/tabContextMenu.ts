@@ -1,11 +1,11 @@
 // Pure helper: given the current DockRegion + panelId + callbacks, return the
 // list of tab-context-menu items dockview should render on right-click.
 //
-// The list is a mix of built-in item ids (dockview handles close / closeOthers)
-// and custom { label, action } items. dockview's own type for these is
-// `(BuiltInContextMenuItem | ReactContextMenuItemConfig)[]`; we express the
-// custom item shape structurally so we don't depend on dockview types beyond
-// what we produce.
+// Every user-visible item is emitted as a custom { label, action } entry so its
+// text flows through the i18n catalog (dockShell.tabContext.* / dockShell.*) —
+// dockview's built-in `close`/`closeOthers` ids render library-hardcoded English
+// labels that can't be localized, so we drive the close actions ourselves via
+// the dockview panel/group API passed in `closeOptions`.
 import type { DockRegion } from './regions';
 import { t as panelT } from '../../i18n';
 import type { SideEdge } from './sideEdgeMove';
@@ -16,6 +16,12 @@ export type TabContextMenuItem =
   | 'closeAll'
   | 'separator'
   | { label: string; action: () => void };
+
+/** Close actions wired to the dockview API (panel.close / close-siblings). */
+export interface CloseMenuOptions {
+  onClose: () => void;
+  onCloseOthers: () => void;
+}
 
 export interface TabTitleMenuOptions {
   /** Title-bar hiding is only valid while this group contains one panel. */
@@ -39,12 +45,18 @@ export function buildTabContextMenuItems(
   moveTo: (panelId: string, region: DockRegion) => void,
   titleOptions?: TabTitleMenuOptions,
   sideEdge?: SideEdgeMenuOptions,
+  closeOptions?: CloseMenuOptions,
 ): TabContextMenuItem[] {
-  const items: TabContextMenuItem[] = [
-    'close',
-    'closeOthers',
-    'separator',
-  ];
+  // Close / Close Others as localized custom items (see file header). When no
+  // close handlers are supplied (pure-builder tests) fall back to dockview's
+  // built-in ids so the item ordering stays observable.
+  const items: TabContextMenuItem[] = closeOptions
+    ? [
+        { label: panelT('dockShell.tabContext.close'), action: closeOptions.onClose },
+        { label: panelT('dockShell.tabContext.closeOthers'), action: closeOptions.onCloseOthers },
+        'separator',
+      ]
+    : ['close', 'closeOthers', 'separator'];
 
   if (region === 'AuxBar') {
     // AuxBar is a separate DockviewReact instance — side-edge move lives in

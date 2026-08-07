@@ -610,6 +610,9 @@
     "slugLabel": "slug (game directory name)",
     "nameLabel": "Display name (optional)",
     "namePlaceholder": "Leave blank to use slug",
+    "templateLabel": "Template",
+    "templateLoading": "Loading templates…",
+    "templateEmpty": "No templates available; the default template will be used.",
     "briefLabel": "brief (optional — leave one and Forge dispatches Iori immediately)",
     "briefPlaceholder": "e.g. 2D card roguelike, 5-10 min per run, build a deck for satisfying blowout damage",
     "creating": "Creating...",
@@ -1241,14 +1244,43 @@
     "moveToSide": "Move to Side",
     "moveOffSide": "Move off Side",
     "moveToPrimaryDock": "Move to Primary Dock",
+    "tabContext": {
+      "close": "Close",
+      "closeOthers": "Close Others"
+    },
     "panelTitles": {
+      "tools": "Tools",
+      "main": "Studio",
+      "viewport": "Viewport",
+      "chat": "ForgeaX CLI",
+      "agents": "Agents",
+      "files": "Files",
+      "console": "Console",
+      "telemetry": "Telemetry",
       "hierarchy": "Hierarchy",
       "assets": "Content Browser",
       "inspector": "Inspector",
-      "viewport": "Viewport",
+      "history": "History",
+      "capabilities": "Capabilities",
+      "launcher": "Launcher",
+      "asset-overview": "Asset Overview",
+      "asset-properties": "Asset Properties",
+      "mesh-slots": "Mesh Slots",
       "info": "Info",
       "checkpoints": "Checkpoints",
       "events": "Events"
+    }
+  },
+  "pageTabs": {
+    "openPages": "Open pages",
+    "newPage": "New page",
+    "allPages": "All pages",
+    "noOpenableTypes": "No openable page types",
+    "closeTab": "Close {{title}}",
+    "context": {
+      "close": "Close",
+      "closeOthers": "Close Others",
+      "closeToRight": "Close to the Right"
     }
   },
   "firstRun": {
@@ -1341,7 +1373,12 @@
     "loadingExtension": "Loading {{extensionId}}…",
     "popoutTitle": "Pop out as a standalone OS window",
     "popoutLabel": "Standalone window",
-    "loadingExtensionGeneric": "Loading extension…"
+    "loadingExtensionGeneric": "Loading extension…",
+    "loadingWorkbenchHost": "Connecting to the Workbench host…",
+    "workbenchHostFailed": "Workbench host failed to load: {{error}}",
+    "workbenchExtensionMissing": "The Workbench host did not register {{extensionId}}.",
+    "workbenchGameRequired": "Open a game before loading this Workbench extension.",
+    "retry": "Retry"
   },
   "chatAgentCapsule": {
     "prevPage": "Previous page",
@@ -1430,7 +1467,10 @@
   },
   "dialog": {
     "confirmActionTitle": "Confirm action",
-    "alertTitle": "Notice"
+    "alertTitle": "Notice",
+    "unsavedTitle": "Unsaved changes",
+    "unsavedBody": "{{title}} has unsaved changes. Save before closing?",
+    "discardChanges": "Don't Save"
   },
   "eventFormatter": {
     "filePart": "[File: {{path}}]",

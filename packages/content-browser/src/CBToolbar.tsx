@@ -14,6 +14,7 @@ import {
 import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
+import { createMaterialInstanceAndOpen } from './create-material-instance';
 import { ContentBrowserIcon } from './content-browser-icons';
 import { requestSaveAll } from './save-all-bus';
 
@@ -29,7 +30,10 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const acceptString = buildAcceptString();
 
-  const basePath = resolveGamePath(currentPath || 'assets');
+  // Game-relative directory for authoring ops (appliers resolve to disk).
+  const packDir = (currentPath || 'assets').replace(/^\/+|\/+$/g, '') || 'assets';
+  // Host-resolved path — only for import diagnostics / file picker context.
+  const basePath = resolveGamePath(packDir);
 
   useEffect(() => {
     const input = fileInputRef.current;
@@ -56,34 +60,66 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
   const handleCreateAsset = useCallback((spec: CreatableAssetSpec) => {
     setAddMenuOpen(false);
-    void promptDialog({
-      title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
-      label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
-      defaultValue: spec.defaultNamePrefix,
-      placeholder: spec.defaultNamePrefix,
-      confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
-      // The asset name becomes part of a filename (`${name}.pack.json`), so
-      // basename rules apply — inline UX-side gate using the SSOT validator
-      // (dev-plan §5 step 5 + follow-up validate wiring). The applier still
-      // enforces on dispatch (north-star §9); this just fails the input BEFORE
-      // Confirm is even enabled, so the user gets red text instead of a
-      // silent toast/reject after the click.
-      validate: (v) => {
-        const r = validateAssetBasename(v);
-        return r.ok ? null : r.hint;
-      },
-    }).then((result) => {
-      const name = result?.trim();
+    void (async () => {
+      const name = (await promptDialog({
+        title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
+        label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
+        defaultValue: spec.defaultNamePrefix,
+        placeholder: spec.defaultNamePrefix,
+        confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+        cancelText: t('editor.contentBrowser.dialogs.cancel'),
+        // The asset name becomes part of a filename (`${name}.pack.json`), so
+        // basename rules apply — inline UX-side gate using the SSOT validator
+        // (dev-plan §5 step 5 + follow-up validate wiring). The applier still
+        // enforces on dispatch (north-star §9); this just fails the input BEFORE
+        // Confirm is even enabled, so the user gets red text instead of a
+        // silent toast/reject after the click.
+        validate: (v) => {
+          const r = validateAssetBasename(v);
+          return r.ok ? null : r.hint;
+        },
+      }))?.trim();
       if (!name) return;
+
+      if (spec.kind === 'scene') {
+        const requestId = crypto.randomUUID();
+        const result = gateway.dispatch({
+          kind: 'createSceneFile',
+          id: name,
+          duplicateCurrent: false,
+          requestId,
+        }, 'human');
+        if (!result.ok) toast.error('createSceneFile', { description: result.error.hint });
+        return;
+      }
+
+      if (spec.kind === 'material') {
+        gateway.dispatch({
+          kind: 'createMaterial',
+          guid: generateAssetGuid(),
+          name,
+          baseColor: [1, 1, 1, 1],
+          metallic: 0,
+          roughness: 0.5,
+          packPath: `${packDir}/Materials.pack.json`,
+        }, 'human');
+        return;
+      }
+
+      if (spec.kind === 'material-instance') {
+        await createMaterialInstanceAndOpen(name, packDir);
+        return;
+      }
+
       gateway.dispatch({
         kind: 'createAsset',
-        packPath: `${basePath}/${name}.pack.json`,
+        packPath: `${packDir}/${name}.pack.json`,
         guid: generateAssetGuid(),
         assetKind: spec.kind,
         name,
       }, 'human');
-    });
-  }, [basePath, t]);
+    })();
+  }, [packDir, t]);
 
   const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);

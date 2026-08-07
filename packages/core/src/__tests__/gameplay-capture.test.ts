@@ -14,10 +14,9 @@ const identity = {
 
 describe('live gameplay capture', () => {
   test('captures the live canvas with matching provenance and decoded byte count', async () => {
-    const canvas = { toDataURL: () => png } as HTMLCanvasElement;
     const gateway = new EditGateway({} as never);
     const captureGateway = createGameplayCaptureGateway({
-      canvas,
+      captureImage: async () => png,
       getProvenance: () => identity,
     });
     gateway.enterPlay({} as never);
@@ -28,9 +27,8 @@ describe('live gameplay capture', () => {
   });
 
   test('reads the live provenance on every capture and fails closed when generation disappears', async () => {
-    const canvas = { toDataURL: () => png } as HTMLCanvasElement;
     let current: typeof identity | null = identity;
-    const captureGateway = createGameplayCaptureGateway({ canvas, getProvenance: () => current });
+    const captureGateway = createGameplayCaptureGateway({ captureImage: async () => png, getProvenance: () => current });
 
     const captured = await captureGateway.captureGameplayFrame();
     expect(captured).toMatchObject({ ok: true, value: { provenance: identity } });
@@ -39,8 +37,20 @@ describe('live gameplay capture', () => {
   });
 
   test('rejects malformed image data from the producer', async () => {
-    const canvas = { toDataURL: () => 'data:image/png;base64,not-base64!' } as HTMLCanvasElement;
-    await expect(createGameplayCaptureGateway({ canvas, getProvenance: () => identity }).captureGameplayFrame())
+    await expect(createGameplayCaptureGateway({
+      captureImage: async () => 'data:image/png;base64,not-base64!',
+      getProvenance: () => identity,
+    }).captureGameplayFrame())
       .resolves.toMatchObject({ ok: false, error: { code: 'surface-unavailable' } });
+  });
+
+  test('fails explicitly when the composed viewport producer rejects', async () => {
+    await expect(createGameplayCaptureGateway({
+      captureImage: async () => { throw new Error('viewport HUD root is unavailable'); },
+      getProvenance: () => identity,
+    }).captureGameplayFrame()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'capture-failed', hint: 'viewport HUD root is unavailable' },
+    });
   });
 });

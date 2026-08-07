@@ -382,7 +382,8 @@ describe('AssetIOFacade authored pack version', () => {
 // envelope (the watcher rebuild races the broadcast).
 describe('createMaterial post-write catalog-sync seam', () => {
   it('awaits the registered sync hook before broadcasting assetsChanged', async () => {
-    const { applyCreateMaterial, registerPostAssetWriteCatalogSync } = await import('../session/pack-ops');
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const { registerPostAssetWriteCatalogSync } = await import('../session/authored-asset-write');
     const { panelBridge } = await import('../io/panel-bridge');
 
     const events: string[] = [];
@@ -416,7 +417,8 @@ describe('createMaterial post-write catalog-sync seam', () => {
   });
 
   it('broadcasts without a hook when none is registered (unit env / no host)', async () => {
-    const { applyCreateMaterial, registerPostAssetWriteCatalogSync } = await import('../session/pack-ops');
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const { registerPostAssetWriteCatalogSync } = await import('../session/authored-asset-write');
     const { panelBridge } = await import('../io/panel-bridge');
     registerPostAssetWriteCatalogSync(null);
 
@@ -450,7 +452,8 @@ describe('createMaterial post-write catalog-sync seam', () => {
 // readiness (stage 'write'), and never reach the catalog barrier/broadcast.
 describe('createMaterial staged write failure (authoritative write result)', () => {
   it('a failed pack write broadcasts assetsError and tracks a stage:write readiness failure', async () => {
-    const { applyCreateMaterial, registerPostAssetWriteCatalogSync, awaitAuthoredMaterialReady } = await import('../session/pack-ops');
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const { registerPostAssetWriteCatalogSync, awaitAuthoredMaterialReady } = await import('../session/authored-asset-write');
     const { panelBridge } = await import('../io/panel-bridge');
     registerPostAssetWriteCatalogSync(null);
 
@@ -494,7 +497,8 @@ describe('createMaterial staged write failure (authoritative write result)', () 
   });
 
   it('a catalog-barrier failure after a successful write tracks a stage:catalog readiness failure', async () => {
-    const { applyCreateMaterial, registerPostAssetWriteCatalogSync, awaitAuthoredMaterialReady } = await import('../session/pack-ops');
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    const { registerPostAssetWriteCatalogSync, awaitAuthoredMaterialReady } = await import('../session/authored-asset-write');
     const { panelBridge } = await import('../io/panel-bridge');
 
     const errors: { op: string; hint: string }[] = [];
@@ -527,7 +531,7 @@ describe('createMaterial staged write failure (authoritative write result)', () 
   });
 
   it('awaitPostAssetWriteCatalogSync dedupes concurrent waits into ONE host-hook invocation', async () => {
-    const { registerPostAssetWriteCatalogSync, awaitPostAssetWriteCatalogSync } = await import('../session/pack-ops');
+    const { registerPostAssetWriteCatalogSync, awaitPostAssetWriteCatalogSync } = await import('../session/authored-asset-write');
     let calls = 0;
     registerPostAssetWriteCatalogSync(async () => {
       calls++;

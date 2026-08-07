@@ -22,10 +22,17 @@
 // and silently no-op. editorEngine still records trace leaves onto the active
 // span (facade._recordLeaf reads the ambient active span, not a per-world
 // binding), so ledger/trace semantics are preserved.
+//
+// Building the op bodies (createCameraOps) is separate from claiming the global
+// op kinds (registerCameraAppliers) because an op kind lives in exactly ONE
+// domain process-wide: a second registration is an OP_ID_CONFLICT throw. The
+// scene viewport owns the ledger-visible camera kinds; a secondary viewport
+// (the MI preview's private orbit camera — chrome, never authored state) runs
+// the same bodies against its own table without registering them.
 
 import { Transform } from '@forgeax/engine-scene';
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import type { EngineFacade } from '@forgeax/editor-core';
+import type { EngineFacade, SessionApplierMeta } from '@forgeax/editor-core';
 import { registerSessionApplier } from '@forgeax/editor-core';
 import type { Vec3 } from './viewport-ray';
 import {
@@ -95,11 +102,30 @@ export interface CameraAppliersDeps {
   frameSelection(): void;
 }
 
-/** Register all camera session-op appliers. Returns a dispose fn that
- *  unregisters them in reverse order. */
-export function registerCameraAppliers({
+export type CameraOpResult = { ok: true } | ReturnType<typeof invalidArgs>;
+
+/** One camera op body plus its catalog metadata, built but not yet registered. */
+export interface CameraOp {
+  readonly kind: string;
+  readonly apply: (op: unknown) => CameraOpResult;
+  readonly meta: SessionApplierMeta;
+}
+
+export interface CameraOps {
+  readonly entries: readonly CameraOp[];
+  /** Run one op against this table only — no ledger entry, no global registry. */
+  run(op: { kind: string }): CameraOpResult | undefined;
+}
+
+/** Build the camera op bodies bound to one viewport's pose storage. */
+export function createCameraOps({
   editorEngine, camera, getPose, setPose, applyCamera, getBookmark, setBookmark, frameSelection,
-}: CameraAppliersDeps): () => void {
+}: CameraAppliersDeps): CameraOps {
+  const entries: CameraOp[] = [];
+  const define = (kind: string, apply: (op: unknown) => CameraOpResult, meta: SessionApplierMeta): void => {
+    entries.push({ kind, apply, meta });
+  };
+
   const writeCameraTransform = (r: { camPos: Vec3; qCam: number[] }): void => {
     editorEngine.set(camera, Transform, {
       pos: [r.camPos[0], r.camPos[1], r.camPos[2]],
@@ -115,9 +141,9 @@ export function registerCameraAppliers({
   // actually moves the camera. T6b: an optional `pos` payload lets a caller
   // express "put camera here + look this way" without knowing the target math
   // (target = pos + fwd * dist).
-  const unregOrbit = registerSessionApplier(
+  define(
     'cameraOrbit',
-    (op, _ctx): { ok: true } | ReturnType<typeof invalidArgs> => {
+    (op): CameraOpResult => {
       const o = op as unknown as {
         target?: [number, number, number]; yaw?: number; pitch?: number; dist?: number;
         pos?: [number, number, number];
@@ -185,9 +211,9 @@ export function registerCameraAppliers({
     applyCamera();
     return { ok: true };
   };
-  const unregFly = registerSessionApplier(
+  define(
     'cameraFly',
-    (op, _ctx) => applyFlyLike(op),
+    (op) => applyFlyLike(op),
     { title: 'Fly camera to position' },
   );
 
@@ -195,9 +221,9 @@ export function registerCameraAppliers({
   // AI-first absolute pose teleport. Semantically same as cameraFly but named
   // "teleport" because there is no human gesture — AI just says "camera goes
   // here now". Separate kind for ledger/self-introspection.
-  const unregTeleport = registerSessionApplier(
+  define(
     'cameraTeleport',
-    (op, _ctx) => applyFlyLike(op),
+    (op) => applyFlyLike(op),
     { title: 'Teleport camera to position' },
   );
 
@@ -206,9 +232,9 @@ export function registerCameraAppliers({
   // are derived from the (pos → lookAt) vector using the engine convention:
   //   forward = qCam · [0,0,-1] with qCam = yaw·Y × pitch·X
   //   → yaw = atan2(-dx, -dz),  pitch = atan2(dy, hypot(dx,dz))
-  const unregLookAt = registerSessionApplier(
+  define(
     'cameraLookAt',
-    (op, _ctx): { ok: true } | ReturnType<typeof invalidArgs> => {
+    (op): CameraOpResult => {
       const o = op as unknown as {
         pos?: [number, number, number]; lookAt?: [number, number, number];
       };
@@ -242,18 +268,18 @@ export function registerCameraAppliers({
   // The em-dash form (name then '—', not name followed by '(') keeps this
   // comment out of the AC-03 sealed-setter grep assertion in
   // gateway-grep-assertions.test.ts.
-  const unregRequestFrame = registerSessionApplier(
+  define(
     'requestFrame',
-    (_op, _ctx): { ok: true } => {
+    (): CameraOpResult => {
       frameSelection();
       return { ok: true };
     },
     { title: 'Frame selection in viewport' },
   );
 
-  const unregSetProjection = registerSessionApplier(
+  define(
     'cameraSetProjection',
-    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+    (op): CameraOpResult => {
       const value = (op as { projection?: unknown }).projection;
       if (value !== 'perspective' && value !== 'orthographic') {
         return invalidArgs('projection must be "perspective" or "orthographic"');
@@ -273,9 +299,9 @@ export function registerCameraAppliers({
     },
   );
 
-  const unregToggleProjection = registerSessionApplier(
+  define(
     'cameraToggleProjection',
-    (_op, _ctx): { ok: true } => {
+    (): CameraOpResult => {
       const cur = getPose();
       setPose({ ...cur, projection: cur.projection === 'perspective' ? 'orthographic' : 'perspective' });
       applyCamera();
@@ -284,9 +310,9 @@ export function registerCameraAppliers({
     { title: 'Toggle camera projection' },
   );
 
-  const unregAdjustFov = registerSessionApplier(
+  define(
     'cameraAdjustFov',
-    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+    (op): CameraOpResult => {
       const delta = (op as { delta?: unknown }).delta;
       if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0) {
         return invalidArgs('delta must be a non-zero finite number');
@@ -312,9 +338,9 @@ export function registerCameraAppliers({
     },
   );
 
-  const unregZoom = registerSessionApplier(
+  define(
     'cameraZoom',
-    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+    (op): CameraOpResult => {
       const delta = (op as { delta?: unknown }).delta;
       if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0) {
         return invalidArgs('delta must be a non-zero finite number');
@@ -342,9 +368,9 @@ export function registerCameraAppliers({
     },
   );
 
-  const unregBookmark = registerSessionApplier(
+  define(
     'cameraBookmark',
-    (op, _ctx): { ok: true } | { ok: false; error: ReturnType<typeof invalidArgs>['error'] } => {
+    (op): CameraOpResult => {
       const input = op as { action?: unknown; slot?: unknown };
       if (input.action !== 'save' && input.action !== 'recall' && input.action !== 'clear') {
         return invalidArgs('action must be "save", "recall", or "clear"');
@@ -399,16 +425,20 @@ export function registerCameraAppliers({
     },
   );
 
+  return {
+    entries,
+    run: (op) => entries.find((entry) => entry.kind === op.kind)?.apply(op),
+  };
+}
+
+/** Claim the camera op kinds as session ops (ledger +1, no undo). Only the
+ *  scene viewport may do this — the kinds are process-global. Returns a dispose
+ *  fn that unregisters them in reverse order. */
+export function registerCameraAppliers(ops: CameraOps): () => void {
+  const unregisters = ops.entries.map(
+    (entry) => registerSessionApplier(entry.kind, (op) => entry.apply(op), entry.meta),
+  );
   return () => {
-    unregBookmark();
-    unregZoom();
-    unregAdjustFov();
-    unregToggleProjection();
-    unregSetProjection();
-    unregRequestFrame();
-    unregLookAt();
-    unregTeleport();
-    unregFly();
-    unregOrbit();
+    for (let i = unregisters.length - 1; i >= 0; i--) unregisters[i]!();
   };
 }

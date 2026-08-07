@@ -150,16 +150,18 @@ export {
   deleteAsset,
   createDirectory,
   deleteDirectory,
+} from '../session/pack-ops';
+export {
   registerPostAssetWriteCatalogSync,
   awaitPostAssetWriteCatalogSync,
   awaitAuthoredMaterialReady,
   registerAuthoredInlineAssetTracker,
-} from '../session/pack-ops';
+} from '../session/authored-asset-write';
 export type {
   AuthoredMaterialReadiness,
   AuthoredMaterialWriteStage,
   AuthoredInlineAssetSnapshot,
-} from '../session/pack-ops';
+} from '../session/authored-asset-write';
 export type { CreateAssetInPackResult } from '../io/asset-io-facade';
 export { createImportFailure, executeAssetImport } from '../session/import-ops';
 export type {

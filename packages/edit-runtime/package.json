@@ -18,6 +18,10 @@
       "types": "./src/viewport/ViewportComponent.tsx",
       "import": "./src/viewport/ViewportComponent.tsx"
     },
+    "./viewport/material-preview": {
+      "types": "./src/viewport/MaterialPreviewViewport.tsx",
+      "import": "./src/viewport/MaterialPreviewViewport.tsx"
+    },
     "./viewport/quadrant": {
       "types": "./src/viewport/viewport-quadrant.ts",
       "import": "./src/viewport/viewport-quadrant.ts"
@@ -95,6 +99,7 @@
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
     "@forgeax/engine-vfx-compiler": "workspace:*",
     "@forgeax/engine-vfx-render": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",

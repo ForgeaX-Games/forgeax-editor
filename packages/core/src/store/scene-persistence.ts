@@ -71,7 +71,7 @@ import {
   awaitPostAssetWriteCatalogSync,
   registerAuthoredInlineAssetTracker,
   type AuthoredInlineAssetSnapshot,
-} from '../session/pack-ops';
+} from '../session/authored-asset-write';
 import { normalizePackForRuntime, stableGuid, validatePackShell } from '../scene/scene-pack';
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';

@@ -27,7 +27,7 @@ import type { AssetSourceMutationScope } from '@forgeax/editor-product';
  *  kinds can be blank-created, SSOT in `packages/content-browser/src/creatable-asset-kinds.ts`.
  *
  *  To extend: add one literal, its spec row, and the applier switch case. */
-export type CreatableAssetKind = 'scene' | 'material';
+export type CreatableAssetKind = 'scene' | 'material' | 'material-instance' | 'particle-effect';
 // Future examples: 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
 
 /** Builtin editor ops — the closed discriminated union of all 25 editor primitives.
@@ -94,6 +94,17 @@ export type BuiltinEditorOp =
   // through ctx.assetIO then invalidates the registry cache for hot viewport reload.
   // Gateway fills _oldPatch / _oldRefs / _oldEntry synchronously from the catalog.
   | { kind: 'updateMaterialParams'; packPath: string; guid: string; paramPatch: Record<string, unknown>; textureGuids?: Record<string, string | null>; _oldPatch?: Record<string, unknown>; _oldRefs?: string[]; _oldEntry?: unknown }
+  // createMaterialInstance (MI editor M1/A3): mint a Material Instance that
+  // references a parent Material (or MI). DOCUMENT-domain; inverse=destroyAsset.
+  // Caller mints `guid`. Overrides use {enabled,value} (UE-style); runtime
+  // rendering resolves via material-instance-resolve → MaterialAsset values.
+  | { kind: 'createMaterialInstance'; guid: string; name: string; parentGuid: string; overrides?: Record<string, { enabled: boolean; value?: unknown }>; physMaterial?: string; lightmass?: { castShadowsAsMasked?: boolean; emissiveBoost?: number; diffuseBoost?: number; exportResolutionScale?: number }; packPath?: string }
+  // saveMaterialInstance: replace the whole MI payload (staging flush). Gateway
+  // fills `_oldEntry` for undo.
+  | { kind: 'saveMaterialInstance'; packPath: string; guid: string; payload: Record<string, unknown>; _oldEntry?: unknown }
+  | { kind: 'setMaterialInstanceParent'; packPath: string; guid: string; parentGuid: string; _oldEntry?: unknown; _catalogEntries?: unknown[] }
+  | { kind: 'setMaterialInstanceOverride'; packPath: string; guid: string; paramKey: string; enabled: boolean; value?: unknown; bucket?: 'overrides' | 'propertyOverrides'; _oldEntry?: unknown }
+  | { kind: 'setMaterialInstanceLightmass'; packPath: string; guid: string; lightmassPatch: { castShadowsAsMasked?: boolean; emissiveBoost?: number; diffuseBoost?: number; exportResolutionScale?: number }; _oldEntry?: unknown }
   // ── session domain (editor session state) — no inverse → ledger only (M2) ──
   | { kind: 'setSelection'; id: EntityId | null }
   | { kind: 'toggleSelection'; id: EntityId }
@@ -108,6 +119,20 @@ export type BuiltinEditorOp =
   | { kind: 'cameraAdjustFov'; delta: number }
   | { kind: 'cameraZoom'; delta: number }
   | { kind: 'cameraBookmark'; action: 'save' | 'recall' | 'clear'; slot: number }
+  // Viewport interaction preferences (mouse/wheel/fly sensitivity + view-scale
+  // defaults). Editor chrome session state — the applier + reactive store live
+  // in core (store/viewport-preferences.ts, gizmo-pivot pattern); partial patch,
+  // every field optional, values clamped by the applier (fail-closed normalize).
+  | { kind: 'setViewportPreferences'; patch: {
+      mouseSensitivity?: number;
+      invertY?: boolean;
+      wheelDirection?: 1 | -1;
+      wheelSpeedScalar?: number;
+      flyBoostMultiplier?: number;
+      flySpeed?: number;
+      fov?: number;
+      projection?: 'perspective' | 'orthographic';
+    } }
   // captureFrame is a request-correlated session operation. The actual RHI
   // recorder lives in edit-runtime/engine; the gateway owns the invocation
   // door and the OperationRun result channel.
@@ -205,6 +230,10 @@ export type BuiltinEditorOp =
   | { kind: 'assetOrphanDetected'; sourcePath: string; metaPath: string }
   | { kind: 'assetValidationFailed'; diagnostics: import('./scan/scan-diagnostic').ScanDiagnostic[] }
   | { kind: 'requestReimport'; paths: string[] }
+  // validateGameProject is a host-owned session operation. The producer
+  // validator remains scripts/game-validation.mjs; the host supplies its
+  // project access and the Gateway owns only the correlated run/result door.
+  | { kind: 'validateGameProject'; requestId: string; maxBytes?: number; maxEntities?: number; retryOfRequestId?: string }
   // ── transient domain (transient view state) — no inverse, no ledger (M2) ──
   | { kind: 'setHoverEntity'; id: EntityId | null }
   | { kind: 'setFieldPreview'; id: EntityId | null; key?: string; value?: number }
@@ -395,6 +424,10 @@ export interface CommandError extends CommandErrorContext {
     // discovery + invocation while a fresh play world is live; it never imports
     // game state tokens or reaches into a game World directly.
     | 'game-projection-unavailable'
+    // R2-04: the host-installed project validator provider is unavailable or
+    // returned an envelope the Gateway cannot safely project.
+    | 'project-validation-unavailable'
+    | 'project-validation-invalid-result'
     | 'game-projection-id-conflict'
     | 'unknown-game-projection'
     | 'game-action-failed'
@@ -415,6 +448,10 @@ export interface CommandError extends CommandErrorContext {
     // instead of leaking a raw promise rejection to the caller.
     | 'rhi-debug-unavailable'
     | 'rhi-capture-failed'
+    // Asset-editor page navigation is a host-installed seam (the app-shell page
+    // extension). A host without it must refuse openAssetEditor structurally,
+    // never by leaking the seam's rejection as an unhandled promise.
+    | 'page-navigation-unavailable'
     // Save persistence effect failures (M2): stable codes for data-protecting
     // refusal and canonical commit outcomes. Callers branch on these fields,
     // never on console/message text.

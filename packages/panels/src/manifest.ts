@@ -17,8 +17,19 @@ import { HierarchyPanel } from './Hierarchy';
 import { HistoryPanel } from './History';
 import { InspectorPanel } from './Inspector';
 import { LauncherPanel } from './Launcher';
-import { AssetOverviewPanel, AssetPropertiesPanel, MeshSlotsPanel } from './AssetEditors';
+import {
+  AssetOverviewPanel,
+  AssetPropertiesPanel,
+  MaterialInstancePreviewPanel,
+  MaterialInstancePropertiesPanel,
+  MeshSlotsPanel,
+} from './AssetEditors';
+import { SettingsPanel } from './Settings';
 import { OperationCenter } from './operations/OperationCenter';
+export {
+  registerMaterialInstancePreview,
+  getMaterialInstancePreview,
+} from './mi-preview-slot';
 
 // D5 (plan-strategy §2): renamed PANEL_COMPONENTS -> EDITOR_PANEL_COMPONENTS to
 // disambiguate from interface's own same-named PANEL_COMPONENTS
@@ -37,8 +48,11 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   history: HistoryPanel,
   capabilities: CapabilitiesPanel,
   launcher: LauncherPanel,
+  settings: SettingsPanel,
   'asset-overview': AssetOverviewPanel,
   'asset-properties': AssetPropertiesPanel,
   'mesh-slots': MeshSlotsPanel,
+  'mi-preview': MaterialInstancePreviewPanel,
+  'mi-properties': MaterialInstancePropertiesPanel,
   'operation-center': OperationCenter,
 };

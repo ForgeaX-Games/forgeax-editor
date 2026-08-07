@@ -198,9 +198,8 @@ export interface HostSession {
   stopSimulation(): void;
   /**
    * Tear down the session's global side effects (disk-watch socket, flush
-   * beacons, VAG flush handler). A multi-game host calls this on a cross-game
-   * switch before disposing the engine; a single-game host (standalone) never
-   * calls it (teardown = page navigation).
+   * beacons, VAG flush handler). The active-game host calls this before a realm
+   * switch; a standalone host never calls it (teardown = page navigation).
    */
   dispose(options?: { flushPendingSave?: boolean }): void;
   /** The live play world while playing, else null. */
@@ -413,23 +412,49 @@ export function createHostSession(deps: HostSessionDeps): {
       cachedInstanceRootAbs = j.instanceRootAbs;
       return cachedInstanceRootAbs;
     };
-    const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+    // The /@fs namespace belongs to the ENGINE vite, whose mount base differs
+    // per topology: standalone editor/e2e co-hosts engine+editor at the bundle
+    // base ('/'), play-runtime mounts at '/preview/', and the packaged studio
+    // serves the editor bundle at '/editor/' while the engine lives at
+    // '/preview/'. Neither the bundle base nor a hardcoded '/preview' is right
+    // in all three (bundle base broke packaged with play-bootstrap-resolve-
+    // failed 'text/html' MIME; hardcoded broke standalone e2e with 404s), so
+    // probe the candidates once: the SPA fallback answers 200 text/html, the
+    // engine answers with a real file. forge.json exists in every game dir.
+    const BUNDLE_BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+    const FS_BASE_CANDIDATES = [...new Set([BUNDLE_BASE, '/preview', ''])];
+    let cachedFsBase: string | undefined;
     const resolveGameFsBase = async (): Promise<string> => {
-      const toFsUrl = (abs: string) => {
+      const toFsUrl = (abs: string, base: string) => {
         const norm = abs.replace(/\\/g, '/');
-        return `${BASE}/@fs${norm.startsWith('/') ? '' : '/'}${norm}`;
+        return `${base}/@fs${norm.startsWith('/') ? '' : '/'}${norm}`;
       };
+      let gameAbs: string;
       if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {
-        return toFsUrl(__FORGEAX_GAME_DIR_ABS__);
+        gameAbs = __FORGEAX_GAME_DIR_ABS__;
+      } else {
+        const rootAbs = await getInstanceRootAbs();
+        // gameRoot comes from the host-installed path resolver (configureHostSession
+        // always runs setPathResolver before boot; Play runs post-boot so it's set),
+        // NOT from `?gameRoot=` — the single realm passes the game as props, so the
+        // resolver is the one source of the host's game->disk layout root.
+        const gameRoot = resolveGamePath('');
+        gameAbs = gameRoot ? `${rootAbs}/${gameRoot}` : rootAbs;
       }
-      const rootAbs = await getInstanceRootAbs();
-      // gameRoot comes from the host-installed path resolver (configureHostSession
-      // always runs setPathResolver before boot; Play runs post-boot so it's set),
-      // NOT from `?gameRoot=` — the single realm passes the game as props, so the
-      // resolver is the one source of the host's game->disk layout root.
-      const gameRoot = resolveGamePath('');
-      const fsBase = toFsUrl(rootAbs);
-      return gameRoot ? `${fsBase}/${gameRoot}` : fsBase;
+      if (cachedFsBase !== undefined) return toFsUrl(gameAbs, cachedFsBase);
+      for (const base of FS_BASE_CANDIDATES) {
+        try {
+          const probe = await deps.fetch(`${toFsUrl(gameAbs, base)}/forge.json`, { cache: 'no-store' });
+          const contentType = probe.headers.get('content-type') ?? '';
+          if (probe.ok && !contentType.includes('text/html')) {
+            cachedFsBase = base;
+            return toFsUrl(gameAbs, base);
+          }
+        } catch { /* candidate unreachable — try the next */ }
+      }
+      // No candidate answered: fall back to the bundle base so the import
+      // failure surfaces with the same diagnostics as before this probe.
+      return toFsUrl(gameAbs, BUNDLE_BASE);
     };
 
     // ── Asset-resident game plugins (game-plugins.ts) ───────────────────────────
@@ -485,20 +510,6 @@ export function createHostSession(deps: HostSessionDeps): {
 
     setBootStage('loadDoc');
     await renderer.ready.catch(() => null);
-
-    // Wait for play-runtime's pack catalog to include this game (covers the
-    // gap between game creation and forgeaxGameRescan's Vite restart).
-    const slug = getSceneId();
-    if (slug && slug !== 'default') {
-      const packIndexUrl = `/preview/pack-index/${slug}.json`;
-      for (let attempt = 0; attempt < 15; attempt++) {
-        try {
-          const r = await deps.fetch(packIndexUrl, { cache: 'no-store' });
-          if (r.ok) break;
-        } catch { /* server restarting */ }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    }
 
     await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
     emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
@@ -829,9 +840,9 @@ export function createHostSession(deps: HostSessionDeps): {
     void installPreviewSkinHook({ world, engine, renderer, viewport });
 
     // ── Disk-watch + flush beacons (was bootEditor :1368) ───────────────────────
-    // Capture each teardown handle so a multi-game host (studio single-realm) can
-    // dispose this session on a cross-game switch — otherwise the previous game's
-    // disk-watch socket + flush beacons keep firing against the new game's world.
+    // Capture each teardown handle so the active-game host can dispose this
+    // session before a realm switch; otherwise the previous disk-watch socket
+    // + flush beacons keep firing against the new game's world.
     // The window pagehide/visibilitychange wiring is lifted behind
     // deps.installSaveBeaconListeners (the boot tail's one DOM boundary), so this
     // path is headless-testable; the flush target is deps.flushPendingSaveBeacon.

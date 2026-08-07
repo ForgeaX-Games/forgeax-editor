@@ -93,8 +93,9 @@ export function createFramePhaseProfiler(
 		return source === "app" ? "frame" : "render";
 	}
 
-	const session: RecorderSession = {
+	const session = {
 		captureId: CAPTURE_ID,
+		detail: "owner",
 		beginFrame(nextFrameId) {
 			frameId = nextFrameId;
 			openPhases.length = 0;
@@ -138,7 +139,7 @@ export function createFramePhaseProfiler(
 			openPhases.length = 0;
 			return { ok: true, value: latest };
 		},
-	};
+	} satisfies RecorderSession & { readonly detail: "owner" };
 
 	return {
 		registerPhaseCatalog(source, phases) {

@@ -37,7 +37,7 @@ import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/pa
 import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
 import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
-import { useShellStore } from '@forgeax/interface/store';
+import { configureWorkbenchClient, useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
@@ -46,11 +46,13 @@ import { prompt as promptDialog } from '@forgeax/editor-ui';
 // exports (no iframe). ViewportComponent boots the engine once in this window;
 // EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
 import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
+import { MaterialPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/material-preview';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
-import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor/panels';
+import { EDITOR_PANEL_COMPONENTS, registerMaterialInstancePreview } from '@forgeax/editor/panels';
+registerMaterialInstancePreview(MaterialPreviewViewport);
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
@@ -62,6 +64,20 @@ import './standalone-menu.css';
 // headless, the router requests a human confirm through this bus.
 import { requestDeleteGuard } from './delete-guard-bus';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
+
+// ── troubleshooting probe (observation only, no logic) ─────────────────────
+// Probe logging MUST bypass the editor console bridge: installConsoleBridge
+// (viewport-runtime-bridges.ts) monkeypatches console.* and re-emits every
+// call into the panel bridge -> shell store -> our store subscriber -> log
+// again = synchronous feedback storm that wedges the main thread. This module
+// evaluates before the viewport boots, so these captures are the UNWRAPPED
+// originals. Remove the probe block once the dead-gear issue is diagnosed.
+const rawProbeInfo: (...args: unknown[]) => void = /* @__PURE__ */ (() => {
+  try { return console.info.bind(console); } catch { return () => {}; }
+})();
+const probeLog = (...args: unknown[]): void => {
+  try { rawProbeInfo(...args); } catch { /* noop */ }
+};
 
 // keyboard-router convergence M4: the interface submodule's global-shortcuts
 // router is editor-agnostic (lint:agnostic forbids importing @forgeax/editor),
@@ -77,6 +93,8 @@ import { registerAction } from '@forgeax/interface/lib/action-registry';
 import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
 import { projectGatewayOps } from '@forgeax/editor-edit-runtime';
 import { gateway } from '@forgeax/editor-core';
+import { installSettingsPanelRedirect } from './settings-redirect';
+import { createStandaloneGameClient } from './game-service-client';
 
 // lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
 // (AC-C1 / T5-1): entity and asset forward-selects each advance it; clear() does
@@ -114,6 +132,13 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
 // case no game is served and the editor opens on an empty scene.
 declare const __FORGEAX_GAME_SLUG__: string | null;
 
+// The standalone build is one game slot per host. A New Game submission
+// materializes into that slot, then reloads the document so the compile-time
+// engine/game-root wiring consumes the newly-created files on the next boot.
+configureWorkbenchClient(createStandaloneGameClient(() => {
+  window.setTimeout(() => window.location.reload(), 0);
+}));
+
 // ── panel renderer injection (single realm, PanelRenderers v9 shape) ──────────
 // v9 (2026-07-08) reclassified PanelRenderers into structural category slots:
 //   surfaces.SceneEditor — the in-process engine viewport (NOT an iframe).
@@ -142,6 +167,8 @@ const EDITOR_PANEL_TITLES: Record<string, string> = {
   history: 'History', capabilities: 'Capabilities',
   launcher: 'Launcher', 'asset-overview': 'Asset Overview',
   'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
+  'mi-preview': 'Preview', 'mi-properties': 'Properties',
+  settings: 'Settings',
 };
 
 const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
@@ -161,23 +188,47 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
 // as props (NOT `?scene=`/`?gameRoot=` URL params — the single realm removed the
 // iframe those addressed, so a stale URL can no longer override the CLI intent).
 function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
-  return <ViewportComponent gameSlug={__FORGEAX_GAME_SLUG__} gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined} />;
+  return (
+    <ViewportComponent
+      gameSlug={__FORGEAX_GAME_SLUG__}
+      gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
+      runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
+    />
+  );
 }
 
 /** Fields no interface factory covers: the workbench layout seed and the
  *  editor bridge hooks — one custom extension keeps them on the same
- *  contributePanels channel (mirrors studio's studio.editor-integration). */
+ *  contributePanels channel (mirrors studio's studio.editor-integration).
+ *  setup() also installs the TopBar-gear redirect: the studio settings
+ *  overlay does not exist in this host, so openOverlay('settings') is routed
+ *  to the dockable Settings panel (standalone/settings-redirect.ts). */
 const standaloneEditorIntegrationExtension: AppExtension = {
   id: 'standalone.editor-integration', version: '1.0.0',
   requires: ['panels'],
   setup(ctx) {
-    return ctx.contributePanels({
+    const disposePanels = ctx.contributePanels({
       builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
       editor: {
         setContextMenuRenderer,
         installBridge: installInterfaceBridge,
       },
     });
+    const disposeRedirect = installSettingsPanelRedirect(useShellStore, ctx.bus);
+    // ── troubleshooting probe (observation only, no logic) ─────────────────
+    // Echoes our own panel:open emit (proves the bus accepted it), then checks
+    // a tick later whether the Settings panel actually mounted in the DOM
+    // (proves DockRegion owned + reopened the panel).
+    const offProbe = ctx.bus.on('panel:open', (p) => {
+      probeLog('[standalone-probe] bus panel:open', p);
+      if (p?.id !== 'ep:settings') return;
+      setTimeout(() => {
+        const mounted = !!document.querySelector('[data-testid="panel-settings"]');
+        probeLog('[standalone-probe] ep:settings in DOM after open =', mounted);
+      }, 600);
+    });
+    probeLog('[standalone-probe] editor-integration setup done (panels + settings redirect + bus echo)');
+    return () => { offProbe(); disposeRedirect(); disposePanels(); };
   },
 };
 
@@ -235,6 +286,28 @@ function boot(): void {
   } catch {
     /* localStorage unavailable — worst case the wizard shows; not fatal */
   }
+
+  // ── troubleshooting probe (observation only, no logic) ─────────────────
+  // Chain under diagnosis: gear click -> openOverlay('settings') -> redirect
+  // -> panel:open -> dock panel mounts. probeLog bypasses the console bridge
+  // (see rawProbeInfo above) so logging itself cannot re-enter the store.
+  // (a) Capture-phase click listener: does the click even REACH the TopBar
+  //     gear button (vs. intercepted by an invisible layer / dead handler)?
+  // (b) Store transition log on THIS realm's useShellStore: if the gear opens
+  //     the overlay but this never logs, the host and TopBar hold TWO
+  //     interface-store module instances (dual-instance split) and the
+  //     redirect subscription can never fire.
+  document.addEventListener('click', (ev) => {
+    const target = ev.target as HTMLElement | null;
+    const btn = target?.closest?.('button');
+    if (!btn) return;
+    probeLog('[standalone-probe] click button:', btn.className, '| title =', btn.getAttribute('title'));
+  }, true);
+  useShellStore.subscribe((s, prev) => {
+    if (s.activeOverlay !== prev.activeOverlay) {
+      probeLog('[standalone-probe] store activeOverlay:', prev.activeOverlay, '->', s.activeOverlay);
+    }
+  });
 
   // Inject the editor-side keyboard-router callbacks (interface submodule stays
   // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks

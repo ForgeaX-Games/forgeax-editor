@@ -16,7 +16,7 @@
  * time; the underlying accessor is identical). This keeps keyboard shortcuts,
  * command palette, and menu clicks on one entry.
  */
-import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   BookOpen,
   BoxSelect,
@@ -302,9 +302,16 @@ interface TopMenuProps {
   items: MenuItemDef[];
   t: TFunction;
   execute: Execute;
+  /** Controlled open flag — the whole bar shares one "which menu is open"
+   *  value so sibling hover can steal the open panel (UE-style). */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Pointer entered this trigger. The bar decides whether to switch the open
+   *  panel here (only when some OTHER menu is already open). */
+  onTriggerEnter: () => void;
 }
 
-function TopMenu({ menu, items, t, execute }: TopMenuProps) {
+function TopMenu({ menu, items, t, execute, open, onOpenChange, onTriggerEnter }: TopMenuProps) {
   const brand = useBrand();
   // The async warm completes after File has rendered. Subscribe so an
   // already-open recent submenu replaces its empty placeholder immediately.
@@ -319,19 +326,14 @@ function TopMenu({ menu, items, t, execute }: TopMenuProps) {
   // populated yet (T3 owns that), `t()` falls back to returning the key so we
   // don't crash — we just show "menubar.file" in place of "File" until T3.
   const titleKey = `menubar.${menu}`;
-  // File menu owns a dynamic 打开最近 submenu whose rows come from an async game
-  // list. Warm the cache when the File dropdown opens so `getRecentGames()` is
-  // populated by the time the user hovers into the submenu (sync at that point).
-  const onOpenChange = menu === 'file'
-    ? (open: boolean) => { if (open) void warmRecentGames(); }
-    : undefined;
   return (
-    <DropdownMenu onOpenChange={onOpenChange}>
+    <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className={isBrand ? 'fx-menubar-btn fx-menubar-btn--brand' : 'fx-menubar-btn'}
+          className={isBrand ? 'fx-menubar-btn fx-menubar-btn--brand no-motion-lift' : 'fx-menubar-btn no-motion-lift'}
           data-menu={menu}
+          onPointerEnter={onTriggerEnter}
         >
           {isBrand ? (
             <>
@@ -367,6 +369,40 @@ export function MenuBar() {
     [host],
   );
 
+  // One shared "which top-level menu is open" value for the whole bar. This is
+  // what makes it behave like a native/UE menu bar rather than N unrelated
+  // dropdowns: only one panel is open at a time, and once ANY panel is open,
+  // pointer-entering a sibling trigger steals the open state to it (see
+  // `handleTriggerEnter`). `null` = closed bar (idle: hover just highlights,
+  // it does NOT open — matching UE, where you must click to arm the bar).
+  const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
+
+  // File owns a dynamic 打开最近 submenu backed by an async game list. Warm the
+  // cache whenever File becomes the open menu — via click OR hover-steal — so
+  // `getRecentGames()` is populated by the time the user reaches the submenu.
+  useEffect(() => {
+    if (openMenu === 'file') void warmRecentGames();
+  }, [openMenu]);
+
+  const handleOpenChange = useCallback(
+    (menu: MenuId) => (isOpen: boolean) => {
+      // Radix fires (false) on the previously-open menu when we steal focus to
+      // a sibling; only honour a close if THIS menu is still the current one,
+      // else the steal would immediately re-close the bar.
+      setOpenMenu((cur) => (isOpen ? menu : cur === menu ? null : cur));
+    },
+    [],
+  );
+
+  const handleTriggerEnter = useCallback(
+    (menu: MenuId) => () => {
+      // Steal the open panel to the hovered trigger, but only while the bar is
+      // already armed (some other menu open). Idle hover must not auto-open.
+      setOpenMenu((cur) => (cur !== null && cur !== menu ? menu : cur));
+    },
+    [],
+  );
+
   // Under Tauri the OS native menu is the SSOT for the whole menu bar (T5
   // bridge) — brand/app menu included — so the HTML bar renders nothing at all
   // (no brand chip, no dropdowns). The trailing divider goes with it.
@@ -376,10 +412,27 @@ export function MenuBar() {
     <>
       <div className="fx-menubar">
         {menus.brand.length > 0 && (
-          <TopMenu menu="brand" items={menus.brand} t={t} execute={execute} />
+          <TopMenu
+            menu="brand"
+            items={menus.brand}
+            t={t}
+            execute={execute}
+            open={openMenu === 'brand'}
+            onOpenChange={handleOpenChange('brand')}
+            onTriggerEnter={handleTriggerEnter('brand')}
+          />
         )}
         {TOP_MENUS.map((m) => (
-          <TopMenu key={m} menu={m} items={menus[m]} t={t} execute={execute} />
+          <TopMenu
+            key={m}
+            menu={m}
+            items={menus[m]}
+            t={t}
+            execute={execute}
+            open={openMenu === m}
+            onOpenChange={handleOpenChange(m)}
+            onTriggerEnter={handleTriggerEnter(m)}
+          />
         ))}
       </div>
       {/* Separates the menu cluster from the game/session switchers. Lives here

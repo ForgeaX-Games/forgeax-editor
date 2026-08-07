@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { gateway } from '@forgeax/editor-core';
 import {
+  createCameraOps,
   registerCameraAppliers,
   type CameraPose,
 } from '../viewport-camera-appliers';
@@ -28,7 +29,7 @@ describe('camera session appliers', () => {
   it('routes projection and view-scale operations through one runtime writer', () => {
     let pose = makePose();
     let writes = 0;
-    unregisters.push(registerCameraAppliers({
+    unregisters.push(registerCameraAppliers(createCameraOps({
       editorEngine: { set: () => undefined } as never,
       camera: 1 as never,
       getPose: () => pose,
@@ -37,7 +38,7 @@ describe('camera session appliers', () => {
       getBookmark: () => undefined,
       setBookmark: () => undefined,
       frameSelection: () => undefined,
-    }));
+    })));
 
     expect(gateway.dispatch({ kind: 'cameraSetProjection', projection: 'orthographic' }, 'ai'))
       .toMatchObject({ ok: true });
@@ -55,7 +56,7 @@ describe('camera session appliers', () => {
   it('saves, recalls, clears, and validates numbered camera bookmarks', () => {
     let pose = makePose();
     const bookmarks = new Map<number, CameraPose>();
-    unregisters.push(registerCameraAppliers({
+    unregisters.push(registerCameraAppliers(createCameraOps({
       editorEngine: { set: () => undefined } as never,
       camera: 1 as never,
       getPose: () => pose,
@@ -67,7 +68,7 @@ describe('camera session appliers', () => {
         else bookmarks.set(slot, bookmark);
       },
       frameSelection: () => undefined,
-    }));
+    })));
 
     expect(gateway.dispatch({ kind: 'cameraBookmark', action: 'save', slot: 1 }, 'human'))
       .toMatchObject({ ok: true });
@@ -86,7 +87,7 @@ describe('camera session appliers', () => {
   it('rejects non-finite poses and degenerate look-at vectors before writing', () => {
     let pose = makePose();
     let writes = 0;
-    unregisters.push(registerCameraAppliers({
+    unregisters.push(registerCameraAppliers(createCameraOps({
       editorEngine: { set: () => undefined } as never,
       camera: 1 as never,
       getPose: () => pose,
@@ -95,7 +96,7 @@ describe('camera session appliers', () => {
       getBookmark: () => undefined,
       setBookmark: () => undefined,
       frameSelection: () => undefined,
-    }));
+    })));
 
     expect(gateway.dispatch({ kind: 'cameraFly', pos: [Number.NaN, 0, 0], yaw: 0, pitch: 0 }, 'ai'))
       .toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });

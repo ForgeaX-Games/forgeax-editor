@@ -38,6 +38,7 @@ import {
   worldRootHandles,
   childrenOf,
   triggerAssetSelectAll,
+  trySaveActivePage,
   type PathSelectionItem,
 } from '@forgeax/editor-core';
 import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadrant';
@@ -212,7 +213,11 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
     },
     undo: () => { gateway.undo(); },
     redo: () => { gateway.redo(); },
-    save: () => { gateway.dispatch(createHumanSaveRequest(), 'human'); },
+    // M4/B3: MI (and future page controllers) divert Ctrl+S away from scene save.
+    save: () => {
+      if (trySaveActivePage()) return;
+      gateway.dispatch(createHumanSaveRequest(), 'human');
+    },
     handleViewportKeyDown: (event) => { getViewportKeyHandler()?.(event); },
   };
 }

@@ -122,13 +122,37 @@
    footer with no click. */
 .fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab {
   position: relative;
-  background: var(--color-background-elevated);
+  /* The footer strip sits on --color-background-elevated (#161619), so the old
+     `elevated` highlight was the SAME colour as its backdrop → invisible. Use
+     the darkest base (like the main dock's selected tab) so the open tab clearly
+     reads as connected to the drawer rising above it. */
+  background: var(--color-background-base);
   color: var(--color-text-primary);
+}
+/* Hover feedback for footer tabs (the main dock's .dv-tab:hover rule doesn't
+   reach here — this strip is relocated out of .fx-dockshell into the footer).
+   The currently-open tab keeps its selected look and does NOT react to hover. */
+.fx-bottom-edge-strip .dv-tab:hover {
+  background: var(--color-interaction-selected-neutral);
+  color: var(--color-text-primary);
+}
+.fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab:hover {
+  background: var(--color-background-base);
+}
+/* Closed footer strip: the bottom edge group always keeps one `.dv-active-tab`
+   (dockview never lets a group go active-less). This strip is relocated OUT of
+   .fx-dockwrap so the edge-group neutralizer in DockShell.css can't reach it —
+   restate it here so a closed footer shows NO selected tab (matches the open-only
+   highlight rule above). `:not(:hover)` so the footer hover rule below still gives
+   feedback on the (neutralized) active tab. */
+.fx-bottom-edge-strip:not(.fx-bottom-edge-open) .dv-tab.dv-active-tab:not(:hover) {
+  background: transparent;
+  color: inherit;
 }
 /* UE focus流光 on the footer active tab (drawer open) — mirrors the grid-group
    accent in DockShell.css. Bottom strip: put the bar on the TOP edge (the side
    the drawer rises from). Brightest at center, fading to both ends. */
-.fx-bottom-edge-strip.fx-bottom-edge-open .dv-tab.dv-active-tab::before {
+.fx-bottom-edge-strip.fx-bottom-edge-focused .dv-tab.dv-active-tab::before {
   content: '';
   position: absolute;
   left: 0;
@@ -182,6 +206,14 @@ html.fx-edge-drag .fx-bottom-edge-strip {
 html.fx-edge-drag .fx-bottom-edge-strip .dv-void-container {
   flex: 1 1 auto;
   min-width: 140px;
+}
+/* Raw close X (dockview's default action, before edgeDrawer swaps it to a Pin):
+   opacity-gate it out of sight — same as the pin below, never a hard delete — so
+   the transient X between (re)render and swap doesn't flash. pointer-events:none
+   so an invisible X can't be clicked-to-close. */
+.fx-bottom-edge-strip .dv-default-tab-action:not(.fx-edge-pin) {
+  opacity: 0;
+  pointer-events: none;
 }
 /* Pin toggle (swapped for close by edgeDrawer): the `.dv-groupview-edge`-scoped
    rules don't reach here, so re-declare the footer variant. Hidden by default —

@@ -55,7 +55,7 @@ describe('buildTabContextMenuItems', () => {
     expect(moves).toEqual([['chat', 'DockShell']]);
   });
 
-  it('items include close + closeOthers + separator (in that order) before the custom action', () => {
+  it('without close handlers → falls back to built-in close + closeOthers + separator ids', () => {
     const items = buildTabContextMenuItems(
       'DockShell',
       'chat',
@@ -69,6 +69,27 @@ describe('buildTabContextMenuItems', () => {
       },
     );
     expect(items.slice(0, 3)).toEqual(['close', 'closeOthers', 'separator']);
+  });
+
+  it('with close handlers → localized close + closeOthers custom items wired to the API', () => {
+    let closed = 0;
+    let closedOthers = 0;
+    const items = buildTabContextMenuItems(
+      'DockShell',
+      'chat',
+      () => {},
+      undefined,
+      undefined,
+      { onClose: () => { closed += 1; }, onCloseOthers: () => { closedOthers += 1; } },
+    );
+    const [close, closeOthers, sep] = items;
+    expect(typeof close === 'object' && close.label).toBe('Close');
+    expect(typeof closeOthers === 'object' && closeOthers.label).toBe('Close Others');
+    expect(sep).toBe('separator');
+    if (typeof close === 'object') close.action();
+    if (typeof closeOthers === 'object') closeOthers.action();
+    expect(closed).toBe(1);
+    expect(closedOthers).toBe(1);
   });
 
   it('single-panel groups offer a title-bar hide action', () => {

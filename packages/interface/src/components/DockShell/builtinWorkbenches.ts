@@ -38,6 +38,16 @@ const FOOTER_EDGE_GROUPS = {
   },
 } as const;
 
+// SSOT for "which panels are interface-level footer chrome", in tab order. The
+// footer is present regardless of the active workbench OR the active Page — a
+// Page's closed panel domain (a mesh page can't accumulate a Level's panels) is
+// deliberately closed, but the footer is CHROME, not a document panel. So it is
+// exempt from that membership gate (see DockRegion.isMember) and, rather than
+// being re-seeded into every layout, is owned by a single reconciler that keeps
+// it in the bottom edge group under any layout (see edgeDrawer.ensureFooterPanels).
+export const FOOTER_PANEL_ID_LIST: readonly string[] = Object.keys(FOOTER_EDGE_PANELS);
+export const FOOTER_PANEL_IDS: ReadonlySet<string> = new Set(FOOTER_PANEL_ID_LIST);
+
 export interface BuiltinWorkbenchSpec {
   id: 'scene' | 'ai';
   name: string;

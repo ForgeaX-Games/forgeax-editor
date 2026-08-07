@@ -654,6 +654,79 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Update Material Params',
   },
+  {
+    id: 'createMaterialInstance', domain: 'document',
+    completion: { kind: 'asset-visible', guidField: 'guid' },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', description: 'Caller-minted RFC 4122 asset GUID. Reuse for openAssetEditor after create.' },
+        name: { type: 'string', description: 'Human-readable Material Instance name (UE-style default prefix MI_).' },
+        parentGuid: { type: 'string', description: 'Parent Material or Material Instance GUID.' },
+        overrides: { type: 'object', description: 'Optional initial overrides map: { [paramKey]: { enabled, value } }.' },
+        physMaterial: { type: 'string', description: 'Optional Physical Material GUID (editor-stored).' },
+        lightmass: { type: 'object', description: 'Optional Lightmass settings patch.' },
+        packPath: { type: 'string', description: 'Optional game-relative pack path. Defaults to assets/materials.pack.json.' },
+      },
+      required: ['guid', 'name', 'parentGuid'],
+    },
+    title: 'Create Material Instance',
+  },
+  {
+    id: 'saveMaterialInstance', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        payload: { type: 'object', description: 'Full material-instance payload to persist (staging flush).' },
+      },
+      required: ['packPath', 'guid', 'payload'],
+    },
+    title: 'Save Material Instance',
+  },
+  {
+    id: 'setMaterialInstanceParent', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        parentGuid: { type: 'string', description: 'New parent GUID. Rejected if it would create a cycle.' },
+      },
+      required: ['packPath', 'guid', 'parentGuid'],
+    },
+    title: 'Set Material Instance Parent',
+  },
+  {
+    id: 'setMaterialInstanceOverride', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        paramKey: { type: 'string' },
+        enabled: { type: 'boolean' },
+        value: { description: 'Override value when enabled (optional when disabling).' },
+        bucket: { type: 'string', description: 'overrides (default) or propertyOverrides.' },
+      },
+      required: ['packPath', 'guid', 'paramKey', 'enabled'],
+    },
+    title: 'Set Material Instance Override',
+  },
+  {
+    id: 'setMaterialInstanceLightmass', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        lightmassPatch: { type: 'object' },
+      },
+      required: ['packPath', 'guid', 'lightmassPatch'],
+    },
+    title: 'Set Material Instance Lightmass',
+  },
 
   // ══ session domain (11 consolidated + play/stop) ════════════════════════
   // ── selection ops: the entity id is a WORLD-BOUND handle ─────────────────────
@@ -1030,6 +1103,34 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Camera bookmark',
   },
+  // Viewport interaction preferences — session domain, ledger-only. The applier
+  // lives in core (store/viewport-preferences.ts, next to gizmo-pivot); numeric
+  // ranges are intentionally NOT enforced here — the applier clamps via
+  // normalizeViewportPreferences so out-of-range input degrades to the nearest
+  // valid value instead of an INVALID_ARGS rejection.
+  { id: 'setViewportPreferences', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        patch: {
+          type: 'object',
+          description: 'Partial viewport-preferences patch; every field optional. Numbers are clamped to their valid range by the applier.',
+          properties: {
+            mouseSensitivity: { type: 'number', description: 'Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05–5).' },
+            invertY: { type: 'boolean', description: 'Reverse vertical mouse look.' },
+            wheelDirection: { type: 'number', enum: [1, -1], description: 'Wheel direction multiplier; 1 is the editor default.' },
+            wheelSpeedScalar: { type: 'number', description: 'Wheel-speed steps per notch while flying (0.1–4).' },
+            flyBoostMultiplier: { type: 'number', description: 'Temporary Shift-held flight multiplier (1–8).' },
+            flySpeed: { type: 'number', description: 'Fly-mode move speed.' },
+            fov: { type: 'number', description: 'Perspective view scale (absolute set).' },
+            projection: { type: 'string', enum: ['perspective', 'orthographic'] },
+          },
+        },
+      },
+      required: ['patch'],
+    },
+    title: 'Set Viewport Preferences',
+  },
   // CB navigation (feat-20260708-cb-nav-session-op-convergence M1):
   // setCBPath/cbGoBack/cbGoForward are session-domain ops (ledger-only, no undo).
   // argsSchema enables AI self-discovery via gateway.listOps() (plan-strategy §8.1 P1).
@@ -1404,6 +1505,35 @@ const builtinOps: ReadonlyArray<{
       required: ['paths'],
     },
     title: 'Request Reimport',
+  },
+  { id: 'validateGameProject', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        requestId: {
+          type: 'string', minLength: 1, maxLength: 128,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+          description: 'Caller-minted correlation id for the accepted/running/terminal project validation run.',
+        },
+        maxBytes: { type: 'number', minimum: 0, description: 'Optional producer validator build-byte budget override.' },
+        maxEntities: { type: 'number', minimum: 0, description: 'Optional producer validator entity budget override.' },
+        retryOfRequestId: {
+          type: 'string', minLength: 1, maxLength: 128,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+          description: 'Optional failed validation run being retried with this new requestId.',
+        },
+      },
+      required: ['requestId'],
+    },
+    title: 'Validate Game Project',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
 ];
 

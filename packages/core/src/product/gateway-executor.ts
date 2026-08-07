@@ -23,7 +23,7 @@ import { RunJournal } from '@forgeax/editor-product';
 import type { ArgsSchema, OpDescriptor } from '../io/catalog';
 import type { CommandOrigin } from '../io/gateway-history';
 import type { EditorOp } from '../types';
-import { awaitAssetWriteCompletion } from '../session/pack-ops';
+import { awaitAssetWriteCompletion } from '../session/authored-asset-write';
 
 export interface GatewayDispatchResult {
   readonly ok: boolean;

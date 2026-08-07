@@ -2,14 +2,16 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const presetPath = resolve(import.meta.dir, '..', 'runtime-vite-preset.ts');
+const presetPath = resolve(import.meta.dir, '../../../../../engine-vite-preset.ts');
 const source = readFileSync(presetPath, 'utf8');
 
-describe('Edit particle importer registration', () => {
-  test('registers the stock particle importer at the build composition root', () => {
+describe('Edit particle Pack registration', () => {
+  test('registers only the native particle cooker at the build composition root', () => {
     expect(source).toContain("from '@forgeax/engine-vfx-compiler'");
-    expect(source).toContain('particleEffectImporter(createStockParticleOperatorRegistry())');
+    expect(source).not.toContain('particleEffectImporter');
+    expect(source).toContain('createParticleEffectNativeCooker(createStockParticleOperatorRegistry())');
     expect(source).toContain('importers: [');
+    expect(source).toContain('cookers: [');
   });
 
   test('keeps the compiler out of Edit runtime source imports', () => {

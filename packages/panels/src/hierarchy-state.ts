@@ -275,7 +275,7 @@ function compareComponentNames(a: string, b: string): number {
 
 const DEFAULT_COLUMNS: HierarchyColumns = {
   type: true,
-  mobility: true,
+  mobility: false,
   id: false,
 };
 

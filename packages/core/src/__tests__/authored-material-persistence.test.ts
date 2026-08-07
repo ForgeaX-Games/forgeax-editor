@@ -32,7 +32,7 @@ import '../index';
 import {
   awaitAuthoredMaterialReady,
   registerPostAssetWriteCatalogSync,
-} from '../session/pack-ops';
+} from '../session/authored-asset-write';
 import { createAuthoredAssetCatalogBarrier } from '../assets/authored-asset-barrier';
 import { setPathResolver } from '../util/path-resolver';
 

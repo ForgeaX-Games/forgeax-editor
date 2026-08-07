@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, AppHost, ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
 import type {
   ActivityRegistration,
   PageController,
@@ -9,6 +9,7 @@ import type {
   PanelTypeRegistration,
   ResourceEditorRegistration,
 } from '@forgeax/interface/core/page-platform';
+import { registerPageDirtyProbe } from '@forgeax/interface/core/page-platform';
 import {
   configureEditorPageNavigation,
   gateway,
@@ -16,14 +17,23 @@ import {
   getSceneFile,
   getSceneList,
   hasPendingDiskSave,
+  isMiStagingDirty,
   onSceneListChange,
+  registerActivePageSaveHandler,
+  subscribeMiStaging,
   type SelectedAsset,
 } from '@forgeax/editor-core';
+import { t } from '@forgeax/editor-core/i18n';
 import {
   DEFAULT_ASSET_EDITOR_DOCK_LAYOUT,
   DEFAULT_EDITOR_DOCK_LAYOUT,
   DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
+  DEFAULT_MI_EDITOR_DOCK_LAYOUT,
 } from './default-dock-layout';
+import {
+  createMaterialInstancePageController,
+  getMiPageController,
+} from './mi-page-controller';
 
 const OWNER = '@forgeax/editor';
 const pageId = (id: string) => `${OWNER}#page/${id}` as PageTypeRegistration['id'];
@@ -35,6 +45,7 @@ const LEVEL_PAGE = pageId('level');
 const ASSET_PAGE = pageId('asset');
 const MESH_PAGE = pageId('mesh');
 const MATERIAL_PAGE = pageId('material');
+const MATERIAL_INSTANCE_PAGE = pageId('material-instance');
 
 // `info` / `checkpoints` / `events` are interface-owned footer chrome that
 // default into the merged bottom EDGE group (see default-dock-layout.ts
@@ -43,9 +54,16 @@ const MATERIAL_PAGE = pageId('material');
 // footer strip — the "only Info shows" bug. Their bodies render via the
 // interface BASE panel components (which override the page runtime for these
 // stable ids), so no editor panelType component is needed.
-const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'checkpoints', 'events', 'ep:assets', 'ep:history', 'ep:capabilities'];
-const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview'];
+//
+// ep:settings is editor CHROME (viewport preferences), not a document panel —
+// it must be a member of every editor page's closed panel domain so the TopBar
+// gear's panel:open never dies on DockRegion's pagePanelIds gate, regardless
+// of which page is active. It is deliberately absent from every default dock
+// layout: the panel opens on demand (gear / Window menu), never on boot.
+const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'checkpoints', 'events', 'ep:assets', 'ep:history', 'ep:capabilities', 'ep:settings'];
+const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview', 'ep:settings'];
 const MESH_PANELS = [...ASSET_PANELS, 'ep:mesh-slots'];
+const MATERIAL_INSTANCE_PANELS = ['ep:mi-preview', 'ep:mi-properties', 'ep:settings'];
 
 function placements(ids: readonly string[]): PagePanelPlacement[] {
   return ids.map((id) => ({ id, panelTypeId: panelId(id.replace(/^ep:/u, '')) }));
@@ -60,29 +78,78 @@ function currentSceneName(): string | undefined {
   return getSceneList().find((entry) => entry.id === id)?.name ?? id;
 }
 
-// Late-bound host for menu actions that dispatch a command (set in setup; the
-// editor extension is a single-realm singleton, like editor-core's own state).
-// Only "reveal" needs it; copy/reference are host-free.
+// Late-bound host for menu actions that dispatch a command / emit a bus event
+// (set in setup; the editor extension is a single-realm singleton, like
+// editor-core's own state). "locate-in-cb" and "reference" need it; copy is
+// host-free.
 let hostRef: AppHost | undefined;
 
-// Menu groups (order = divider layout): 'file' = path actions (copy / reveal);
-// 'actions' = the LAST group, holding save + reference-to-chat together (per the
-// interaction spec). copy/reveal need no host; reveal fires the shared
-// `file.reveal` command; reference goes through the public app.chat command.
-// `| undefined` fields keep exactOptionalPropertyTypes callers simple.
+// Menu groups (order = divider layout): 'file' = path actions (copy path +
+// locate in content browser); 'actions' = the LAST group, holding save +
+// reference-to-chat together (per the interaction spec). copy needs no host;
+// locate emits the `content-browser:reveal` bus event; reference goes through
+// the public app.chat command. `| undefined` fields keep
+// exactOptionalPropertyTypes callers simple.
 
 function pathMenuItems(path: string | undefined): PageMenuItem[] {
   if (!path) return [];
   return [
     {
-      id: 'copy-path', label: '复制路径', icon: 'copy', group: 'file',
+      id: 'copy-path', label: t('editor.pageMenu.copyPath'), icon: 'copy', group: 'file',
       run: () => { void navigator.clipboard?.writeText(path).catch(() => {}); },
     },
-    {
-      id: 'reveal', label: '在文件资源管理器中显示', icon: 'folder-search', group: 'file',
-      run: () => { void hostRef?.commands.execute('file.reveal', { path }).catch(() => {}); },
-    },
   ];
+}
+
+// "Locate in Content Browser" — pure mechanism communication: this file NEVER
+// imports the content-browser package. It (1) brings the editor Level page + its
+// Assets panel up via interface commands, then (2) emits the neutral
+// `content-browser:reveal` bus event. A mounted Content Browser (a global
+// service) resolves the target and performs the navigation/selection through its
+// own gateway door. Decoupled both ways.
+function revealTargetFor(opts: {
+  guid?: string | null | undefined;
+  path?: string | undefined;
+  kind?: string | undefined;
+  name?: string | undefined;
+}): ContentBrowserRevealTarget {
+  if (opts.guid) {
+    return {
+      guid: opts.guid,
+      ...(opts.path ? { packPath: opts.path } : {}),
+      ...(opts.kind ? { assetKind: opts.kind } : {}),
+      ...(opts.name ? { name: opts.name } : {}),
+    };
+  }
+  return opts.path ? { path: opts.path, pathKind: 'file' } : {};
+}
+
+async function revealInContentBrowser(target: ContentBrowserRevealTarget): Promise<void> {
+  const host = hostRef;
+  if (!host || (!target.guid && !target.path)) return;
+  // 1) The Content Browser (ep:assets) lives in the editor Level page layout —
+  //    focus it so the panel mounts + subscribes before we hand off the target.
+  const snap = host.pages.getSnapshot();
+  const level = snap.instances.find((p) => p.typeId === LEVEL_PAGE);
+  const onLevel = !!level && snap.activeKey === level.encodedKey;
+  try {
+    if (level) { if (!onLevel) await host.pages.focus(level.encodedKey); }
+    else await host.pages.open({ typeId: LEVEL_PAGE });
+  } catch { /* noop */ }
+  // 2) Reveal the Assets panel wherever it lives (grid tab / edge drawer).
+  try { await host.commands.execute('app.panel.reveal', { id: 'ep:assets' }); } catch { /* noop */ }
+  // 3) Hand the locate instruction to the Content Browser over the neutral bus.
+  const emit = () => host.bus.emit('content-browser:reveal', { target });
+  if (onLevel) emit();
+  else requestAnimationFrame(() => requestAnimationFrame(emit));
+}
+
+function locateMenuItems(target: ContentBrowserRevealTarget): PageMenuItem[] {
+  if (!target.guid && !target.path) return [];
+  return [{
+    id: 'locate-in-cb', label: t('editor.pageMenu.locateInContentBrowser'), icon: 'crosshair', group: 'file',
+    run: () => { void revealInContentBrowser(target); },
+  }];
 }
 
 function referenceMenuItem(opts: {
@@ -94,7 +161,7 @@ function referenceMenuItem(opts: {
   if (!opts.guid) return [];
   const guid = opts.guid;
   return [{
-    id: 'reference', label: '引用到对话流', icon: 'at-sign', group: 'actions',
+    id: 'reference', label: t('editor.pageMenu.referenceToChat'), icon: 'at-sign', group: 'actions',
     run: () => {
       void hostRef?.commands.execute('app.chat.referenceAsset', {
         guid,
@@ -112,7 +179,7 @@ function referenceMenuItem(opts: {
 // reference-to-chat.
 function saveSceneItem(): PageMenuItem {
   return {
-    id: 'save', label: '保存', icon: 'save', group: 'actions',
+    id: 'save', label: t('editor.pageMenu.save'), icon: 'save', group: 'actions',
     disabled: !hasPendingDiskSave(),
     run: () => {
       try { gateway.dispatch({ kind: 'saveDocToDisk', requestId: crypto.randomUUID() }, 'human'); } catch { /* gateway locked */ }
@@ -135,6 +202,7 @@ const levelController = (): PageController => ({
     const path = getActiveScenePackPath() ?? undefined;
     return [
       ...pathMenuItems(path),
+      ...locateMenuItems(revealTargetFor({ guid: entry?.guid ?? null, path, kind: 'scene', name: entry?.name ?? id ?? undefined })),
       saveSceneItem(),
       ...referenceMenuItem({ guid: entry?.guid ?? null, name: entry?.name ?? id ?? undefined, kind: 'scene', path }),
     ];
@@ -151,6 +219,12 @@ const fileController: PageTypeRegistration['createController'] = (context) => {
     dispose: () => undefined,
     getContextMenuItems: () => [
       ...pathMenuItems(path),
+      ...locateMenuItems(revealTargetFor({
+        guid: resource?.canonicalId ?? null,
+        path,
+        kind: resource?.kind,
+        name: path ? path.split('/').at(-1) : undefined,
+      })),
       ...referenceMenuItem({
         guid: resource?.canonicalId ?? null,
         name: path ? path.split('/').at(-1) : undefined,
@@ -184,6 +258,7 @@ function page(
 
 function pageForAsset(asset: SelectedAsset): PageTypeRegistration['id'] {
   if (asset.kind === 'mesh') return MESH_PAGE;
+  if (asset.kind === 'material-instance') return MATERIAL_INSTANCE_PAGE;
   if (asset.kind === 'material') return MATERIAL_PAGE;
   return ASSET_PAGE;
 }
@@ -191,7 +266,7 @@ function pageForAsset(asset: SelectedAsset): PageTypeRegistration['id'] {
 export function createEditorPageExtension(
   renderPanel: (id: string) => ReactNode,
 ): AppExtension {
-  const allPanelIds = [...new Set([...LEVEL_PANELS, ...MESH_PANELS])];
+  const allPanelIds = [...new Set([...LEVEL_PANELS, ...MESH_PANELS, ...MATERIAL_INSTANCE_PANELS])];
   return {
     id: OWNER,
     version: '2.0.0',
@@ -206,6 +281,16 @@ export function createEditorPageExtension(
         page(ASSET_PAGE, 'Asset', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
         page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS, fileController),
         page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
+        {
+          ...page(
+            MATERIAL_INSTANCE_PAGE,
+            'Material Instance',
+            'resource',
+            DEFAULT_MI_EDITOR_DOCK_LAYOUT,
+            MATERIAL_INSTANCE_PANELS,
+          ),
+          createController: createMaterialInstancePageController,
+        },
       ],
       activities: [{
         id: activityId('editor'),
@@ -217,6 +302,13 @@ export function createEditorPageExtension(
       resourceEditors: [
         { id: editorId('mesh'), selector: { kinds: ['mesh'] }, pageTypeId: MESH_PAGE, priority: 'default', sourceLayer: 'builtin' },
         { id: editorId('material'), selector: { kinds: ['material'] }, pageTypeId: MATERIAL_PAGE, priority: 'default', sourceLayer: 'builtin' },
+        {
+          id: editorId('material-instance'),
+          selector: { kinds: ['material-instance'] },
+          pageTypeId: MATERIAL_INSTANCE_PAGE,
+          priority: 'default',
+          sourceLayer: 'builtin',
+        },
         {
           id: editorId('asset'),
           selector: {
@@ -252,10 +344,30 @@ export function createEditorPageExtension(
         getActiveAsset: activeAsset,
         subscribe: ctx.host.pages.subscribe,
       });
-      // The Level tab's live title comes from its page controller (levelController
-      // → editor-core scene manifest), so opening it is all setup needs here.
+      const resetDirtyProbe = registerPageDirtyProbe({
+        isDirty: (page) => {
+          if (page.typeId !== MATERIAL_INSTANCE_PAGE) return false;
+          const guid = page.resource?.canonicalId;
+          return typeof guid === 'string' && isMiStagingDirty(guid);
+        },
+        subscribe: subscribeMiStaging,
+      });
+      const resetActiveSave = registerActivePageSaveHandler(() => {
+        const snapshot = ctx.host.pages.getSnapshot();
+        if (!snapshot.activeKey) return false;
+        const instance = snapshot.instances.find((candidate) => candidate.encodedKey === snapshot.activeKey);
+        if (!instance || instance.typeId !== MATERIAL_INSTANCE_PAGE) return false;
+        const controller = getMiPageController(snapshot.activeKey);
+        if (!controller?.save) return false;
+        void controller.save();
+        return true;
+      });
       void ctx.host.pages.open({ typeId: LEVEL_PAGE });
-      return resetNavigation;
+      return () => {
+        resetActiveSave();
+        resetDirtyProbe();
+        resetNavigation();
+      };
     },
   };
 }

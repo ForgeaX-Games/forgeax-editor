@@ -27,6 +27,10 @@ import {
   TooltipTrigger,
 } from '@forgeax/editor-ui/tooltip';
 import {
+  FLY_SPEED_MAX,
+  FLY_SPEED_MIN,
+  FOV_MAX,
+  FOV_MIN,
   gateway,
   getGizmoMode,
   getGizmoSpace,
@@ -41,6 +45,8 @@ import {
   useGizmoSpace,
   useSceneFile,
   useSceneList,
+  useViewportPreferences,
+  type ViewportPreferencesPatch,
 } from '@forgeax/editor-core';
 import { getLocale, useTranslation, type Locale } from '@forgeax/editor-core/i18n';
 import {
@@ -111,6 +117,12 @@ interface LocalizedText {
 
 function L(zh: string, en: string): LocalizedText {
   return { zh, en };
+}
+
+/** Viewport-preference edits go through the one gateway door (session op) so
+ *  the toolbar menu, the Settings dock panel and AI dispatch the SAME op. */
+function patchViewportPreferences(patch: ViewportPreferencesPatch): void {
+  gateway.dispatch({ kind: 'setViewportPreferences', patch }, 'human');
 }
 
 function pickText(text: LocalizedText, locale: Locale): string {
@@ -464,11 +476,13 @@ function PopItem({
 function PopToggle({
   label,
   checked = false,
-  disabled = true,
+  disabled = false,
+  onChange,
 }: {
   label: string;
   checked?: boolean;
   disabled?: boolean;
+  onChange?: (next: boolean) => void;
 }): ReactNode {
   return (
     <button
@@ -477,6 +491,7 @@ function PopToggle({
       data-checked={checked ? 'true' : 'false'}
       disabled={disabled}
       aria-disabled={disabled ? 'true' : undefined}
+      onClick={disabled || !onChange ? undefined : () => onChange(!checked)}
     >
       <span className="fx-vp-pop-label">{label}</span>
       <span className="fx-vp-switch" aria-hidden="true" />
@@ -487,15 +502,37 @@ function PopToggle({
 function PopRange({
   label,
   value,
+  display,
+  min = 0,
+  max = 100,
+  step = 1,
+  disabled = false,
+  onChange,
 }: {
   label: string;
-  value: string;
+  value: number;
+  /** Formatted value shown at the row end; defaults to the raw number. */
+  display?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  onChange?: (next: number) => void;
 }): ReactNode {
   return (
-    <div className="fx-vp-pop-range" aria-disabled="true">
+    <div className="fx-vp-pop-range" aria-disabled={disabled ? 'true' : undefined}>
       <span className="fx-vp-pop-label">{label}</span>
-      <input type="range" min={0} max={100} value={60} disabled readOnly />
-      <span className="fx-vp-pop-value">{value}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        readOnly={!onChange}
+        onChange={onChange ? (e) => onChange(Number(e.target.value)) : undefined}
+      />
+      <span className="fx-vp-pop-value">{display ?? String(value)}</span>
     </div>
   );
 }
@@ -648,13 +685,13 @@ function SnapMenuControl(): ReactNode {
         <Magnet size={15} />
       </ToolMenuTrigger>
       <PopPanel title={pickText(L('吸附', 'Snapping'), locale)}>
-        <PopToggle label={pickText(L('网格吸附', 'Grid snap'), locale)} />
-        <PopToggle label={pickText(L('旋转吸附', 'Rotation snap'), locale)} />
-        <PopToggle label={pickText(L('缩放吸附', 'Scale snap'), locale)} />
-        <PopToggle label={pickText(L('表面吸附', 'Surface snap'), locale)} />
+        <PopToggle label={pickText(L('网格吸附', 'Grid snap'), locale)} disabled />
+        <PopToggle label={pickText(L('旋转吸附', 'Rotation snap'), locale)} disabled />
+        <PopToggle label={pickText(L('缩放吸附', 'Scale snap'), locale)} disabled />
+        <PopToggle label={pickText(L('表面吸附', 'Surface snap'), locale)} disabled />
         <PopSeparator />
-        <PopRange label={pickText(L('网格步长', 'Grid step'), locale)} value="10 cm" />
-        <PopRange label={pickText(L('角度步长', 'Angle step'), locale)} value="15°" />
+        <PopRange label={pickText(L('网格步长', 'Grid step'), locale)} value={10} display="10 cm" disabled />
+        <PopRange label={pickText(L('角度步长', 'Angle step'), locale)} value={15} display="15°" disabled />
       </PopPanel>
     </DropdownMenu>
   );
@@ -663,20 +700,43 @@ function SnapMenuControl(): ReactNode {
 function CameraMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
+  const prefs = useViewportPreferences();
+  const perspective = prefs.projection === 'perspective';
 
   return (
     <DropdownMenu>
-      <ToolMenuTrigger title={pickText(L('透视', 'Perspective'), locale)}>
+      <ToolMenuTrigger title={perspective ? pickText(L('透视', 'Perspective'), locale) : pickText(L('正交', 'Orthographic'), locale)}>
         <Camera size={15} />
       </ToolMenuTrigger>
       <PopPanel title={pickText(L('相机 · 视角与镜头', 'Camera · view & lens'), locale)}>
-        <PopItem icon={<Eye size={14} />} label={pickText(L('透视', 'Perspective'), locale)} desc={pickText(L('3D 人眼视角', '3D eye view'), locale)} active disabled />
+        <PopItem
+          icon={<Eye size={14} />}
+          label={pickText(L('透视', 'Perspective'), locale)}
+          desc={pickText(L('3D 人眼视角', '3D eye view'), locale)}
+          active={perspective}
+          onClick={() => gateway.dispatch({ kind: 'cameraSetProjection', projection: 'perspective' }, 'human')}
+        />
+        <PopItem
+          icon={<Axis3d size={14} />}
+          label={pickText(L('正交', 'Orthographic'), locale)}
+          desc={pickText(L('平行投影 · 无透视形变', 'Parallel projection'), locale)}
+          active={!perspective}
+          onClick={() => gateway.dispatch({ kind: 'cameraSetProjection', projection: 'orthographic' }, 'human')}
+        />
         <PopItem icon={<Axis3d size={14} />} label={pickText(L('顶视', 'Top'), locale)} desc={pickText(L('正交 · 从上往下', 'Ortho · top-down'), locale)} disabled />
         <PopItem icon={<Box size={14} />} label={pickText(L('前视', 'Front'), locale)} desc={pickText(L('正交 · 从前', 'Ortho · front'), locale)} disabled />
         <PopItem icon={<Box size={14} />} label={pickText(L('侧视', 'Side'), locale)} desc={pickText(L('正交 · 从侧', 'Ortho · side'), locale)} disabled />
         <PopSeparator />
-        <PopRange label={pickText(L('视野 FOV', 'FOV'), locale)} value="90°" />
-        <PopRange label={pickText(L('相机速度', 'Speed'), locale)} value="4" />
+        <PopRange
+          label={pickText(L('视野 FOV', 'FOV'), locale)}
+          value={prefs.fov}
+          min={FOV_MIN}
+          max={FOV_MAX}
+          step={Math.PI / 180}
+          display={`${Math.round(prefs.fov * 180 / Math.PI)}°`}
+          disabled={!perspective}
+          onChange={(fov) => patchViewportPreferences({ fov })}
+        />
       </PopPanel>
     </DropdownMenu>
   );
@@ -748,6 +808,7 @@ function LayoutMenuControl(): ReactNode {
 function SettingsMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
+  const prefs = useViewportPreferences();
 
   return (
     <DropdownMenu>
@@ -755,9 +816,53 @@ function SettingsMenuControl(): ReactNode {
         <SlidersHorizontal size={15} />
       </ToolMenuTrigger>
       <PopPanel title={pickText(L('视口设置', 'Viewport settings'), locale)} align="end">
-        <PopRange label={pickText(L('鼠标灵敏度', 'Sensitivity'), locale)} value="5" />
-        <PopRange label={pickText(L('滚轮速度', 'Scroll'), locale)} value="6" />
-        <PopRange label={pickText(L('音量', 'Volume'), locale)} value="70%" />
+        <PopRange
+          label={pickText(L('鼠标灵敏度', 'Sensitivity'), locale)}
+          value={prefs.mouseSensitivity}
+          min={0.05}
+          max={5}
+          step={0.05}
+          display={prefs.mouseSensitivity.toFixed(2)}
+          onChange={(mouseSensitivity) => patchViewportPreferences({ mouseSensitivity })}
+        />
+        <PopRange
+          label={pickText(L('滚轮速度', 'Scroll speed'), locale)}
+          value={prefs.wheelSpeedScalar}
+          min={0.1}
+          max={4}
+          step={0.1}
+          display={prefs.wheelSpeedScalar.toFixed(1)}
+          onChange={(wheelSpeedScalar) => patchViewportPreferences({ wheelSpeedScalar })}
+        />
+        <PopRange
+          label={pickText(L('飞行速度', 'Fly speed'), locale)}
+          value={prefs.flySpeed}
+          min={FLY_SPEED_MIN}
+          max={FLY_SPEED_MAX}
+          step={0.5}
+          display={prefs.flySpeed.toFixed(1)}
+          onChange={(flySpeed) => patchViewportPreferences({ flySpeed })}
+        />
+        <PopRange
+          label={pickText(L('加速倍率', 'Boost multiplier'), locale)}
+          value={prefs.flyBoostMultiplier}
+          min={1}
+          max={8}
+          step={0.5}
+          display={`×${prefs.flyBoostMultiplier.toFixed(1)}`}
+          onChange={(flyBoostMultiplier) => patchViewportPreferences({ flyBoostMultiplier })}
+        />
+        <PopSeparator />
+        <PopToggle
+          label={pickText(L('反转 Y 轴', 'Invert Y'), locale)}
+          checked={prefs.invertY}
+          onChange={(invertY) => patchViewportPreferences({ invertY })}
+        />
+        <PopToggle
+          label={pickText(L('反转滚轮方向', 'Invert wheel'), locale)}
+          checked={prefs.wheelDirection === -1}
+          onChange={(inverted) => patchViewportPreferences({ wheelDirection: inverted ? -1 : 1 })}
+        />
       </PopPanel>
     </DropdownMenu>
   );

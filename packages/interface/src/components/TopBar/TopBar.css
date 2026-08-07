@@ -10,7 +10,7 @@
   position: relative;
   min-width: 0;
 }
-.tb-left { display: flex; align-items: center; gap: 0; min-width: 0; max-width: 100%; overflow: hidden; }
+.tb-left { display: flex; align-items: center; gap: 0; min-width: 0; max-width: 100%; overflow: hidden; height: 100%; }
 .tb-session-switcher { flex: 0 1 140px; min-width: 0; max-width: 100%; overflow: hidden; }
 .tb-dots-cluster { display: flex; align-items: center; gap: 12px; padding: 0 24px; height: 100%; flex-shrink: 0; }
 .tb-left .title {
@@ -517,6 +517,22 @@
 }
 .tb-modal-input:focus, .tb-modal-textarea:focus { border-color: var(--primary); }
 .tb-modal-textarea { resize: vertical; }
+.tb-modal-select {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  outline: none;
+  font-family: inherit;
+}
+.tb-modal-select:focus { border-color: var(--primary); }
+.tb-modal-help {
+  font-size: 11px;
+  color: var(--text-muted, rgba(255,255,255,0.4));
+  padding: 2px 0;
+}
 .tb-modal-error {
   font-size: 11px;
   color: var(--accent-error);

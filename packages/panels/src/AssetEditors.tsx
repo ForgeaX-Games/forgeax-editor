@@ -4,7 +4,7 @@
 // Inspector. The active editor document is their shared subject SSOT, while the
 // document scope decides which panels may coexist (for example mesh-slots only
 // exists on a mesh page and can never leak into the Level page).
-import { Suspense, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   ensureAssetCataloged,
   gateway,
@@ -14,13 +14,15 @@ import {
 import type { SelectedAsset } from '@forgeax/editor-core';
 import { prompt as promptDialog } from '@forgeax/editor-ui';
 import { PREVIEW_COMPONENTS } from './asset-inspector';
+import { getMaterialInstancePreview } from './mi-preview-slot';
 import './inspector.css';
+import './mi-preview.css';
 
 const KIND_BADGE: Record<string, string> = {
   mesh: '◫', texture: '🖼', 'cube-texture': '🧊g', sampler: '⚙',
-  material: '🎨', scene: '🗺', shader: '📜', skeleton: '🦴',
+  material: '🎨', 'material-instance': '🎛', scene: '🗺', shader: '📜', skeleton: '🦴',
   skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱',
+  'render-pipeline': '🔧', tileset: '🧱', 'particle-effect': '✨',
 };
 
 function useDocumentAsset(): SelectedAsset | null {
@@ -138,6 +140,39 @@ interface MeshSlot {
   vertexCount?: unknown;
   topology?: unknown;
 }
+
+/** Material Instance 3D preview panel (M5 — viewport injected by edit-runtime/host). */
+export function MaterialInstancePreviewPanel(): ReactElement {
+  const asset = useDocumentAsset();
+  const Preview = getMaterialInstancePreview();
+  return (
+    <div className="panel" data-testid="panel-mi-preview" data-subject-id={asset?.guid}>
+      {asset?.kind !== 'material-instance' ? <EmptyAssetPage /> : Preview ? (
+        <Preview />
+      ) : (
+        <div className="field muted">
+          Material Instance preview viewport is not registered by the host.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Material Instance properties panel (M3: MaterialInstanceEditor). */
+export function MaterialInstancePropertiesPanel(): ReactElement {
+  const asset = useDocumentAsset();
+  return (
+    <div className="panel" data-testid="panel-mi-properties" data-subject-id={asset?.guid}>
+      {asset?.kind !== 'material-instance' ? <EmptyAssetPage /> : (
+        <Suspense fallback={<div className="field muted">Loading properties…</div>}>
+          <MaterialInstanceEditorLazy />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
+const MaterialInstanceEditorLazy = lazy(() => import('./asset-inspector/MaterialInstanceEditor'));
 
 /** Mesh-only submesh/material-slot projection. The rows are derived from the
  * engine mesh payload; this panel does not invent a second material-binding

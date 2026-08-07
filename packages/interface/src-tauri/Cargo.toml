@@ -1,6 +1,6 @@
 [package]
 name = "forgeax-studio-desktop"
-version = "0.3.22"
+version = "0.3.23"
 description = "ForgeaX Studio desktop shell (Tauri 2)"
 edition = "2021"
 rust-version = "1.77"

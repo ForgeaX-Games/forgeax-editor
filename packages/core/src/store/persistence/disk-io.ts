@@ -53,6 +53,7 @@ import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-fa
 import type { ImportedPreviewSessionState } from '../../io/scene-authoring-session';
 import { normalizeAnimationPlayerSceneAsset } from '../../scene/animation-slot-sync';
 import { normalizeMaterialPackEntries } from '../../io/material-pack-refs';
+import { normalizeMaterialInstancePackEntries } from '../../assets/material-instance-schema';
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -446,6 +447,11 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       console.warn('[editor-core][diag] worldToPack: material refs normalization refused save:', materialRefs.error);
       return null;
     }
+    const miRefs = normalizeMaterialInstancePackEntries(packObj);
+    if (!miRefs.ok) {
+      console.warn('[editor-core][diag] worldToPack: material-instance refs normalization refused save:', miRefs.error);
+      return null;
+    }
     // The engine collector emits its historical v1 shell. Upgrade only at the
     // editor-owned persistence boundary; the engine runtime remains strict on
     // Pack v2 and does not need a legacy fallback.
@@ -702,6 +708,11 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
               console.error('[editor-core][diag] doLoadDocFromDisk: unsafe material migration refused:', materialRefs.error);
               return false;
             }
+            const miRefs = normalizeMaterialInstancePackEntries(parsed as unknown as Record<string, unknown>);
+            if (!miRefs.ok) {
+              console.error('[editor-core][diag] doLoadDocFromDisk: unsafe material-instance migration refused:', miRefs.error);
+              return false;
+            }
             if (materialRefs.changed) {
               // Each entry is read-modify-written inside the asset gate. Do not
               // replace the whole stale load snapshot: a concurrent create
@@ -716,11 +727,28 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
               console.info(
                 `[editor-core][diag] doLoadDocFromDisk: persisted material refs migration for ${materialRefs.changedEntries.length} asset(s)`,
               );
+            }
+            if (miRefs.changed) {
+              for (const entry of miRefs.changedEntries) {
+                const migrated = await assetIO.writePackEntry(p, entry as never);
+                if (!migrated) {
+                  console.error('[editor-core][diag] doLoadDocFromDisk: material-instance migration could not be persisted');
+                  return false;
+                }
+              }
+              console.info(
+                `[editor-core][diag] doLoadDocFromDisk: persisted material-instance refs migration for ${miRefs.changedEntries.length} asset(s)`,
+              );
+            }
+            if (materialRefs.changed || miRefs.changed) {
               // A refresh can arrive with the old scene/material payloads
               // already ready in the registry. Invalidate the changed entries
               // and the scene root before loadByGuid, otherwise its ready
               // fast-path would bypass the repaired pack bytes.
               for (const entry of materialRefs.changedEntries) {
+                if (typeof entry.guid === 'string') reg?.invalidate(entry.guid);
+              }
+              for (const entry of miRefs.changedEntries) {
                 if (typeof entry.guid === 'string') reg?.invalidate(entry.guid);
               }
               const migratedSceneGuid = parsed.assets.find((asset) => asset.kind === 'scene')?.guid;

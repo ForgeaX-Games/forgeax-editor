@@ -78,6 +78,7 @@ import {
   TooltipTrigger,
 } from '../ui/tooltip';
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover';
+import { iconForDockPanel } from '../../lib/panel-tab-icons';
 import { useHost } from '../../core/app-shell';
 import {
   getContextExpressionKeys,
@@ -733,15 +734,18 @@ function PanelHeaderBar({ panelId, panel }: { panelId: string; panel: PanelDescr
         const showOverflow = location === 'header/right' && overflow.length > 0;
         return (
           <div key={location} className="fx-panel-header-zone" data-zone={location.slice('header/'.length)}>
-            {location === 'header/left' && panel.header?.showTitle !== false && (
+            {location === 'header/left' && panel.header?.showTitle !== false && (() => {
+              const PanelIcon = iconForDockPanel(panelId);
+              return (
               <div className="fx-panel-title-block" ref={titleRef}>
-                {panel.icon && <span className="fx-panel-icon" aria-hidden="true">{panel.icon}</span>}
+                <PanelIcon className="fx-panel-icon" size={14} aria-hidden="true" />
                 <div className="fx-panel-title-wrap">
                   <div className="fx-panel-title" title={panel.title}>{panel.title}</div>
                   {panel.header?.subtitle && <div className="fx-panel-subtitle">{panel.header.subtitle}</div>}
                 </div>
               </div>
-            )}
+              );
+            })()}
             {(zoneActions.length > 0 || showOverflow) && (
               <div className="fx-panel-toolbar" data-location={location}>
                 {zoneActions.map((action) => (

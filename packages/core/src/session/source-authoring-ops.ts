@@ -14,7 +14,7 @@ import {
 } from '../assets/source-mutation-preflight';
 import { assetIO } from '../io/asset-io-facade';
 import { registerSessionApplier, registerTransientApplier, type SessionApplier, type SessionApplierCtx } from '../io/appliers';
-import { awaitPostAssetWriteCatalogSync } from './pack-ops';
+import { awaitPostAssetWriteCatalogSync } from './authored-asset-write';
 import type { CommandError, EditorOp, SourceAuthoringPhase, SourceAuthoringSubjectRef } from '../types';
 
 export interface SourceAuthoringRuntime {

@@ -20,8 +20,8 @@ import {
 export type { GameplayCaptureArtifact, GameplayCaptureProvenance, GameplayInput } from './gameplay-contract';
 type GameplayProducerResult = { ok: true; state?: 'running' | 'stopped'; data?: unknown } | { ok: false; error: unknown };
 export type GameplayCaptureSurface = {
-  canvas: HTMLCanvasElement;
-  captureImage?: () => string | Promise<string>;
+  /** Capture the composed game viewport, including its viewport-local DOM HUD. */
+  captureImage: () => Promise<string>;
   getProvenance: () => GameplayCaptureProvenance | null;
 };
 export type GameplayCaptureGateway = {
@@ -51,7 +51,7 @@ export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): G
       if (!provenance) return { ok: false, error: { code: 'renderer-generation-unavailable', hint: 'live renderer did not publish a numeric generation' } };
       let dataUrl: string;
       try {
-        dataUrl = await (surface.captureImage?.() ?? surface.canvas.toDataURL('image/png'));
+        dataUrl = await surface.captureImage();
       } catch (error) {
         return { ok: false, error: { code: 'capture-failed', hint: error instanceof Error ? error.message : String(error) } };
       }

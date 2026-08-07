@@ -30,6 +30,7 @@
 // When #1295 ships this whole module can be replaced by the native `pinned`
 // flag on EdgeGroupOptions.
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview';
+import { FOOTER_PANEL_ID_LIST } from './builtinWorkbenches';
 
 const OPEN_CLASS = 'fx-edge-drawer-open';
 /** Toggled to (re)start the wipe-in animation — on first open AND on same-strip tab switch. */
@@ -328,10 +329,24 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   // state onto the footer strip so the active-tab highlight (dv-active-tab) only
   // shows WHILE the drawer is open — otherwise the group's always-present active
   // panel would paint a persistent highlight in the footer with no click.
+  // The relocated footer strip is OUTSIDE its group element, so the
+  // `dv-active-group` focus class dockview toggles never reaches it. Mirror it
+  // as `fx-bottom-edge-focused` so the lime focus accent (::before) lights ONLY
+  // while the bottom drawer is BOTH open AND focused — not merely open (an open
+  // but unfocused drawer keeps its selected tab, minus the accent bar).
+  const syncBottomFocusMarker = (): void => {
+    if (!bottomStripEl) return;
+    const focused = !!openGroup
+      && edgeOf(openGroup) === 'bottom'
+      && openGroup.element.classList.contains('dv-active-group');
+    bottomStripEl.classList.toggle('fx-bottom-edge-focused', focused);
+  };
+
   const syncBottomOpenMarker = (): void => {
     if (!bottomStripEl) return;
     const isBottomOpen = !!openGroup && edgeOf(openGroup) === 'bottom';
     bottomStripEl.classList.toggle('fx-bottom-edge-open', isBottomOpen);
+    syncBottomFocusMarker();
   };
 
   // Hard close — dispose / switching to another edge group.
@@ -638,6 +653,67 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     } catch { /* dockview internals moved — empty band is cosmetic */ }
   };
 
+  // ── Global footer-chrome owner ───────────────────────────────────────────
+  // The footer panels (Info / Checkpoints / Events) are interface-level chrome
+  // that must exist under EVERY layout — every workbench AND every Page — not be
+  // re-seeded into each layout's JSON. This reconciler is that single owner:
+  // installEdgeDrawer runs once per DockShell region and persists across every
+  // workbench / Page switch, so after each layout change we ensure any missing
+  // footer panel is (re)added into the bottom edge group. Panels are inserted
+  // straight into the edge group (position.referenceGroup) so they never detour
+  // through the grid.
+  //
+  // `ensuringFooter` does double duty: reentrancy guard AND a "batch in progress"
+  // flag the layout/panel event handlers below check to STAY QUIET. Adding a panel
+  // (and the moveTo fallback) each fire onDidAddPanel / onDidActivePanelChange /
+  // onDidLayoutChange, so without suppression every insert would re-run relocate +
+  // wirePinButtons and each new panel would momentarily steal the active tab — the
+  // "close button flashes, tabs randomly focus" churn seen on page switch. Instead
+  // we do all inserts silently, restore the pre-existing active panel so the footer
+  // never steals focus from the page content, and let the SINGLE post-ensure
+  // reconcile (in the caller sequence) relocate + wire the strip exactly once.
+  let ensuringFooter = false;
+  const ensureFooterPanels = (): void => {
+    if (ensuringFooter) return;
+    const bottom = edgeGroupAt('bottom');
+    if (!bottom) return; // ensureEdgeSlots creates it; a later tick retries
+    // Steady state (footer already complete): do nothing — onDidLayoutChange fires
+    // on every resize/drag, so a no-op fast-path keeps those churn-free.
+    if (FOOTER_PANEL_ID_LIST.every((id) => api.getPanel(id))) return;
+    ensuringFooter = true;
+    // Preserve whatever the page had focused so a freshly-added footer tab (an
+    // empty group's first panel is force-active; moveTo also activates) can't grab
+    // the active group.
+    const prevActive = api.activePanel;
+    try {
+      FOOTER_PANEL_ID_LIST.forEach((id, index) => {
+        // Only ADD a fully-absent footer panel — never relocate one the user has
+        // dragged elsewhere (respecting a user who moved Info into the grid).
+        if (api.getPanel(id)) return;
+        try {
+          api.addPanel({
+            id,
+            component: id,
+            title: id,
+            position: { referenceGroup: bottom, direction: 'within', index },
+            inactive: true,
+          });
+          // Guarantee it landed in the bottom edge group: referenceGroup targeting
+          // can fall back to a fresh grid group on some dockview builds. Moving it
+          // in the SAME tick (before paint) keeps the add flash-free. moveTo-into-
+          // edge is the proven path (see willDropSub).
+          const panel = api.getPanel(id);
+          if (panel && panel.group !== bottom) {
+            try { panel.api.moveTo({ group: bottom, position: 'center' }); } catch { /* noop */ }
+          }
+        } catch { /* component not registered in this host — skip */ }
+      });
+      try { prevActive?.api.setActive(); } catch { /* prevActive was closed — noop */ }
+    } finally {
+      ensuringFooter = false;
+    }
+  };
+
   // Normalize to collapsed on install. In our model an edge group is ALWAYS
   // collapsed (a narrow strip); "expansion" is the fixed drawer overlay, never a
   // splitview resize. A previously-persisted expanded state (collapsed:false)
@@ -665,6 +741,7 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   };
 
   ensureEdgeSlots();
+  ensureFooterPanels();
   normalize();
   rebindCollapseGuards();
   relocateBottomStrip();
@@ -745,9 +822,14 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   };
   window.addEventListener('forgeax:edge-drawer', onEdgeDrawerCmd);
   const layoutSub = api.onDidLayoutChange(() => {
+    // Silent while ensureFooterPanels is batching — its addPanel/moveTo calls fire
+    // this; the caller does the single reconcile once the batch completes.
+    if (ensuringFooter) return;
     reposition();
     // fromJSON / reset may drop edge slots — re-create empty ones for drop.
     ensureEdgeSlots();
+    // …then re-assert the global footer chrome for the new layout.
+    ensureFooterPanels();
     normalize();
     rebindCollapseGuards();
     // Reset/fromJSON disposes+recreates the bottom group → re-relocate its strip.
@@ -758,7 +840,7 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   });
   // Panel add/remove is the precise moment an edge can become empty / non-empty;
   // layout-change alone can miss it depending on dockview's event ordering.
-  const addPanelSub = api.onDidAddPanel(() => { relocateBottomStrip(); wirePinButtons(); syncEmptyEdges(); });
+  const addPanelSub = api.onDidAddPanel(() => { if (ensuringFooter) return; relocateBottomStrip(); wirePinButtons(); syncEmptyEdges(); });
   const remPanelSub = api.onDidRemovePanel(() => { syncEmptyEdges(); });
   // fromJSON hydration fires ONLY `onDidLayoutFromJSON` — NOT `onDidLayoutChange`
   // (a gridview AsapEvent that ignores edge groups, which live in the shell
@@ -768,6 +850,7 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   // the "shows only after clicking dockview" bug. Reconcile here explicitly.
   const fromJsonSub = api.onDidLayoutFromJSON(() => {
     ensureEdgeSlots();
+    ensureFooterPanels();
     normalize();
     rebindCollapseGuards();
     relocateBottomStrip();
@@ -777,7 +860,7 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   // Active-panel changes fire during hydration once a restored bottom panel is
   // made active — a cheap extra beat to catch strips the layout-change path may
   // have relocated before their tabs were fully populated.
-  const activeSub = api.onDidActivePanelChange(() => { relocateBottomStrip(); });
+  const activeSub = api.onDidActivePanelChange(() => { if (ensuringFooter) return; relocateBottomStrip(); syncBottomFocusMarker(); });
 
   // Root edge drop (the thin outermost overlay) normally orthogonalizes into a
   // NEW grid group. When we already own an edge-group slot at that position,
