@@ -41,13 +41,26 @@ import { STORAGE_KEYS } from '../../lib/storageKeys';
 import { useHost } from '../../core/app-shell';
 import { pageLayoutStore, pageLayoutToDockview, type PageLayoutIdentity } from '../../core/page-platform';
 import { pingAnchorRelayout } from '../../lib/surfaceAnchors';
-import { buildDefault } from './builtinWorkbenches';
+import { buildDefault, FOOTER_PANEL_IDS } from './builtinWorkbenches';
 import { shouldApplyHydratedWorkbenchLayout } from './workspace-hydration';
 import { getDockResetEpoch } from './dockResetEpoch';
 import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
 import { installEdgeDrawer } from './edgeDrawer';
 import { isOnSideEdge, nearerSideEdge, type SideEdge } from './sideEdgeMove';
 import './DockShell.css';
+
+// Anchor for `addPanel({ position: { referencePanel } })`. MUST exclude non-grid
+// panels: `api.panels` also lists the edge groups' occupants (the footer chrome
+// seeded by installEdgeDrawer is appended last), and anchoring to one of those
+// drops the new panel INTO the collapsed side strip instead of the grid — the
+// "close a panel, reopen it, and it comes back tucked in the side menu" bug.
+function lastGridPanelId(api: DockviewApi): string | undefined {
+  for (let i = api.panels.length - 1; i >= 0; i--) {
+    const panel = api.panels[i];
+    if (panel?.api.location.type === 'grid') return panel.id;
+  }
+  return undefined;
+}
 
 // Strip panels whose `contentComponent` is not in the known component set.
 // Prevents dockview's `fromJSON` from throwing when a saved layout references
@@ -276,8 +289,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     if (id === 'chat') return false;
     // A semantic editor document owns a closed panel domain. A mesh/material
     // page cannot accumulate Level panels (or vice versa) through restore,
-    // reopen, drag, or the layout menu.
-    if (pagePanelIds !== null && !pagePanelIds.has(id)) return false;
+    // reopen, drag, or the layout menu. EXCEPTION: footer chrome (Info /
+    // Checkpoints / Events) is global — present under every workbench AND every
+    // Page — so it is exempt from the closed-domain gate. edgeDrawer's
+    // ensureFooterPanels adds it into the bottom edge group; letting it pass
+    // membership here is what stops closeStrayPanels from evicting it again.
+    if (pagePanelIds !== null && !pagePanelIds.has(id) && !FOOTER_PANEL_IDS.has(id)) return false;
     // No descriptor registered → treat non-editor panels as belonging to the
     // DockShell region (matches the pre-refactor behavior).
     const desc = panels?.[id];
@@ -716,7 +733,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           if (!isMemberRef.current(id)) return;
           if (api.getPanel(id)) return;
           if (panelLocations[id] !== region) return; // no explicit override → leave to buildDefault
-          const ref = api.panels[api.panels.length - 1]?.id;
+          const ref = lastGridPanelId(api);
           try {
             api.addPanel({
               id,
@@ -874,7 +891,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         if (cleaned) {
           api.fromJSON(cleaned);
           closeStrayPanels(api);
-          restored = api.panels.length > 0;
+          // edgeDrawer's ensureFooterPanels adds the global footer chrome into the
+          // bottom edge group on every layout change, so `panels.length > 0` would
+          // count a footer-only restore as success and defeat the empty-page
+          // rebuild. Gate on the PAGE's own placements instead.
+          const mounted = new Set(api.panels.map((panel) => panel.id));
+          restored = hasMountedPagePlacement(scope.panelIds, mounted);
         }
       }
     } catch { restored = false; }
@@ -979,6 +1001,31 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     });
   }, [host]);
 
+  // Reveal-anywhere: activate the panel in the grid, reopen it if it was closed,
+  // OR expand its edge/footer drawer (a collapsed edge group needs the drawer
+  // channel — setActive alone won't slide the flyout out). Superset of both
+  // panel:open (grid reopen) and app.drawer.open (edge flyout), so callers don't
+  // have to know where a panel currently lives.
+  useEffect(() => {
+    return host.bus.on('panel:reveal', (payload) => {
+      const id = payload.id;
+      if (!id) return;
+      if (!isMemberRef.current(id)) return; // another region owns it
+      const api = apiRef.current;
+      if (!api) return;
+      let panel = api.getPanel(id);
+      if (!panel) { reopenRef.current?.(id); panel = api.getPanel(id) ?? undefined; }
+      if (!panel) return;
+      if (panel.group?.api.location.type === 'edge') {
+        // edgeDrawer.ts listens on window for this (chrome-drawer emits the same
+        // literal); it setActives the panel AND opens the collapsed flyout.
+        window.dispatchEvent(new CustomEvent('forgeax:edge-drawer', { detail: { action: 'open', id } }));
+        return;
+      }
+      try { panel.api.setActive(); } catch { /* noop */ }
+    });
+  }, [host]);
+
   // Close a panel by id. No-op if the panel isn't currently mounted in THIS
   // region — panel ids are globally unique, so at most one region owns it and
   // the others fall through silently. Peer to panel:open/panel:focus; used by
@@ -1070,7 +1117,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     if (!api || api.getPanel(id)) return;
     // Region-scoped: refuse to reopen a panel that doesn't belong here.
     if (!isMemberRef.current(id)) return;
-    const ref = api.panels[api.panels.length - 1]?.id;
+    const ref = lastGridPanelId(api);
     const component = id;
     const title = titleFor(id);
     api.addPanel({ id, component, title, position: ref ? { referencePanel: ref, direction: 'right' } : undefined });
@@ -1171,7 +1218,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // Floating-GROUP moves (dragging the window's tab bar) are POINTER-based, not
     // HTML5 dragstart — so catch pointerdown on the tab bar (`.dv-tabs-and-actions-
     // container`) too, else a floating window can't be merged back over an iframe
-    // panel. Native tab drags also begin with this pointerdown; harmless on clicks.
+    // panel. Native tab drags also begin with this pointerdown, so EVERY click in
+    // the strip flips the flag for its pointerdown→pointerup window. That is only
+    // survivable because the `fx-dock-dragging` pointer-events kill in DockShell.css
+    // subtracts the strip: were the strip's own contents disabled mid-click, the
+    // `click` would retarget to an ancestor and the tab's close (X) / pop-out
+    // buttons would silently stop firing.
     const onPointerDown = (e: PointerEvent): void => {
       const t = e.target as Element | null;
       if (t && t.closest('.dv-tabs-and-actions-container')) on();

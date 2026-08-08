@@ -34,7 +34,7 @@ describe('VFX runtime readiness contract', () => {
 
   it('attaches only the correlated committed snapshot to a successful import result', () => {
     const result = withRuntimeReadiness(
-      { filename: 'burst.particle.json', status: 'done', guid: 'particle-guid' },
+      { filename: 'burst.pack.json', status: 'done', guid: 'particle-guid' },
       {
         requestId: 'import-request-2',
         assetGuid: 'particle-guid',

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useHost } from '@forgeax/interface/core/app-shell';
+import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
@@ -63,6 +64,7 @@ import {
   orderContextMenuEntries,
   menuIconForId,
   fileSpecificMenuItems,
+  dirOfPath,
   type CBContextMenuEntry,
 } from './content-browser-format';
 import './content-browser.css';
@@ -254,6 +256,69 @@ export function ContentBrowser() {
     const index = viewItems.findIndex(viewItem => viewItemKey(viewItem) === viewItemKey(item));
     if (index >= 0) multiSelect.handleClick(index, e);
   }, [multiSelect, viewItems]);
+
+  // ── Locate-in-Content-Browser (`content-browser:reveal` bus event) ──────────
+  // Any caller (an editor page tab, chat, another app) emits the neutral
+  // interface bus event with a target identity; NOBODY imports this package. The
+  // handler here OWNS the locate logic but writes ONLY through the gateway door
+  // (setCBPath + setFolderSelection / setAssetSelectionOne) — same SSOT path a
+  // human click uses, so the data flow is never bypassed. The pending scroll is a
+  // pure view side-effect (reads the DOM after the grid rebuilds for the new path).
+  const revealScrollRef = useRef<string | null>(null);
+  const handleReveal = useCallback((target: ContentBrowserRevealTarget) => {
+    reload(); // refresh the catalog so a freshly-authored target is present
+    let dir = '';
+    let selector: string | null = null;
+    if (target.path) {
+      const kind = target.pathKind ?? 'file';
+      dir = dirOfPath(target.path);
+      gateway.dispatch({ kind: 'setFolderSelection', items: [{ path: target.path, kind }] });
+      selector = kind === 'dir'
+        ? `[data-folder-path="${CSS.escape(target.path)}"]`
+        : `[data-file-path="${CSS.escape(target.path)}"]`;
+    } else if (target.guid) {
+      const rel = relByAssetGuid.get(target.guid)
+        ?? (target.packPath ? catalogPathToRoot(target.packPath, gameSlug, catalogAssetRoots) : null);
+      if (rel) dir = dirOfPath(rel);
+      gateway.dispatch({ kind: 'setAssetSelectionOne', asset: {
+        guid: target.guid,
+        kind: target.assetKind ?? 'unknown',
+        name: target.name ?? target.guid,
+        payload: {},
+        packPath: target.packPath ?? '',
+      } });
+      selector = `[data-asset-guid="${CSS.escape(target.guid)}"]`;
+    } else {
+      return;
+    }
+    gateway.dispatch({ kind: 'setCBPath', path: dir });
+    revealScrollRef.current = selector;
+  }, [reload, relByAssetGuid, gameSlug, catalogAssetRoots]);
+
+  useEffect(() => host.bus.on('content-browser:reveal', ({ target }) => handleReveal(target)), [host, handleReveal]);
+
+  // After the grid rebuilds for the revealed path, scroll the target card into
+  // view and flash it. A few rAF retries cover the async folder/disk fetch beat.
+  useEffect(() => {
+    const selector = revealScrollRef.current;
+    if (!selector) return;
+    let tries = 0;
+    let raf = 0;
+    const attempt = () => {
+      const el = document.querySelector(selector);
+      if (el) {
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        el.classList.add('cb-reveal-flash');
+        window.setTimeout(() => el.classList.remove('cb-reveal-flash'), 1200);
+        revealScrollRef.current = null;
+        return;
+      }
+      if (tries++ > 8) { revealScrollRef.current = null; return; }
+      raf = requestAnimationFrame(attempt);
+    };
+    raf = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(raf);
+  }, [viewItems]);
 
   // Keep the preview/selection bound to its item across catalog refreshes. If the
   // item is still present under the same key (assets are guid-keyed → survive a
@@ -1017,6 +1082,7 @@ export function ContentBrowser() {
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     const materialSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'material');
     const materialInstanceSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'material-instance');
+    const particleSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'particle-effect');
     const menuItems = buildBlankAreaContextMenu(
       nav.currentPath,
       (parentPath) => {
@@ -1034,6 +1100,7 @@ export function ContentBrowser() {
       },
       materialSpec ? () => createAssetInCurrentPath(materialSpec) : undefined,
       materialInstanceSpec ? () => createAssetInCurrentPath(materialInstanceSpec) : undefined,
+      particleSpec ? () => createAssetInCurrentPath(particleSpec) : undefined,
     );
     const resolved = menuItems.map(m => ({
       label: m.label,

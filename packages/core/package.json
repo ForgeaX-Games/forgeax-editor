@@ -74,6 +74,7 @@
     "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
     "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",

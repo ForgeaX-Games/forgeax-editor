@@ -25,15 +25,15 @@
 //   submodule (whose own apps/preview reads a DIFFERENT assets submodule).
 //
 // WHY IT LIVES IN @forgeax/editor-core (exposed at ./asset-roots, NOT the barrel)
-//   Both consumers — packages/play-runtime/vite.config.ts and
-//   packages/edit-runtime/src/viewport/runtime-vite-preset.ts — depend on
+//   Both consumers — packages/play-runtime/vite.config.ts and the editor-level
+//   engine-vite-preset — depend on
 //   @forgeax/editor-core, so a single helper here can't drift between the two
 //   configs. It is a DEDICATED sub-path export (like @forgeax/engine-pack/config),
 //   NOT re-exported from src/index.ts, because it imports node:fs/node:path and
 //   the core barrel is browser-bundled — keeping it off the barrel keeps browser
 //   builds free of node builtins.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -120,4 +120,84 @@ export function resolveGameAssetRoots(
     }
   }
   return out;
+}
+
+// ── shader-source pack-boundary expansion ───────────────────────────────────
+// The engine catalog scanner fails CLOSED on a root containing build-only
+// shader sidecars (`*.meta.json` with `importer: 'shader'`): one such file
+// degrades the root and `installCatalogProjection` empties the WHOLE catalog,
+// so every game GUID load reports a misleading DDC/ImportTransport miss. The
+// canonical engine template ships exactly this layout — `assets/shaders/*.wgsl
+// .meta.json` next to runtime packs — while declaring a single `assets` root;
+// the engine's own hosts (apps/preview, engine vitest) survive it by passing
+// an explicit per-FILE pack boundary that omits the shader sidecars.
+//
+// The editor's hosts are generic and cannot hand-list files per game, so they
+// derive the same boundary here: a root containing shader sidecars expands
+// into explicit file roots (every *.pack.json + non-shader *.meta.json,
+// scanner file-root contract) with the shader sidecars excluded; clean roots
+// keep their directory form unchanged (live file discovery via the dev
+// watcher is preserved). Known trade-off of the tainted expansion: new files
+// dropped into that root are not picked up by the dev watcher until restart —
+// the scanner-level fix (skip build-only shader sidecars with a diagnostic
+// instead of degrading the root) is tracked as an engine feedback.
+export interface PackBoundaryExpansion {
+  readonly roots: string[];
+  readonly excludedShaderSidecars: string[];
+}
+
+export function expandPackRootsExcludingShaderSources(
+  roots: readonly string[],
+): PackBoundaryExpansion {
+  const out: string[] = [];
+  const excluded: string[] = [];
+  for (const root of roots) {
+    const { packFiles, shaderSidecars } = collectPackBoundaryFiles(root);
+    if (shaderSidecars.length === 0) {
+      out.push(root);
+      continue;
+    }
+    excluded.push(...shaderSidecars);
+    out.push(...packFiles);
+  }
+  return { roots: out, excludedShaderSidecars: excluded };
+}
+
+const PACK_BOUNDARY_BLACKLIST = new Set(['node_modules', '.git', 'dist', '.forgeax-asset-cache']);
+
+function collectPackBoundaryFiles(dir: string): { packFiles: string[]; shaderSidecars: string[] } {
+  const packFiles: string[] = [];
+  const shaderSidecars: string[] = [];
+  const walk = (current: string): void => {
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch { return; }
+    for (const entry of entries) {
+      const fullPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!PACK_BOUNDARY_BLACKLIST.has(entry.name)) walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entry.name.endsWith('.pack.json')) {
+        packFiles.push(fullPath);
+        continue;
+      }
+      if (!entry.name.endsWith('.meta.json')) continue;
+      if (isShaderSourceSidecar(fullPath)) shaderSidecars.push(fullPath);
+      else packFiles.push(fullPath);
+    }
+  };
+  walk(dir);
+  return { packFiles, shaderSidecars };
+}
+
+function isShaderSourceSidecar(metaPath: string): boolean {
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as { importer?: unknown };
+    return meta.importer === 'shader';
+  } catch {
+    return false;
+  }
 }

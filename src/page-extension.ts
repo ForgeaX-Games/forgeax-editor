@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, AppHost, ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
 import type {
   ActivityRegistration,
   PageController,
@@ -78,16 +78,18 @@ function currentSceneName(): string | undefined {
   return getSceneList().find((entry) => entry.id === id)?.name ?? id;
 }
 
-// Late-bound host for menu actions that dispatch a command (set in setup; the
-// editor extension is a single-realm singleton, like editor-core's own state).
-// Only "reveal" needs it; copy/reference are host-free.
+// Late-bound host for menu actions that dispatch a command / emit a bus event
+// (set in setup; the editor extension is a single-realm singleton, like
+// editor-core's own state). "locate-in-cb" and "reference" need it; copy is
+// host-free.
 let hostRef: AppHost | undefined;
 
-// Menu groups (order = divider layout): 'file' = path actions (copy / reveal);
-// 'actions' = the LAST group, holding save + reference-to-chat together (per the
-// interaction spec). copy/reveal need no host; reveal fires the shared
-// `file.reveal` command; reference goes through the public app.chat command.
-// `| undefined` fields keep exactOptionalPropertyTypes callers simple.
+// Menu groups (order = divider layout): 'file' = path actions (copy path +
+// locate in content browser); 'actions' = the LAST group, holding save +
+// reference-to-chat together (per the interaction spec). copy needs no host;
+// locate emits the `content-browser:reveal` bus event; reference goes through
+// the public app.chat command. `| undefined` fields keep
+// exactOptionalPropertyTypes callers simple.
 
 function pathMenuItems(path: string | undefined): PageMenuItem[] {
   if (!path) return [];
@@ -96,11 +98,58 @@ function pathMenuItems(path: string | undefined): PageMenuItem[] {
       id: 'copy-path', label: t('editor.pageMenu.copyPath'), icon: 'copy', group: 'file',
       run: () => { void navigator.clipboard?.writeText(path).catch(() => {}); },
     },
-    {
-      id: 'reveal', label: t('editor.pageMenu.revealInExplorer'), icon: 'folder-search', group: 'file',
-      run: () => { void hostRef?.commands.execute('file.reveal', { path }).catch(() => {}); },
-    },
   ];
+}
+
+// "Locate in Content Browser" — pure mechanism communication: this file NEVER
+// imports the content-browser package. It (1) brings the editor Level page + its
+// Assets panel up via interface commands, then (2) emits the neutral
+// `content-browser:reveal` bus event. A mounted Content Browser (a global
+// service) resolves the target and performs the navigation/selection through its
+// own gateway door. Decoupled both ways.
+function revealTargetFor(opts: {
+  guid?: string | null | undefined;
+  path?: string | undefined;
+  kind?: string | undefined;
+  name?: string | undefined;
+}): ContentBrowserRevealTarget {
+  if (opts.guid) {
+    return {
+      guid: opts.guid,
+      ...(opts.path ? { packPath: opts.path } : {}),
+      ...(opts.kind ? { assetKind: opts.kind } : {}),
+      ...(opts.name ? { name: opts.name } : {}),
+    };
+  }
+  return opts.path ? { path: opts.path, pathKind: 'file' } : {};
+}
+
+async function revealInContentBrowser(target: ContentBrowserRevealTarget): Promise<void> {
+  const host = hostRef;
+  if (!host || (!target.guid && !target.path)) return;
+  // 1) The Content Browser (ep:assets) lives in the editor Level page layout —
+  //    focus it so the panel mounts + subscribes before we hand off the target.
+  const snap = host.pages.getSnapshot();
+  const level = snap.instances.find((p) => p.typeId === LEVEL_PAGE);
+  const onLevel = !!level && snap.activeKey === level.encodedKey;
+  try {
+    if (level) { if (!onLevel) await host.pages.focus(level.encodedKey); }
+    else await host.pages.open({ typeId: LEVEL_PAGE });
+  } catch { /* noop */ }
+  // 2) Reveal the Assets panel wherever it lives (grid tab / edge drawer).
+  try { await host.commands.execute('app.panel.reveal', { id: 'ep:assets' }); } catch { /* noop */ }
+  // 3) Hand the locate instruction to the Content Browser over the neutral bus.
+  const emit = () => host.bus.emit('content-browser:reveal', { target });
+  if (onLevel) emit();
+  else requestAnimationFrame(() => requestAnimationFrame(emit));
+}
+
+function locateMenuItems(target: ContentBrowserRevealTarget): PageMenuItem[] {
+  if (!target.guid && !target.path) return [];
+  return [{
+    id: 'locate-in-cb', label: t('editor.pageMenu.locateInContentBrowser'), icon: 'crosshair', group: 'file',
+    run: () => { void revealInContentBrowser(target); },
+  }];
 }
 
 function referenceMenuItem(opts: {
@@ -153,6 +202,7 @@ const levelController = (): PageController => ({
     const path = getActiveScenePackPath() ?? undefined;
     return [
       ...pathMenuItems(path),
+      ...locateMenuItems(revealTargetFor({ guid: entry?.guid ?? null, path, kind: 'scene', name: entry?.name ?? id ?? undefined })),
       saveSceneItem(),
       ...referenceMenuItem({ guid: entry?.guid ?? null, name: entry?.name ?? id ?? undefined, kind: 'scene', path }),
     ];
@@ -169,6 +219,12 @@ const fileController: PageTypeRegistration['createController'] = (context) => {
     dispose: () => undefined,
     getContextMenuItems: () => [
       ...pathMenuItems(path),
+      ...locateMenuItems(revealTargetFor({
+        guid: resource?.canonicalId ?? null,
+        path,
+        kind: resource?.kind,
+        name: path ? path.split('/').at(-1) : undefined,
+      })),
       ...referenceMenuItem({
         guid: resource?.canonicalId ?? null,
         name: path ? path.split('/').at(-1) : undefined,
@@ -198,13 +254,6 @@ function page(
     panels: placements(ids),
     ...(createController ? { createController } : {}),
   };
-}
-
-function pageForAsset(asset: SelectedAsset): PageTypeRegistration['id'] {
-  if (asset.kind === 'mesh') return MESH_PAGE;
-  if (asset.kind === 'material-instance') return MATERIAL_INSTANCE_PAGE;
-  if (asset.kind === 'material') return MATERIAL_PAGE;
-  return ASSET_PAGE;
 }
 
 export function createEditorPageExtension(
@@ -253,11 +302,14 @@ export function createEditorPageExtension(
           priority: 'default',
           sourceLayer: 'builtin',
         },
+        // The default editor. Enumerating kinds here was a latent bug: it listed
+        // the retired `cube-texture` while never covering equirect /
+        // animation-graph / video / particle-effect, and nothing caught it
+        // because the shell's own kind switch fell back on its own. `asset.kind`
+        // is an open string, so any kind without a dedicated page belongs here.
         {
           id: editorId('asset'),
-          selector: {
-            kinds: ['texture', 'cube-texture', 'sampler', 'scene', 'shader', 'skeleton', 'skin', 'animation-clip', 'audio', 'font', 'render-pipeline', 'tileset'],
-          },
+          selector: { fallback: true },
           pageTypeId: ASSET_PAGE,
           priority: 'default',
           sourceLayer: 'builtin',
@@ -274,15 +326,15 @@ export function createEditorPageExtension(
       };
       const resetNavigation = configureEditorPageNavigation({
         async openAsset(asset) {
-          await ctx.host.pages.open({
-            typeId: pageForAsset(asset),
-            resource: {
-              canonicalId: asset.guid,
-              uri: `forgeax-asset://${asset.guid}`,
-              displayPath: asset.name,
-              kind: asset.kind,
-              metadata: { asset },
-            },
+          // architecture.md forbids a consumer-side asset kind switch: the
+          // resolver owns association > source layer > priority, so a user
+          // association or an installed extension's editor wins here for free.
+          await ctx.host.resourceEditors.open({
+            canonicalId: asset.guid,
+            uri: `forgeax-asset://${asset.guid}`,
+            displayPath: asset.name,
+            kind: asset.kind,
+            metadata: { asset },
           });
         },
         getActiveAsset: activeAsset,
