@@ -205,26 +205,6 @@ if (INITIAL_GAME_DIR && /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID)) {
 const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
 const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
 
-export function assetCorsOrigins(env: Readonly<NodeJS.ProcessEnv> = process.env): string[] {
-  const configured = env.FORGEAX_ASSET_CORS_ORIGINS
-    ?.split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-  if (configured && configured.length > 0) return configured;
-
-  const interfacePort = Number(env.FORGEAX_INTERFACE_PORT ?? 18920);
-  return [
-    `http://127.0.0.1:${interfacePort}`,
-    `http://localhost:${interfacePort}`,
-    `https://127.0.0.1:${interfacePort}`,
-    `https://localhost:${interfacePort}`,
-  ];
-}
-
-export function hmrClientPort(env: Readonly<NodeJS.ProcessEnv> = process.env): number {
-  return Number(env.FORGEAX_HMR_CLIENT_PORT ?? env.FORGEAX_INTERFACE_PORT ?? 18920);
-}
-
 /** Project-bound identity used by local orchestration clients before opening preview. */
 function forgeaxRuntimeIdentity() {
   const instanceRootAbs = process.env.FORGEAX_PROJECT_ROOT
@@ -519,7 +499,15 @@ export default defineConfig({
     // origins (loopback, http+https); override via FORGEAX_ASSET_CORS_ORIGINS
     // (comma-separated) for non-default interface ports / remote gateways.
     cors: {
-      origin: assetCorsOrigins(),
+      origin: (process.env.FORGEAX_ASSET_CORS_ORIGINS
+        ?.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)) ?? [
+        'http://127.0.0.1:18920',
+        'http://localhost:18920',
+        'https://127.0.0.1:18920',
+        'https://localhost:18920',
+      ],
     },
     watch: {
       usePolling: true,
@@ -540,7 +528,9 @@ export default defineConfig({
     // internal vite port. FORGEAX_HMR_CLIENT_PORT overrides
     // FORGEAX_INTERFACE_PORT for exactly this case.
     hmr: {
-      clientPort: hmrClientPort(),
+      clientPort: Number(
+        process.env.FORGEAX_HMR_CLIENT_PORT ?? process.env.FORGEAX_INTERFACE_PORT ?? 18920,
+      ),
     },
   },
   build: {
