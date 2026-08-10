@@ -484,7 +484,7 @@ export function paintDiagnosticMessage(container: HTMLElement, err: unknown): vo
   const lines: string[] = [
     '⚠ forgeax editor: engine init failed',
     '',
-    `createApp error: ${err instanceof Error ? err.message : String(err)}`,
+    `boot error: ${err instanceof Error ? err.message : String(err)}`,
   ];
   const e = err as Record<string, unknown> | null;
   const detail = e && typeof e === 'object' ? (e.detail as Record<string, unknown> | undefined) : undefined;

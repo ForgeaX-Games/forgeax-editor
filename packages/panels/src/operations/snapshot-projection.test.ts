@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createOperationRun, type OperationRunRequest } from '@forgeax/editor-product';
 import {
+  createStableOperationSnapshotGetter,
   getOperationCenterRows,
   installOperationProjectionSource,
   subscribeOperationProjection,
@@ -78,6 +79,21 @@ describe('versioned terminal projection source', () => {
 
     expect(secondRows).not.toBe(firstRows);
     expect(secondRows[0]?.status).toBe('succeeded');
+  });
+
+  it('keeps the useSyncExternalStore snapshot identity stable until revision changes', () => {
+    let revision = 1;
+    const source: OperationProjectionSource = {
+      getSnapshot: () => ({ revision, runs: [] }),
+    };
+    const getSnapshot = createStableOperationSnapshotGetter(() => source);
+
+    const first = getSnapshot();
+    expect(getSnapshot()).toBe(first);
+    revision = 2;
+    const second = getSnapshot();
+    expect(second).not.toBe(first);
+    expect(getSnapshot()).toBe(second);
   });
 
   it('keeps raw snapshot inputs out of the derived rows cache', () => {

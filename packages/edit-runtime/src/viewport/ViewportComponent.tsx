@@ -75,7 +75,9 @@ import {
   createAuthoredAssetCatalogBarrier,
   registerMaterialInstanceLoader,
   getActiveRuntimeUiGraph,
+  bindViewportRuntimeClient,
 } from '@forgeax/editor-core';
+import type { MessagePortTransportClient } from '@forgeax/editor-product';
 import { createSourceAuthoringRuntime, installCatalogReconcileProvider } from '../runtime/source-authoring-runtime';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
@@ -92,6 +94,7 @@ import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 import {
   createViewportRuntimeTransportService,
+  createInProcessViewportRuntimeClient,
   installViewportRuntimeConnectionHost,
   VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
   readViewportRuntimeHostOrigin,
@@ -370,6 +373,17 @@ export function ViewportComponent({
       gameRoot,
       runtimeBinding,
       selectedSceneGuid,
+    }).catch((error: unknown) => {
+      // A rejected boot must converge to a visible terminal state. Without a
+      // catch here, the overlay remains on "Starting engine…" forever while
+      // the browser only reports an unhandled rejection.
+      console.error('[editor] viewport boot failed:', error);
+      resetEditRealm();
+      emitBoot(
+        `boot ✗ failed: ${error instanceof Error ? error.message : String(error)}`,
+        'error',
+      );
+      paintDiagnosticMessage(container, error);
     });
     // No cleanup returned: the viewport lifecycle is NOT managed by React.
     // Standalone teardown = page navigation. Multi-game host teardown =
@@ -1217,6 +1231,31 @@ async function bootViewport(
         revision: gateway.operationRunSnapshot().revision,
       }, runtimeHostOrigin);
     }));
+  } else if (runtimeOwner === null && runtimeUiGraph !== null) {
+    // Studio's current editor is a single realm: the shell and this Runtime
+    // share one window, so there is no iframe MessagePort handshake to bind the
+    // panel-side viewport client. Reuse the exact canonical service locally so
+    // toolbar enablement and projection queries observe the same Runtime-owned
+    // Gateway/World surface as the isolated carrier path.
+    const service = createViewportRuntimeTransportService({
+      runtime: runtimeIdentity,
+      graph: runtimeUiGraph,
+      gateway,
+      readViewportStatus: () => ({
+        quadrant: getViewportQuadrant(),
+        playPhase: gateway.playPhase,
+        lastPlayError: gateway.lastPlayError,
+        canUndo: gateway.canUndo(),
+        canRedo: gateway.canRedo(),
+      }),
+      readExecutionReport: executionDiagnostics.report,
+    });
+    const localClient: MessagePortTransportClient = createInProcessViewportRuntimeClient(service);
+    const unbindLocalClient = bindViewportRuntimeClient(runtimeIdentity, localClient);
+    registerTeardown(() => {
+      unbindLocalClient();
+      localClient.dispose();
+    });
   }
   // W1-L1H producer: a managed Studio page is the editor viewport carrier.
   // Publish identity/readiness from this same canvas/renderer and keep the

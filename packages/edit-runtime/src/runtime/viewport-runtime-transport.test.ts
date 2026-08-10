@@ -10,6 +10,7 @@ import {
   VIEWPORT_RUNTIME_CONNECT,
   VIEWPORT_RUNTIME_CONNECTED,
   VIEWPORT_RUNTIME_READY,
+  createInProcessViewportRuntimeClient,
   createViewportProjectionQuery,
   createViewportRuntimeTransportService,
   installViewportRuntimeConnectionHost,
@@ -47,6 +48,32 @@ function fakePort(): TransportMessagePort & { closed: boolean } {
 }
 
 describe('viewport runtime transport', () => {
+  test('adapts the canonical service for the in-process shell and fences disposal', async () => {
+    const requests: unknown[] = [];
+    const service = {
+      handle: async (request: unknown) => {
+        requests.push(request);
+        return { jsonrpc: '2.0', id: 'request-1', correlationId: 'request-1', result: { ok: true } };
+      },
+    } as never;
+    const client = createInProcessViewportRuntimeClient(service);
+    const request = {
+      jsonrpc: '2.0',
+      version: 'editor-transport/v1',
+      id: 'request-1',
+      correlationId: 'request-1',
+      scope: 'viewport:runtime:1',
+      method: 'transport.describe',
+      params: {},
+    } as const;
+
+    await expect(client.request(request)).resolves.toMatchObject({ result: { ok: true } });
+    expect(requests).toEqual([request]);
+
+    client.dispose();
+    await expect(client.request(request)).rejects.toThrow('viewport-runtime-client-disposed');
+  });
+
   test('accepts one trusted generation and rejects source, stale, and replayed connections', () => {
     const target = new FakeTarget();
     const acknowledgements: unknown[] = [];

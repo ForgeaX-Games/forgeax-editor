@@ -11,9 +11,15 @@ describe('independent Play particle Pack registration', () => {
     expect(source).toContain('engineVitePreset');
     expect(preset).toContain("from '@forgeax/engine-vfx-compiler'");
     expect(preset).not.toContain('particleEffectImporter');
-    expect(preset).toContain('createParticleCodeNativeCooker(discoverParticleCodeModules(packRoots))');
+    expect(preset).toContain('discoverParticleCodeModules(opts.pack?.rootsProvider ?? (() => packRoots))');
     expect(preset).toContain('importers: [');
     expect(preset).toContain('cookers: [');
+  });
+
+  test('keeps native cooker discovery live across a late runtime bind', () => {
+    expect(source).toContain('const resolveActivePackRoots = (): string[] =>');
+    expect(source).toContain('rootsProvider: resolveActivePackRoots');
+    expect(source).toContain('resolveRoots: (gameDir, gameId) => singleGamePackRoots(gameDir, gameId)');
   });
 
   test('keeps the compiler out of Play runtime source imports', () => {

@@ -9,6 +9,7 @@ import {
   type TransportMessagePort,
   type OperationRun,
   type OperationRunAcceptResult,
+  type MessagePortTransportClient,
   type TransportService,
   type ViewportProjectionEnvelope,
   type ViewportRuntimeIdentity,
@@ -92,6 +93,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function viewportRuntimeTransportScope(runtime: ViewportRuntimeIdentity): string {
   return `viewport:${runtime.runtimeId}:${runtime.runtimeGeneration}`;
+}
+
+/**
+ * Adapt the canonical Runtime service to the panel client contract when the
+ * Runtime and shell live in the same window. This keeps in-process Studio on
+ * the same typed request path as the MessagePort carrier without inventing a
+ * second Gateway or projection implementation.
+ */
+export function createInProcessViewportRuntimeClient(service: TransportService): MessagePortTransportClient {
+  let disposed = false;
+  return {
+    request(request) {
+      if (disposed) return Promise.reject(new Error('viewport-runtime-client-disposed'));
+      return service.handle(request);
+    },
+    dispose() {
+      disposed = true;
+    },
+  };
 }
 
 export function readViewportRuntimeIdentity(

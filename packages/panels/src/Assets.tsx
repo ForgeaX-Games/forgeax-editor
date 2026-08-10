@@ -1,9 +1,15 @@
 import { Component, Suspense, lazy } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
-import { buildOperationCenterRows, getOperationProjectionSource, subscribeOperationProjection } from './operations/run-view-model';
+import {
+  buildOperationCenterRows,
+  createStableOperationSnapshotGetter,
+  getOperationProjectionSource,
+  subscribeOperationProjection,
+} from './operations/run-view-model';
 
+const getOperationSnapshot = createStableOperationSnapshotGetter();
 const operationRuns = {
-  getSnapshot: () => getOperationProjectionSource().getSnapshot(),
+  getSnapshot: getOperationSnapshot,
   subscribe: subscribeOperationProjection,
   retry: (runId: string) => {
     const source = getOperationProjectionSource();

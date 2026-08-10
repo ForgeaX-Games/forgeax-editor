@@ -297,7 +297,7 @@ export default defineConfig({
     // not from the root). Vite auto-discovers and optimizes them on first
     // crawl from the actual import sites, so listing them here only produced a
     // spurious "Failed to resolve dependency" warning.
-    include: STANDALONE_OPTIMIZE_DEPS,
+    include: [...enginePreset.optimizeDeps.include, ...STANDALONE_OPTIMIZE_DEPS],
     // Never mutate the optimizer manifest in response to a late lazy import.
     // The include list above is the host's dependency boundary; native ESM
     // modules outside it stay on Vite's normal transform path.

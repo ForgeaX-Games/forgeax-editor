@@ -1224,7 +1224,7 @@
     "missingStandaloneMid": " is missing a ",
     "missingStandaloneSuffix": " entry.",
     "extensionUnavailablePrefix": "Could not load extension ",
-    "extensionUnavailableSuffix": ". Make sure forgeax-server is running (bun scripts/run.ts in forgeax-studio), then refresh."
+    "extensionUnavailableSuffix": ". Make sure forgeax-server is running (run bun fx start in forgeax-studio), then refresh."
   },
   "errorBoundary": {
     "retry": "Retry",

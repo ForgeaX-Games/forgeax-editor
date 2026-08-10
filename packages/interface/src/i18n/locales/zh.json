@@ -1224,7 +1224,7 @@
     "missingStandaloneMid": " 缺少 ",
     "missingStandaloneSuffix": " 入口。",
     "extensionUnavailablePrefix": "无法加载扩展 ",
-    "extensionUnavailableSuffix": "。请确认 forgeax-server 已启动（在 forgeax-studio 目录运行 bun scripts/run.ts），然后刷新页面。"
+    "extensionUnavailableSuffix": "。请确认 forgeax-server 已启动（在 forgeax-studio 目录运行 bun fx start），然后刷新页面。"
   },
   "errorBoundary": {
     "retry": "重试",

@@ -437,6 +437,12 @@ const initialScopeCommand: RuntimeScopeCommand | undefined = (
 // Play owns one active game realm. The engine plumbing itself is shared with
 // Edit/Standalone; this host contributes only the exact roots and the dynamic
 // scope controller.
+// The Pack producer starts with shared/template roots and is rebound to the
+// selected game's roots later. Native VFX cooking uses this same current-root
+// resolver, so a late game bind cannot leave the cooker on the empty startup
+// snapshot.
+const resolveActivePackRoots = (): string[] =>
+  singleGamePackRoots(activeGameDir, activeGameId);
 const enginePreset = engineVitePreset({
   base: '/preview/',
   gameDirAbs: INITIAL_GAME_DIR || null,
@@ -446,7 +452,8 @@ const enginePreset = engineVitePreset({
     packageRoots: [PLAY_PACKAGE_ROOT],
   },
   pack: {
-    roots: singleGamePackRoots(INITIAL_GAME_DIR, INITIAL_GAME_ID),
+    roots: resolveActivePackRoots(),
+    rootsProvider: resolveActivePackRoots,
     cleanOrphanMetas: false,
   },
 });

@@ -251,6 +251,7 @@ test('Gateway exposes one versioned snapshot for retained operation runs', async
     expect(Object.isFrozen(snapshot.runs)).toBe(true);
     expect(Object.isFrozen(snapshot.runs[0])).toBe(true);
     expect(gateway.operationRunSnapshot()).toEqual(snapshot);
+    expect(gateway.operationRunSnapshot()).toBe(snapshot);
   } finally {
     if (previousApplier === undefined) sessionAppliers.delete('saveDocToDisk');
     else sessionAppliers.set('saveDocToDisk', previousApplier);

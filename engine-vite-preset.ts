@@ -430,9 +430,12 @@ function expandShaderTaintedRoots(roots: readonly string[]): string[] {
 }
 
 export function discoverParticleCodeModules(
-  roots: readonly string[],
+  rootsOrProvider: readonly string[] | (() => readonly string[]),
 ): Readonly<Record<string, ParticleCodeModuleSet>> {
   const modules: Record<string, ParticleCodeModuleSet> = {};
+  const roots = typeof rootsOrProvider === 'function'
+    ? rootsOrProvider
+    : () => rootsOrProvider;
   const scan = (): Record<string, ParticleCodeModuleSet> => {
     const next: Record<string, ParticleCodeModuleSet> = {};
     const visit = (path: string): void => {
@@ -458,7 +461,7 @@ export function discoverParticleCodeModules(
       }
       next[id] = { entry };
     };
-    for (const root of roots) visit(root);
+    for (const root of roots()) visit(root);
     return next;
   };
   const refresh = (): void => {
@@ -687,6 +690,12 @@ export interface EngineVitePresetOptions {
   */
   pack?: {
     readonly roots: readonly string[];
+    /**
+     * Current roots for native cookers that resolve source files outside the
+     * authored Pack payload. Dynamic hosts must return the same roots they
+     * pass to pack.rebind() after a late game switch.
+     */
+    readonly rootsProvider?: () => readonly string[];
     readonly refresh?: () => void;
     readonly cleanOrphanMetas?: boolean;
    readonly runtimeBinding?: RuntimeAssetBinding;
@@ -699,12 +708,23 @@ export interface EngineVitePreset {
   plugins: PluginOption[];
   /** The one Pack producer used by this host, if it owns a catalog. */
   pack: ForgeaXPackPlugin | null;
-  optimizeDeps: { exclude: string[]; holdUntilCrawlEnd: false };
+  optimizeDeps: { exclude: string[]; include: string[]; holdUntilCrawlEnd: false };
   resolve: { dedupe: string[]; preserveSymlinks: boolean };
   build: { target: 'esnext' };
   /** Declared game roots projected into the pack catalog's sourcePath space. */
   catalogRoots: CatalogAssetRoot[];
 }
+
+// These dependencies enter through excluded native-ESM engine packages. Vite's
+// initial HTML crawl cannot discover them reliably, so every host consuming the
+// shared preset must seed the optimizer from the owning package. The parent >
+// dependency form is important: it resolves each Noble subpath from the
+// package that imports it instead of flattening the Bun isolated-linker graph.
+const ENGINE_OPTIMIZE_DEPS_INCLUDE = [
+  '@forgeax/engine-animation > @noble/hashes/blake3.js',
+  '@forgeax/engine-pack > @noble/hashes/sha2.js',
+  '@forgeax/engine-pack > @noble/hashes/utils.js',
+] as const;
 
 /** Shared opt-in gate for the RHI capture middleware across every host. */
 export function engineRhiDebugPlugins(
@@ -725,7 +745,9 @@ export function engineRhiDebugPlugins(
  *                   optional self-hosted pluginPack + silenced forgeaxShader).
  *                   Does NOT include react() — each config adds its own.
  *   - optimizeDeps: exclude the whole @forgeax family (native ESM, single
- *                   instance; SSOT-derived, cannot drift like a hand list).
+ *                   instance; SSOT-derived, cannot drift like a hand list),
+ *                   and pre-bundle engine dependencies that Vite cannot see
+ *                   through the excluded package graph during its first crawl.
  *   - resolve:      dedupe react + the @forgeax family; preserveSymlinks.
  *   - build:        target 'esnext' — the entry uses top-level await (initSceneList
  *                   / boot) which pre-esnext targets forbid.
@@ -773,7 +795,9 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
         targetProfileImporter(),
       ],
       cookers: [
-        createParticleCodeNativeCooker(discoverParticleCodeModules(packRoots)),
+        createParticleCodeNativeCooker(
+          discoverParticleCodeModules(opts.pack?.rootsProvider ?? (() => packRoots)),
+        ),
       ],
       // Edit/Standalone and Play both refresh through their host-specific
       // bridges. The default is intentionally no-op so a shared preset cannot
@@ -824,6 +848,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       // This is shared by Play and Edit so they cannot drift on the same
       // symlink-diamond failure mode.
       holdUntilCrawlEnd: false,
+      include: [...ENGINE_OPTIMIZE_DEPS_INCLUDE],
     },
     resolve: {
       // react/react-dom dedupe (single React instance); the @forgeax family

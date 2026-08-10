@@ -354,6 +354,28 @@ export function getOperationProjectionSource(): OperationProjectionSource {
   return activeSource;
 }
 
+/**
+ * Adapt a replaceable projection source to React's useSyncExternalStore
+ * contract. Gateway snapshots are versioned but may be freshly allocated on
+ * every read; keep the object identity stable until the source or revision
+ * actually changes so consumers do not render-loop on an unchanged snapshot.
+ */
+export function createStableOperationSnapshotGetter(
+  sourceGetter: () => OperationProjectionSource = getOperationProjectionSource,
+): () => OperationRunProjectionSnapshot {
+  let cachedSource = EMPTY_SOURCE;
+  let cachedSnapshot = EMPTY_SNAPSHOT;
+  return () => {
+    const source = sourceGetter();
+    const next = source.getSnapshot();
+    if (source !== cachedSource || next.revision !== cachedSnapshot.revision) {
+      cachedSource = source;
+      cachedSnapshot = next;
+    }
+    return cachedSnapshot;
+  };
+}
+
 export function getOperationCenterRows(source: OperationProjectionSource = activeSource): readonly OperationCenterRow[] {
   const snapshot = source.getSnapshot();
   const runs = snapshot.runs;
