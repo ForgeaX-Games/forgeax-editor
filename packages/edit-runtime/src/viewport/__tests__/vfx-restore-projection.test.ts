@@ -47,6 +47,7 @@ describe('VFX Stop restore projection', () => {
     const fake = createHost();
     const bridge = createEditVfxRuntimeBridge({
       camera: { read: () => undefined },
+      renderFeatureDiagnostics: () => [],
       hostFactory: () => fake.host as never,
     });
     expect((await bridge.attachWorld(editWorld, assets as never)).ok).toBe(true);
@@ -87,12 +88,14 @@ describe('VFX Stop restore projection', () => {
     const playWorld = lifecycle.currentPlayWorld() as World | null;
     expect(playWorld).not.toBeNull();
     if (playWorld === null) throw new Error('Play world was not assembled');
-    expect(bridge.readDiagnostics() as unknown).toEqual({ activeWorlds: 2 });
+    expect(fake.attached.filter(({ world }) => !fake.detached.includes(world))).toHaveLength(2);
 
     lifecycle.stopSimulation();
 
     expect(lifecycle.currentPlayWorld()).toBeNull();
-    expect(bridge.readDiagnostics() as unknown).toEqual({ activeWorlds: 1 });
+    expect(fake.attached.filter(({ world }) => !fake.detached.includes(world))).toEqual([
+      { world: editWorld, assets },
+    ]);
     expect(fake.attached[0]).toEqual({ world: editWorld, assets });
     expect(fake.detached).toEqual([playWorld]);
     expect(events.indexOf('play-detach')).toBeLessThan(events.indexOf('play-stop'));

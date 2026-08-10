@@ -22,6 +22,20 @@ export {
 } from './contracts/manifest';
 export type { ProductContractManifest } from './contracts/manifest';
 export {
+  VIEWPORT_CARRIER_KINDS,
+  VIEWPORT_RUNTIME_CONTRACT_VERSION,
+  isCurrentViewportRuntime,
+  isViewportCarrierKind,
+  isViewportProjectionEnvelope,
+  isViewportRuntimeIdentity,
+} from './contracts/viewport-runtime';
+export type {
+  ViewportCarrierKind,
+  ViewportProjectionEnvelope,
+  ViewportProjectionStatus,
+  ViewportRuntimeIdentity,
+} from './contracts/viewport-runtime';
+export {
   capabilityId,
   isCapabilityDescriptor,
   unavailableCapability,
@@ -266,6 +280,7 @@ export {
   parseTransportMessage,
 } from './transport/protocol';
 export type { TransportRequest, TransportResponse } from './transport/protocol';
+export type { TransportActor } from './contracts/transport';
 export {
   authorizeTransportRequest,
   createTransportSecurityPolicy,
@@ -286,6 +301,21 @@ export type {
 } from './transport/service';
 export { createStdioCarrier } from './transport/stdio-carrier';
 export type { StdioCarrier } from './transport/stdio-carrier';
+export {
+  MessagePortTransportError,
+  createMessagePortCarrier,
+  createMessagePortTransportClient,
+} from './transport/message-port-carrier';
+export type {
+  MessagePortCarrier,
+  MessagePortCarrierOptions,
+  MessagePortCarrierReject,
+  MessagePortTransportClient,
+  MessagePortTransportClientOptions,
+  MessagePortTransportErrorCode,
+  TransportMessageEvent,
+  TransportMessagePort,
+} from './transport/message-port-carrier';
 export { createHeadlessRuntime, headlessAvailability } from './runtime/headless-runtime';
 export {
   expandWorkflowRecipe,

@@ -744,7 +744,12 @@ export function createTransportService(options: TransportServiceOptions = {}): T
         const params = record(request.params);
         const operationId = typeof params.operationId === 'string' ? params.operationId : 'unknown';
         const input = params.input;
-        return operationId === 'saveDocToDisk' && typeof record(input).requestId === 'string'
+        // Capability IDs are namespaced on the public transport
+        // (`editor.saveDocToDisk`), while the operation-run owner uses the
+        // Gateway verb. Both forms must reach the same save terminal path so
+        // actor identity and request correlation are preserved.
+        const operationVerb = operationId.split('.').at(-1);
+        return operationVerb === 'saveDocToDisk' && typeof record(input).requestId === 'string'
           ? dispatchSave(request, input, params, params.async === true)
           : runOperation(request, operationId, input, params, {
             asynchronous: params.async === true,

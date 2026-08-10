@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useSyncExternalStore, useState } from 'react';
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Box,
@@ -18,8 +18,8 @@ import {
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
-import { entExists, entName, entParent, entComponent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, setHiddenMany, showAllHidden, ungroupEntity } from '@forgeax/editor-core';
+import { entExists, entName, entParent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
+import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, setVisibilityMany, showAllHidden, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
 // setters (setSelection/setHoverEntity/toggleSelection) or the origin-less
@@ -27,9 +27,9 @@ import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, requestRefEntity, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, readEntityVisibility, readVisibilityIntent, requestRefEntity, resolveVisibility, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, subscribeViewportRuntimeClient } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
-import type { EntityHandle } from '@forgeax/editor-core';
+import type { EntityHandle, VisibilitySnapshot } from '@forgeax/editor-core';
 import {
   clearHierarchyFilters,
   clearHierarchySearchQuery,
@@ -51,6 +51,7 @@ import {
   subscribeHierarchyPanelState,
   toggleHierarchyCollapsed,
   type HierarchyColumns,
+  type HierarchyRuntimeProjection,
 } from './hierarchy-state';
 
 interface Menu {
@@ -67,6 +68,18 @@ type CompNameIndex = ReadonlyMap<EntityHandle, readonly string[]>;
 const EMPTY_COMP_INDEX: CompNameIndex = new Map();
 const EMPTY_NAMES: readonly string[] = [];
 const EMPTY_IDS: readonly EntityHandle[] = [];
+
+type HierarchyOperation = Parameters<typeof gateway.dispatch>[0];
+interface RemoteHierarchyContextValue {
+  readonly selectionIds: ReadonlySet<EntityHandle>;
+  readonly primarySelection: EntityHandle | null;
+  readonly structure: HierarchyStructureProjection;
+}
+const RemoteHierarchyContext = createContext<RemoteHierarchyContextValue | null>(null);
+
+function dispatchHierarchyOperation(operation: HierarchyOperation): void {
+  void dispatchActiveEditorOperation(operation);
+}
 
 // A referentially STABLE callback that always invokes the latest closure — the
 // `useEvent` idiom (React RFC). The right-click/collapse handlers close over the
@@ -186,10 +199,23 @@ function applyDrop(target: EntityHandle, pos: DropPos): void {
 let anchorId: EntityHandle | null = null;
 
 /** Walk the tree in display order, skipping collapsed subtrees. */
-function flatVisibleOrder(collapsed: ReadonlySet<EntityHandle>): EntityHandle[] {
+function flatVisibleOrder(
+  collapsed: ReadonlySet<EntityHandle>,
+  projection?: HierarchyStructureProjection,
+): EntityHandle[] {
+  const projectedChildren = projection
+    ? new Map(projection.rows.map((row) => [row.id, row.childIds] as const))
+    : undefined;
+  const projectedChildIds = projection
+    ? new Set(projection.rows.flatMap((row) => row.childIds))
+    : undefined;
   const result: EntityHandle[] = [];
   function walk(parentId: EntityHandle | null): void {
-    const ids = childrenOf(gateway.activeWorld, parentId);
+    const ids = projectedChildren
+      ? parentId === null
+        ? projection!.rows.filter((row) => !projectedChildIds!.has(row.id)).map((row) => row.id)
+        : projectedChildren.get(parentId) ?? EMPTY_IDS
+      : childrenOf(gateway.activeWorld, parentId);
     for (const id of parentId === null ? stableDisplayOrder(ids) : ids) {
       result.push(id);
       if (!collapsed.has(id)) walk(id);
@@ -199,25 +225,29 @@ function flatVisibleOrder(collapsed: ReadonlySet<EntityHandle>): EntityHandle[] 
   return result;
 }
 
-function handleShiftClick(id: EntityHandle, collapsed: ReadonlySet<EntityHandle>): void {
-  const anchor = anchorId ?? getSelection();
+function handleShiftClick(
+  id: EntityHandle,
+  collapsed: ReadonlySet<EntityHandle>,
+  remote: RemoteHierarchyContextValue | null,
+): void {
+  const anchor = anchorId ?? remote?.primarySelection ?? getSelection();
   if (anchor === null) {
-    gateway.dispatch({ kind: 'setSelection', id });
+    dispatchHierarchyOperation({ kind: 'setSelection', id });
     anchorId = id;
     return;
   }
-  const order = flatVisibleOrder(collapsed);
+  const order = flatVisibleOrder(collapsed, remote?.structure);
   const ai = order.indexOf(anchor);
   const ci = order.indexOf(id);
   if (ai < 0 || ci < 0) {
-    gateway.dispatch({ kind: 'setSelection', id });
+    dispatchHierarchyOperation({ kind: 'setSelection', id });
     anchorId = id;
     return;
   }
   const lo = Math.min(ai, ci);
   const hi = Math.max(ai, ci);
   const range = order.slice(lo, hi + 1);
-  gateway.dispatch({ kind: 'setSelectionMany', ids: range });
+  dispatchHierarchyOperation({ kind: 'setSelectionMany', ids: range });
 }
 
 function highlightName(name: string, q: string) {
@@ -277,8 +307,8 @@ interface HierarchyRowVM {
   readonly name: string;
   readonly typeId: string;
   readonly hidden: boolean;
-  /** UE-parity recursive hide: a strict ancestor carries EditorHidden, so this
-   *  row renders dimmed (lighter than own-hidden) even though its own eye is on. */
+  /** An ancestor's hidden Visibility intent reaches this row while its own
+   *  intent remains inherited, so the row renders dimmed. */
   readonly ancestorHidden: boolean;
   readonly mobilityKey: ReturnType<typeof hierarchyMobility>;
   readonly childIds: readonly EntityHandle[];
@@ -308,30 +338,15 @@ function rowVmEqual(a: HierarchyRowVM, b: HierarchyRowVM): boolean {
     && a.mobilityKey === b.mobilityKey
     && idsEqual(a.childIds, b.childIds);
 }
-// Rebuilt alongside the component-name index: handles carrying EditorHidden, so
-// a row's ancestor-hidden lookup is a Set probe instead of a per-row query.
-let rowVmHiddenSet: ReadonlySet<EntityHandle> = new Set();
-function ancestorHiddenOf(world: NonNullable<typeof gateway.activeWorld>, id: EntityHandle): boolean {
-  const seen = new Set<number>();
-  let cur: EntityHandle | undefined = id;
-  for (;;) {
-    if (cur === undefined || seen.has(cur as number)) return false;
-    seen.add(cur as number);
-    const co = entComponent(world, cur, 'ChildOf');
-    if (!co.ok) return false;
-    const parent = (co.value as { parent: EntityHandle }).parent;
-    if (rowVmHiddenSet.has(parent)) return true;
-    cur = parent;
-  }
-}
+// Rebuilt alongside the component-name index: the engine's immutable
+// Visibility snapshot resolves inherited state for every row in one pass.
+let rowVmVisibility: VisibilitySnapshot | undefined;
 function rowVmSnapshot(id: EntityHandle): HierarchyRowVM {
   if (rowVmDirty) {
     rowVmDirty = false;
     const w = gateway.activeWorld;
     rowVmCompIndex = w ? worldComponentNames(w) : EMPTY_COMP_INDEX;
-    const hidden = new Set<EntityHandle>();
-    for (const [handle, compNames] of rowVmCompIndex) if (compNames.includes('EditorHidden')) hidden.add(handle);
-    rowVmHiddenSet = hidden;
+    rowVmVisibility = w ? resolveVisibility(w) : undefined;
   }
   const prev = rowVmCache.get(id);
   const world = gateway.activeWorld;
@@ -341,12 +356,15 @@ function rowVmSnapshot(id: EntityHandle): HierarchyRowVM {
     return MISSING_ROW_VM;
   }
   const names = rowVmCompIndex.get(id) ?? EMPTY_NAMES;
+  const resolution = rowVmVisibility
+    ? readEntityVisibility(world, id, rowVmVisibility)
+    : readEntityVisibility(world, id);
   const candidate: HierarchyRowVM = {
     exists: true,
     name: entName(world, id),
     typeId: getHierarchyEntityType(names, world, id).id,
-    hidden: names.includes('EditorHidden'),
-    ancestorHidden: ancestorHiddenOf(world, id),
+    hidden: resolution.intent === 'hidden',
+    ancestorHidden: resolution.effective === 'hidden' && resolution.intent !== 'hidden',
     mobilityKey: hierarchyMobility(entComponentsPresent(world, id, names)),
     childIds: childrenOf(world, id),
   };
@@ -397,14 +415,14 @@ interface HierarchyVisibleRow {
 function flattenVisibleRows(
   roots: readonly EntityHandle[],
   collapsed: ReadonlySet<EntityHandle>,
-  world: NonNullable<typeof gateway.activeWorld>,
+  world: typeof gateway.activeWorld,
   projection?: HierarchyStructureProjection,
 ): HierarchyVisibleRow[] {
   const childrenById = projection
     ? new Map(projection.rows.map((row) => [row.id, row.childIds] as const))
     : undefined;
   const childrenOfId = (id: EntityHandle): readonly EntityHandle[] =>
-    childrenById?.get(id) ?? childrenOf(world, id);
+    childrenById?.get(id) ?? (world ? childrenOf(world, id) : EMPTY_IDS);
   const pending: HierarchyVisibleRow[] = [];
   for (let i = roots.length - 1; i >= 0; i -= 1) {
     pending.push({ id: roots[i]!, depth: 1 });
@@ -422,7 +440,55 @@ function flattenVisibleRows(
   return rows;
 }
 
-function useHierarchyStructureProjection(): HierarchyStructureProjection | undefined {
+function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined {
+  const connection = useSyncExternalStore(
+    subscribeViewportRuntimeClient,
+    getViewportRuntimeClientSnapshot,
+    getViewportRuntimeClientSnapshot,
+  );
+  const [projection, setProjection] = useState<HierarchyRuntimeProjection | undefined>();
+  useEffect(() => {
+    if (connection.status !== 'ready') {
+      setProjection(undefined);
+      return;
+    }
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const envelope = await queryViewportRuntimeProjection<HierarchyRuntimeProjection>({ kind: 'hierarchy.structure' });
+        if (disposed) return;
+        if (envelope.status === 'ready') setProjection(envelope.value);
+        else if (envelope.status === 'empty') setProjection({
+          structure: { structureEpoch: envelope.revision, rows: [] },
+          selectionIds: [],
+        });
+        else setProjection(undefined);
+      } catch {
+        if (!disposed) setProjection(undefined);
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    // Bounded pull keeps the cache disposable and avoids inventing a second
+    // notification protocol before measurement demonstrates that deltas pay off.
+    const timer = window.setInterval(() => void refresh(), 100);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
+  return projection;
+}
+
+function useHierarchyProjection(): {
+  readonly structure: HierarchyStructureProjection | undefined;
+  readonly remote: HierarchyRuntimeProjection | undefined;
+} {
+  const remoteProjection = useRemoteHierarchyProjection();
   const graph = getActiveRuntimeUiGraph();
   const holder = useRef<{ graph: unknown; generation: number; selector: ReturnType<typeof createHierarchyStructureSelector>; mounted: ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']> } | null>(null);
   const generation = graph?.stats().worldGeneration ?? 0;
@@ -434,7 +500,14 @@ function useHierarchyStructureProjection(): HierarchyStructureProjection | undef
   const getSnapshot = useCallback(() => binding?.mounted.getSnapshot(), [binding]);
   const subscribe = useCallback((listener: () => void) => binding?.mounted.subscribe(listener) ?? (() => undefined), [binding]);
   useEffect(() => () => binding?.mounted.unsubscribe(), [binding]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const localProjection = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // A shell may retain a bootstrap/dummy World for legacy chrome wiring. Its
+  // mere presence does not make it authoritative once a Runtime carrier is
+  // connected: the carrier projection wins, and the local graph is only the
+  // in-process fallback used when no remote projection exists.
+  return remoteProjection !== undefined
+    ? { structure: remoteProjection.structure, remote: remoteProjection }
+    : { structure: localProjection, remote: undefined };
 }
 
 function projectionRow(projection: HierarchyStructureProjection | undefined, id: EntityHandle): HierarchyRowVM | undefined {
@@ -487,7 +560,9 @@ const Row = memo(function Row({
   // (useSyncExternalStore bails on Object.is), so a doc churn or a hover move
   // no longer repaints the whole tree.
   const vm = useHierarchyRowVM(id, projection);
-  const isSelected = useIsSelected(id);
+  const remote = useContext(RemoteHierarchyContext);
+  const localIsSelected = useIsSelected(id);
+  const isSelected = remote?.selectionIds.has(id) ?? localIsSelected;
   const isHovered = useIsHoverEntity(id);
   const isCollapsed = useIsHierarchyCollapsed(id);
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
@@ -514,7 +589,7 @@ const Row = memo(function Row({
   function commitRename(next: string) {
     setEditing(false);
     const name = next.trim();
-    if (name && name !== nodeName) gateway.dispatch({ kind: 'rename', entity: id, name });
+    if (name && name !== nodeName) void dispatchActiveEditorOperation({ kind: 'rename', entity: id, name });
   }
   return (
     <>
@@ -523,23 +598,24 @@ const Row = memo(function Row({
         className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : nodeAncestorHidden ? ' pdim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${isHovered ? ' hov' : ''}`}
         data-testid={`hier-row-${id}`}
         title={`${nodeName} · #${id}${!nodeHidden && nodeAncestorHidden ? ` · ${t('editor.hierarchy.hiddenByAncestor')}` : ''}`}
-        onMouseEnter={() => gateway.dispatch({ kind: 'setHoverEntity', id })}
-        onMouseLeave={() => gateway.dispatch({ kind: 'setHoverEntity', id: null })}
+        onMouseEnter={() => dispatchHierarchyOperation({ kind: 'setHoverEntity', id })}
+        onMouseLeave={() => dispatchHierarchyOperation({ kind: 'setHoverEntity', id: null })}
         onClick={(e) => {
           if (e.shiftKey) {
-            handleShiftClick(id, getHierarchyPanelSnapshot().collapsed);
+            handleShiftClick(id, getHierarchyPanelSnapshot().collapsed, remote);
           } else if (e.metaKey || e.ctrlKey) {
-            gateway.dispatch({ kind: 'toggleSelection', id });
+            dispatchHierarchyOperation({ kind: 'toggleSelection', id });
             anchorId = id;
           } else {
-            gateway.dispatch({ kind: 'setSelection', id });
+            dispatchHierarchyOperation({ kind: 'setSelection', id });
             anchorId = id;
           }
         }}
         onContextMenu={(e) => {
           e.preventDefault();
           // keep an existing multi-selection if right-clicking inside it
-          if (!getSelectionList().has(id)) gateway.dispatch({ kind: 'setSelection', id });
+          const selection = remote?.selectionIds ?? getSelectionList();
+          if (!selection.has(id)) dispatchHierarchyOperation({ kind: 'setSelection', id });
           onMenu({ id, x: e.clientX, y: e.clientY });
         }}
         draggable={!readOnly}
@@ -587,9 +663,9 @@ const Row = memo(function Row({
             // (one undo step) via the shared core op (north-star §3.2).
             const sel = getSelectionList();
             const ids = sel.has(id)
-              ? [id, ...[...sel].filter((sid) => sid !== id && entComponent(gateway.activeWorld, sid, 'EditorHidden').ok === nodeHidden)]
+              ? [id, ...[...sel].filter((sid) => sid !== id && (readVisibilityIntent(gateway.activeWorld, sid) === 'hidden') === nodeHidden)]
               : [id];
-            setHiddenMany(ids, newHidden);
+            setVisibilityMany(ids, newHidden ? 'hidden' : 'visible');
           }}
         >
           {nodeHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
@@ -701,10 +777,10 @@ const SceneFolderRow = memo(function SceneFolderRow({
   const folderTypeLabel = t('editor.hierarchy.types.folder');
   const visibilityTargets = collectEntitySubtree(visibilityIds ?? childrenIds);
   const folderHidden = visibilityTargets.length > 0
-    && visibilityTargets.every((id) => entComponent(gateway.activeWorld, id, 'EditorHidden').ok);
+    && visibilityTargets.every((id) => readVisibilityIntent(gateway.activeWorld, id) === 'hidden');
   const setFolderHidden = (hidden: boolean) => {
     if (readOnly) return;
-    setHiddenMany(visibilityTargets, hidden);
+    setVisibilityMany(visibilityTargets, hidden ? 'hidden' : 'visible');
   };
   return (
     <>
@@ -812,7 +888,9 @@ function VirtualizedRows({
     estimateSize: () => HIERARCHY_ROW_HEIGHT,
     overscan: 12,
   });
-  const selectedId = useSelection();
+  const remote = useContext(RemoteHierarchyContext);
+  const localSelectedId = useSelection();
+  const selectedId = remote?.primarySelection ?? localSelectedId;
   const selectedIndex = selectedId === null ? -1 : rows.findIndex((row) => row.id === selectedId);
   useEffect(() => {
     if (selectedIndex >= 0) rowVirtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
@@ -863,7 +941,16 @@ export function HierarchyPanel() {
   // as well; otherwise the first `graph === null` snapshot is never replaced
   // and the hierarchy remains an empty folder until another unrelated render.
   useDocVersion();
-  const projection = useHierarchyStructureProjection();
+  const { structure: projection, remote: remoteProjectionState } = useHierarchyProjection();
+  const remoteContext = useMemo<RemoteHierarchyContextValue | null>(() => {
+    if (remoteProjectionState === undefined) return null;
+    const selectionIds = new Set(remoteProjectionState.selectionIds);
+    return {
+      selectionIds,
+      primarySelection: remoteProjectionState.selectionIds.at(-1) ?? null,
+      structure: remoteProjectionState.structure,
+    };
+  }, [remoteProjectionState]);
   const view = useSyncExternalStore(
     subscribeHierarchyPanelState,
     getHierarchyPanelSnapshot,
@@ -896,19 +983,22 @@ export function HierarchyPanel() {
     expandHierarchySceneFolder();
   }, [activeSceneId]);
 
-  const readOnly = gateway.mode === 'play';
   const activeWorld = gateway.activeWorld;
-  const worldReady = activeWorld != null;
+  const remoteProjection = remoteContext !== null;
+  const readOnly = gateway.mode === 'play' || remoteProjection;
+  const worldReady = activeWorld != null || projection !== undefined;
   const hierarchyBodyRef = useRef<HTMLDivElement>(null);
-  const worldEntityIds = worldReady ? worldEntityHandles(activeWorld) : EMPTY_IDS;
+  const worldEntityIds = remoteProjection
+    ? projection?.rows.map((row) => row.id) ?? EMPTY_IDS
+    : activeWorld ? worldEntityHandles(activeWorld) : EMPTY_IDS;
   // The runtime projection is the cheap structural read model, but a freshly
   // dispatched public transaction can land before its runtime graph publish.
   // Never let that transient lag hide authored entities: when its cardinality
   // disagrees with the active world, use the same world's value-stable row VM
   // until the projection catches up.
-  const usableProjection = projection && projection.rows.length === worldEntityIds.length
+  const usableProjection = remoteProjection
     ? projection
-    : undefined;
+    : projection && projection.rows.length === worldEntityIds.length ? projection : undefined;
   if (worldReady) pruneDisplayOrder(worldEntityIds);
   // Root order derives from the doc. `docVersion` is referenced so the panel
   // re-derives roots when the document mutates (incl. the per-frame Play mirror),
@@ -921,10 +1011,10 @@ export function HierarchyPanel() {
     : undefined;
   const projectedRoots = usableProjection
     ? usableProjection.rows.filter((row) => !projectedChildIds!.has(row.id)).map((row) => row.id)
-    : worldReady ? childrenOf(activeWorld, null) : EMPTY_IDS;
+    : !remoteProjection && activeWorld ? childrenOf(activeWorld, null) : EMPTY_IDS;
   const roots = useStableIds(worldReady ? stableDisplayOrder(projectedRoots) : EMPTY_IDS);
   const visibleRows = useMemo(() => {
-    if (!activeWorld || view.collapsed.has(HIERARCHY_SCENE_FOLDER_ID)) return [];
+    if ((!activeWorld && !usableProjection) || view.collapsed.has(HIERARCHY_SCENE_FOLDER_ID)) return [];
     return flattenVisibleRows(roots, view.collapsed, activeWorld, usableProjection);
   }, [activeWorld, roots, usableProjection, view.collapsed]);
   useEffect(() => {
@@ -940,7 +1030,7 @@ export function HierarchyPanel() {
   const toggleCollapse = useCallback((id: EntityHandle) => toggleHierarchyCollapsed(id), []);
   const spawnEntity = () => {
     if (readOnly) return;
-    gateway.dispatch({
+    void dispatchActiveEditorOperation({
       kind: 'spawnEntity',
       name: 'Entity',
       parent: getSelection(),
@@ -951,7 +1041,7 @@ export function HierarchyPanel() {
     if (readOnly) return;
     const preset = getPreset(label);
     if (!preset) return;
-    gateway.dispatch({
+    void dispatchActiveEditorOperation({
       kind: 'spawnEntity',
       name: preset.label,
       parent: getSelection(),
@@ -959,8 +1049,10 @@ export function HierarchyPanel() {
     });
   };
   const selectAll = () => {
-    if (!gateway.activeWorld) return;
-    gateway.dispatch({ kind: 'setSelectionMany', ids: worldEntityHandles(gateway.activeWorld) });
+    const ids = remoteContext
+      ? remoteContext.structure.rows.map((row) => row.id)
+      : gateway.activeWorld ? worldEntityHandles(gateway.activeWorld) : EMPTY_IDS;
+    dispatchHierarchyOperation({ kind: 'setSelectionMany', ids: [...ids] });
   };
   const showAll = () => {
     if (!gateway.activeWorld || readOnly) return;
@@ -972,7 +1064,8 @@ export function HierarchyPanel() {
     clearHierarchyFilters();
   };
   const focusSelectionInViewport = () => {
-    if (getSelection() !== null) gateway.dispatch({ kind: 'requestFrame' });
+    const selected = remoteContext?.primarySelection ?? getSelection();
+    if (selected !== null) void dispatchActiveEditorOperation({ kind: 'requestFrame' });
   };
   const createMenuItems = (): MenuItemDef[] => [
     { label: t('editor.hierarchy.menu.createEntity'), icon: 'file-plus', onClick: spawnEntity, disabled: readOnly },
@@ -994,7 +1087,7 @@ export function HierarchyPanel() {
   // renders at the top layer of the whole window (or posts to the interface
   // parent when embedded in an iframe) — never clipped by this panel's bounds.
   const openMenu = useEvent((m: Menu) => {
-    if (!worldReady) return;
+    if (!activeWorld) return;
     // M7 / AC-15: entity name/components read from world (SSOT); doc.entities +
     // EntityNode.source deleted, so the edit-source menu item is dropped.
     const snapshot = [...getSelectionList()];
@@ -1007,14 +1100,14 @@ export function HierarchyPanel() {
       items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: snapshot.length }), icon: 'trash-2', onClick: () => deleteManyCascade(snapshot) });
       items.push({ sep: true });
     }
-    items.push({ label: t('editor.hierarchy.menu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => gateway.dispatch({ kind: 'requestRename', entity: m.id }), disabled: readOnly });
+    items.push({ label: t('editor.hierarchy.menu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => { void dispatchActiveEditorOperation({ kind: 'requestRename', entity: m.id }); }, disabled: readOnly });
     items.push({ label: t('editor.hierarchy.menu.duplicate'), icon: 'copy', shortcut: 'Ctrl+D', onClick: () => duplicateEntity(m.id) });
     items.push({ label: t('editor.hierarchy.menu.copyJson'), icon: 'braces', onClick: () => { if (entExists(gateway.activeWorld, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(gateway.activeWorld, m.id), components: entComponents(gateway.activeWorld, m.id) }, null, 2)); } });
     items.push({ label: t('editor.hierarchy.menu.refToChat'), icon: 'spark', forge: true, shortcut: 'Ctrl+K', onClick: () => requestRefEntity(m.id) });
     if (childrenOf(gateway.activeWorld, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), icon: 'layers', onClick: () => ungroupEntity(m.id) });
-    const hidden = entComponent(gateway.activeWorld, m.id, 'EditorHidden').ok;
+    const hidden = readVisibilityIntent(gateway.activeWorld, m.id) === 'hidden';
     items.push({ sep: true });
-    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', shortcut: 'H', onClick: () => gateway.dispatch({ kind: 'setHidden', entity: m.id, hidden: !hidden }), disabled: readOnly });
+    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', shortcut: 'H', onClick: () => gateway.dispatch({ kind: 'setVisibility', entity: m.id, state: hidden ? 'visible' : 'hidden' }), disabled: readOnly });
     items.push({ label: t('editor.hierarchy.menu.focusViewport'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport });
     items.push({ label: t('editor.hierarchy.menu.moveTo'), icon: 'folder', disabled: true });
     items.push({ sep: true });
@@ -1027,7 +1120,7 @@ export function HierarchyPanel() {
       { sep: true },
       { label: t('editor.hierarchy.menu.paste'), icon: 'copy', shortcut: 'Ctrl+V', disabled: true },
       { label: t('editor.hierarchy.menu.selectAll'), icon: 'box-select', shortcut: 'Ctrl+A', onClick: selectAll },
-      { label: t('editor.hierarchy.menu.deselect'), icon: 'crosshair', onClick: () => gateway.dispatch({ kind: 'setSelection', id: null }) },
+      { label: t('editor.hierarchy.menu.deselect'), icon: 'crosshair', onClick: () => dispatchHierarchyOperation({ kind: 'setSelection', id: null }) },
       { sep: true },
       { label: t('editor.hierarchy.menu.expandAll'), icon: 'chevrons-up-down', onClick: expandHierarchyAll },
       { label: t('editor.hierarchy.menu.collapseAll'), icon: 'chevrons-down-up', onClick: collapseHierarchyAll },
@@ -1062,6 +1155,7 @@ export function HierarchyPanel() {
   }
 
   return (
+    <RemoteHierarchyContext.Provider value={remoteContext}>
     <div
       className="panel outliner-panel"
       data-testid="panel-hierarchy"
@@ -1074,6 +1168,7 @@ export function HierarchyPanel() {
       // are excluded so Backspace edits text instead of deleting nodes.
       tabIndex={0}
       onKeyDown={(e) => {
+        if (readOnly) return;
         if (e.key !== 'Delete' && e.key !== 'Backspace') return;
         const tgt = e.target as HTMLElement;
         if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable) return;
@@ -1099,7 +1194,7 @@ export function HierarchyPanel() {
           style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
           onClick={(e) => {
             if ((e.target as HTMLElement).closest('.tn')) return;
-            gateway.dispatch({ kind: 'setSelection', id: null });
+            dispatchHierarchyOperation({ kind: 'setSelection', id: null });
             clearAssetSelection();
             clearFolderSelection();
           }}
@@ -1163,7 +1258,7 @@ export function HierarchyPanel() {
           }}
           onClick={(e) => {
             if ((e.target as HTMLElement).closest('.tn')) return;
-            gateway.dispatch({ kind: 'setSelection', id: null });
+            dispatchHierarchyOperation({ kind: 'setSelection', id: null });
             clearAssetSelection();
             clearFolderSelection();
           }}
@@ -1195,5 +1290,6 @@ export function HierarchyPanel() {
         </div>
       )}
     </div>
+    </RemoteHierarchyContext.Provider>
   );
 }

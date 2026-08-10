@@ -10,6 +10,7 @@ export type {
 } from './scene/scene-types';
 export type { SceneAsset } from '@forgeax/engine-types';
 import type { SceneAsset } from '@forgeax/engine-types';
+import type { VisibilityState } from '@forgeax/engine-render';
 import type { CommandErrorContext, ErrorSubjectRef } from '@forgeax/editor-product';
 import type { EntityHandle, EntityId, EntitySource } from './scene/scene-types';
 import type { SelectedAsset } from './store/asset-selection';
@@ -50,7 +51,7 @@ export type BuiltinEditorOp =
   | { kind: 'removeSceneOverride'; root: EntityId; member: EntityId; component: string; field: string }
   | { kind: 'addComponent'; entity: EntityId; component: string; value: unknown }
   | { kind: 'removeComponent'; entity: EntityId; component: string }
-  | { kind: 'setHidden'; entity: EntityId; hidden: boolean }
+  | { kind: 'setVisibility'; entity: EntityId; state: VisibilityState }
   // instantiateSceneAsset — re-instantiate a collected SceneAsset POD (from the
   // engine's rootsToSceneAsset) as live world entities, materials round-tripped
   // by GUID. This is the ONE document op both "copy an existing entity" callers
@@ -116,6 +117,12 @@ export type BuiltinEditorOp =
   | { kind: 'requestFrame' }
   | { kind: 'cameraSetProjection'; projection: 'perspective' | 'orthographic' }
   | { kind: 'cameraToggleProjection' }
+  // cameraSetView: UE-style view preset — a projection + axis-aligned orientation
+  // pair. Axis views imply orthographic; 'perspective' restores the perspective
+  // projection keeping the current orbit direction (pitch re-clamped to the
+  // perspective range). A free orthographic camera (V toggle) is NOT a preset —
+  // it derives the 'orthographic' label, never a settable value.
+  | { kind: 'cameraSetView'; view: 'perspective' | 'top' | 'bottom' | 'left' | 'right' | 'front' | 'back' }
   | { kind: 'cameraAdjustFov'; delta: number }
   | { kind: 'cameraZoom'; delta: number }
   | { kind: 'cameraBookmark'; action: 'save' | 'recall' | 'clear'; slot: number }
@@ -137,6 +144,9 @@ export type BuiltinEditorOp =
   // recorder lives in edit-runtime/engine; the gateway owns the invocation
   // door and the OperationRun result channel.
   | { kind: 'captureFrame'; frames?: number; requestId: string; retryOfRequestId?: string }
+  // Session-only VFX preview control. The runtime owner replays the selected
+  // live player at the next fixed-tick boundary; authored scene data is unchanged.
+  | { kind: 'replayParticleEffect'; entity: EntityId }
   | { kind: 'requestRename'; entity: EntityId }
   | { kind: 'setSceneId'; id: string | null | undefined }
   // switchSceneFile is request-correlated: scene loading is asynchronous and

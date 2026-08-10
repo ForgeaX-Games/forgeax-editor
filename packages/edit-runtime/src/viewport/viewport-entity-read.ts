@@ -21,10 +21,11 @@
 //              nested entities lag by tens of units and end up mispositioned.
 
 import type { World, EntityHandle } from '@forgeax/engine-ecs';
-import { ChildOf } from '@forgeax/engine-scene';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import type { Quat } from '@forgeax/engine-math';
 import { mat4, vec3, quat as quatMath } from '@forgeax/engine-math';
-import { entComponent, entComponents, quatToEuler } from '@forgeax/editor-core';
+import { entComponent, quatToEuler, readEntityVisibility, readVisibilityIntent } from '@forgeax/editor-core';
+import type { VisibilitySnapshot } from '@forgeax/editor-core';
 import { worldPointToParentLocal } from './viewport-transform';
 import type { Vec3 } from './viewport-ray';
 
@@ -81,15 +82,24 @@ export function readWorldTransform(world: World, handle: EntityHandle): EditorTr
  *  on `handle`. Transform propagation defines `child.world = parent.world ×
  *  child.local`, so the only correct inverse for a parented entity is
  *  `inverse(parent.world) × target` — using the child's normalized world axes
- *  loses inherited scale and incorrectly folds in the child's own rotation. */
+ *  loses inherited scale and incorrectly folds in the child's own rotation.
+ *
+ *  The ChildOf/Transform hops read the engine DIRECTLY (world.get), not via
+ *  entComponent: entComponent's legacy liveness probe is Name-keyed, and Name
+ *  is NOT intrinsic — prefab/GLB-internal nodes are live without one, so the
+ *  gated read misread an unnamed-but-live parent as stale and the write-back
+ *  silently degraded to identity (world coords landed in local pos — the
+ *  2026-08-07 drag-direction bug). Here the component read itself is the
+ *  liveness check: a dead/recycled handle fails the engine get and we keep
+ *  the identity passthrough; an unnamed live parent simply reads fine. */
 export function worldPositionToLocal(world: World, handle: EntityHandle, target: Vec3): Vec3 {
-  const childOf = entComponent(world, handle, 'ChildOf');
+  const childOf = world.get(handle, ChildOf);
   if (!childOf.ok) return target;
-  const parent = childOf.value.parent as number | undefined;
+  const parent = (childOf.value as { parent?: number }).parent;
   if (parent === undefined) return target;
-  const parentTransform = entComponent(world, parent as EntityHandle, 'Transform');
+  const parentTransform = world.get(parent as EntityHandle, Transform);
   if (!parentTransform.ok) return target;
-  const parentWorld = parentTransform.value.world as ArrayLike<number> | undefined;
+  const parentWorld = (parentTransform.value as Record<string, unknown>).world as ArrayLike<number> | undefined;
   if (!parentWorld || parentWorld.length < 16) return target;
   return worldPointToParentLocal(parentWorld, target);
 }
@@ -113,26 +123,16 @@ export function readWorldQuat(world: World, handle: EntityHandle): [number, numb
   return [rot[0]!, rot[1]!, rot[2]!, rot[3]!];
 }
 
-/** EditorHidden is an editor-only marker; the entComponents walk surfaces it
- *  from the active world. */
+/** Read authored visibility intent from the engine-owned Visibility component. */
 export function isEntHidden(world: World, handle: EntityHandle): boolean {
-  return 'EditorHidden' in entComponents(world, handle);
+  return readVisibilityIntent(world, handle) === 'hidden';
 }
 
-/** UE-parity effective hide: the entity itself OR any strict ancestor carries
- *  EditorHidden (hiding a parent recursively hides the subtree). This is the
- *  same derivation applySetHidden materializes onto the engine Disabled marker
- *  for the render extract; picking must match what the user sees. */
-export function isEntEffectivelyHidden(world: World, handle: EntityHandle): boolean {
-  const seen = new Set<number>();
-  let cur: EntityHandle | undefined = handle;
-  while (cur !== undefined) {
-    if (seen.has(cur as number)) return false;
-    seen.add(cur as number);
-    if (isEntHidden(world, cur)) return true;
-    const co = world.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
-    if (!co.ok) return false;
-    cur = (co.value as { parent: number }).parent as EntityHandle;
-  }
-  return false;
+/** Read effective engine visibility, including inherited parent state. */
+export function isEntEffectivelyHidden(
+  world: World,
+  handle: EntityHandle,
+  snapshot?: VisibilitySnapshot,
+): boolean {
+  return readEntityVisibility(world, handle, snapshot).effective === 'hidden';
 }

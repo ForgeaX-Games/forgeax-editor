@@ -38,6 +38,7 @@ export interface DiagnosticsPanelRow {
   readonly traceId?: string;
   readonly location?: DiagnosticsLocation;
   readonly subjectRef?: ErrorSubjectRef;
+  readonly objectRefs?: ErrorObjectRefs;
   readonly retryable: boolean;
   readonly actions: readonly DiagnosticsPanelAction[];
   /** JSON-safe source facts for copy/details; never used as a control signal. */

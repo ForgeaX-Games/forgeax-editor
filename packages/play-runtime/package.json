@@ -28,7 +28,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
+  },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": {"lines": 57.32, "functions": 57.89}
+    }
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",

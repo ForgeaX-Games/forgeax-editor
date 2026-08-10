@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname, join, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, realpathSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, readFileSync } from 'node:fs';
 import {
   engineVitePreset,
+  ENGINE_EXECUTION_ISOLATION_HEADERS,
   resolveGameEngineEntry as resolveSharedGameEngineEntry,
   type EngineVitePreset,
 } from '../../engine-vite-preset';
@@ -12,6 +13,7 @@ import {
 import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
 import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy';
 import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller';
+import { setupSingleGameRootFarm } from './src/active-game-mount';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PLAY_PACKAGE_ROOT = resolve(here, 'node_modules');
@@ -192,45 +194,12 @@ function templateGameDefaultRuntimeRoots(gameDir: string): string[] {
 const viteRoot = here;
 
 let mountedGameLink: string | undefined;
-function setupSingleGameRootFarm(gameDir: string, gameId: string): void {
-  const targetPath = resolve(gameDir);
-  const mountRoot = resolve(here, HOST_GAMES_FARM);
-  if (!existsSync(targetPath)) {
-    throw new Error(`active game directory does not exist: ${targetPath}`);
-  }
-  mkdirSync(mountRoot, { recursive: true });
-  const linkPath = resolve(mountRoot, gameId);
-  if (mountedGameLink !== undefined && mountedGameLink !== linkPath) {
-    try {
-      if (lstatSync(mountedGameLink).isSymbolicLink()) unlinkSync(mountedGameLink);
-    } catch { /* the previous exact mount may already be gone */ }
-  }
-  try {
-    const existing = lstatSync(linkPath);
-    if (!existing.isSymbolicLink()) {
-      throw new Error(`refusing to replace non-symlink active game mount: ${linkPath}`);
-    }
-    if (realpathSync(linkPath) === realpathSync(targetPath)) {
-      mountedGameLink = linkPath;
-      return;
-    }
-    unlinkSync(linkPath);
-  } catch (error) {
-    if (error instanceof Error && !error.message.includes('ENOENT')) throw error;
-  }
-  // Remove a broken generated junction before recreating the exact active-game mount.
-  try {
-    const stale = lstatSync(linkPath);
-    if (stale.isSymbolicLink()) unlinkSync(linkPath);
-  } catch {
-    // No existing mount.
-  }
-  symlinkSync(targetPath, linkPath, 'junction');
-  mountedGameLink = linkPath;
-}
-
 if (INITIAL_GAME_DIR && /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID)) {
-  setupSingleGameRootFarm(INITIAL_GAME_DIR, INITIAL_GAME_ID);
+  mountedGameLink = setupSingleGameRootFarm({
+    farmRoot: resolve(here, HOST_GAMES_FARM),
+    gameDir: INITIAL_GAME_DIR,
+    gameId: INITIAL_GAME_ID,
+  });
 }
 
 const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
@@ -470,7 +439,12 @@ const runtimeScopeController = createRuntimeScopeController({
   secret: RUNTIME_SCOPE_SECRET,
   initial: initialScopeCommand,
   prepareGameMount: (gameDir, gameId) => {
-    setupSingleGameRootFarm(gameDir, gameId);
+    mountedGameLink = setupSingleGameRootFarm({
+      farmRoot: resolve(here, HOST_GAMES_FARM),
+      gameDir,
+      gameId,
+      previousMount: mountedGameLink,
+    });
     activeGameDir = resolve(gameDir);
     activeGameId = gameId;
   },
@@ -506,6 +480,7 @@ export default defineConfig({
     ...enginePreset.resolve,
   },
   server: {
+    headers: ENGINE_EXECUTION_ISOLATION_HEADERS,
     port: PORT,
     host: HOST,
     strictPort: true,

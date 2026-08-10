@@ -1,0 +1,15 @@
+{
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [
+          {"context": "b2-self-boot", "integration_id": 15368},
+          {"context": "typecheck", "integration_id": 15368},
+          {"context": "submodule-pin", "integration_id": 15368},
+          {"context": "smoke-play", "integration_id": 15368}
+        ]
+      }
+    }
+  ]
+}

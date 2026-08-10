@@ -1,14 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  deriveMaterialParamRows,
   ensureAssetCataloged,
+  ensureMaterialChainCataloged,
+  ensureShaderParamSchemaIndex,
   gateway,
   hexToMaterialColor,
+  materialCatalogLookup,
   materialColorToHex,
   panelBridge,
+  resolveMaterialParamSchema,
+  resolveOverrides,
+  setMaterialPreviewParam,
   useActiveEditorAsset,
+  type MaterialParamRow,
+  type ShaderParamSchemaIndex,
 } from '@forgeax/editor-core';
 import { AssetPicker } from '../AssetPicker';
 import { PropertyRow } from './PropertyRow';
+import { useNumberDraft } from '../useNumberDraft';
 import type { PreviewProps } from './index';
 
 interface PassDesc {
@@ -16,24 +26,14 @@ interface PassDesc {
   program?: { module?: string };
 }
 
-/** Engine SSOT: user-region texture field names (derive-paramschema.ts:287-291). */
-const TEXTURE_FIELD_NAMES: ReadonlySet<string> = new Set([
-  'baseColorTexture',
-  'metallicRoughnessTexture',
-  'normalTexture',
-]);
-
 /** Accepted drag-drop kinds for texture assignment. */
 const DROPPABLE_TEXTURE_KINDS: ReadonlySet<string> = new Set(['texture', 'image']);
 
-/** From values' stored value (integer refs index OR raw GUID string) resolve
- *  to the actual texture GUID. Pack format stores `values[key] = refs[] index`
- *  (number), while the materialLoader resolves indices back to GUID strings at load
- *  time (may arrive as string). */
-function resolveTextureGuid(value: unknown, refs: readonly string[]): string | null {
-  if (typeof value === 'string' && value.length > 0) return value;
-  if (typeof value === 'number' && refs[value]) return refs[value]!;
-  return null;
+/** camelCase schema name → human label ("baseColor" → "Base Color"). The raw
+ *  name stays on the tooltip so shader-side naming remains discoverable. */
+function paramLabel(name: string): string {
+  const spaced = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 // ── TextureSlot: per-field drop zone + browse + display ─────────────────────
@@ -115,7 +115,170 @@ function TextureSlot({ label, guid, canEdit, onAssign, onClear, onBrowse }: Text
   );
 }
 
-// ── Main component ──────────────────────────────────────────────────────────
+// ── Per-kind parameter editors ──────────────────────────────────────────────
+
+interface EditorProps {
+  row: MaterialParamRow;
+  canEdit: boolean;
+  onCommit: (value: unknown) => void;
+  onPreview: (value: unknown) => void;
+}
+
+/** Single numeric cell with draft semantics (commit on blur/Enter, Escape
+ *  aborts, arrows step) shared by scalar and vector editors. */
+function NumberCell({ value, canEdit, onCommit, testId }: {
+  value: number;
+  canEdit: boolean;
+  onCommit: (n: number) => void;
+  testId?: string;
+}) {
+  const draft = useNumberDraft(value, undefined, onCommit);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      style={{ width: 56 }}
+      disabled={!canEdit}
+      data-testid={testId}
+      value={draft.value}
+      onFocus={draft.onFocus}
+      onChange={draft.onChange}
+      onBlur={draft.onBlur}
+      onKeyDown={draft.onKeyDown}
+    />
+  );
+}
+
+function ScalarEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
+  const display = typeof row.value === 'number' ? row.value : 0;
+  const [drag, setDrag] = useState<number | null>(null);
+  // Optimistic post-commit value: the pack write + assetsChanged round-trip is
+  // async, so without this the slider would snap back to the stale value until
+  // the write lands. Cleared as soon as the resolved value refreshes.
+  const [pending, setPending] = useState<number | null>(null);
+  useEffect(() => { setPending(null); }, [display]);
+  const shown = drag ?? pending ?? display;
+
+  const finishDrag = useCallback(() => {
+    if (drag !== null) {
+      setPending(drag);
+      onCommit(drag);
+      setDrag(null);
+    }
+  }, [drag, onCommit]);
+
+  return (
+    <span className="f-val">
+      {row.slider && (
+        <input
+          type="range"
+          min={0} max={1} step={0.01}
+          value={shown}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setDrag(v);
+            onPreview(v);
+          }}
+          onMouseUp={finishDrag}
+          onKeyUp={finishDrag}
+          disabled={!canEdit}
+          data-testid={`mat-${row.name}-slider`}
+          style={{ width: '50%' }}
+        />
+      )}
+      <NumberCell
+        value={shown}
+        canEdit={canEdit}
+        onCommit={(n) => { setDrag(null); setPending(n); onCommit(n); }}
+        testId={`mat-${row.name}-number`}
+      />
+    </span>
+  );
+}
+
+function ColorEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
+  const arr = Array.isArray(row.value) ? row.value as number[]
+    : Array.isArray(row.defaultValue) ? row.defaultValue as number[]
+    : [1, 1, 1, 1];
+  const hex = materialColorToHex(arr, row.colorSpace);
+  // The native color input fires `input` per picker tick; route those through
+  // the transient preview channel and commit once on blur so a color drag is
+  // ONE ledger entry instead of dozens. `pendingHex` keeps the swatch on the
+  // committed color until the async pack write round-trips into row.value.
+  const picked = useRef<string | null>(null);
+  const [pendingHex, setPendingHex] = useState<string | null>(null);
+  useEffect(() => { setPendingHex(null); }, [hex]);
+  const shown = pendingHex ?? hex;
+
+  const toValue = (nextHex: string): number[] => {
+    const alpha = row.components === 4 ? (arr[3] ?? 1) : 1;
+    const next = hexToMaterialColor(nextHex, alpha, row.colorSpace);
+    return row.components === 4 ? next : next.slice(0, row.components);
+  };
+
+  return (
+    <span className="f-val">
+      <input
+        type="color"
+        value={shown}
+        onChange={(e) => {
+          picked.current = e.target.value;
+          setPendingHex(e.target.value);
+          onPreview(toValue(e.target.value));
+        }}
+        onBlur={() => {
+          if (picked.current !== null && picked.current !== hex) onCommit(toValue(picked.current));
+          picked.current = null;
+        }}
+        disabled={!canEdit}
+        data-testid={`mat-${row.name}-input`}
+        style={{ width: 32, height: 22, border: 'none', padding: 0, cursor: canEdit ? 'pointer' : 'default' }}
+      />
+      <span className="hexval" style={{ marginLeft: 6, fontSize: '0.82em', fontFamily: 'monospace' }}>
+        {shown}
+      </span>
+    </span>
+  );
+}
+
+function VectorEditor({ row, canEdit, onCommit }: EditorProps) {
+  const arr = Array.isArray(row.value) ? row.value as number[]
+    : Array.isArray(row.defaultValue) ? row.defaultValue as number[]
+    : new Array<number>(row.components).fill(0);
+  return (
+    <span className="f-val" style={{ display: 'inline-flex', gap: 4 }}>
+      {Array.from({ length: row.components }, (_, i) => (
+        <NumberCell
+          key={i}
+          value={typeof arr[i] === 'number' ? arr[i]! : 0}
+          canEdit={canEdit}
+          onCommit={(n) => {
+            const next = Array.from({ length: row.components }, (_, j) => (typeof arr[j] === 'number' ? arr[j]! : 0));
+            next[i] = n;
+            onCommit(next);
+          }}
+          testId={`mat-${row.name}-${i}`}
+        />
+      ))}
+    </span>
+  );
+}
+
+function BoolEditor({ row, canEdit, onCommit }: EditorProps) {
+  return (
+    <span className="f-val">
+      <input
+        type="checkbox"
+        checked={row.value === true}
+        disabled={!canEdit}
+        onChange={(e) => onCommit(e.target.checked)}
+        data-testid={`mat-${row.name}-checkbox`}
+      />
+    </span>
+  );
+}
+
+// ── Live payload (unchanged contract: catalog envelope is the SSOT) ─────────
 
 /** Re-read the asset's payload from the catalog after a pack write (Task 5).
  *  The stored `SelectedAsset.payload` is a snapshot from selection time; without
@@ -160,21 +323,67 @@ function useLivePayload(propsPayload: Record<string, unknown>, guid: string | un
   }, [guid, propsPayload, version]);
 }
 
+// ── Main component ──────────────────────────────────────────────────────────
+
 export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewProps) {
   const asset = useActiveEditorAsset();
   const { payload, refs } = useLivePayload(propsPayload, asset?.guid);
+  const [schemaIndex, setSchemaIndex] = useState<ShaderParamSchemaIndex | undefined>(undefined);
+  const [chainVersion, setChainVersion] = useState(0);
+  const [pickerTarget, setPickerTarget] = useState<string | null>(null);
+
+  // Shader paramSchema index from the same manifest the renderer boots with —
+  // the engine SSOT for "which parameters this material's shader exposes".
+  useEffect(() => {
+    let cancelled = false;
+    void ensureShaderParamSchemaIndex().then((index) => {
+      if (!cancelled) setSchemaIndex(index);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Parent-chain warm: resolveOverrides reads registry.assetCatalog
+  // synchronously, and only loadByGuid fills it — an uncatalogued parent would
+  // silently drop inherited values from every row.
+  useEffect(() => {
+    if (!asset?.guid) return;
+    let cancelled = false;
+    void ensureMaterialChainCataloged(gateway.doc.registry, asset.guid).then(() => {
+      if (!cancelled) setChainVersion((v) => v + 1);
+    });
+    return () => { cancelled = true; };
+  }, [asset?.guid]);
+
   const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
   const parent = payload.parent as string | undefined;
-  const values = (payload.values ?? {}) as Record<string, unknown>;
   const colorSpace = payload.colorSpace === 'linear' ? 'linear' : 'srgb';
+  const ownValues = (payload.values ?? {}) as Record<string, unknown>;
 
-  const baseColor = Array.isArray(values.baseColor) ? values.baseColor as number[] : [1, 1, 1, 1];
-  const metallic = typeof values.metallic === 'number' ? values.metallic : 0;
-  const roughness = typeof values.roughness === 'number' ? values.roughness : 0.5;
+  // Display inherited (parent-chain merged) values, not just the material's
+  // own — this is what the renderer resolves at draw time.
+  const resolvedValues = useMemo(() => {
+    void chainVersion;
+    if (!asset?.guid) return ownValues;
+    const resolved = resolveOverrides(asset.guid, materialCatalogLookup(gateway.doc.registry));
+    return Object.keys(resolved).length > 0 ? resolved : ownValues;
+  }, [asset?.guid, ownValues, chainVersion]);
 
-  const [localMetallic, setLocalMetallic] = useState(metallic);
-  const [localRoughness, setLocalRoughness] = useState(roughness);
-  const [pickerTarget, setPickerTarget] = useState<string | null>(null);
+  const { descriptors, declaredNames } = useMemo(
+    () => resolveMaterialParamSchema(payload, schemaIndex),
+    [payload, schemaIndex],
+  );
+
+  const rows = useMemo(() => deriveMaterialParamRows({
+    descriptors,
+    declaredNames,
+    ownValues,
+    resolvedValues,
+    refs,
+    colorSpace,
+  }), [descriptors, declaredNames, ownValues, resolvedValues, refs, colorSpace]);
+
+  const paramRows = rows.filter((row) => row.kind !== 'texture');
+  const textureRows = rows.filter((row) => row.kind === 'texture');
 
   const canEdit = !!asset?.packPath && !!asset?.guid;
 
@@ -210,9 +419,24 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
     dispatchMaterialOp({ paramPatch });
   }, [dispatchMaterialOp]);
 
-  // Task 1: handleAssignTexture — assign a texture GUID to a named slot.
-  // Uses the existing updateMaterialParams op with textureGuids (same path as
-  // handleClearTexture, but setting a GUID instead of null). No new op needed.
+  /** Commit one parameter through the ledger. The transient drag overlay is
+   *  NOT cleared here — the preview viewport drops it when the post-write
+   *  `assetsChanged` re-resolve lands, so the preview never flickers back to
+   *  the pre-commit value in between. */
+  const commitParam = useCallback((name: string, value: unknown) => {
+    dispatchParam({ [name]: value });
+  }, [dispatchParam]);
+
+  const previewParam = useCallback((name: string, value: unknown) => {
+    if (asset?.guid) setMaterialPreviewParam(asset.guid, name, value);
+  }, [asset?.guid]);
+
+  /** Revert one parameter to the inherited/default value by deleting the
+   *  material's own key (updateMaterialParams deletes on undefined). */
+  const resetParam = useCallback((name: string) => {
+    dispatchParam({ [name]: undefined });
+  }, [dispatchParam]);
+
   const handleAssignTexture = useCallback((key: string, textureGuid: string) => {
     if (!asset) return;
     dispatchMaterialOp({ paramPatch: {}, textureGuids: { [key]: textureGuid } });
@@ -222,94 +446,78 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
     dispatchMaterialOp({ paramPatch: { [key]: undefined }, textureGuids: { [key]: null } });
   }, [dispatchMaterialOp]);
 
-  const handleColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const hex = e.target.value;
-    const alpha = baseColor[3] ?? 1;
-    dispatchParam({ baseColor: hexToMaterialColor(hex, alpha, colorSpace) });
-  }, [dispatchParam, baseColor, colorSpace]);
-
-  const handleMetallicCommit = useCallback((val: number) => {
-    dispatchParam({ metallic: val });
-  }, [dispatchParam]);
-
-  const handleRoughnessCommit = useCallback((val: number) => {
-    dispatchParam({ roughness: val });
-  }, [dispatchParam]);
-
-  // Collect texture fields that exist in TEXTURE_FIELD_NAMES — always show all
-  // three slots (even if undefined) so the user can discover and assign them.
-  const textureFields = useMemo(() => {
-    return [...TEXTURE_FIELD_NAMES].map(key => ({
-      key,
-      guid: resolveTextureGuid(values[key], refs),
-    }));
-  }, [values, refs]);
-
   return (
     <div data-testid="preview-material" className="mat-editor">
       <div className="compname">Material</div>
 
-      {/* Base Color */}
-      <div className="f-row" data-testid="mat-baseColor">
-        <span
-          className="f-name"
-          title={colorSpace === 'srgb'
-            ? 'Stored as sRGB; converted to linear once at render extraction'
-            : 'Stored as explicit linear RGB; the browser color picker is displayed in sRGB'}
-        >
-          Base Color ({colorSpace === 'srgb' ? 'sRGB' : 'Linear'})
-        </span>
-        <span className="f-val">
-          <input
-            type="color"
-            value={materialColorToHex(baseColor, colorSpace)}
-            onChange={handleColorChange}
-            disabled={!canEdit}
-            data-testid="mat-baseColor-input"
-            style={{ width: 32, height: 22, border: 'none', padding: 0, cursor: canEdit ? 'pointer' : 'default' }}
-          />
-          <span className="hexval" style={{ marginLeft: 6, fontSize: '0.82em', fontFamily: 'monospace' }}>
-            {materialColorToHex(baseColor, colorSpace)}
-          </span>
-        </span>
+      {/* Schema-driven parameter rows (shader paramSchema + declared +
+          values-only), displayed with parent-chain resolved values. */}
+      <div className="mat-tex-section">
+        <div className="mat-tex-section-title">Parameters</div>
+        {paramRows.length === 0 && (
+          <div className="field muted">No parameters on this material.</div>
+        )}
+        {paramRows.map((row) => (
+          <div className="f-row" data-testid={`mat-${row.name}`} data-overridden={row.overridden ? '1' : undefined} key={row.name}>
+            <span
+              className="f-name"
+              title={row.kind === 'color'
+                ? `${row.name} — stored as ${row.colorSpace === 'srgb' ? 'sRGB; converted to linear once at render extraction' : 'explicit linear RGB; the browser color picker is displayed in sRGB'}`
+                : row.name}
+            >
+              {paramLabel(row.name)}
+            </span>
+            {row.kind === 'color' && (
+              <ColorEditor row={row} canEdit={canEdit}
+                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
+            )}
+            {row.kind === 'scalar' && (
+              <ScalarEditor row={row} canEdit={canEdit}
+                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
+            )}
+            {row.kind === 'vector' && (
+              <VectorEditor row={row} canEdit={canEdit}
+                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
+            )}
+            {row.kind === 'bool' && (
+              <BoolEditor row={row} canEdit={canEdit}
+                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
+            )}
+            {row.kind === 'readonly' && (
+              <span className="f-val"><span className="hexval">{String(row.value ?? '—')}</span></span>
+            )}
+            {canEdit && row.overridden && (
+              <button
+                className="mat-clear-btn"
+                title="Reset to inherited/default"
+                data-testid={`mat-${row.name}-reset`}
+                onClick={() => resetParam(row.name)}
+              >
+                ↺
+              </button>
+            )}
+          </div>
+        ))}
       </div>
 
-      {/* Metallic */}
-      <div className="f-row" data-testid="mat-metallic">
-        <span className="f-name">Metallic</span>
-        <span className="f-val">
-          <input
-            type="range"
-            min={0} max={1} step={0.01}
-            value={localMetallic}
-            onChange={(e) => setLocalMetallic(Number(e.target.value))}
-            onMouseUp={() => handleMetallicCommit(localMetallic)}
-            onKeyUp={() => handleMetallicCommit(localMetallic)}
-            disabled={!canEdit}
-            data-testid="mat-metallic-slider"
-            style={{ width: '60%' }}
+      {/* Texture slots: every texture the shader schema declares (plus
+          values-only texture keys), not a hard-coded subset. */}
+      <div className="mat-tex-section">
+        <div className="mat-tex-section-title">Textures</div>
+        {textureRows.length === 0 && (
+          <div className="field muted">This material's shader declares no texture slots.</div>
+        )}
+        {textureRows.map((row) => (
+          <TextureSlot
+            key={row.name}
+            label={row.name}
+            guid={row.textureGuid}
+            canEdit={canEdit}
+            onAssign={(textureGuid) => handleAssignTexture(row.name, textureGuid)}
+            onClear={() => handleClearTexture(row.name)}
+            onBrowse={() => setPickerTarget(row.name)}
           />
-          <span style={{ marginLeft: 6, fontSize: '0.85em', minWidth: 30 }}>{localMetallic.toFixed(2)}</span>
-        </span>
-      </div>
-
-      {/* Roughness */}
-      <div className="f-row" data-testid="mat-roughness">
-        <span className="f-name">Roughness</span>
-        <span className="f-val">
-          <input
-            type="range"
-            min={0} max={1} step={0.01}
-            value={localRoughness}
-            onChange={(e) => setLocalRoughness(Number(e.target.value))}
-            onMouseUp={() => handleRoughnessCommit(localRoughness)}
-            onKeyUp={() => handleRoughnessCommit(localRoughness)}
-            disabled={!canEdit}
-            data-testid="mat-roughness-slider"
-            style={{ width: '60%' }}
-          />
-          <span style={{ marginLeft: 6, fontSize: '0.85em', minWidth: 30 }}>{localRoughness.toFixed(2)}</span>
-        </span>
+        ))}
       </div>
 
       {/* Passes (read-only) */}
@@ -320,27 +528,11 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
 
       {parent && <PropertyRow label="Parent" value={parent} />}
 
-      {/* Texture slots (AC-T1 browse + AC-T2 drop + AC-T3 empty state) */}
-      <div className="mat-tex-section">
-        <div className="mat-tex-section-title">Textures</div>
-        {textureFields.map(({ key, guid }) => (
-          <TextureSlot
-            key={key}
-            label={key}
-            guid={guid}
-            canEdit={canEdit}
-            onAssign={(textureGuid) => handleAssignTexture(key, textureGuid)}
-            onClear={() => handleClearTexture(key)}
-            onBrowse={() => setPickerTarget(key)}
-          />
-        ))}
-      </div>
-
-      {/* AssetPicker modal (AC-T1: Browse → pick → assign) */}
+      {/* AssetPicker modal (Browse → pick → assign) */}
       {pickerTarget && (
         <AssetPicker
           assetType="TextureAsset"
-          currentGuid={textureFields.find(f => f.key === pickerTarget)?.guid ?? undefined}
+          currentGuid={textureRows.find((r) => r.name === pickerTarget)?.textureGuid ?? undefined}
           onPick={(guid) => { handleAssignTexture(pickerTarget, guid); setPickerTarget(null); }}
           onClear={() => { handleClearTexture(pickerTarget); setPickerTarget(null); }}
           onClose={() => setPickerTarget(null)}

@@ -18,8 +18,8 @@
 //     research Finding 13 named (the old code returned undefined for both).
 //
 // Entity ENUMERATION (former per-session id-set/handle-set/root-set helpers) is
-// now a world walk: worldEntityHandles(world) runs a Name query (createQueryState
-// + queryRun) to list every live handle; worldRootHandles(world) filters to
+// now a world walk: worldEntityHandles(world) runs a persistent world.query to
+// list every live handle; worldRootHandles(world) filters to
 // entities with no live ChildOf parent. These replace the legacy-map keyset the
 // deleted helpers walked.
 //
@@ -32,19 +32,12 @@
 
 import { Name, ChildOf, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-// EditorHidden is editor-core's own marker component (plan-strategy §2 D-7), NOT
-// an engine export — importing it from @forgeax/engine-runtime is the exact
-// `Socket`-class regression AGENTS.md anti-pattern #5 warns about (would trip
-// TS2305 under the strict engine-.d.ts typecheck gate).
-import { EditorHidden } from '../components/EditorHidden';
 import {
   getRegisteredComponents,
-  createQueryState,
-  queryRun,
   Disabled,
   Entity,
 } from '@forgeax/engine-ecs';
-import type { World } from '@forgeax/engine-ecs';
+import type { Component, World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import {
   createEntityObjectRef,
@@ -112,13 +105,31 @@ export interface EditRejectedInPlayError {
 const STALE_HINT =
   'handle does not survive a play/stop boundary; re-query activeWorld or call getSelection() for a fresh handle';
 
-/** True when `world.get(handle, Name)` fails specifically because the handle is
- *  stale/despawned (engine code 'stale-entity'). A component-absent failure on a
- *  live entity is NOT stale. Name is intrinsic (every live entity has it), so its
- *  failure is a reliable liveness probe. */
+/** True when the handle is stale/despawned (engine error code 'stale-entity').
+ *
+ *  The probe reads `Name` — deliberately, NOT the structurally-intrinsic
+ *  `Entity`. Two forces hold it here:
+ *
+ *  1. This legacy fallback is the ONLY stale guard available in play mode:
+ *     the super handle-pair check needs a (worldRef, epoch) binding, and the
+ *     play world has none. A bare handle minted in the edit world can
+ *     numerically collide with a live play-world entity (deterministic
+ *     same-doc allocation + runtime spawns — see play-runtime README), and no
+ *     engine read can distinguish that collision from a genuinely live
+ *     entity. The e2e cross-world guard (vfx-particle-runtime "Edit save ->
+ *     reopen -> Play -> Stop round trip") pins stale-entity-handle for such a
+ *     read; the colliding runtime node carries no Name, so the Name probe is
+ *     what catches it.
+ *  2. The known downside — live UNNAMED entities (prefab/GLB-internal nodes)
+ *     misread as stale — must NOT be "fixed" here again (the 2026-08-07
+ *     Entity-probe attempt turned the play-mode collision into a silent
+ *     component-absent / wrong-entity read). Read sites that legitimately
+ *     serve unnamed entities bypass this gate by reading the component they
+ *     need directly via world.get (e.g. viewport-entity-read's
+ *     worldPositionToLocal), where the component read itself is the liveness
+ *     check. */
 function isStale(world: World, handle: EntityHandle): boolean {
-  const r = world.get(handle, Name);
-  return !r.ok;
+  return !world.get(handle, Name).ok;
 }
 
 /** Studio cross-game switch clears `gateway.doc.world` before the next createApp
@@ -216,7 +227,7 @@ function checkHandle(
 
 // ── Entity enumeration (replaces entIds / entHandles / entRootHandles) ──────
 
-/** Run `queryRun` over every live entity carrying ALL of `withTokens` — INCLUDING
+/** Run a persistent Query over every live entity carrying ALL of `withTokens` — INCLUDING
  *  entities carrying the engine `Disabled` marker. The engine query auto-excludes
  *  Disabled unless `Disabled` is explicitly in `with` (which then REQUIRES it), so
  *  full coverage is the UNION of two passes: one ordinary (enabled entities) and
@@ -235,25 +246,13 @@ export function queryEachIncludingDisabled(
   const passes: ReadonlyArray<ReadonlyArray<unknown>> = alreadyDisabled
     ? [withTokens]
     : [withTokens, [...withTokens, Disabled]];
-  type EntityColumn = { self?: { length: number; [i: number]: number } };
   for (const withList of passes) {
-    // The engine query generics don't flow through a dynamic `with`, so the
-    // runtime shapes are erased to `unknown` and narrowed at the read site (the
-    // store/ AC-06 gate forbids the colon-any annotation, so none appear here).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = createQueryState({ with: withList as any[] } as any);
-    queryRun(
-      state as unknown as Parameters<typeof queryRun>[0],
-      world as unknown as Parameters<typeof queryRun>[1],
-      (bundle: unknown) => {
-        const entities = (bundle as { Entity?: EntityColumn }).Entity?.self;
-        if (!entities) return;
-        for (let i = 0; i < entities.length; i++) {
-          const h = entities[i];
-          if (h !== undefined) visit(h);
-        }
-      },
-    );
+    // Entity identity is intrinsic on QueryRow and must not be repeated as a
+    // presence filter. The remaining tokens are dynamic editor inputs, so erase
+    // only the descriptor generic while preserving the public Query contract.
+    const filters = withList.filter((token) => token !== Entity) as Component[];
+    const query = world.query({ with: filters }).unwrap();
+    for (const row of query) visit(row.entity);
   }
 }
 
@@ -272,9 +271,9 @@ export function worldEntityHandles(world: World): EntityHandle[] {
  *  query), this covers GLB mount-internal mesh nodes that carry NO Name —
  *  the glTF bridge only stamps Name on nodes with a non-empty glTF name, so a
  *  Name-keyed enumeration makes unnamed mesh nodes unpickable. Hidden
- *  (Disabled / EditorHidden-chain) entities are INCLUDED here; visibility
- *  filtering is the consumer's job (the pick sweep applies
- *  isEntEffectivelyHidden per candidate). */
+ *  (Disabled) entities are INCLUDED here; Visibility filtering is the
+ *  consumer's job (the pick sweep applies isEntEffectivelyHidden per
+ *  candidate). */
 export function worldRenderableHandles(world: World): EntityHandle[] {
   if (!hasWorld(world)) return [];
   const out: EntityHandle[] = [];
@@ -427,8 +426,8 @@ export function worldComponentNames(world: World): Map<EntityHandle, string[]> {
   type EntityColumn = { self?: { length: number; [i: number]: number } };
   for (const [name, token] of getRegisteredComponents()) {
     // `Entity` is in the query `with` so the row-handle column populates (same
-    // convention as worldEntityHandles). Hidden entities included via the same
-    // union walk — the Hierarchy hidden flag / type column must see them.
+    // convention as worldEntityHandles). Disabled entities are included via the
+    // same union walk — the Hierarchy type column must see them.
     queryEachIncludingDisabled(world, [token, Entity], (h) => {
       let names = map.get(h as EntityHandle);
       if (names === undefined) { names = []; map.set(h as EntityHandle, names); }
@@ -467,7 +466,6 @@ const _readTokenCache = new Map<string, unknown>();
   _readTokenCache.set('Name', Name);
   _readTokenCache.set('Transform', Transform);
   _readTokenCache.set('ChildOf', ChildOf);
-  _readTokenCache.set('EditorHidden', EditorHidden);
 })();
 
 function resolveReadToken(name: string): unknown {

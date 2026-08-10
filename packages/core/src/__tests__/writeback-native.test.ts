@@ -25,11 +25,11 @@ import {
   serializeSceneAssetToPack,
 } from '@forgeax/engine-runtime';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
+import { Visibility, VisibilityStateValue } from '@forgeax/engine-render';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
-import { EditorHidden } from '../components/EditorHidden';
-import { stripEditorHiddenMarker } from '../store/store';
+import { stripDisabledMarker } from '../store/store';
 
 // ── Minimal mock ShaderRegistry for AssetRegistry constructor ──────────────
 
@@ -146,8 +146,7 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
 
     // AC-08: verify no editor-only fields leak into pack.
     const packJson = JSON.stringify(pack);
-    expect(packJson).not.toContain('EditorHidden');
-    expect(packJson).not.toContain('"hidden"');
+    expect(packJson).not.toContain('Disabled');
   });
 
   // (b) Failure branch: entity ref outside closure produces structured error
@@ -191,20 +190,16 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     }
   });
 
-  // (c) AC-04 + AC-05 (verify F6 regression guard): a hidden entity survives the
-  // round-trip (entity serialized normally) while its EditorHidden marker is
-  // stripped from the pack. The earlier worldToPack impl filtered hidden ROOT
-  // entities out entirely — reproducing exactly the scene-pack.ts:178 data-loss
-  // bug AC-05 exists to fix (AGENTS.md #2). stripEditorHiddenMarker keeps the
-  // entity, drops only the marker.
-  it('(c) hidden entity survives round-trip, EditorHidden stripped (AC-04/AC-05)', () => {
+  // (c) Visibility is authored scene data: a hidden entity survives collection
+  // and keeps its explicit state for the Edit → pack → Play round-trip.
+  it('(c) hidden Visibility intent survives round-trip (AC-04/AC-05)', () => {
     const world = new World();
     const registry = makeRegistry();
 
-    // Two roots: one visible, one hidden (marker present).
+    // Two roots: one visible, one explicitly hidden.
     const visible = spawnRoot(world, 'Visible');
     const hidden = spawnRoot(world, 'Hidden');
-    const addR = world.addComponent(hidden, { component: EditorHidden, data: {} });
+    const addR = world.addComponent(hidden, { component: Visibility, data: { state: VisibilityStateValue.hidden } });
     expect(addR.ok).toBe(true);
 
     const collected = rootsToSceneAsset(registry, world, [visible, hidden]);
@@ -212,51 +207,47 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     if (!collected.ok) return;
 
     // Before strip: engine collected BOTH entities (hidden not dropped) and the
-    // EditorHidden marker is present on the hidden one (it is a registered comp).
+    // Visibility intent is present on the hidden one.
     const rawEntities = (collected.value as unknown as { entities: Array<{ components: Record<string, unknown> }> }).entities;
     expect(rawEntities.length).toBe(2); // AC-05: hidden entity NOT dropped
 
-    // After strip: entity count unchanged, EditorHidden marker gone.
-    const stripped = stripEditorHiddenMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
+    // After strip: entity count unchanged and Visibility remains authored data.
+    const stripped = stripDisabledMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
     expect(stripped.entities.length).toBe(2); // AC-05: both entities still present
-    for (const e of stripped.entities) {
-      expect('EditorHidden' in e.components).toBe(false); // AC-04: marker stripped
-    }
+    const hiddenEntity = stripped.entities.find((e) => 'Visibility' in e.components);
+    expect(hiddenEntity?.components.Visibility).toEqual({ state: VisibilityStateValue.hidden });
 
-    // AC-04: pack JSON must not leak the marker.
+    // The explicit Visibility state is part of the authored pack contract.
     const packR = serializeSceneAssetToPack(stripped as never);
     expect(packR.ok).toBe(true);
     if (!packR.ok) return;
     const packJson = JSON.stringify(packR.value);
-    expect(packJson).not.toContain('EditorHidden');
-    expect(packJson).not.toContain('"hidden"');
+    expect(packJson).toContain('Visibility');
   });
 
-  // (c2) UE-parity M1: the engine `Disabled` marker (derived render-state synced
-  // by applySetHidden) must never reach a scene pack either — it re-derives from
-  // EditorHidden at load, so persisting it would double-author the same fact and
-  // leak editor state into the game payload (north-star derive discipline).
-  it('(c2) Disabled engine marker is stripped alongside EditorHidden', () => {
+  // (c2) The engine `Disabled` marker is derived/runtime state and must never
+  // reach a scene pack, while authored Visibility remains.
+  it('(c2) Disabled engine marker is stripped while Visibility remains', () => {
     const world = new World();
     const registry = makeRegistry();
 
     const hidden = spawnRoot(world, 'Hidden');
-    expect(world.addComponent(hidden, { component: EditorHidden, data: {} }).ok).toBe(true);
+    expect(world.addComponent(hidden, { component: Visibility, data: { state: VisibilityStateValue.hidden } }).ok).toBe(true);
     expect(world.addComponent(hidden, { component: Disabled, data: {} }).ok).toBe(true);
 
     const collected = rootsToSceneAsset(registry, world, [hidden]);
     expect(collected.ok).toBe(true);
     if (!collected.ok) return;
 
-    const stripped = stripEditorHiddenMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
+    const stripped = stripDisabledMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
     expect(stripped.entities.length).toBe(1);
     for (const e of stripped.entities) {
-      expect('EditorHidden' in e.components).toBe(false);
       expect('Disabled' in e.components).toBe(false);
+      expect(e.components.Visibility).toEqual({ state: VisibilityStateValue.hidden });
     }
     const packJson = JSON.stringify(stripped);
-    expect(packJson).not.toContain('EditorHidden');
     expect(packJson).not.toContain('Disabled');
+    expect(packJson).toContain('Visibility');
   });
 
   // (d) Placeholder for sessionToPack grep check at commit time.

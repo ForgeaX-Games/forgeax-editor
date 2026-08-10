@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "name": "duplicate check identity",
+      "operation": "duplicate-check-id",
+      "expectedCode": "identity-duplicate"
+    },
+    {
+      "name": "unknown execution home",
+      "operation": "add-unknown-home",
+      "expectedCode": "identity-home-invalid"
+    },
+    {
+      "name": "fast profile is not a strict subset",
+      "operation": "fast-not-subset",
+      "expectedCode": "profile-fast-not-subset"
+    },
+    {
+      "name": "profile and execution home drift",
+      "operation": "profile-home-drift",
+      "expectedCode": "profile-home-drift"
+    },
+    {
+      "name": "required context has no mapping",
+      "operation": "remove-context-mapping",
+      "expectedCode": "required-context-missing"
+    },
+    {
+      "name": "required context maps more than once",
+      "operation": "duplicate-context-mapping",
+      "expectedCode": "required-context-duplicate"
+    },
+    {
+      "name": "required context maps a local-only check",
+      "operation": "required-context-home-drift",
+      "expectedCode": "required-context-home-drift"
+    }
+  ]
+}

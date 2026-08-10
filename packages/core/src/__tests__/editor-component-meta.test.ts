@@ -55,7 +55,7 @@ describe('editor component meta overlay', () => {
     // The overlay grew past hiding with the animation-preview M1 contract
     // (AnimationPlayer bespoke+animation keys); the HIDDEN set stays the
     // internal components plus the derived engine `Disabled` marker (synced by
-    // applySetHidden from EditorHidden intent — users must not edit it
+    // Visibility is the authored engine contract and remains inspectable.
     // directly; docs 2026-08-04-editor-hide-ue-parity-plan).
     const hidden = Object.entries(EDITOR_COMPONENT_META)
       .filter(([, meta]) => meta.hidden === true)

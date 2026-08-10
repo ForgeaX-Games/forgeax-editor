@@ -46,6 +46,7 @@ import { shouldApplyHydratedWorkbenchLayout } from './workspace-hydration';
 import { getDockResetEpoch } from './dockResetEpoch';
 import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
 import { installEdgeDrawer } from './edgeDrawer';
+import { designedPanelPosition } from './reopen-position';
 import { isOnSideEdge, nearerSideEdge, type SideEdge } from './sideEdgeMove';
 import './DockShell.css';
 
@@ -1111,16 +1112,31 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   }, [applyWorkspace, region]);
 
   // Reopen a panel that was closed (× on its tab) so closing one is never a
-  // dead end. Re-added to the right of whatever's there.
+  // dead end. Page-scoped panels return to their DESIGNED seat (derived from
+  // the Page Type's default layout); anything else is re-added to the right
+  // of whatever's there.
   const reopen = useCallback((id: string): void => {
     const api = apiRef.current;
     if (!api || api.getPanel(id)) return;
     // Region-scoped: refuse to reopen a panel that doesn't belong here.
     if (!isMemberRef.current(id)) return;
-    const ref = lastGridPanelId(api);
+    const scopeLayout = pageScopeRef.current?.layout;
+    const designed = scopeLayout
+      ? designedPanelPosition(scopeLayout, id, (panelId) => api.getPanel(panelId) != null)
+      : undefined;
     const component = id;
     const title = titleFor(id);
-    api.addPanel({ id, component, title, position: ref ? { referencePanel: ref, direction: 'right' } : undefined });
+    if (designed?.kind === 'edge') {
+      api.addPanel({ id, component, title, position: { direction: designed.direction } });
+      return;
+    }
+    const ref = designed?.referencePanel ?? lastGridPanelId(api);
+    api.addPanel({
+      id,
+      component,
+      title,
+      position: ref ? { referencePanel: ref, direction: designed?.direction ?? 'right' } : undefined,
+    });
   }, [titleFor]);
   // Keep a ref so the drag-end closure (registered once in useEffect) can call
   // the latest `reopen` without needing a deps re-registration.

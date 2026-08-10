@@ -31,7 +31,7 @@ import { Name, Transform, scenePlugin as transformPlugin } from '@forgeax/engine
 // engine #650 (Tier-2 decomposition) moved builtin handles into
 // @forgeax/engine-assets-runtime.
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { World, Entity, type EntityHandle } from '@forgeax/engine-ecs';
+import { Disabled, World, type EntityHandle } from '@forgeax/engine-ecs';
 import { WorldManager } from '../index';
 
 // NOTE: entComponents (editor helper) treats a Name-less entity as stale (Name is
@@ -40,26 +40,13 @@ import { WorldManager } from '../index';
 const has = (world: World, h: EntityHandle, token: unknown): boolean =>
   world.get(h, token as Parameters<World['get']>[1]).ok;
 
-/** Enumerate EVERY live entity handle in a world via the archetype-graph self
- *  column (same idiom as editworld-freeze-snapshot.test.ts). Unlike
+/** Enumerate EVERY live entity handle through the public Query API. Unlike
  *  worldEntityHandles (a Name-query walk), this surfaces Name-less entities too —
  *  the editor camera + gizmo carry no Name, so a Name walk would miss them. */
 function allEntityHandles(world: World): EntityHandle[] {
   const out: EntityHandle[] = [];
-  const graph = (
-    world as unknown as {
-      _getGraph: () => {
-        archetypes: { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }[];
-      };
-    }
-  )._getGraph();
-  for (const arch of graph.archetypes) {
-    const selfCol = arch.columns.get(Entity.id)?.get('self');
-    if (!selfCol) continue;
-    for (let row = 0; row < arch.size; row++) {
-      out.push(selfCol.view[row]! as unknown as EntityHandle);
-    }
-  }
+  for (const row of world.query({}).unwrap()) out.push(row.entity);
+  for (const row of world.query({ with: [Disabled] }).unwrap()) out.push(row.entity);
   return out;
 }
 

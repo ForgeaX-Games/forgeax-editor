@@ -275,6 +275,7 @@ function withError(run: OperationRun, error: CommandError): OperationRun {
   return frozenRun({
     ...run,
     status: 'failed',
+    progress: frozenProgress({ fraction: 1, stage: 'failed' }),
     error: Object.freeze({ ...error, recoveryActions: Object.freeze([...error.recoveryActions]) }),
     recoveryActions: Object.freeze([...error.recoveryActions]),
   });
@@ -317,12 +318,20 @@ export function reduceOperationRun(
   if (event.type === 'progress') return validatedRun(frozenRun({ ...next, progress: frozenProgress(event.progress) }));
   if (event.type === 'effect-result') return validatedRun(frozenRun({ ...next, effectResults: { ...current.effectResults, [event.effectKey]: event.result } }));
   if (event.type === 'succeeded') {
-    return validatedRun(frozenRun({ ...next, status: 'succeeded', completedAt: event.at, result: event.result, recoveryActions: [] }));
+    return validatedRun(frozenRun({
+      ...next,
+      status: 'succeeded',
+      progress: frozenProgress({ fraction: 1, stage: 'succeeded' }),
+      completedAt: event.at,
+      result: event.result,
+      recoveryActions: [],
+    }));
   }
   if (event.type === 'failed') return validatedRun(frozenRun({ ...withError(next, event.error), completedAt: event.at, sequence: event.sequence }));
   if (event.type === 'cancelled') return validatedRun(frozenRun({
       ...next,
       status: 'cancelled',
+      progress: frozenProgress({ fraction: 1, stage: 'cancelled' }),
       completedAt: event.at,
       ...(event.error === undefined ? {} : { error: event.error, recoveryActions: event.error.recoveryActions }),
     }));

@@ -1,0 +1,133 @@
+{
+  "cases": [
+    {
+      "name": "valid ownership partition",
+      "input": {
+        "surfaces": [
+          {
+            "path": "packages/core",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {"name": "@forgeax/editor-core", "forgeaxCi": {"ownership": "Editor-owned"}}
+          },
+          {
+            "path": "packages/ui",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {
+              "name": "@forgeax/editor-ui",
+              "forgeaxCi": {
+                "ownership": "intentionally non-tested host",
+                "obligations": {"kind": "static", "checks": ["bun run typecheck"]}
+              }
+            }
+          },
+          {
+            "path": "packages/engine",
+            "kind": "gitlink-root",
+            "materialization": "materialized",
+            "packageJson": {"name": "@forgeax/engine"}
+          },
+          {
+            "path": "packages/engine/packages/runtime",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "gitlinkRoot": "packages/engine",
+            "packageJson": {"name": "@forgeax/engine-runtime"}
+          }
+        ]
+      },
+      "expectedClasses": [
+        "Editor-owned",
+        "intentionally non-tested host",
+        "consumed-submodule-contract",
+        "consumed-submodule-contract"
+      ]
+    },
+    {
+      "name": "unknown override fails closed",
+      "input": {
+        "surfaces": [
+          {
+            "path": "packages/unknown",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {"name": "unknown", "forgeaxCi": {"ownership": "mystery"}}
+          }
+        ]
+      },
+      "expectedError": "ownership-unknown"
+    },
+    {
+      "name": "duplicate declarations fail closed",
+      "input": {
+        "surfaces": [
+          {
+            "path": "packages/core",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {"name": "@forgeax/editor-core"}
+          }
+        ],
+        "ownershipDeclarations": [
+          {"path": "packages/core", "ownership": "Editor-owned"},
+          {"path": "packages/core", "ownership": "consumed-submodule-contract"}
+        ]
+      },
+      "expectedError": "ownership-duplicate"
+    },
+    {
+      "name": "strict classification rejects omitted surface",
+      "input": {
+        "strictDeclarations": true,
+        "surfaces": [
+          {
+            "path": "packages/core",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {"name": "@forgeax/editor-core"}
+          }
+        ]
+      },
+      "expectedError": "ownership-missing"
+    },
+    {
+      "name": "host must carry a static or integration obligation",
+      "input": {
+        "surfaces": [
+          {
+            "path": "packages/ui",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {
+              "name": "@forgeax/editor-ui",
+              "forgeaxCi": {"ownership": "intentionally non-tested host"}
+            }
+          }
+        ]
+      },
+      "expectedError": "host-obligation-missing"
+    },
+    {
+      "name": "host cannot forge coverage evidence",
+      "input": {
+        "surfaces": [
+          {
+            "path": "packages/ui",
+            "kind": "workspace-package",
+            "materialization": "materialized",
+            "packageJson": {
+              "name": "@forgeax/editor-ui",
+              "forgeaxCi": {
+                "ownership": "intentionally non-tested host",
+                "obligations": {"kind": "static", "checks": ["bun run typecheck"]},
+                "quality": {"test": "bun test", "coverage": {"lines": 0, "functions": 0}}
+              }
+            }
+          }
+        ]
+      },
+      "expectedError": "host-coverage-forbidden"
+    }
+  ]
+}

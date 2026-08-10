@@ -7,7 +7,9 @@ export const allowedApiRules: ApiCallRule[] = [
   { pattern: /^\/api\/boot-splash$/ },
   { pattern: /^\/api\/extensions\/list(?:\?kind=(?:\$\{[^}]+\}|cli-provider))?$/ },
   { pattern: /^\/api\/extensions\/capabilities$/ },
-  { pattern: /^\/api\/bus\/ui\/surfaces(?:\/\$\{[^}]+\}\/(?:ack|pending|snapshot)|\/\$\{[^}]+\})?$/ },
+  // surface id 段既可能是模板串,也可能是字面量(MenuBar 直写 host.menubar);
+  // 动词含 dispatched(人机同账补记),pending 与 DELETE 都可带 ?page=(按页计数/注销)。
+  { pattern: /^\/api\/bus\/ui\/surfaces(?:\/(?:\$\{[^}]+\}|[a-zA-Z0-9._-]+)(?:\/(?:ack|dispatched|snapshot)|\/pending(?:\?page=\$\{[^}]+\})?|\?page=\$\{[^}]+\})?)?$/ },
   { pattern: /^\/api\/cli\/health$/ },
   { pattern: /^\/api\/commands\/(?:\$\{[^}]+\}|upload)\/(?:execute|query)$/ },
   { pattern: /^\/api\/events\/stream\?topic=(?:plugin\.reloaded|tool\.confirm-\*|tool\.confirm-required)$/ },

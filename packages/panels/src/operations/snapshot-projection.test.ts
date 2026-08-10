@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { createOperationRun, type OperationRunRequest } from '@forgeax/editor-product';
 import {
   getOperationCenterRows,
+  installOperationProjectionSource,
+  subscribeOperationProjection,
   type OperationProjectionSource,
   type OperationRunProjectionSnapshot,
 } from './run-view-model';
@@ -84,5 +86,38 @@ describe('versioned terminal projection source', () => {
     expect(source).not.toContain('readonly runs: readonly (OperationRun | OperationRunFactProjection)[];');
     expect(source).not.toContain('readonly commits: readonly AuthoredCommit[];');
     expect(source).toContain('rowsCache = { source, revision, resolveAsset: source.resolveAsset, rows };');
+  });
+
+  it('moves mounted subscribers when the replaceable Runtime projection changes', () => {
+    let firstNotify = () => {};
+    let secondNotify = () => {};
+    const first: OperationProjectionSource = {
+      getSnapshot: () => ({ revision: 1, runs: [] }),
+      subscribe: (listener) => {
+        firstNotify = listener;
+        return () => { firstNotify = () => {}; };
+      },
+    };
+    const second: OperationProjectionSource = {
+      getSnapshot: () => ({ revision: 2, runs: [] }),
+      subscribe: (listener) => {
+        secondNotify = listener;
+        return () => { secondNotify = () => {}; };
+      },
+    };
+    let notifications = 0;
+    const unsubscribe = subscribeOperationProjection(() => { notifications += 1; });
+    const releaseFirst = installOperationProjectionSource(first);
+    const afterFirstInstall = notifications;
+    const releaseSecond = installOperationProjectionSource(second);
+    firstNotify();
+    expect(notifications).toBe(afterFirstInstall + 1);
+    secondNotify();
+    expect(notifications).toBe(afterFirstInstall + 2);
+    releaseSecond();
+    firstNotify();
+    expect(notifications).toBe(afterFirstInstall + 4);
+    releaseFirst();
+    unsubscribe();
   });
 });

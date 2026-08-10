@@ -16,6 +16,7 @@
 // surface real divergence instead of silently accepting drift.
 
 import { z } from 'zod';
+import { VIEWPORT_CARRIER_KINDS } from '@forgeax/editor-product';
 import { GameplayScopeSchema, type GameplayScope } from './io/gameplay-contract';
 
 // ── 1. VAG_CONSOLE ───────────────────────────────────────────────────────────
@@ -94,6 +95,11 @@ export type VagCarrierFailureDetail = z.infer<typeof VagCarrierFailureDetailSche
 const VagCarrierPayloadSchema = z.object({
   version: z.literal(VAG_CARRIER_PROTOCOL_VERSION),
   runtimeId: z.string().min(1).nullable(),
+  // Additive fields for viewport-runtime/v1. Optional keeps the external VAG
+  // wire compatible with Studio supervisors that have not adopted them yet.
+  runtimeGeneration: z.number().int().positive().optional(),
+  carrierId: z.string().min(1).optional(),
+  carrierKind: z.enum(VIEWPORT_CARRIER_KINDS).optional(),
   // Present for managed carrier pages; null for ordinary user-opened preview
   // pages that are not owned by the server supervisor.
   challengeResponse: z.string().min(1).nullable(),

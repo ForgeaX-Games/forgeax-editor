@@ -9,7 +9,7 @@ describe('Edit particle Pack registration', () => {
   test('registers only the native particle cooker at the build composition root', () => {
     expect(source).toContain("from '@forgeax/engine-vfx-compiler'");
     expect(source).not.toContain('particleEffectImporter');
-    expect(source).toContain('createParticleEffectNativeCooker(createStockParticleOperatorRegistry())');
+    expect(source).toContain('createParticleCodeNativeCooker(discoverParticleCodeModules(packRoots))');
     expect(source).toContain('importers: [');
     expect(source).toContain('cookers: [');
   });

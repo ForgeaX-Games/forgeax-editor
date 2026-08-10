@@ -1,13 +1,23 @@
-// regression-manifest.ts — the product-owned R3-07 regression contract.
+// regression-manifest.ts — the product-owned projection of the CI contract.
 //
-// One manifest describes the checks that `bun fx ci` can execute. The same
-// coordinates are printed in the human route line and written to the optional
-// JSON report, so a red command can be located without translating a generic
-// shell step back into a roadmap. Commands remain ordinary Bun/Playwright
-// entry points; this file owns selection and provenance, not their semantics.
+// The contract is the only business roster. This module keeps the historical
+// forgeax-regression/v1 execution shape for downstream callers while deriving
+// every check identity, profile, owner, and execution home from that producer
+// source of truth.
+
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type RegressionProfile = 'fast' | 'full';
 export type FixtureLayer = 'R0' | 'R1' | 'R2';
+
+export interface ContractCheck {
+  readonly checkId: string;
+  readonly owner: string;
+  readonly command: string;
+  readonly executionHome: Readonly<Record<string, boolean>>;
+}
 
 export interface RegressionCheck {
   readonly id: string;
@@ -19,199 +29,87 @@ export interface RegressionCheck {
   readonly journey: string;
   readonly gate: string;
   readonly profiles: readonly RegressionProfile[];
+  readonly owner: string;
+  readonly executionHome: Readonly<Record<string, boolean>>;
 }
 
-const fast: readonly RegressionProfile[] = ['fast', 'full'];
-const full: readonly RegressionProfile[] = ['full'];
+export interface RegressionManifestProjection {
+  readonly manifestVersion: typeof REGRESSION_MANIFEST_VERSION;
+  readonly checks: readonly RegressionCheck[];
+  readonly profiles: Readonly<Record<RegressionProfile, readonly string[]>>;
+  readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+}
+
+interface ContractDocument {
+  readonly version: string;
+  readonly checks: readonly ContractCheck[];
+  readonly profiles: Readonly<Record<string, readonly string[]>>;
+  readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+}
 
 export const REGRESSION_MANIFEST_VERSION = 'forgeax-regression/v1';
 
-export const REGRESSION_CHECKS: readonly RegressionCheck[] = Object.freeze([
-  {
-    id: 'r0-platform-io-unit',
-    name: 'platform-io unit tests',
-    command: 'bun',
-    args: ['-F', '@forgeax/platform-io', 'test'],
+const profileNames: Readonly<Record<RegressionProfile, string>> = {
+  fast: 'local-fast',
+  full: 'local-full',
+};
+
+const contractPath = resolve(
+  fileURLToPath(new URL('../ci/editor-ci-contract.json', import.meta.url)),
+);
+
+function loadContract(): ContractDocument {
+  return JSON.parse(readFileSync(contractPath, 'utf8')) as ContractDocument;
+}
+
+function splitCommand(command: string): readonly [string, ...string[]] {
+  const parts = command.trim().split(/\s+/);
+  const executable = parts.shift();
+  if (!executable) throw new Error('contract check command must not be empty');
+  return [executable, ...parts];
+}
+
+function profilesFor(checkId: string, contract: ContractDocument): readonly RegressionProfile[] {
+  return (['fast', 'full'] as const).filter((profile) =>
+    contract.profiles[profileNames[profile]]?.includes(checkId),
+  );
+}
+
+function projectCheck(check: ContractCheck, contract: ContractDocument): RegressionCheck {
+  const [command, ...args] = splitCommand(check.command);
+  return {
+    id: check.checkId,
+    name: check.checkId,
+    command,
+    args,
     fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
+    roadmapId: 'R3-07',
     journey: 'J0/J1',
-    gate: 'C4/C6/C7',
-    profiles: fast,
-  },
-  {
-    id: 'r0-material-pack-shape',
-    name: 'material pack shape',
-    command: 'bun',
-    args: ['scripts/validate-material-pack-shape.mjs'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0',
-    gate: 'C4/C5/C6',
-    profiles: fast,
-  },
-  {
-    id: 'r0-standalone-b2',
-    name: 'standalone B2 self-boot',
-    command: 'bun',
-    args: ['scripts/selfcheck-standalone-b2.mjs'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0',
-    gate: 'C4/C5/C6',
-    profiles: fast,
-  },
-  {
-    id: 'r0-editor-lint',
-    name: 'editor lint',
-    command: 'bun',
-    args: ['run', 'lint'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0/J1',
-    gate: 'C2/C3',
-    profiles: fast,
-  },
-  {
-    id: 'r0-dependency-cycle-lint',
-    name: 'dependency-cycle lint',
-    command: 'bun',
-    args: ['run', 'lint:dep'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0/J1',
-    gate: 'C7',
-    profiles: fast,
-  },
-  {
-    id: 'r0-editor-typecheck',
-    name: 'editor typecheck',
-    command: 'bun',
-    args: ['run', 'typecheck'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0/J1',
-    gate: 'C2/C3/C7',
-    profiles: fast,
-  },
-  {
-    id: 'r0-core-unit',
-    name: 'editor-core unit tests',
-    command: 'bun',
-    args: ['-F', '@forgeax/editor-core', 'test'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0/J1',
-    gate: 'C2/C4/C6',
-    profiles: fast,
-  },
-  {
-    id: 'r0-product-unit',
-    name: 'editor-product unit tests',
-    command: 'bun',
-    args: ['-F', '@forgeax/editor-product', 'test'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0',
-    gate: 'C1/C3/C6',
-    profiles: fast,
-  },
-  {
-    id: 'r0-panels-unit',
-    name: 'editor-panels unit tests',
-    command: 'bun',
-    args: ['-F', '@forgeax/editor-panels', 'test'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0/J1',
-    gate: 'C3',
-    profiles: fast,
-  },
-  {
-    id: 'r0-edit-runtime-unit',
-    name: 'edit-runtime unit tests',
-    command: 'bun',
-    args: ['-F', '@forgeax/editor-edit-runtime', 'test'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J0/J1',
-    gate: 'C5/C6',
-    profiles: fast,
-  },
-  {
-    id: 'r0-content-browser-unit',
-    name: 'content-browser unit tests',
-    command: 'bun',
-    args: ['-F', '@forgeax/editor-content-browser', 'test'],
-    fixtureLayer: 'R0',
-    roadmapId: 'R0-08',
-    journey: 'J1',
-    gate: 'C1/C3/C4',
-    profiles: fast,
-  },
-  {
-    id: 'r1-true-fixture',
-    name: 'R1 true multi-scene fixture',
-    command: 'bun',
-    args: ['run', 'test:e2e', 'e2e/true-fixture.spec.ts'],
-    fixtureLayer: 'R1',
-    roadmapId: 'R1-08',
-    journey: 'J2/J3',
-    gate: 'C4/C5/C6/C7',
-    profiles: full,
-  },
-  {
-    id: 'r1-placement-binding',
-    name: 'R1 placement and binding regression',
-    command: 'bun',
-    args: ['run', 'test:e2e', 'e2e/placement-binding-regression.spec.ts'],
-    fixtureLayer: 'R1',
-    roadmapId: 'R1-08',
-    journey: 'J2/J3',
-    gate: 'C4/C5/C6/C7',
-    profiles: full,
-  },
-  {
-    id: 'r1-play-stop-world-fork',
-    name: 'R1 Play/Stop world fork regression',
-    command: 'bun',
-    args: ['run', 'test:e2e', 'e2e/play-stop-world-fork.spec.ts'],
-    fixtureLayer: 'R1',
-    roadmapId: 'R1-08',
-    journey: 'J2/J3',
-    gate: 'C5/C6/C7',
-    profiles: full,
-  },
-  {
-    id: 'r2-j5-static-artifact',
-    name: 'R2 J5 validation + static artifact smoke',
-    command: 'bun',
-    args: ['run', 'test:j5'],
-    fixtureLayer: 'R2',
-    roadmapId: 'R2-06',
-    journey: 'J5',
-    gate: 'C1/C4/C5/C6/C7',
-    profiles: full,
-  },
-  {
-    id: 'r2-j4-interaction-release',
-    name: 'R2 J4 interaction and release smoke',
-    command: 'bun',
-    args: [
-      'run',
-      'test:e2e',
-      'e2e/j4-runner.spec.ts',
-      'e2e/smoke-boot-play.spec.ts',
-      'e2e/smoke-content-browser.spec.ts',
-      'e2e/save-operation-run.spec.ts',
-      'e2e/play-real-game-safety-net.spec.ts',
-    ],
-    fixtureLayer: 'R2',
-    roadmapId: 'R2-06',
-    journey: 'J4/J0/J1',
-    gate: 'C4/C5/C6/C7',
-    profiles: full,
-  },
-]);
+    gate: 'C1-C7',
+    profiles: profilesFor(check.checkId, contract),
+    owner: check.owner,
+    executionHome: structuredClone(check.executionHome),
+  };
+}
+
+export function projectRegressionManifest(input: ContractDocument): RegressionManifestProjection {
+  const checks = input.checks.map((check) => projectCheck(check, input));
+  return {
+    manifestVersion: REGRESSION_MANIFEST_VERSION,
+    checks,
+    profiles: {
+      fast: [...(input.profiles['local-fast'] ?? [])],
+      full: [...(input.profiles['local-full'] ?? [])],
+    },
+    requiredContexts: input.requiredContexts.map(({ context, checkId }) => ({ context, checkId })),
+  };
+}
+
+const CONTRACT = loadContract();
+
+export const REGRESSION_CONTRACT_VERSION = CONTRACT.version;
+export const REGRESSION_MANIFEST = projectRegressionManifest(CONTRACT);
+export const REGRESSION_CHECKS: readonly RegressionCheck[] = Object.freeze(REGRESSION_MANIFEST.checks);
 
 export function selectRegressionChecks(
   profile: RegressionProfile,

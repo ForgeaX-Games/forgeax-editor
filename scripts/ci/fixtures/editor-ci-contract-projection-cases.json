@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "name": "projection loses owner",
+      "operation": "remove-owner",
+      "expectedCode": "projection-drift"
+    },
+    {
+      "name": "projection loses execution home",
+      "operation": "remove-home",
+      "expectedCode": "projection-drift"
+    },
+    {
+      "name": "projection loses first failure",
+      "operation": "remove-first-failure",
+      "expectedCode": "projection-drift"
+    },
+    {
+      "name": "projection adds a second roster",
+      "operation": "duplicate-roster-entry",
+      "expectedCode": "projection-drift"
+    },
+    {
+      "name": "projection changes failure class",
+      "operation": "change-failure-class",
+      "expectedCode": "projection-drift"
+    },
+    {
+      "name": "projection drops every check",
+      "operation": "empty-roster",
+      "expectedCode": "zero-job"
+    }
+  ]
+}

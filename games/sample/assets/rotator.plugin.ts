@@ -24,10 +24,15 @@
 //   - component + system names are GLOBALLY UNIQUE (the loader fails fast on a
 //     duplicate name across plugin files).
 
-import { defineComponent, defineSystem, Entity } from '@forgeax/engine-ecs';
+import { defineComponent, defineSystem } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
 import { Transform } from '@forgeax/engine-scene';
+import {
+  GAMEPLAY_PRODUCER_CONTRACT,
+  GAMEPLAY_PRODUCER_CONTRACT_VERSION,
+  type GamePluginProducer,
+} from '@forgeax/engine-app';
 
 // ── Component ────────────────────────────────────────────────────────────────
 // A tiny authoring component: spin `speed` radians/second about local `axis`.
@@ -44,6 +49,8 @@ export const Rotator = defineComponent('Rotator', {
 // hardcoded 1/60 — there is no `Time` resource on the live path), so we match
 // that fixed-step convention.
 const FIXED_DT = 1 / 60;
+const SAMPLE_ROTATOR_SPEED_KEY = 'sample.rotator.speed';
+const DEFAULT_ROTATOR_SPEED = 1;
 
 // Scratch quats reused across frames (no per-frame allocation in the hot loop).
 const _delta = quat.create();
@@ -58,46 +65,109 @@ const _next = quat.create();
 // stage for scheduler diagnostics.
 export const rotate = defineSystem({
   name: 'rotate',
-  // Entity is REQUIRED in `with` for `bundle.Entity.self` (the row count) to be
-  // present — buildColumnBundle only emits columns for listed components.
-  queries: [{ with: [Rotator, Transform, Entity] }],
+  queries: [{ read: [Rotator], write: [Transform] }],
   before: ['propagateTransforms'],
   labels: ['transform'],
-  fn: (_world: World, queryResults) => {
-    for (const bundle of queryResults[0]) {
-      const axisCol = bundle.Rotator.axis; // Float32Array, stride 3 per row
-      const speedCol = bundle.Rotator.speed; // Float32Array, stride 1
-      const quatCol = bundle.Transform.quat; // Float32Array, stride 4 ([x,y,z,w])
-      const entities = bundle.Entity.self;
+  fn: (world: World, queryResults) => {
+    const globalSpeed = world.hasResource(SAMPLE_ROTATOR_SPEED_KEY)
+      ? world.getResource<number>(SAMPLE_ROTATOR_SPEED_KEY)
+      : undefined;
+    for (const row of queryResults[0]) {
+      const rotator = row.get(Rotator);
+      const transform = row.mut(Transform);
+      const speed = globalSpeed ?? rotator.speed ?? 0;
+      const angle = speed * FIXED_DT;
+      if (angle === 0) continue;
 
-      for (let i = 0; i < entities.length; i++) {
-        const speed = speedCol[i] ?? 0;
-        const angle = speed * FIXED_DT;
-        if (angle === 0) continue;
+      const ax = rotator.axis[0] ?? 0;
+      const ay = rotator.axis[1] ?? 0;
+      const az = rotator.axis[2] ?? 0;
+      // Zero axis → fromAxisAngle degrades to identity (engine contract): skip.
+      if (ax === 0 && ay === 0 && az === 0) continue;
 
-        const ax = axisCol[i * 3] ?? 0;
-        const ay = axisCol[i * 3 + 1] ?? 0;
-        const az = axisCol[i * 3 + 2] ?? 0;
-        // Zero axis → fromAxisAngle degrades to identity (engine contract): skip.
-        if (ax === 0 && ay === 0 && az === 0) continue;
-
-        // deltaQ = rotation of `angle` about `axis`; next = deltaQ * current
-        // (Hamilton product) so the spin accumulates on top of the authored pose.
-        quat.fromAxisAngle(_delta, [ax, ay, az], angle);
-        const q = i * 4;
-        _next[0] = quatCol[q] ?? 0;
-        _next[1] = quatCol[q + 1] ?? 0;
-        _next[2] = quatCol[q + 2] ?? 0;
-        _next[3] = quatCol[q + 3] ?? 1;
-        quat.multiply(_next, _delta, _next);
-        // Renormalize to bleed off float drift over long spins, then write back
-        // into the live column buffer (in-place — mutates the ECS store directly).
-        quat.normalize(_next, _next);
-        quatCol[q] = _next[0]!;
-        quatCol[q + 1] = _next[1]!;
-        quatCol[q + 2] = _next[2]!;
-        quatCol[q + 3] = _next[3]!;
-      }
+      // deltaQ = rotation of `angle` about `axis`; next = deltaQ * current
+      // (Hamilton product) so the spin accumulates on top of the authored pose.
+      quat.fromAxisAngle(_delta, [ax, ay, az], angle);
+      _next[0] = transform.quat[0] ?? 0;
+      _next[1] = transform.quat[1] ?? 0;
+      _next[2] = transform.quat[2] ?? 0;
+      _next[3] = transform.quat[3] ?? 1;
+      quat.multiply(_next, _delta, _next);
+      // Renormalize to bleed off float drift over long spins, then write back
+      // through the query's declared mutable Transform row.
+      quat.normalize(_next, _next);
+      transform.quat[0] = _next[0]!;
+      transform.quat[1] = _next[1]!;
+      transform.quat[2] = _next[2]!;
+      transform.quat[3] = _next[3]!;
     }
   },
 });
+
+/**
+ * The sample's real game-owned producer. Its descriptor, lifecycle recovery,
+ * diagnostics read, and action all travel through the same host carrier as the
+ * template game projection; the editor does not special-case this plugin.
+ */
+export const gameplay: GamePluginProducer = {
+  descriptor: {
+    contract: GAMEPLAY_PRODUCER_CONTRACT,
+    version: GAMEPLAY_PRODUCER_CONTRACT_VERSION,
+    id: 'sample.rotator',
+    title: 'Sample Rotator Gameplay',
+  },
+  register: ({ world, gameProjection, lifecycle }) => {
+    world.insertResource(SAMPLE_ROTATOR_SPEED_KEY, DEFAULT_ROTATOR_SPEED);
+
+    const removeAction = gameProjection?.registerAction({
+      id: 'sample.rotator.set-speed',
+      title: 'Set Rotator Speed',
+      description: 'Set the shared sample rotator speed in radians per second',
+      argsSchema: {
+        type: 'object',
+        properties: { speed: { type: 'number' } },
+        required: ['speed'],
+      },
+      run: (args) => {
+        const speed = typeof args === 'object' && args !== null && !Array.isArray(args)
+          ? (args as { speed?: unknown }).speed
+          : undefined;
+        if (typeof speed !== 'number' || !Number.isFinite(speed)) {
+          throw new Error('speed must be a finite number');
+        }
+        world.insertResource(SAMPLE_ROTATOR_SPEED_KEY, speed);
+        return { speed };
+      },
+    });
+    if (removeAction) lifecycle.registerCleanup(removeAction);
+
+    const query = world.query({ with: [Rotator] }).unwrap();
+    const removeRead = gameProjection?.registerRead({
+      id: 'sample.rotator.state',
+      title: 'Sample Rotator State',
+      description: 'Current producer-owned speed and Rotator entity count',
+      read: () => {
+        let rotatorEntities = 0;
+        for (const _row of query) rotatorEntities += 1;
+        return {
+          pluginId: 'sample.rotator',
+          contractVersion: GAMEPLAY_PRODUCER_CONTRACT_VERSION,
+          speed: world.hasResource(SAMPLE_ROTATOR_SPEED_KEY)
+            ? world.getResource<number>(SAMPLE_ROTATOR_SPEED_KEY)
+            : DEFAULT_ROTATOR_SPEED,
+          rotatorEntities,
+        };
+      },
+    });
+    if (removeRead) lifecycle.registerCleanup(removeRead);
+
+    lifecycle.registerReload(() => {
+      // Source reload recovery is producer-owned: re-admit the runtime with a
+      // deterministic default instead of leaving stale action state behind.
+      world.insertResource(SAMPLE_ROTATOR_SPEED_KEY, DEFAULT_ROTATOR_SPEED);
+    });
+    lifecycle.registerCleanup(() => {
+      if (world.hasResource(SAMPLE_ROTATOR_SPEED_KEY)) world.removeResource(SAMPLE_ROTATOR_SPEED_KEY);
+    });
+  },
+};

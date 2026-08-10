@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
+  discoverGameMaterialPackages,
   engineRhiDebugPlugins,
   isEditorBuildOnlyPackPath,
   resolveGameEngineEntry,
@@ -96,6 +97,26 @@ describe('isEditorBuildOnlyPackPath', () => {
       expect(isEditorBuildOnlyPackPath(imageMeta)).toBe(false);
       expect(isEditorBuildOnlyPackPath(malformedShaderMeta)).toBe(true);
       expect(isEditorBuildOnlyPackPath(join(root, 'animated-target.wgsl'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('discoverGameMaterialPackages', () => {
+  test('finds only shader contract packages under declared game asset roots', () => {
+    const root = mkdtempSync(join(tmpdir(), 'forgeax-game-materials-'));
+    try {
+      mkdirSync(join(root, 'assets', 'vfx'), { recursive: true });
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({ forgeax: { assets: { roots: ['assets'] } } }),
+      );
+      const shaderPack = join(root, 'assets', 'vfx', 'sigil.shader.pack.json');
+      writeFileSync(shaderPack, '{}');
+      writeFileSync(join(root, 'assets', 'vfx', 'runtime.pack.json'), '{}');
+
+      expect(discoverGameMaterialPackages(root)).toEqual([shaderPack]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

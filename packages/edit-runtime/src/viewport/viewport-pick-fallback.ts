@@ -28,7 +28,7 @@ import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { MeshFilter } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import { toShared, type MeshAsset } from '@forgeax/engine-types';
-import { worldRenderableHandles } from '@forgeax/editor-core';
+import { resolveVisibility, worldRenderableHandles } from '@forgeax/editor-core';
 import { isEntEffectivelyHidden, readWorldTransform } from './viewport-entity-read';
 import { aabbToWorldBox, entityBox, rayAABB, type Vec3 } from './viewport-ray';
 
@@ -38,10 +38,11 @@ import { aabbToWorldBox, entityBox, rayAABB, type Vec3 } from './viewport-ray';
 export function pickMeshFallback(world: World, origin: Vec3, dir: Vec3): EntityHandle | null {
   // Per-call MeshAsset cache: a house GLB shares one mesh across many nodes.
   const meshCache = new Map<number, MeshAsset | null>();
+  const visibility = resolveVisibility(world);
   let best: EntityHandle | null = null;
   let bestT = Infinity;
   for (const id of worldRenderableHandles(world)) {
-    if (isEntEffectivelyHidden(world, id)) continue;
+    if (isEntEffectivelyHidden(world, id, visibility)) continue;
 
     let box: { center: Vec3; half: Vec3 } | null = null;
     const mf = world.get(id, MeshFilter);

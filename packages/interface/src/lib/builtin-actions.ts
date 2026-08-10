@@ -107,12 +107,18 @@ export function registerBuiltinActions(): void {
     id: 'workbench.list_plugins',
     title: '列出工作台插件',
     description:
-      'List installed workbench plugins (id, name, description). Use this to tell the user what workbench tools exist and what each does, then guide them with workbench.open_plugin. Returns { count, plugins:[{id,name,description}] }.',
+      'List installed workbench plugins (id, name, description). Use this to tell the user what workbench tools exist and what each does, then guide them with workbench.open_plugin. Returns { count, plugins:[{id,name,description}] }. A plugin shows on the rail only when its manifest declares an activity AND the user has pinned it; the pin half is per-user localStorage, so this list cannot tell you what the rail currently shows. The workbench grid always lists every installed plugin, so do NOT claim a plugin is unreachable.',
     capability: 'read',
     firstClass: true,
     surface: 'ui',
     run: async () => {
       const { items } = await listExtensions('workbench');
+      // 2026-08-06 外审 B5:此前这里带 railPinned/railNote —— 判据是一张手维护的
+      // 14-slug 表,而 rail 的真实可达性 = manifest 的 contributes.activities ∩ 每浏览
+      // 器 localStorage 的 pin 集,与那张表毫无关系。默认(无 localStorage)全部
+      // pinned,note 却断言"都看不到"并禁止 agent 说出正确答案 —— 用单一账源下
+      // 否定结论 + 手维护副本必然腐烂,两条都是本打样自己立的反面不变式。删除;
+      // 可达性交给真投影(将来 rail 接入 surface 总线后由它现算),不再猜。
       const plugins = items
         .filter((p) => !p.workbench?.hidden)
         .map((p) => ({

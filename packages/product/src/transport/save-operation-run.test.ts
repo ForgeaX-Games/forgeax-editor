@@ -86,7 +86,7 @@ test('synchronous save dispatch waits for the canonical terminal operation run',
   });
 
   const accepted = await service.handle(request('dispatch', 'run.dispatch', {
-    operationId: 'saveDocToDisk',
+    operationId: 'editor.saveDocToDisk',
     input: { requestId: 'save-transport-1' },
     ...auth,
   }));

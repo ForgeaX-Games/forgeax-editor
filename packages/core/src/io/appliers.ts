@@ -38,7 +38,7 @@ import {
   applyRemoveSceneOverride,
   applyAddComponent,
   applyRemoveComponent,
-  applySetHidden,
+  applySetVisibility,
   applyInstantiateSceneAsset,
   applyDuplicateEntity,
   applyTransaction,
@@ -196,7 +196,7 @@ function _unregisterApplier(kind: string, expectedApplier: ApplierFn | SessionAp
 // Each kind is registered explicitly via registerApplier — no DOCUMENT_KINDS
 // hardcoded array (AC-24). M1 t2: spawnEntity/destroyEntity/rename/reparent
 // now have their own per-op applier functions. The remaining 5 kinds
-// (setComponent/addComponent/removeComponent/setHidden/transaction) still
+// (setComponent/addComponent/removeComponent/setVisibility/transaction) still
 // delegate to applyCommand for now; t3/t4 will replace them.
 
 registerApplier('document', 'spawnEntity', applySpawnEntity as unknown as ApplierFn);
@@ -208,7 +208,7 @@ registerApplier('document', 'setSceneOverride', applySetSceneOverride as unknown
 registerApplier('document', 'removeSceneOverride', applyRemoveSceneOverride as unknown as ApplierFn);
 	registerApplier('document', 'addComponent', applyAddComponent as unknown as ApplierFn);
 	registerApplier('document', 'removeComponent', applyRemoveComponent as unknown as ApplierFn);
-	registerApplier('document', 'setHidden', applySetHidden as unknown as ApplierFn);
+	registerApplier('document', 'setVisibility', applySetVisibility as unknown as ApplierFn);
 	registerApplier('document', 'instantiateSceneAsset', applyInstantiateSceneAsset as unknown as ApplierFn);
 registerApplier('document', 'duplicateEntity', applyDuplicateEntity as unknown as ApplierFn);
 registerApplier('document', 'applyVisualQualityPreset', applyVisualQualityPreset as unknown as ApplierFn);

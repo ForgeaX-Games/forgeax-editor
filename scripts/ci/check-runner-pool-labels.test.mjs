@@ -8,6 +8,8 @@ import {
   classifyRunnerSelector,
 } from './check-runner-pool-labels.mjs';
 
+const runnerFixture = resolve('scripts/ci/fixtures/runner-label-contract.yml');
+
 test('the editor workflow declares an explicit pool for every self-hosted job', () => {
   const result = checkWorkflowDirectory(resolve('.github/workflows'));
   assert.deepEqual(result.errors, []);
@@ -53,4 +55,25 @@ test('GitHub-hosted selectors remain valid', () => {
     kind: 'github-hosted',
     labels: ['ubuntu-latest'],
   });
+});
+
+test('contract fixture keeps one capacity label for every self-hosted selector', () => {
+  const result = checkWorkflowText(readFileSync(runnerFixture, 'utf8'), 'runner-label-contract.yml');
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(
+    result.selectors.filter((selector) => selector.kind === 'self-hosted').map((selector) => selector.pool),
+    ['standard', 'heavy'],
+  );
+});
+
+test('dynamic selectors without static matrix values are rejected', () => {
+  const result = classifyRunnerSelector('fromJSON(matrix.runner)');
+  assert.equal(result.kind, 'error');
+  assert.match(result.message, /no statically declared values/);
+});
+
+test('a second capacity label is rejected even when the selector is otherwise self-hosted', () => {
+  const result = classifyRunnerSelector('[self-hosted, Linux, X64, standard, heavy]');
+  assert.equal(result.kind, 'error');
+  assert.match(result.message, /exactly one/);
 });

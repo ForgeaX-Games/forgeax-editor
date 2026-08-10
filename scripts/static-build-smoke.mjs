@@ -105,15 +105,69 @@ page.on('console', (message) => {
 page.on('request', (request) => requests.push(request.url()));
 await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(5000);
-const state = await page.evaluate(() => ({
-  canvas: document.querySelectorAll('canvas').length,
-  app: Boolean((window).__forgeax),
-  entities: (window).__forgeax?.world?.inspect?.().entityCount ?? 0,
-}));
+const readState = () => page.evaluate(() => {
+  const runtime = (window).__forgeax;
+  const world = runtime?.world?.inspect?.();
+  const vfxRuntime = runtime?.world?.hasResource?.('VfxGpuRuntime')
+    ? runtime.world.getResource('VfxGpuRuntime')
+    : null;
+  const vfx = runtime?.renderer?.renderFeatureDiagnostics?.()
+    .find((entry) => entry.identity === 'forgeax.vfx-render.gpu-particles');
+  return {
+    canvas: document.querySelectorAll('canvas').length,
+    app: Boolean(runtime),
+    entities: world?.entityCount ?? 0,
+    activeComponents: world?.activeComponents ?? [],
+    vfxRuntime: vfxRuntime === null
+      ? null
+      : {
+          queuedIntents: vfxRuntime.snapshot().length,
+          diagnostics: vfxRuntime.diagnostics(),
+        },
+    vfx: vfx === undefined
+      ? null
+      : {
+          identity: vfx.identity,
+          status: vfx.status,
+          latestError: vfx.latestError ?? null,
+        },
+  };
+});
+const vfxReady = (candidate) => (
+  candidate.vfx?.status === 'active'
+  && candidate.vfx.latestError === null
+  && candidate.vfxRuntime !== null
+  && candidate.vfxRuntime.diagnostics.length === 0
+);
+let state = await readState();
+if (state.activeComponents.includes('ParticleEffectPlayer')) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (vfxReady(state)) {
+      await page.waitForTimeout(300);
+      const settled = await readState();
+      if (vfxReady(settled)) {
+        state = settled;
+        break;
+      }
+      state = settled;
+    } else {
+      await page.waitForTimeout(100);
+      state = await readState();
+    }
+  }
+}
 const apiRequests = requests.filter((url) => new URL(url).pathname.startsWith('/api/'));
 const result = { phase: 'browser-smoke', baseUrl, statuses, state, apiRequests, failures };
 console.log(JSON.stringify(result, null, 2));
 await page.screenshot({ path: join(dist, 'j5-smoke.png') });
 await browser.close();
 server.close();
-if (state.canvas < 1 || !state.app || state.entities < 2 || apiRequests.length > 0 || failures.length > 0) process.exit(1);
+const expectsVfx = state.activeComponents.includes('ParticleEffectPlayer');
+const vfxFailed = expectsVfx && (
+  state.vfx?.status !== 'active'
+  || state.vfx.latestError !== null
+  || state.vfxRuntime === null
+  || state.vfxRuntime.diagnostics.length > 0
+);
+if (state.canvas < 1 || !state.app || state.entities < 2 || vfxFailed || apiRequests.length > 0 || failures.length > 0) process.exit(1);

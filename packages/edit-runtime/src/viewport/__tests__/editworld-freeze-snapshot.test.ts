@@ -24,7 +24,7 @@
 //   research Finding 3 (injectEditMode(true) does NOT stop the frame loop)
 
 import { describe, expect, it } from 'bun:test';
-import { World, Entity, Update } from '@forgeax/engine-ecs';
+import { Disabled, World, Update } from '@forgeax/engine-ecs';
 import { createApp, inputPlugin } from '@forgeax/engine-app';
 import { scenePlugin as transformPlugin, Name, Transform } from '@forgeax/engine-scene';
 import { assemblePlayWorld, type PlayAssembly } from '../play-assemble';
@@ -99,22 +99,12 @@ function makeSceneAsset() {
   };
 }
 
-/** Snapshot the set of live entity handles in a world (self column scan).
- *  arch.size counts only live (dense) rows, so every row 0..size-1 is a live
- *  entity — including the packed value 0 (the very first entity, index 0
- *  generation 0, is a legitimate handle). Do NOT filter 0 out here. */
+/** Snapshot every live entity handle through the public Query API, including
+ *  Disabled entities that the default query predicate excludes. */
 function entitySnapshot(world: EcsWorld): Set<number> {
   const set = new Set<number>();
-  const graph = (world as unknown as {
-    _getGraph: () => { archetypes: { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }[] };
-  })._getGraph();
-  for (const arch of graph.archetypes) {
-    const selfCol = arch.columns.get(Entity.id)?.get('self');
-    if (!selfCol) continue;
-    for (let row = 0; row < arch.size; row++) {
-      set.add(selfCol.view[row]! as number);
-    }
-  }
+  for (const row of world.query({}).unwrap()) set.add(row.entity);
+  for (const row of world.query({ with: [Disabled] }).unwrap()) set.add(row.entity);
   return set;
 }
 

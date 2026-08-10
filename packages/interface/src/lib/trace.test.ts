@@ -40,7 +40,7 @@ describe('browser tracer chat.turn', () => {
     beginChatTurn('forge', 'sid-1');
     chatFirstToken('forge');
     chatFirstToken('forge'); // 幂等,不重复起 ui.stream
-    chatTurnEnd('forge', true);
+    chatTurnEnd('forge', 'ok');
 
     const send = finals('ui.send')[0]!;
     const req = finals('ui.request')[0]!;
@@ -62,10 +62,21 @@ describe('browser tracer chat.turn', () => {
     expect(finals('ui.send').length).toBe(1);
   });
 
+  it('取消:status 走 ok(不污染错误率),但 root span 留 cancelled 标记', () => {
+    // 三值收尾的理由:标 error,错误率里就全是用户主动停的假失败;并进 ok,误触取消风暴
+    // 在监控里又和健康流量长得一模一样 —— 追溯系统不该亲手销毁取消信号。
+    beginChatTurn('forge', 'sid-1');
+    chatFirstToken('forge');
+    chatTurnEnd('forge', 'cancelled');
+    const send = finals('ui.send')[0]!;
+    expect(send.status?.code).toBe('ok');
+    expect((send.attrs as Record<string, unknown> | undefined)?.cancelled).toBe(true);
+  });
+
   it('error turn → spans carry error status + message', () => {
     beginChatTurn('forge', 'sid-1');
     chatFirstToken('forge');
-    chatTurnEnd('forge', false, 'boom');
+    chatTurnEnd('forge', 'error', 'boom');
     const send = finals('ui.send')[0]!;
     expect(send.status?.code).toBe('error');
     const stream = finals('ui.stream')[0]!;
@@ -74,7 +85,7 @@ describe('browser tracer chat.turn', () => {
 
   it('degenerate turn (no token) still closes ui.request + ui.send', () => {
     beginChatTurn('forge', 'sid-1');
-    chatTurnEnd('forge', true); // 无 first token
+    chatTurnEnd('forge', 'ok'); // 无 first token
     expect(finals('ui.request').length).toBe(1);
     expect(finals('ui.send').length).toBe(1);
     expect(finals('ui.stream').length).toBe(0); // 没起过 stream
@@ -85,8 +96,8 @@ describe('browser tracer chat.turn', () => {
     beginChatTurn('mochi', 'sid-1');
     chatFirstToken('forge');
     chatFirstToken('mochi');
-    chatTurnEnd('forge', true);
-    chatTurnEnd('mochi', true);
+    chatTurnEnd('forge', 'ok');
+    chatTurnEnd('mochi', 'ok');
     const sends = finals('ui.send');
     expect(sends.length).toBe(2);
     expect(sends[0].traceId).not.toBe(sends[1].traceId);
@@ -107,7 +118,7 @@ describe('browser tracer chat.turn', () => {
       if (doc) Object.defineProperty(doc, 'visibilityState', { value: 'hidden', configurable: true });
       beginChatTurn('forge', 'sid-h');
       chatFirstToken('forge');
-      chatTurnEnd('forge', true);
+      chatTurnEnd('forge', 'ok');
       const render = finals('ui.render')[0]!;
       const send = finals('ui.send')[0]!;
       // 失焦也立刻收口(不等 rAF):render + send 都已 endTs

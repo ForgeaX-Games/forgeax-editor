@@ -15,7 +15,7 @@ export interface OverlayStoreLike {
 }
 
 export interface PanelOpenBusLike {
-  emit(event: 'panel:open', payload: { id: string; source?: string }): void;
+  emit(event: 'panel:open' | 'panel:close', payload: { id: string; source?: string }): void;
 }
 
 /** Dock id of the Settings editor panel (editorPanelIds are ep:-prefixed). */
@@ -36,7 +36,11 @@ function log(...args: unknown[]): void {
   try { rawInfo(LOG_PREFIX, ...args); } catch { /* probe must never break the host */ }
 }
 
-export function installSettingsPanelRedirect(store: OverlayStoreLike, bus: PanelOpenBusLike): () => void {
+export function installSettingsPanelRedirect(
+  store: OverlayStoreLike,
+  bus: PanelOpenBusLike,
+  isSettingsPanelOpen: () => boolean = () => false,
+): () => void {
   // Reentrancy guard: closeOverlay() sets state synchronously, re-entering
   // this listener with activeOverlay already null. The flag keeps the
   // contract explicit instead of relying on that notification ordering.
@@ -53,9 +57,18 @@ export function installSettingsPanelRedirect(store: OverlayStoreLike, bus: Panel
     if (redirecting || state.activeOverlay !== 'settings') return;
     redirecting = true;
     try {
-      log('redirect: closeOverlay + emit panel:open', SETTINGS_PANEL_ID);
       store.getState().closeOverlay();
-      bus.emit('panel:open', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
+      // Toggle parity with the studio overlay: once the intent becomes a DOCK
+      // panel, the overlay store no longer tracks it (activeOverlay snaps back
+      // to null), so Ctrl+, / the gear would otherwise only ever RE-open the
+      // panel — never close it. Mirror app.panel.toggle: visible → panel:close.
+      if (isSettingsPanelOpen()) {
+        log('redirect: panel visible — closeOverlay + emit panel:close', SETTINGS_PANEL_ID);
+        bus.emit('panel:close', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
+      } else {
+        log('redirect: closeOverlay + emit panel:open', SETTINGS_PANEL_ID);
+        bus.emit('panel:open', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
+      }
       log('redirect: emitted');
     } finally {
       redirecting = false;

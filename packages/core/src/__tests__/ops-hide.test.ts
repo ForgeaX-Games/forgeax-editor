@@ -1,24 +1,24 @@
-// ops-hide.test.ts — UE-parity hide gestures (docs 2026-08-04-editor-hide-ue-parity-plan)
+// ops-hide.test.ts — engine Visibility hide gestures
 //
 // Locks the shared core ops behind H / Ctrl+H / Shift+H and the Hierarchy eye:
-//   1. hideMany / setHiddenMany wrap multi-entity hides in ONE transaction
+//   1. hideMany / setVisibilityMany wrap multi-entity hides in ONE transaction
 //      (one undo step) and skip entities already in the target state
-//   2. showAllHidden clears every EditorHidden marker as one undo step
+//   2. showAllHidden changes every explicit hidden Visibility intent as one undo step
 //   3. hideUnselected isolates the selection: selected entities AND their
 //      ancestors stay visible, everything else hides
-//   4. every hidden entity also carries the engine `Disabled` marker (render
-//      exclusion), cleared again after undo / show
+//   4. effective descendant hiding comes from the engine Visibility resolver;
+//      the editor does not materialize Disabled markers
 //
 // All ops route through the singleton gateway's one dispatch door — these tests
 // never call applyCommand directly (north-star §3.2).
 
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { Disabled, World } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { createEditSession } from '../session/document';
 import { gateway } from '../store/store';
-import { hideMany, hideUnselected, setHiddenMany, showAllHidden } from '../session/ops';
-import { EditorHidden } from '../components/EditorHidden';
+import { hideMany, hideUnselected, setVisibilityMany, showAllHidden } from '../session/ops';
+import { Visibility, VisibilityStateValue, readVisibilityIntent, resolveVisibility } from '../visibility';
 import { worldEntityHandles } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
@@ -42,10 +42,7 @@ function spawn(name: string, parent?: number): EntityHandle {
 }
 
 function hidden(h: EntityHandle): boolean {
-  return gateway.activeWorld.get(h, EditorHidden).ok;
-}
-function disabled(h: EntityHandle): boolean {
-  return gateway.activeWorld.get(h, Disabled).ok;
+  return readVisibilityIntent(gateway.activeWorld, h) === 'hidden';
 }
 
 describe('hide ops (UE parity §1)', () => {
@@ -53,21 +50,25 @@ describe('hide ops (UE parity §1)', () => {
     gateway.replaceDoc(createSession());
   });
 
-  it('hideMany hides all targets with Disabled sync, ONE undo restores all', () => {
+  it('hideMany sets explicit Visibility intent, ONE undo restores all', () => {
     const a = spawn('A');
     const b = spawn('B');
     hideMany([a, b]);
     expect(hidden(a)).toBe(true);
     expect(hidden(b)).toBe(true);
-    expect(disabled(a)).toBe(true);
-    expect(disabled(b)).toBe(true);
+    const aVisibility = gateway.activeWorld.get(a, Visibility);
+    const bVisibility = gateway.activeWorld.get(b, Visibility);
+    expect(aVisibility.ok).toBe(true);
+    expect(bVisibility.ok).toBe(true);
+    if (aVisibility.ok) expect(aVisibility.value.state).toBe(VisibilityStateValue.hidden);
+    if (bVisibility.ok) expect(bVisibility.value.state).toBe(VisibilityStateValue.hidden);
 
     // Multi-entity gesture = ONE transaction = ONE undo step (deleteMany parity).
     expect(gateway.undo()).toBe(true);
     expect(hidden(a)).toBe(false);
     expect(hidden(b)).toBe(false);
-    expect(disabled(a)).toBe(false);
-    expect(disabled(b)).toBe(false);
+    expect(gateway.activeWorld.get(a, Visibility).ok).toBe(false);
+    expect(gateway.activeWorld.get(b, Visibility).ok).toBe(false);
   });
 
   it('hideMany skips already-hidden entities instead of double-dispatching', () => {
@@ -81,16 +82,18 @@ describe('hide ops (UE parity §1)', () => {
     expect(hidden(b)).toBe(true);
   });
 
-  it('setHiddenMany(false) shows targets and is a no-op when nothing differs', () => {
+  it('setVisibilityMany shows targets and is a no-op when nothing differs', () => {
     const a = spawn('A');
-    setHiddenMany([a], true);
+    setVisibilityMany([a], 'hidden');
     expect(hidden(a)).toBe(true);
     const applied = gateway.appliedCount();
-    setHiddenMany([a], true); // already hidden → no dispatch
+    setVisibilityMany([a], 'hidden'); // already hidden → no dispatch
     expect(gateway.appliedCount()).toBe(applied);
-    setHiddenMany([a], false);
+    setVisibilityMany([a], 'visible');
     expect(hidden(a)).toBe(false);
-    expect(disabled(a)).toBe(false);
+    const visibility = gateway.activeWorld.get(a, Visibility);
+    expect(visibility.ok).toBe(true);
+    if (visibility.ok) expect(visibility.value.state).toBe(VisibilityStateValue.visible);
   });
 
   it('showAllHidden clears every hidden entity as one undo step', () => {
@@ -102,8 +105,6 @@ describe('hide ops (UE parity §1)', () => {
     expect(hidden(a)).toBe(false);
     expect(hidden(b)).toBe(false);
     expect(hidden(c)).toBe(false);
-    expect(disabled(a)).toBe(false);
-    expect(disabled(b)).toBe(false);
 
     expect(gateway.undo()).toBe(true); // undo the show-all transaction…
     expect(hidden(a)).toBe(true);
@@ -121,11 +122,10 @@ describe('hide ops (UE parity §1)', () => {
     // The parent must stay visible: hiding it would recursively take the
     // isolated child down with it (UE isolate semantics).
     expect(hidden(parent)).toBe(false);
-    expect(disabled(parent)).toBe(false);
-    expect(disabled(child)).toBe(false);
+    expect(resolveVisibility(gateway.activeWorld).effective(child)).toBe('visible');
     // The selected subtree stays visible too.
     expect(hidden(grandchild)).toBe(false);
-    expect(disabled(grandchild)).toBe(false);
+    expect(resolveVisibility(gateway.activeWorld).effective(grandchild)).toBe('visible');
   });
 
   it('hideUnselected with an empty selection is a no-op', () => {
@@ -141,7 +141,7 @@ describe('hide ops (UE parity §1)', () => {
     hideMany([a]);
     expect(hidden(a)).toBe(true);
     expect(hidden(keep)).toBe(false);
-    expect(disabled(keep)).toBe(false);
+    expect(gateway.activeWorld.get(keep, Visibility).ok).toBe(false);
     expect(worldEntityHandles(gateway.activeWorld).length).toBe(2);
   });
 });

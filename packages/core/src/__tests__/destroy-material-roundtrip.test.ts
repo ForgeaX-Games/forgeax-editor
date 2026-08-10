@@ -1,7 +1,7 @@
 // destroy-material-roundtrip.test.ts — locks the destroyEntity undo material-
 // loss bug fix. The same class of bug as duplicateEntity: the old applyDestroy-
 // Entity inverse used spawnEntity + a hardcoded component subset (Transform /
-// ChildOf / MeshFilter / EditorHidden / Name), dropping MeshRenderer. The fix
+// ChildOf / MeshFilter / Visibility / Name), dropping MeshRenderer. The fix
 // routes the inverse through instantiateSceneAsset (GUID round-trip) so undo
 // faithfully restores materials and the child subtree. These tests assert:
 //   1. delete + undo restores a mesh entity with NON-EMPTY MeshRenderer.materials

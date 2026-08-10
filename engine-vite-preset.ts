@@ -21,7 +21,7 @@
 //   into its own defineConfig alongside its config-specific parts (react(),
 //   root, base, hmr, --game /api proxy, etc.).
 
-import { dirname, resolve, join, relative } from 'node:path';
+import { basename, dirname, resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readdirSync, readFileSync, realpathSync, createReadStream, statSync, unlinkSync, existsSync } from 'node:fs';
 import type { PluginOption } from 'vite';
@@ -38,11 +38,17 @@ import { fbxImporter } from '@forgeax/engine-fbx';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
 import { targetProfileImporter } from './packages/engine/templates/game-default/assets/plugins/target-profile-importer';
 import {
-  createParticleEffectNativeCooker,
-  createStockParticleOperatorRegistry,
+  createParticleCodeNativeCooker,
+  type ParticleCodeModuleSet,
 } from '@forgeax/engine-vfx-compiler';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+
+/** One deployment policy for every browser host that may select Engine shared execution. */
+export const ENGINE_EXECUTION_ISOLATION_HEADERS = Object.freeze({
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+});
 
 // This module's directory is packages/editor/. Anchor the @forgeax workspace
 // family at edit-runtime's node_modules so every consuming config derives the
@@ -363,6 +369,37 @@ export function isEditorBuildOnlyPackPath(path: string): boolean {
   }
 }
 
+/**
+ * Discover game-authored shader contracts from the same declared asset roots
+ * that feed Pack. The `.shader.pack.json` suffix is the existing material
+ * compiler convention: the package owns one MaterialAsset contract and points
+ * at its sibling WGSL source. Keeping discovery at the shared host preset means
+ * Edit, Play, and standalone builds cannot drift onto different shader sets.
+ */
+export function discoverGameMaterialPackages(gameDirAbs: string): string[] {
+  const roots = resolveGameAssetRoots(gameDirAbs, { sharedBase: SHARED_BASE });
+  const packages = new Set<string>();
+  const walk = (current: string): void => {
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (entry.isFile() && entry.name.endsWith('.shader.pack.json')) {
+        packages.add(path);
+      }
+    }
+  };
+  for (const root of roots) walk(root.abs);
+  return [...packages].sort();
+}
+
 // ── orphan .meta.json auto-cleanup (editor-level policy) ────────────────────
 // The engine scanner (scan() step 5) is correctly fail-fast on orphan
 // .meta.json files. But at the editor level we prefer graceful recovery:
@@ -390,6 +427,57 @@ function expandShaderTaintedRoots(roots: readonly string[]): string[] {
     );
   }
   return expansion.roots;
+}
+
+export function discoverParticleCodeModules(
+  roots: readonly string[],
+): Readonly<Record<string, ParticleCodeModuleSet>> {
+  const modules: Record<string, ParticleCodeModuleSet> = {};
+  const scan = (): Record<string, ParticleCodeModuleSet> => {
+    const next: Record<string, ParticleCodeModuleSet> = {};
+    const visit = (path: string): void => {
+      let stat: ReturnType<typeof statSync>;
+      try {
+        stat = statSync(path);
+      } catch {
+        return;
+      }
+      if (stat.isDirectory()) {
+        for (const entry of readdirSync(path, { withFileTypes: true })) {
+          if (entry.isDirectory() && ORPHAN_CLEAN_BLACKLIST.has(entry.name)) continue;
+          if (entry.isDirectory() || entry.isFile()) visit(join(path, entry.name));
+        }
+        return;
+      }
+      if (!path.endsWith('.vfx.wgsl')) return;
+      const id = basename(path);
+      const entry = readFileSync(path, 'utf8');
+      const previous = next[id];
+      if (previous !== undefined && previous.entry !== entry) {
+        throw new Error(`duplicate VFX module identity ${id}`);
+      }
+      next[id] = { entry };
+    };
+    for (const root of roots) visit(root);
+    return next;
+  };
+  const refresh = (): void => {
+    const next = scan();
+    for (const id of Object.keys(modules)) {
+      if (next[id] === undefined) delete modules[id];
+    }
+    Object.assign(modules, next);
+  };
+  refresh();
+  return new Proxy(modules, {
+    get(target, property, receiver) {
+      // pluginPack recooks authored packs after any watched source change.
+      // Refresh here so edits and removals of WGSL sidecars participate in
+      // that cook instead of reading the startup snapshot.
+      if (typeof property === 'string') refresh();
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
 }
 
 function cleanOrphanMetas(roots: readonly string[]): void {
@@ -685,7 +773,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
         targetProfileImporter(),
       ],
       cookers: [
-        createParticleEffectNativeCooker(createStockParticleOperatorRegistry()),
+        createParticleCodeNativeCooker(discoverParticleCodeModules(packRoots)),
       ],
       // Edit/Standalone and Play both refresh through their host-specific
       // bridges. The default is intentionally no-op so a shared preset cannot
@@ -697,7 +785,13 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     });
     plugins.push(pack as unknown as PluginOption);
   }
-  plugins.push(silenceShaderEmitInServe(forgeaxShader() as unknown as Record<string, unknown>));
+  plugins.push(
+    silenceShaderEmitInServe(
+      forgeaxShader({
+        materialPackages: gameDirAbs === null ? [] : discoverGameMaterialPackages(gameDirAbs),
+      }) as unknown as Record<string, unknown>,
+    ),
+  );
 
   // ── opt-in RHI-debug capture (FORGEAX_ENGINE_RHI_DEBUG=1) ────────────────────
   // The vite-plugin-rhi-debug config() hook UNCONDITIONALLY injects

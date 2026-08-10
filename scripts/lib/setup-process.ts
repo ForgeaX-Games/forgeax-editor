@@ -12,6 +12,16 @@ export function engineInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       env.PNPM_CONFIG_NETWORK_CONCURRENCY ?? DEFAULT_PNPM_NETWORK_CONCURRENCY,
     PNPM_CONFIG_FETCH_RETRIES:
       env.PNPM_CONFIG_FETCH_RETRIES ?? DEFAULT_PNPM_FETCH_RETRIES,
+    // @forgeax/engine-physics intentionally lazy-loads Rapier backends from
+    // the interface package while those backends import the interface types.
+    // pnpm 11 exposes this only as a config/env option, so scope the known
+    // cycle allowance to this engine install rather than repository-wide pnpm.
+    PNPM_CONFIG_IGNORE_WORKSPACE_CYCLES:
+      env.PNPM_CONFIG_IGNORE_WORKSPACE_CYCLES ?? 'true',
+    // The engine is a git submodule, so its `.git` is a gitfile rather than a
+    // hooks directory. Hook installation belongs to the editor root checkout.
+    SKIP_INSTALL_SIMPLE_GIT_HOOKS:
+      env.SKIP_INSTALL_SIMPLE_GIT_HOOKS ?? '1',
   };
 }
 

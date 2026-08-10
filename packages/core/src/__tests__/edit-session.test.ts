@@ -22,6 +22,7 @@ import {
   isSelfOrDescendant,
 } from '../session/document';
 import { entExists, entName, worldEntityHandles } from '../store/entity-state';
+import { VisibilityStateValue } from '../visibility';
 import type { EntityHandle } from '../scene/scene-types';
 import type { EditSession, EditorOp } from '../types';
 
@@ -119,9 +120,9 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
   it('addComponent then removeComponent are mutual inverses', () => {
     const s = createEditSession();
     const e = spawn(s, 'e');
-    const add = applyCommand(s, { kind: 'addComponent', entity: e, component: 'EditorHidden', value: {} });
+    const add = applyCommand(s, { kind: 'addComponent', entity: e, component: 'Visibility', value: { state: VisibilityStateValue.hidden } });
     expect(add.ok).toBe(true);
-    const rm = applyCommand(s, { kind: 'removeComponent', entity: e, component: 'EditorHidden' });
+    const rm = applyCommand(s, { kind: 'removeComponent', entity: e, component: 'Visibility' });
     expect(rm.ok).toBe(true);
     if (add.ok) expect(add.inverse.kind).toBe('removeComponent');
     if (rm.ok) expect(rm.inverse.kind).toBe('addComponent');
@@ -130,8 +131,8 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
   it('addComponent on an existing component → COMPONENT_EXISTS', () => {
     const s = createEditSession();
     const e = spawn(s, 'e');
-    applyCommand(s, { kind: 'addComponent', entity: e, component: 'EditorHidden', value: {} });
-    const r = applyCommand(s, { kind: 'addComponent', entity: e, component: 'EditorHidden', value: {} });
+    applyCommand(s, { kind: 'addComponent', entity: e, component: 'Visibility', value: { state: VisibilityStateValue.hidden } });
+    const r = applyCommand(s, { kind: 'addComponent', entity: e, component: 'Visibility', value: { state: VisibilityStateValue.hidden } });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('COMPONENT_EXISTS');
   });

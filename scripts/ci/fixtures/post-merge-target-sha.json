@@ -1,0 +1,93 @@
+{
+  "cases": [
+    {
+      "name": "valid target SHA envelope",
+      "targetSha": "target-sha-001",
+      "runId": 801,
+      "attempt": 2,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801",
+      "jobId": 901,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v1",
+      "monitorSha": "monitor-sha-001",
+      "valid": true
+    },
+    {
+      "name": "workflow head SHA mismatch",
+      "targetSha": "target-sha-001",
+      "headSha": "other-sha-001",
+      "runId": 801,
+      "attempt": 2,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801",
+      "jobId": 901,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v1",
+      "monitorSha": "monitor-sha-001",
+      "expectedCode": "target-sha-mismatch"
+    },
+    {
+      "name": "run identity mismatch",
+      "targetSha": "target-sha-001",
+      "runId": 802,
+      "envelopeRunId": 801,
+      "attempt": 2,
+      "htmlUrl": "https://github.com/ForgeaX-Games/ForgeaX-editor/actions/runs/802",
+      "jobId": 901,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v1",
+      "monitorSha": "monitor-sha-001",
+      "expectedCode": "run-id-mismatch"
+    },
+    {
+      "name": "attempt identity mismatch",
+      "targetSha": "target-sha-001",
+      "runId": 801,
+      "attempt": 2,
+      "envelopeAttempt": 1,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801",
+      "jobId": 901,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v1",
+      "monitorSha": "monitor-sha-001",
+      "expectedCode": "attempt-mismatch"
+    },
+    {
+      "name": "job identity mismatch",
+      "targetSha": "target-sha-001",
+      "runId": 801,
+      "attempt": 2,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801",
+      "jobId": 901,
+      "envelopeJobId": 902,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v1",
+      "monitorSha": "monitor-sha-001",
+      "expectedCode": "job-id-mismatch"
+    },
+    {
+      "name": "contract version mismatch",
+      "targetSha": "target-sha-001",
+      "runId": 801,
+      "attempt": 2,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801",
+      "jobId": 901,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v2",
+      "monitorSha": "monitor-sha-001",
+      "expectedCode": "contract-version-mismatch"
+    },
+    {
+      "name": "monitor checkout SHA cannot replace target SHA",
+      "targetSha": "target-sha-001",
+      "runId": 801,
+      "attempt": 2,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801",
+      "jobId": 901,
+      "jobName": "typecheck",
+      "contractVersion": "forgeax-editor-ci-contract/v1",
+      "monitorSha": "monitor-sha-001",
+      "envelopeTargetSha": "monitor-sha-001",
+      "expectedCode": "target-sha-mismatch"
+    }
+  ]
+}

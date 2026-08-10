@@ -1,0 +1,24 @@
+{
+  "envelopeFields": [
+    "contractVersion",
+    "checkId",
+    "owner",
+    "profile",
+    "executionHome",
+    "provenance",
+    "terminalStatus",
+    "failureClass",
+    "code",
+    "expected",
+    "observed",
+    "hint",
+    "firstFailure",
+    "attempts",
+    "sloClaim"
+  ],
+  "discoveryRecovery": {
+    "dirtyWorktree": "commit or stash changes before executing a local CI profile",
+    "missingSetup": "run bun fx setup before executing engine-backed checks",
+    "unsafeBoundary": "stop when trusted workflow admission cannot be proven"
+  }
+}

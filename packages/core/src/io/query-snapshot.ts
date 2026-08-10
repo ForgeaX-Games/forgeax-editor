@@ -20,8 +20,8 @@
 //   plan-strategy §2 D-5: querySnapshot full-open + three-layer value safety
 //   requirements AC-14/15/16: any registered component queryable + snapshot
 //     isolation + explicit failure for unknowns
-//   research F-4: resolveComponent / getRegisteredComponents / createQueryState
-//     / queryRun are public; schema reflection via Component.schema
+//   research F-4: resolveComponent / getRegisteredComponents / world.query are
+//     public; schema reflection via Component.schema
 //   research RD-7: safety layer has no complete precedent, implemented here
 //   plan-tasks t25: delete whitelist + resolveComponent + structured return
 //   plan-tasks t26: opaque-handle + snap-copy + skipped fields
@@ -30,13 +30,11 @@ import type { Component, ComponentSchema } from '@forgeax/engine-ecs';
 import {
   resolveComponent,
   getRegisteredComponents,
-  createQueryState,
-  queryRun,
   isManagedField,
   isManagedArrayField,
   isEntityField,
 } from '@forgeax/engine-ecs';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 import type { EntityId } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -78,35 +76,6 @@ export type QuerySnapshotFn = (descriptor: QuerySnapshotDescriptor) => QuerySnap
  * - OpaqueHandle for managed handle/string/buffer fields
  * - plain number[] snap-copy for array fields
  */
-/** Fixed arity N of an `array<T, N>` schema type string, or undefined for a
- *  scalar / variable-length `array<T>` field. Mirrors engine
- *  parseManagedArraySchema's fixed-capacity arm without importing an ECS internal. */
-function fixedArrayArity(fieldType: string): number | undefined {
-  const m = /^array<[^,>]+,\s*(\d+)\s*>$/.exec(fieldType);
-  if (!m) return undefined;
-  const n = Number(m[1]);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
-}
-
-/** `true` for a VARIABLE-capacity `array<T>` field (no `,N` arity) — e.g.
- *  `array<entity>` (Children.entities). These take two archetype columns: a u32
- *  BufferPool slot-id column + a `<field>:count` sidecar (engine column.ts §D-3).
- *  The per-column bundle loop can't reconstruct the logical list from either
- *  column alone (the slot id reads as a scalar, the sidecar leaks as a fake
- *  `<field>:count` field), so such fields are re-read whole via the public
- *  `world.get` — the same escape hatch the `string` case already uses. */
-function isVariableArrayField(fieldType: string): boolean {
-  return isManagedArrayField(fieldType) && fixedArrayArity(fieldType) === undefined;
-}
-
-/** `true` for an internal array sidecar column name (`<field>:count`, engine
- *  column.ts §D-3). The colon is forbidden in user-facing field names, so this
- *  never hides a real field — it only suppresses the leaked count column that the
- *  variable-array re-read (isVariableArrayField) already covers via the base field. */
-function isArrayCountSidecar(fieldName: string): boolean {
-  return fieldName.endsWith(':count');
-}
-
 function snapFieldValue(
   fieldType: string,
   rawValue: unknown,
@@ -160,7 +129,7 @@ function snapFieldValue(
   //     serializes `true`/`false`. Mirror the engine's predicate verbatim so the two
   //     read paths can never drift — a docs-following `if (x.castShadow === true)`
   //     must not get a false negative on a bool that IS set.
-  if (fieldType === 'bool') return rawValue === 1;
+  if (fieldType === 'bool') return typeof rawValue === 'boolean' ? rawValue : rawValue === 1;
 
   // (5) Other scalar fields (f32/f64/i32/u32/i16/u16/i8/u8/enum/ref) →
   //     return as-is (already a JS number from TypedArray[i]).
@@ -206,114 +175,43 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
     nameToSchema.set(tok.name, tok.schema as ComponentSchema);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const state = createQueryState({ with: tokens as any[] });
+  // The persistent Query is the engine's only public query constructor.
+  // Components with fields belong in `read` so row.get() is legal; zero-field
+  // tags belong in `with` because asking for tag data is intentionally rejected.
+  const dataTokens = tokens.filter(
+    (token) => token.name !== 'Entity' && Object.keys(token.schema).length > 0,
+  );
+  const tagTokens = tokens.filter(
+    (token) => token.name !== 'Entity' && Object.keys(token.schema).length === 0,
+  );
+  const query = _world.query({ read: dataTokens, with: tagTokens }).unwrap();
 
   const rows: QuerySnapshotRow[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  queryRun(state as any, _world as any, (bundle: any) => {
-    // Entity self column gives row count
-    const entities = bundle.Entity?.self as { length: number; [index: number]: number } | undefined;
-    if (!entities) return;
-    const entityIds: number[] = [];
-    for (let i = 0; i < entities.length; i++) {
-      entityIds.push(entities[i] ?? 0);
-    }
-
-    for (let i = 0; i < entityIds.length; i++) {
-      const row: QuerySnapshotRow = { entity: entityIds[i]! as EntityId };
-      // For each queried component (including Entity), extract ith row value
-      for (const compName of allNames) {
-        if (compName === 'Entity') continue; // Entity is the row key, not a component field
-        const compBundle = bundle[compName];
-        if (!compBundle) continue;
-
-        const schema = nameToSchema.get(compName);
-        const fields: Record<string, unknown> = {};
-
-        for (const [fieldName, col] of Object.entries(compBundle)) {
-          // Internal `<field>:count` sidecar of a variable array<T> column — not a
-          // user field. Suppress it; the base field is re-read whole below.
-          if (isArrayCountSidecar(fieldName)) continue;
-          if (col && typeof col === 'object') {
-            // TypedArray / ManagedColumnReader access
-            const colObj = col as { length?: number; subarray?: (a: number, b: number) => unknown; [index: number]: unknown; get?: (i: number) => unknown };
-            const fieldType: string | undefined = schema?.[fieldName] as string | undefined;
-            // Variable `array<T>` (no arity) — e.g. array<entity> (Children.entities).
-            // The bundle exposes only a per-row slot id (reads as a scalar) + a leaked
-            // `:count` sidecar; neither reconstructs the logical list. Re-read the whole
-            // field via the public world.get (the SSOT), mirroring the `string` case.
-            // Elements are JSON-safe (entity handles / scalars); snap-copy to a plain array.
-            if (fieldType && isVariableArrayField(fieldType)) {
-              const componentToken = resolveComponent(compName);
-              const componentValue = componentToken
-                ? _world.get(entityIds[i]! as unknown as EntityHandle, componentToken)
-                : undefined;
-              const resolved = componentValue?.ok
-                ? (componentValue.value as Record<string, unknown>)[fieldName]
-                : undefined;
-              fields[fieldName] = Array.isArray(resolved)
-                ? Array.from(resolved as ArrayLike<unknown>)
-                : ArrayBuffer.isView(resolved)
-                  ? Array.from(resolved as unknown as ArrayLike<number>)
-                  : [];
-              continue;
-            }
-            // Inline `array<T,N>` columns (feat-20260602) surface as a FLAT
-            // stride-N TypedArray: row `i` lives at [i*N, (i+1)*N), not at [i]
-            // (engine query.ts arity-aware slicing). Detect the fixed arity from
-            // the schema type and read the per-row sub-array before snapshotting.
-            const arity = fieldType ? fixedArrayArity(fieldType) : undefined;
-            if (arity !== undefined && typeof colObj.subarray === 'function') {
-              const base = i * arity;
-              if (base < (colObj.length ?? 0)) {
-                const rowView = colObj.subarray(base, base + arity);
-                fields[fieldName] = snapFieldValue(fieldType!, rowView);
-              }
-            } else if (i < (colObj.length ?? 0)) {
-              const rawValue = typeof colObj.get === 'function' ? colObj.get(i) : colObj[i];
-
-              // Apply value-safety classification (t26)
-              // Schema field type may not be available (e.g. Entity component),
-              // fall back to raw value as-is.
-              if (!fieldType) {
-                // No schema info — return raw value as-is (best effort)
-                fields[fieldName] = rawValue;
-              } else if (fieldType === 'string') {
-                // Query bundles intentionally expose managed string slot IDs, not
-                // payloads. Re-read this one field through the SAME live component
-                // token + World to obtain the immutable authored string without
-                // leaking the slot. This applies to every registered string field,
-                // not only Name.value.
-                const componentToken = resolveComponent(compName);
-                const componentValue = componentToken
-                  ? _world.get(
-                    entityIds[i]! as unknown as EntityHandle,
-                    componentToken,
-                  )
-                  : undefined;
-                const resolved = componentValue?.ok
-                  ? (componentValue.value as Record<string, unknown>)[fieldName]
-                  : '';
-                fields[fieldName] = typeof resolved === 'string' ? resolved : '';
-              } else {
-                const snapped = snapFieldValue(fieldType, rawValue);
-                fields[fieldName] = snapped;
-              }
-            }
-          } else {
-            fields[fieldName] = col;
-          }
-        }
-
-        // Store per-component data under component name
-        if (Object.keys(fields).length > 0) {
-          row[compName] = fields;
-        }
+  for (const queryRow of query) {
+    const row: QuerySnapshotRow = { entity: queryRow.entity as EntityId };
+    for (const token of tokens) {
+      if (token.name === 'Entity') continue;
+      const schema = nameToSchema.get(token.name);
+      if (schema === undefined) continue;
+      if (Object.keys(schema).length === 0) {
+        row[token.name] = {};
+        continue;
       }
-      rows.push(row);
+      const value = queryRow.get(token) as Record<string, unknown>;
+      const fields: Record<string, unknown> = {};
+      for (const [fieldName, fieldType] of Object.entries(schema)) {
+        const rawValue = value[fieldName];
+        // The row API resolves authored strings and materializes arrays through
+        // the same World storage owner. Copy arrays again at the Gateway seam so
+        // callers never retain a live typed view.
+        fields[fieldName] = fieldType === 'string'
+          ? (typeof rawValue === 'string' ? rawValue : '')
+          : snapFieldValue(fieldType, rawValue);
+      }
+      row[token.name] = fields;
     }
-  });
+    rows.push(row);
+  }
 
   return { ok: true, rows };
 }

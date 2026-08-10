@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { defineParticleEffectSource } from '@forgeax/engine-vfx';
+import {
+  parseParticleEffectSourceV2,
+  PARTICLE_CODE_DEFAULT_MODULE_ID,
+} from '@forgeax/engine-vfx';
 
 import { applyCreateAsset } from '../session/pack-ops';
 
@@ -51,17 +54,15 @@ describe('particle-effect Pack authoring contract', () => {
       refs: [],
     });
 
-    const source = defineParticleEffectSource(request.asset.payload);
+    const source = parseParticleEffectSourceV2(request.asset.payload);
     expect(source.ok).toBe(true);
     if (!source.ok) return;
     const emitter = source.value.emitters[0];
     expect(emitter).toBeDefined();
-    expect(emitter?.operators.spawn.length).toBeGreaterThan(0);
-    expect(emitter?.operators.initialize.length).toBeGreaterThan(0);
-    expect(emitter?.operators.update.length).toBeGreaterThan(0);
-    expect(emitter?.operators.output.length).toBeGreaterThan(0);
+    expect(emitter?.backend).toEqual({ required: 'gpu' });
+    expect(emitter?.program.module).toBe(PARTICLE_CODE_DEFAULT_MODULE_ID);
 
-    const materialGuid = emitter?.output.material;
+    const materialGuid = emitter?.renderers[0]?.material;
     expect(materialGuid).toBeDefined();
     expect(request.extraAssets).toEqual([
       expect.objectContaining({ guid: materialGuid, kind: 'material' }),

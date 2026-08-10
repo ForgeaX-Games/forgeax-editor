@@ -1,0 +1,90 @@
+{
+  "cases": [
+    {
+      "name": "materialized gitlink is an admission boundary",
+      "input": {
+        "workspacePatterns": ["packages/*", "packages/engine/packages/*"],
+        "gitlinkRoots": ["packages/engine"],
+        "entries": [
+          {
+            "path": "packages/core",
+            "kind": "package",
+            "packageJson": {"name": "@forgeax/editor-core", "scripts": {"test": "bun test"}}
+          },
+          {
+            "path": "packages/engine",
+            "kind": "gitlink",
+            "initialized": true,
+            "packageJson": {"name": "@forgeax/engine", "workspaces": ["packages/*"]}
+          },
+          {
+            "path": "packages/engine/packages/runtime",
+            "kind": "package",
+            "packageJson": {"name": "@forgeax/engine-runtime", "scripts": {"test": "bun test"}}
+          }
+        ]
+      },
+      "expected": {
+        "status": "ready",
+        "surfaces": [
+          {"path": "packages/core", "kind": "workspace-package", "materialization": "materialized"},
+          {"path": "packages/engine", "kind": "gitlink-root", "materialization": "materialized"}
+        ],
+        "admissions": []
+      }
+    },
+    {
+      "name": "uninitialized gitlink remains visible",
+      "input": {
+        "workspacePatterns": ["packages/*"],
+        "gitlinkRoots": ["packages/engine"],
+        "entries": [
+          {"path": "packages/engine", "kind": "gitlink", "initialized": false}
+        ]
+      },
+      "expected": {
+        "status": "admission",
+        "surfaces": [
+          {"path": "packages/engine", "kind": "gitlink-root", "materialization": "uninitialized"}
+        ],
+        "admissions": ["packages/engine"]
+      }
+    },
+    {
+      "name": "empty workspace directory is not a missing package",
+      "input": {
+        "workspacePatterns": ["packages/*"],
+        "gitlinkRoots": [],
+        "entries": [
+          {"path": "packages/empty", "kind": "directory"}
+        ]
+      },
+      "expected": {
+        "status": "admission",
+        "surfaces": [
+          {"path": "packages/empty", "kind": "workspace-surface", "materialization": "empty-directory"}
+        ],
+        "admissions": ["packages/empty"]
+      }
+    },
+    {
+      "name": "nested workspace pattern is retained without expanding a gitlink",
+      "input": {
+        "workspacePatterns": ["packages/*", "packages/engine/packages/*", "packages/tools/*"],
+        "gitlinkRoots": ["packages/engine"],
+        "entries": [
+          {"path": "packages/tools/checker", "kind": "package", "packageJson": {"name": "checker"}},
+          {"path": "packages/engine/packages/runtime", "kind": "package", "packageJson": {"name": "@forgeax/engine-runtime"}}
+        ]
+      },
+      "expected": {
+        "status": "admission",
+        "surfaces": [
+          {"path": "packages/engine", "kind": "gitlink-root", "materialization": "uninitialized"},
+          {"path": "packages/tools/checker", "kind": "workspace-package", "materialization": "materialized"}
+        ],
+        "admissions": ["packages/engine"]
+      }
+    }
+  ]
+}

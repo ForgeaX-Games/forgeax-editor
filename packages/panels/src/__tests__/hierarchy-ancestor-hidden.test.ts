@@ -1,8 +1,7 @@
-// hierarchy-ancestor-hidden.test.ts — UE-parity recursive hide projection
-// (docs 2026-08-04-editor-hide-ue-parity-plan M3)
+// hierarchy-ancestor-hidden.test.ts — engine Visibility inheritance projection
 //
 // Locks the Hierarchy structure projection's `ancestorHidden` derivation: a row
-// must know when a STRICT ANCESTOR carries EditorHidden so the panel can dim it
+// must know when a strict ancestor's Visibility state hides it so the panel can dim it
 // (lighter than own-hidden) without walking ChildOf per row per render. Uses the
 // selector's DEFAULT reader against a real World — the same read path the panel
 // mounts at runtime.
@@ -65,7 +64,7 @@ describe('Hierarchy projection — ancestorHidden (UE recursive hide)', () => {
     const child = spawn(gw, 'Child', parent);
     const grandchild = spawn(gw, 'Grandchild', child);
     const sibling = spawn(gw, 'Sibling');
-    gw.dispatch({ kind: 'setHidden', entity: parent, hidden: true } as EditorOp);
+    gw.dispatch({ kind: 'setVisibility', entity: parent, state: 'hidden' } as EditorOp);
 
     const rows = project();
     expect(rowOf(rows, parent).hidden).toBe(true);
@@ -81,8 +80,8 @@ describe('Hierarchy projection — ancestorHidden (UE recursive hide)', () => {
   it('unhiding the parent restores descendant rows to fully visible', () => {
     const parent = spawn(gw, 'Parent');
     const child = spawn(gw, 'Child', parent);
-    gw.dispatch({ kind: 'setHidden', entity: parent, hidden: true } as EditorOp);
-    gw.dispatch({ kind: 'setHidden', entity: parent, hidden: false } as EditorOp);
+    gw.dispatch({ kind: 'setVisibility', entity: parent, state: 'hidden' } as EditorOp);
+    gw.dispatch({ kind: 'setVisibility', entity: parent, state: 'visible' } as EditorOp);
 
     const rows = project();
     expect(rowOf(rows, parent).ancestorHidden).toBe(false);
@@ -93,9 +92,9 @@ describe('Hierarchy projection — ancestorHidden (UE recursive hide)', () => {
   it('a hidden child under a hidden parent keeps its own flag after the parent shows', () => {
     const parent = spawn(gw, 'Parent');
     const child = spawn(gw, 'Child', parent);
-    gw.dispatch({ kind: 'setHidden', entity: child, hidden: true } as EditorOp);
-    gw.dispatch({ kind: 'setHidden', entity: parent, hidden: true } as EditorOp);
-    gw.dispatch({ kind: 'setHidden', entity: parent, hidden: false } as EditorOp);
+    gw.dispatch({ kind: 'setVisibility', entity: child, state: 'hidden' } as EditorOp);
+    gw.dispatch({ kind: 'setVisibility', entity: parent, state: 'hidden' } as EditorOp);
+    gw.dispatch({ kind: 'setVisibility', entity: parent, state: 'visible' } as EditorOp);
 
     const rows = project();
     expect(rowOf(rows, child).hidden).toBe(true);

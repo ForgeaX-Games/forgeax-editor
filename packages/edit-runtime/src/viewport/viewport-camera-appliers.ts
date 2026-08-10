@@ -42,10 +42,14 @@ import {
   clampFov,
   clampOrthoHalfHeight,
   clampPitch,
+  clampPitchForProjection,
   computeFlyCamera,
   computeOrbitCamera,
+  deriveOrthoHalfHeight,
   flyToOrbit,
+  viewPresetOrientation,
   type CameraProjection,
+  type CameraViewPreset,
 } from './viewport-camera';
 
 const invalidArgs = (hint: string) => ({
@@ -96,6 +100,11 @@ export interface CameraAppliersDeps {
   setPose(pose: CameraPose): void;
   /** Repaint the editor camera, projection and visual helpers from caller state. */
   applyCamera(): void;
+  /** Abort an in-progress pointer gesture (fly/orbit/pan) before an op whose
+   *  semantics conflict with it — e.g. cameraSetView switching to orthographic
+   *  while RMB-fly is live would leave flyTick writing a forbidden ortho fly.
+   *  Optional: the orbit-only preview viewport has no gesture loop to cancel. */
+  cancelNavigation?(): void;
   getBookmark(slot: number): CameraBookmark | undefined;
   setBookmark(slot: number, bookmark: CameraBookmark | null): void;
   /** requestFrame delegates to the closure-local frameSelection(). */
@@ -119,7 +128,7 @@ export interface CameraOps {
 
 /** Build the camera op bodies bound to one viewport's pose storage. */
 export function createCameraOps({
-  editorEngine, camera, getPose, setPose, applyCamera, getBookmark, setBookmark, frameSelection,
+  editorEngine, camera, getPose, setPose, applyCamera, cancelNavigation, getBookmark, setBookmark, frameSelection,
 }: CameraAppliersDeps): CameraOps {
   const entries: CameraOp[] = [];
   const define = (kind: string, apply: (op: unknown) => CameraOpResult, meta: SessionApplierMeta): void => {
@@ -155,7 +164,10 @@ export function createCameraOps({
       if (o.pitch !== undefined && !isFiniteNumber(o.pitch)) return invalidArgs('pitch must be a finite number');
       if (o.dist !== undefined && !isFiniteNumber(o.dist)) return invalidArgs('dist must be a finite number');
       const nextYaw = o.yaw ?? cur.yaw;
-      const nextPitch = clampPitch(o.pitch ?? cur.pitch);
+      // Projection-aware pitch clamp (R1): an orthographic axis view sits at
+      // exactly ±90°; clamping to the perspective ±86° here would snap the
+      // view on every pan/zoom gesture-end (those ride this same op).
+      const nextPitch = clampPitchForProjection(o.pitch ?? cur.pitch, cur.projection);
       const nextDist = clampDist(o.dist ?? cur.dist);
       let tgt: Vec3;
       if (o.pos) {
@@ -191,7 +203,7 @@ export function createCameraOps({
     if (o.pitch !== undefined && !isFiniteNumber(o.pitch)) return invalidArgs('pitch must be a finite number');
     const p: Vec3 = o.pos ? [o.pos[0], o.pos[1], o.pos[2]] : [...cur.camPos];
     const nextYaw = o.yaw ?? cur.yaw;
-    const nextPitch = clampPitch(o.pitch ?? cur.pitch);
+    const nextPitch = clampPitchForProjection(o.pitch ?? cur.pitch, cur.projection);
     return { ok: true, pos: p, yaw: nextYaw, pitch: nextPitch };
   };
   const applyFlyLike = (op: unknown): { ok: true } | ReturnType<typeof invalidArgs> => {
@@ -245,11 +257,11 @@ export function createCameraOps({
       const dz = o.lookAt[2] - o.pos[2];
       const horiz = Math.hypot(dx, dz);
       if (Math.hypot(dx, dy, dz) <= Number.EPSILON) return invalidArgs('lookAt must differ from pos');
+      const cur = getPose();
       const calcYaw = Math.atan2(-dx, -dz);
-      const calcPitch = clampPitch(Math.atan2(dy, horiz));
+      const calcPitch = clampPitchForProjection(Math.atan2(dy, horiz), cur.projection);
       const p: Vec3 = [o.pos[0], o.pos[1], o.pos[2]];
       const r = computeFlyCamera({ pos: p, yaw: calcYaw, pitch: calcPitch });
-      const cur = getPose();
       const orb = flyToOrbit({ pos: p, yaw: calcYaw, pitch: calcPitch }, cur.dist);
       setPose({
         target: orb.target, yaw: calcYaw, pitch: calcPitch, dist: orb.dist,
@@ -308,6 +320,71 @@ export function createCameraOps({
       return { ok: true };
     },
     { title: 'Toggle camera projection' },
+  );
+
+  // ── cameraSetView (UE-style view presets) ─────────────────────────────────
+  // One op expresses the composite "view" semantic: projection + axis-aligned
+  // orientation. Axis views → orthographic with the preset yaw/pitch (kept at
+  // exactly ±90° for top/bottom — the applier must NOT route these through the
+  // perspective pitch clamp); the orbit target stays so the view keeps looking
+  // at the same scene content, and the ortho view scale carries over (derived
+  // from dist/fov when coming from perspective). 'perspective' restores the
+  // perspective projection keeping the view direction, with a ONE-TIME pitch
+  // clamp back into the perspective gesture range so the next orbit gesture
+  // doesn't snap (R5).
+  define(
+    'cameraSetView',
+    (op): CameraOpResult => {
+      const view = (op as { view?: unknown }).view;
+      if (view !== 'perspective' && view !== 'top' && view !== 'bottom'
+        && view !== 'left' && view !== 'right' && view !== 'front' && view !== 'back') {
+        return invalidArgs('view must be one of perspective|top|bottom|left|right|front|back');
+      }
+      // Switching projection mid-fly would leave flyTick writing an ortho fly
+      // (forbidden) — end any live pointer gesture first.
+      cancelNavigation?.();
+      const cur = getPose();
+      if (view === 'perspective') {
+        const pitch = clampPitch(cur.pitch);
+        const r = computeOrbitCamera(cur.target, cur.yaw, pitch, cur.dist);
+        setPose({
+          ...cur, pitch,
+          camPos: r.camPos, fwd: r.fwd, rgt: r.rgt, upv: r.upv,
+          projection: 'perspective',
+        });
+        applyCamera();
+        return { ok: true };
+      }
+      const orientation = viewPresetOrientation(view as CameraViewPreset);
+      if (!orientation) return invalidArgs(`no orientation for view "${view}"`);
+      const orthoHalfHeight = cur.projection === 'orthographic'
+        ? clampOrthoHalfHeight(cur.orthoHalfHeight)
+        : deriveOrthoHalfHeight(cur.dist, cur.fov);
+      const r = computeOrbitCamera(cur.target, orientation.yaw, orientation.pitch, cur.dist);
+      setPose({
+        ...cur,
+        yaw: orientation.yaw,
+        pitch: orientation.pitch,
+        camPos: r.camPos, fwd: r.fwd, rgt: r.rgt, upv: r.upv,
+        projection: 'orthographic',
+        orthoHalfHeight,
+      });
+      applyCamera();
+      return { ok: true };
+    },
+    {
+      title: 'Set viewport view preset',
+      argsSchema: {
+        type: 'object',
+        properties: {
+          view: {
+            type: 'string',
+            enum: ['perspective', 'top', 'bottom', 'left', 'right', 'front', 'back'],
+          },
+        },
+        required: ['view'],
+      },
+    },
   );
 
   define(
@@ -400,7 +477,8 @@ export function createCameraOps({
       setPose({
         ...bookmark,
         target: [...bookmark.target],
-        pitch: clampPitch(bookmark.pitch),
+        // Orthographic bookmarks may legitimately hold ±90° (Top/Bottom views).
+        pitch: clampPitchForProjection(bookmark.pitch, bookmark.projection),
         dist: clampDist(bookmark.dist),
         camPos: [...bookmark.camPos],
         fwd: [...bookmark.fwd],

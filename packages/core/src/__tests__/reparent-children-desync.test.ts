@@ -1,5 +1,5 @@
 // reparent-children-desync — regression test for hierarchy reparent causing
-// Children/ChildOf bidirectional desync (node hidden bug).
+// Children/ChildOf bidirectional desync.
 //
 // Bug: reparent case used w.set() for entities that already had ChildOf,
 // bypassing the ECS exclusive-relationship arm that maintains bidirectional
@@ -12,7 +12,8 @@
 //   3. ChildOf on child points to new parent.
 //   4. Reparent inverse stores a legacy EntityId (not engine handle).
 //   5. Applying inverse restores original parent (full undo roundtrip).
-//   6. Reparent does NOT affect EditorHidden state (decoupled visibility).
+//   6. Reparent preserves authored Visibility intent while inherited state is
+//      resolved against the new parent.
 //
 // Anchors:
 //   feedbacks/2026-07-07-hierarchy-reparent-children-desync-node-hidden.md §6/§8
@@ -22,7 +23,7 @@ import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Children, Name } from '@forgeax/engine-scene';
 import { applyCommand, createEditSession } from '../session/document';
-import { EditorHidden } from '../components/EditorHidden';
+import { Visibility, resolveVisibility } from '../visibility';
 import type { EditorOp, EditSession, WithEntityId } from '../types';
 
 function createSession(): EditSession {
@@ -180,51 +181,52 @@ describe('reparent inverse stores the prior parent handle', () => {
   });
 });
 
-describe('reparent does NOT affect EditorHidden (decoupled visibility)', () => {
-  it('reparent preserves EditorHidden=false (visible stays visible)', () => {
+describe('reparent preserves authored Visibility intent', () => {
+  it('reparent preserves inherited intent (visible stays visible)', () => {
     const session = createSession();
     const parentA = spawn(session, 'ParentA');
     const parentB = spawn(session, 'ParentB');
     const child = spawn(session, 'Child', parentA.legacyId);
 
     // Child is not hidden before reparent
-    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(false);
+    expect(session.world.get(child.engineHandle, Visibility).ok).toBe(false);
 
     applyCommand(session, { kind: 'reparent', entity: child.legacyId, parent: parentB.legacyId });
 
     // Child is still not hidden after reparent
-    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(false);
+    expect(session.world.get(child.engineHandle, Visibility).ok).toBe(false);
   });
 
-  it('reparent preserves EditorHidden=true (hidden stays hidden)', () => {
+  it('reparent preserves explicit hidden Visibility intent', () => {
     const session = createSession();
     const parentA = spawn(session, 'ParentA');
     const parentB = spawn(session, 'ParentB');
     const child = spawn(session, 'Child', parentA.legacyId);
 
     // Hide the child, then reparent
-    applyCommand(session, { kind: 'setHidden', entity: child.legacyId, hidden: true });
-    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(true);
+    applyCommand(session, { kind: 'setVisibility', entity: child.legacyId, state: 'hidden' });
+    expect(session.world.get(child.engineHandle, Visibility).ok).toBe(true);
 
     applyCommand(session, { kind: 'reparent', entity: child.legacyId, parent: parentB.legacyId });
 
     // Still hidden
-    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(true);
+    expect(session.world.get(child.engineHandle, Visibility).ok).toBe(true);
   });
 
-  it('hidden parent does not infect reparented child', () => {
+  it('inherited child follows a hidden new parent after reparent', () => {
     const session = createSession();
     const parentA = spawn(session, 'ParentA');
     const parentB = spawn(session, 'ParentB');
     const child = spawn(session, 'Child', parentA.legacyId);
 
     // Hide parentB
-    applyCommand(session, { kind: 'setHidden', entity: parentB.legacyId, hidden: true });
+    applyCommand(session, { kind: 'setVisibility', entity: parentB.legacyId, state: 'hidden' });
 
     // Reparent child under hidden parentB
     applyCommand(session, { kind: 'reparent', entity: child.legacyId, parent: parentB.legacyId });
 
-    // Child should NOT inherit parent's hidden state
-    expect(session.world.get(child.engineHandle, EditorHidden).ok).toBe(false);
+    // The child remains inherited, so the engine resolver now follows parentB.
+    expect(session.world.get(child.engineHandle, Visibility).ok).toBe(false);
+    expect(resolveVisibility(session.world).effective(child.engineHandle)).toBe('hidden');
   });
 });

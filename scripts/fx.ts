@@ -62,13 +62,17 @@ import {
   runSupervisedCommand,
 } from './lib/setup-process.ts';
 import {
-  REGRESSION_MANIFEST_VERSION,
+  REGRESSION_CONTRACT_VERSION,
   parseFixtureLayer,
   selectRegressionChecks,
   type FixtureLayer,
   type RegressionCheck,
   type RegressionProfile,
 } from './regression-manifest.ts';
+import {
+  EDITOR_CI_REPORT_SCHEMA_VERSION,
+  validateEditorCiReport,
+} from './ci/editor-ci-report.mjs';
 import {
   WORKTREE_CONFIG_FILE,
   portEnvironment,
@@ -530,7 +534,9 @@ function ensureCodecWasm(): void {
  * engine/node_modules links to its own store. The engine's test helpers then
  * import a second Vitest instance from pnpm, so property suites lose their
  * active test context. Recreate only this generated directory before pnpm
- * installs its authoritative dependency graph.
+ * installs its authoritative dependency graph. This is a normal package-manager
+ * handoff, not an install warning: Bun owns the editor graph and pnpm owns the
+ * nested engine graph.
  */
 function resetEngineNodeModulesIfBunLinked(): void {
   const nodeModules = join(ENGINE_DIR, 'node_modules');
@@ -545,7 +551,6 @@ function resetEngineNodeModulesIfBunLinked(): void {
     // A broken generated link is equally safe to replace with pnpm's graph.
   }
 
-  warn('Bun linked engine dependencies into the editor store; recreating engine node_modules with pnpm.');
   rmSync(nodeModules, { force: true, recursive: true });
 }
 
@@ -922,6 +927,7 @@ function build(argv: string[]): void {
 // completed `bun fx setup` before these checks execute.
 type CiProfile = RegressionProfile;
 type CiOptions = { readonly profile: CiProfile; readonly fixtureLayer?: FixtureLayer; readonly reportPath?: string };
+type CiFailureClass = 'admission' | 'environment' | 'source' | 'external-transport';
 type CiCheckResult = {
   readonly id: string;
   readonly name: string;
@@ -929,25 +935,44 @@ type CiCheckResult = {
   readonly journey: string;
   readonly gate: string;
   readonly fixtureLayer: FixtureLayer;
-  readonly status: 'passed' | 'failed';
+  readonly status: 'pass' | 'failure';
+  readonly failureClass: CiFailureClass | null;
   readonly durationMs: number;
   readonly exitCode: number;
 };
 type CiReport = {
-  readonly schemaVersion: typeof REGRESSION_MANIFEST_VERSION;
+  readonly $schema: typeof EDITOR_CI_REPORT_SCHEMA_VERSION;
+  readonly contractVersion: typeof REGRESSION_CONTRACT_VERSION;
+  readonly checkId: string;
+  readonly owner: string;
   readonly profile: CiProfile;
+  readonly executionHome: 'local-fast' | 'local-full';
+  readonly provenance: { readonly kind: 'local'; readonly timingDomain: 'local-execution'; readonly editorCommit: string };
+  readonly terminalStatus: 'pass' | 'failure';
+  readonly failureClass: CiFailureClass | null;
+  readonly code: string | null;
+  readonly expected: string | null;
+  readonly observed: string | null;
+  readonly hint: string;
+  readonly attempts: readonly { readonly attempt: number; readonly attemptId: string; readonly status: 'pass' | 'failure' }[];
+  readonly sloClaim: null;
   readonly fixtureLayer: FixtureLayer | 'all';
   readonly editorCommit: string;
-  readonly status: 'passed' | 'failed';
   readonly checks: readonly CiCheckResult[];
-  readonly firstFailure?: {
+  readonly firstFailure: {
+    readonly attempt: number;
+    readonly attemptId: string;
+    readonly code: string;
+    readonly expected: string;
+    readonly observed: string;
+    readonly hint: string;
     readonly id: string;
     readonly roadmapId: string;
     readonly journey: string;
     readonly gate: string;
     readonly fixtureLayer: FixtureLayer;
     readonly exitCode: number;
-  };
+  } | null;
 };
 
 const CI_CONTEXT = 'epic=R3-07 work package=R3-07E gates=C1,C2,C3,C4,C5,C6,C7';
@@ -988,9 +1013,163 @@ function defaultCiReportPath(profile: CiProfile, editorCommit: string): string {
 }
 
 function writeCiReport(path: string, report: CiReport): void {
+  const validation = validateEditorCiReport(report);
+  if (!validation.ok) {
+    const { code, expected, observed, hint } = validation.error;
+    die(`CI report contract failure: code=${code} expected=${expected} observed=${observed} hint=${hint}`);
+  }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`[fx] regression report: ${path}`);
+}
+
+type CiFailure = {
+  readonly failureClass: CiFailureClass;
+  readonly code: string;
+  readonly expected: string;
+  readonly observed: string;
+  readonly hint: string;
+  readonly exitCode?: number;
+};
+
+function ciExecutionHome(profile: CiProfile): 'local-fast' | 'local-full' {
+  return profile === 'fast' ? 'local-fast' : 'local-full';
+}
+
+function makeCiReport(
+  profile: CiProfile,
+  editorCommit: string,
+  checks: readonly CiCheckResult[],
+  failure?: CiFailure & { readonly check?: RegressionCheck },
+): CiReport {
+  const attemptId = `local-${editorCommit.slice(0, 12)}-${checks.length + 1}`;
+  const firstFailure = failure
+    ? {
+        attempt: 1,
+        attemptId,
+        code: failure.code,
+        expected: failure.expected,
+        observed: failure.observed,
+        hint: failure.hint,
+        id: failure.check?.id ?? 'ci-admission',
+        roadmapId: failure.check?.roadmapId ?? 'R3-07',
+        journey: failure.check?.journey ?? 'J0/J1',
+        gate: failure.check?.gate ?? 'C1-C7',
+        fixtureLayer: failure.check?.fixtureLayer ?? 'R0',
+        exitCode: failure.exitCode ?? 1,
+      }
+    : undefined;
+  return {
+    $schema: EDITOR_CI_REPORT_SCHEMA_VERSION,
+    contractVersion: REGRESSION_CONTRACT_VERSION,
+    checkId: failure?.check?.id ?? 'ci-profile',
+    owner: failure?.check?.owner ?? 'editor-ci',
+    profile,
+    executionHome: ciExecutionHome(profile),
+    provenance: { kind: 'local', timingDomain: 'local-execution', editorCommit },
+    terminalStatus: failure ? 'failure' : 'pass',
+    failureClass: failure?.failureClass ?? null,
+    code: failure?.code ?? null,
+    expected: failure?.expected ?? null,
+    observed: failure?.observed ?? null,
+    hint: failure?.hint ?? 'No recovery action is required.',
+    attempts: [{ attempt: 1, attemptId, status: failure ? 'failure' : 'pass' }],
+    sloClaim: null,
+    fixtureLayer: 'all',
+    editorCommit,
+    checks,
+    firstFailure: firstFailure ?? null,
+  };
+}
+
+function writeAdmissionReport(
+  reportPath: string,
+  profile: CiProfile,
+  editorCommit: string,
+  failure: CiFailure,
+): never {
+  writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], failure));
+  die(`CI admission failure: code=${failure.code} report=${reportPath}`);
+}
+
+function discoverContract(): void {
+  const validation = spawnSync(
+    'bun',
+    [
+      'scripts/ci/editor-ci-contract.mjs',
+      '--workflows-dir',
+      '.github/workflows',
+      '--ruleset-file',
+      'scripts/ci/fixtures/ruleset.json',
+    ],
+    { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  if (validation.status !== 0) {
+    die(`contract discovery admission failed: ${validation.stderr || validation.stdout}`);
+  }
+  const contract = JSON.parse(readFileSync(join(ROOT, 'ci', 'editor-ci-contract.json'), 'utf8')) as {
+    readonly version: string;
+    readonly checks: readonly {
+      readonly checkId: string;
+      readonly owner: string;
+      readonly command: string;
+      readonly executionHome: Readonly<Record<string, boolean>>;
+    }[];
+    readonly profiles: Readonly<Record<string, readonly string[]>>;
+    readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+  };
+  console.log(JSON.stringify({
+    schemaVersion: contract.version,
+    checks: contract.checks,
+    profiles: contract.profiles,
+    requiredContexts: contract.requiredContexts,
+    recovery: {
+      dirtyWorktree: 'commit or stash changes before executing a local CI profile',
+      missingSetup: 'run bun fx setup before executing engine-backed checks',
+      unsafeBoundary: 'stop when trusted workflow admission cannot be proven',
+    },
+  }, null, 2));
+}
+
+function requiredCiArtifacts(): readonly string[] {
+  return [
+    join(ENGINE_DIR, 'packages', 'vite-plugin-shader', 'dist', 'index.mjs'),
+    join(ENGINE_DIR, 'packages', 'wgpu-wasm', 'pkg', 'wgpu_wasm_bg.wasm'),
+  ];
+}
+
+function ensureCiAdmission(profile: CiProfile, reportPath: string, editorCommit: string): void {
+  if (isDirty()) {
+    writeAdmissionReport(reportPath, profile, editorCommit, {
+      failureClass: 'admission',
+      code: 'dirty-worktree',
+      expected: 'clean worktree before local CI execution',
+      observed: 'git status --porcelain is non-empty',
+      hint: 'Commit or stash changes, then rerun the selected local CI profile.',
+    });
+  }
+  if (requiredCiArtifacts().some((path) => !existsSync(path))) {
+    writeAdmissionReport(reportPath, profile, editorCommit, {
+      failureClass: 'admission',
+      code: 'setup-required',
+      expected: 'engine dist and wasm artifacts are present',
+      observed: 'one or more setup artifacts are missing',
+      hint: 'Run bun fx setup before executing engine-backed checks.',
+    });
+  }
+  const currentEngine = gitOut(['-C', ENGINE_DIR, 'rev-parse', 'HEAD']);
+  const builtEngine = existsSync(ENGINE_DIST_SHA_FILE)
+    ? readFileSync(ENGINE_DIST_SHA_FILE, 'utf8').trim()
+    : '';
+  if (!currentEngine || builtEngine !== currentEngine) {
+    writeAdmissionReport(reportPath, profile, editorCommit, {
+      failureClass: 'admission',
+      code: 'stale-engine-dist',
+      expected: currentEngine || 'readable engine submodule revision',
+      observed: builtEngine || 'missing engine dist freshness marker',
+      hint: 'Run bun fx setup to rebuild engine artifacts for the pinned submodule.',
+    });
+  }
 }
 
 function runCiCheck(check: RegressionCheck): CiCheckResult {
@@ -1001,6 +1180,7 @@ function runCiCheck(check: RegressionCheck): CiCheckResult {
     cwd: ROOT,
     env: process.env,
   });
+  const failed = result.status !== 0;
   return {
     id: check.id,
     name: check.name,
@@ -1008,54 +1188,166 @@ function runCiCheck(check: RegressionCheck): CiCheckResult {
     journey: check.journey,
     gate: check.gate,
     fixtureLayer: check.fixtureLayer,
-    status: result.status === 0 ? 'passed' : 'failed',
+    status: failed ? 'failure' : 'pass',
+    failureClass: failed ? (result.error || result.status === null ? 'environment' : 'source') : null,
     durationMs: Date.now() - started,
     exitCode: result.status ?? 1,
   };
 }
 
-function verifyFreshFrozenInstall(profile: CiProfile): void {
-  const route = ciRoute(profile);
+function runFreshCloneStep(
+  profile: CiProfile,
+  stage: string,
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  expected: string,
+): CiFailure | undefined {
+  const result = spawnSync(command, [...args], {
+    stdio: 'inherit',
+    shell: IS_WIN,
+    cwd,
+    env: process.env,
+  });
+  if (result.status === 0) return undefined;
+  const observed = result.status === null
+    ? result.error?.message ?? 'process did not exit normally'
+    : `process exited with code ${result.status}`;
+  return {
+    failureClass: 'environment',
+    code: `fresh-${stage}`,
+    expected,
+    observed,
+    hint: `Repair the fresh-clone environment and rerun ${ciRoute(profile)}.`,
+    exitCode: result.status ?? 1,
+  };
+}
+
+function verifyFreshFrozenInstall(profile: CiProfile): CiFailure | undefined {
   const branch = gitOut(['branch', '--show-current']);
   const head = gitOut(['rev-parse', 'HEAD']);
-  if (!head) die(`CI failure: ${route} stage=commit — could not resolve the editor commit to verify.`);
+  if (!head) {
+    return {
+      failureClass: 'admission',
+      code: 'commit-unavailable',
+      expected: 'the current editor commit is resolvable',
+      observed: 'git rev-parse HEAD returned no commit',
+      hint: 'Run the local CI command from a valid editor checkout.',
+    };
+  }
   if (gitOut(['status', '--porcelain']) !== '') {
-    die(`CI failure: ${route} stage=clean-worktree — commit changes first so the fresh clone verifies the exact PR commit.`);
+    return {
+      failureClass: 'admission',
+      code: 'dirty-worktree',
+      expected: 'clean worktree before fresh-clone verification',
+      observed: 'git status --porcelain is non-empty',
+      hint: 'Commit or stash changes, then rerun the selected local CI profile.',
+    };
   }
   const origin = gitOut(['remote', 'get-url', 'origin']);
-  if (!origin) die(`CI failure: ${route} stage=origin — an origin remote is required to reproduce the PR checkout.`);
+  if (!origin) {
+    return {
+      failureClass: 'admission',
+      code: 'origin-unavailable',
+      expected: 'an origin remote is available for fresh-clone verification',
+      observed: 'git remote get-url origin returned no URL',
+      hint: 'Configure the editor origin remote, then rerun the selected local CI profile.',
+    };
+  }
   const tempRoot = mkdtempSync(join(tmpdir(), 'forgeax-editor-ci-'));
   const cloneDir = join(tempRoot, 'repo');
   try {
     // Match actions/checkout's clean recursive checkout. A same-worktree Bun
     // install can reuse parent workspace links and pass even when the committed
     // lock fails on GitHub, as happened with the engine-ui upgrade.
-    sh('git', ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), origin, cloneDir], {
-      failureMessage: `CI failure: ${route} stage=fresh-clone`,
-    });
+    const cloneFailure = runFreshCloneStep(
+      profile,
+      'clone',
+      'git',
+      ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), origin, cloneDir],
+      ROOT,
+      'the editor repository and recursive submodules can be cloned',
+    );
+    if (cloneFailure) return cloneFailure;
     if (!branch) {
       // Studio consumes editor as a detached gitlink. Re-check out that exact
       // commit in the clean clone, then realign nested pins before frozen Bun
       // validates the same source tree Studio will ship.
-      sh('git', ['checkout', '--detach', head], {
-        cwd: cloneDir,
-        failureMessage: `CI failure: ${route} stage=exact-checkout`,
-      });
-      sh('git', ['submodule', 'update', '--init', '--recursive'], {
-        cwd: cloneDir,
-        failureMessage: `CI failure: ${route} stage=submodule-checkout`,
-      });
+      const checkoutFailure = runFreshCloneStep(
+        profile,
+        'exact-checkout',
+        'git',
+        ['checkout', '--detach', head],
+        cloneDir,
+        'the exact editor commit can be checked out in the clean clone',
+      );
+      if (checkoutFailure) return checkoutFailure;
+      const submoduleFailure = runFreshCloneStep(
+        profile,
+        'submodule-checkout',
+        'git',
+        ['submodule', 'update', '--init', '--recursive'],
+        cloneDir,
+        'recursive submodules can be materialized for the exact editor commit',
+      );
+      if (submoduleFailure) return submoduleFailure;
     }
-    sh('npx', ['--yes', 'bun@1.3.14', 'install', '--frozen-lockfile', '--ignore-scripts'], {
-      cwd: cloneDir,
-      failureMessage: `CI failure: ${route} stage=frozen-install`,
-    });
+    return runFreshCloneStep(
+      profile,
+      'frozen-install',
+      'npx',
+      ['--yes', 'bun@1.3.14', 'install', '--frozen-lockfile', '--ignore-scripts'],
+      cloneDir,
+      'Bun 1.3.14 frozen install succeeds in a fresh clone',
+    );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
+function runCiProfile(
+  profile: CiProfile,
+  checks: readonly RegressionCheck[],
+  editorCommit: string,
+  reportPath: string,
+): readonly CiCheckResult[] {
+  const results: CiCheckResult[] = [];
+  const route = ciRoute(profile, checks[0]);
+  step(`CI: ${route} stage=fresh-clone ...`);
+  const freshFailure = verifyFreshFrozenInstall(profile);
+  if (freshFailure) {
+    writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], freshFailure));
+    die(`CI failure: ${route} stage=${freshFailure.code} report=${reportPath}`);
+  }
+  for (const check of checks) {
+    const stepRoute = ciRoute(profile, check);
+    step(`CI: ${stepRoute} stage=${check.name} ...`);
+    const result = runCiCheck(check);
+    results.push(result);
+    if (result.status === 'failure') {
+      const report = makeCiReport(profile, editorCommit, results, {
+        failureClass: result.failureClass ?? 'source',
+        code: 'check-failed',
+        expected: 'selected check exits with code 0',
+        observed: `${check.id} exited with code ${result.exitCode}`,
+        hint: 'Inspect the first failed check and follow its structured recovery boundary.',
+        check,
+      });
+      writeCiReport(reportPath, report);
+      die(`CI failure: ${stepRoute} stage=${check.name} command=${check.command} ${check.args.join(' ')} report=${reportPath}`);
+    }
+  }
+  return results;
+}
+
 function ci(argv: string[]): void {
+  if (argv[0] === 'contract') {
+    if (argv.slice(1).some((arg) => arg !== '--json')) {
+      die("unknown contract flag; expected --json");
+    }
+    discoverContract();
+    return;
+  }
   const options = parseCiOptions(argv);
   const profile = options.profile;
   const checks = selectRegressionChecks(profile, options.fixtureLayer);
@@ -1063,54 +1355,11 @@ function ci(argv: string[]): void {
   if (checks.length === 0) {
     die(`${route} has no checks; fast profile only contains R0, while R1/R2 require --full`);
   }
-  const requiredArtifacts = [
-    join(ENGINE_DIR, 'packages', 'vite-plugin-shader', 'dist', 'index.mjs'),
-    join(ENGINE_DIR, 'packages', 'wgpu-wasm', 'pkg', 'wgpu_wasm_bg.wasm'),
-  ];
-  if (requiredArtifacts.some((path) => !existsSync(path))) {
-    die(`CI failure: ${route} stage=setup — engine dist/wasm artefacts missing. Run \`bun fx setup\`.`);
-  }
-  requireFreshEngineDist(`CI failure: ${route} stage=engine-dist`);
-
   const editorCommit = gitOut(['rev-parse', 'HEAD']);
   const reportPath = options.reportPath ?? defaultCiReportPath(profile, editorCommit);
-  const results: CiCheckResult[] = [];
-  step(`CI: ${route} stage=fresh-clone ...`);
-  verifyFreshFrozenInstall(profile);
-  for (const check of checks) {
-    const stepRoute = ciRoute(profile, check);
-    step(`CI: ${stepRoute} stage=${check.name} ...`);
-    const result = runCiCheck(check);
-    results.push(result);
-    if (result.status === 'failed') {
-      const report: CiReport = {
-        schemaVersion: REGRESSION_MANIFEST_VERSION,
-        profile,
-        fixtureLayer: options.fixtureLayer ?? 'all',
-        editorCommit,
-        status: 'failed',
-        checks: results,
-        firstFailure: {
-          id: check.id,
-          roadmapId: check.roadmapId,
-          journey: check.journey,
-          gate: check.gate,
-          fixtureLayer: check.fixtureLayer,
-          exitCode: result.exitCode,
-        },
-      };
-      writeCiReport(reportPath, report);
-      die(`CI failure: ${stepRoute} stage=${check.name} command=${check.command} ${check.args.join(' ')} report=${reportPath}`);
-    }
-  }
-  const report: CiReport = {
-    schemaVersion: REGRESSION_MANIFEST_VERSION,
-    profile,
-    fixtureLayer: options.fixtureLayer ?? 'all',
-    editorCommit,
-    status: 'passed',
-    checks: results,
-  };
+  ensureCiAdmission(profile, reportPath, editorCommit);
+  const results = runCiProfile(profile, checks, editorCommit, reportPath);
+  const report = makeCiReport(profile, editorCommit, results);
   writeCiReport(reportPath, report);
   ok(`local CI passed: ${route} checks=${results.length} report=${reportPath}`);
 }
@@ -1157,6 +1406,8 @@ Repo maintenance:
   ci:fast / ci:full             package-script aliases for the two profiles;
                                 both require bun fx setup; --full also needs
                                 installed Playwright Chromium.
+  ci contract --json             read and validate the producer-owned CI
+                                contract without executing a check.
 
   worktree <name> [--from REF]  create .worktrees/<name>, initialize recursive
                                 submodules, install dependencies, run setup,

@@ -24,10 +24,10 @@ import type { SceneAsset } from '@forgeax/engine-types';
 
 import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { Disabled, getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
-import { EditorHidden } from '../components/EditorHidden';
+import { Visibility, VisibilityStateValue, visibilityStateFromU32, type VisibilityState } from '../visibility';
 import { EngineFacade } from '../io/engine-facade';
 import { assetIO } from '../io/asset-io-facade';
 import { worldRootHandles } from '../store/entity-state';
@@ -114,7 +114,7 @@ function resolveToken(name: string): CToken | undefined {
   _cmpCache.set('Name', Name);
   _cmpCache.set('Transform', Transform);
   _cmpCache.set('ChildOf', ChildOf);
-  _cmpCache.set('EditorHidden', EditorHidden);
+  _cmpCache.set('Visibility', Visibility);
 })();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -427,7 +427,7 @@ function spawnComponentData(
   // must NOT re-author Children or it would double-write. On the dedup-absent
   // baseline (main HEAD) BASELINE_NAMES already omits 'Children'; keeping it out
   // of this skip-set-plus-author path is the verify-absence guarantee.
-  const BASELINE_NAMES = new Set(['Name', 'Transform', 'ChildOf', 'MeshRenderer']);
+  const BASELINE_NAMES = new Set(['Name', 'Transform', 'ChildOf']);
   // verify F-1 (round 1): `Editor*`-prefixed keys are intentional transient
   // editor-side markers (e.g. `EditorPendingMeshAsset`, carrying a real GUID for
   // the edit-runtime drag-spawn resolver to consume via `lastCommand.components`
@@ -570,7 +570,7 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
     for (const ce of subtree) {
       const nr = engine.get(ce, Name); const nm = nr.ok ? nr.value.value : '?';
       const comps: Record<string, unknown> = {};
-      for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['EditorHidden', EditorHidden]] as [string, CToken][]) {
+      for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['Visibility', Visibility]] as [string, CToken][]) {
         const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
       }
       const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
@@ -967,77 +967,61 @@ export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
   return { ok: true, inverse: { kind: 'addComponent', entity: cmd.entity, component: cmd.component, value }, created: [] };
 }
 
-// ── setHidden applier ─────────────────────────────────────────────────────────
-// Two markers, two roles (UE-parity editor hide, docs 2026-08-04-editor-hide-ue-
-// parity-plan §3.2):
-//   EditorHidden — authored per-entity intent. SSOT; persists with the scene file;
-//     stripped from packs (Play unaffected).
-//   engine Disabled — DERIVED "effectively hidden" (self or any ancestor carries
-//     EditorHidden). The render extract query auto-excludes Disabled, so toggling
-//     it is what removes the entity from the viewport; it never reaches packs
-//     (stripEditorHiddenMarker drops it too).
-// Hiding a parent recursively hides the subtree; unhiding restores each child's
-// OWN intent (UE Outliner semantics). The applier re-derives the subtree after
-// every toggle, so the single-op inverse restores the whole cascade in one undo.
+// ── setVisibility applier ─────────────────────────────────────────────────────
+// Visibility.state is the single authored intent. The engine render extractor
+// resolves parent inheritance and filters render candidates; the editor must not
+// mirror effective state onto descendants with Disabled or a second marker.
 
-/** Walk the ChildOf chain: does any strict ancestor of `node` carry EditorHidden? */
-function ancestorEditorHidden(engine: EngineWriteProxy, node: EntityHandle): boolean {
-  const seen = new Set<number>();
-  let cur: EntityHandle = node;
-  for (;;) {
-    if (seen.has(cur as number)) return false;
-    seen.add(cur as number);
-    const co = engine.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
-    if (!co.ok) return false;
-    const parent = (co.value as { parent: number }).parent as EntityHandle;
-    if (engine.get(parent, EditorHidden).ok) return true;
-    cur = parent;
-  }
+function visibilityStateFromValue(value: unknown): VisibilityState | undefined {
+  return visibilityStateFromU32(Number(value));
 }
 
-/** Re-derive Disabled for `node` and every descendant from EditorHidden intent. */
-function syncDisabledSubtree(
-  engine: EngineWriteProxy,
-  node: EntityHandle,
-  ancestorHidden: boolean,
-): { ok: true } | { ok: false; error: CommandError } {
-  const effective = ancestorHidden || engine.get(node, EditorHidden).ok;
-  const hasDisabled = engine.get(node, Disabled).ok;
-  if (effective && !hasDisabled) {
-    const r = engine.addComponent(node, { component: Disabled, data: {} });
-    if (!r.ok) return { ok: false, error: { code: 'HIDE_FAILED', hint: String(r.error) } };
-  } else if (!effective && hasDisabled) {
-    const r = engine.removeComponent(node, Disabled);
-    if (!r.ok) return { ok: false, error: { code: 'UNHIDE_FAILED', hint: String(r.error) } };
-  }
-  const ch = engine.get(node, Children) as { ok: true; value: { entities: number[] | Uint32Array } } | { ok: false };
-  if (!ch.ok) return { ok: true };
-  const raw = (ch.value as { entities: number[] | Uint32Array }).entities;
-  const arr: number[] = Array.isArray(raw) ? raw : Array.from(raw as Uint32Array);
-  for (const child of arr) {
-    const r = syncDisabledSubtree(engine, child as EntityHandle, effective);
-    if (!r.ok) return r;
-  }
-  return { ok: true };
-}
-
-export function applySetHidden(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cmd = _cmd as any;
+export function applySetVisibility(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  const cmd = _cmd as Extract<EditorOp, { kind: 'setVisibility' }>;
   const { engine, alias } = ctx;
   const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
-  const isHidden = engine.get(eH, EditorHidden).ok;
-  if (cmd.hidden && !isHidden) {
-    const r = engine.addComponent(eH, { component: EditorHidden, data: {} });
-    if (!r.ok) return { ok: false, error: { code: 'HIDE_FAILED', hint: String(r.error) } };
-  } else if (!cmd.hidden && isHidden) {
-    const r = engine.removeComponent(eH, EditorHidden);
-    if (!r.ok) return { ok: false, error: { code: 'UNHIDE_FAILED', hint: String(r.error) } };
+  if (cmd.state !== 'inherited' && cmd.state !== 'hidden' && cmd.state !== 'visible') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `invalid Visibility state "${String(cmd.state)}"` } };
   }
-  const sync = syncDisabledSubtree(engine, eH, ancestorEditorHidden(engine, eH));
-  if (!sync.ok) return { ok: false, error: sync.error };
-  return { ok: true, inverse: { kind: 'setHidden', entity: cmd.entity, hidden: isHidden }, created: [] };
+
+  const current = engine.get(eH, Visibility);
+  const previous = current.ok
+    ? visibilityStateFromValue((current.value as { state: number }).state)
+    : 'inherited';
+  if (previous === undefined) {
+    return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.entity} has an invalid Visibility state` } };
+  }
+
+  if (cmd.state === 'inherited') {
+    if (current.ok) {
+      const r = engine.removeComponent(eH, Visibility);
+      if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
+      return {
+        ok: true,
+        inverse: { kind: 'addComponent', entity: cmd.entity, component: 'Visibility', value: clone(current.value) },
+        created: [],
+      };
+    }
+    return { ok: true, inverse: { kind: 'setVisibility', entity: cmd.entity, state: 'inherited' }, created: [] };
+  }
+
+  const value = { state: VisibilityStateValue[cmd.state] };
+  if (current.ok) {
+    const r = engine.set(eH, Visibility, value);
+    if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
+    return {
+      ok: true,
+      inverse: previous === 'inherited'
+        ? { kind: 'setComponent', entity: cmd.entity, component: 'Visibility', patch: clone(current.value) }
+        : { kind: 'setVisibility', entity: cmd.entity, state: previous },
+      created: [],
+    };
+  }
+
+  const r = engine.addComponent(eH, { component: Visibility, data: value });
+  if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
+  return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: 'Visibility' }, created: [] };
 }
 
 // ── transaction applier ───────────────────────────────────────────────────────
@@ -1204,8 +1188,8 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       return applyAddComponent(ctx, cmd);
     case 'removeComponent':
       return applyRemoveComponent(ctx, cmd);
-    case 'setHidden':
-      return applySetHidden(ctx, cmd);
+    case 'setVisibility':
+      return applySetVisibility(ctx, cmd);
     case 'instantiateSceneAsset':
       return applyInstantiateSceneAsset(ctx, cmd);
     case 'duplicateEntity':

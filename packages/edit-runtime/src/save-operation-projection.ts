@@ -5,7 +5,7 @@
 // read model; this module owns no completion flag or transport state.
 
 import type { EditorOp } from '@forgeax/editor-core';
-import { projectSaveRun, type SaveRunProjection } from '@forgeax/editor-panels';
+import { projectSaveRun, type SaveRunProjection } from '@forgeax/editor-panels/operation-projection';
 import type { CommandError, OperationRun } from '@forgeax/editor-product';
 
 export function createHumanSaveRequest(): Extract<EditorOp, { readonly kind: 'saveDocToDisk' }> {

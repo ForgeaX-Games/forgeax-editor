@@ -1,31 +1,13 @@
-// Standalone editor chrome entry — :15290 host page (single realm, M2).
+// Standalone editor chrome entry — :15290 persistent shell.
 //
-// SINGLE-REALM ASSEMBLY (plan-strategy REPLAN D4/D8; requirements AC-04/AC-05):
-//   Before M2 this host rendered the viewport AND every ep:* panel as iframes to
-//   edit-runtime (:15280) — each iframe a SEPARATE module realm with its own
-//   EditorBus + engine. M2 collapses the editor to ONE realm: the engine boots
-//   ONCE in THIS window (via ViewportComponent's single-boot latch) and both the
-//   viewport and the ep:* panels are in-process React components assembled through
-//   DockShell's injection slots:
-//     - renderEdit         -> ViewportComponent (the in-process engine surface,
-//                             imported from @forgeax/editor-edit-runtime).
-//     - renderEditorPanel  -> EDITOR_PANEL_COMPONENTS[id] (in-process panel
-//                             component; placeholder for ids with no component).
-//   There is NO /editor iframe anywhere (the root vite `/editor` proxy is deleted
-//   too — the host bundler serves the engine in-process via engine-vite-preset).
-//
-// AC-spec-matrix:
-//   AC-04a — no editor panel/viewport iframe (page has no ?panel= / ?viewportOnly=1)
-//   AC-04b — the engine <canvas> lives in THIS document (in-process viewport)
-//   AC-04c — DockShell still registers every ep:* panel (now component slots)
-//   AC-05  — panels + chat share one flat dock, freely interleaved
-//   AC-09  — no chat/Forge in the standalone host (structural: no extension
-//            contributes panels.chat — formerly the hideChatAndForge prop)
-//
-// Anchors: plan-strategy S2 D4/D5/D6/D8, S3.1 host entry; requirements AC-04/05/09;
-//          research Finding 2/3/7.
+// The shell and all business panels stay in this realm. Exactly one replaceable
+// Viewport Runtime carrier owns Gateway, EditWorld, AssetRegistry and the GPU
+// canvas under /editor/. Panels consume disposable projections over MessagePort;
+// they never boot or mirror a second authoritative editor runtime. This same
+// carrier boundary can later be hosted by a page or Tauri WebView without
+// changing the Runtime contract.
 
-import { StrictMode, type ReactNode } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
 import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
@@ -42,10 +24,9 @@ import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
 import { prompt as promptDialog } from '@forgeax/editor-ui';
-// Single-realm surfaces — imported IN-PROCESS from edit-runtime's D8 subpath
-// exports (no iframe). ViewportComponent boots the engine once in this window;
-// EDITOR_PANEL_COMPONENTS maps ep:<id> -> the panel's React component.
-import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
+// The viewport carrier is isolated; preview-only surfaces and business panels
+// remain lightweight in-process components in the shell.
+import { ViewportRuntimeFrame } from '@forgeax/editor-edit-runtime/runtime-frame';
 import { MaterialPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/material-preview';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
@@ -65,20 +46,6 @@ import './standalone-menu.css';
 import { requestDeleteGuard } from './delete-guard-bus';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 
-// ── troubleshooting probe (observation only, no logic) ─────────────────────
-// Probe logging MUST bypass the editor console bridge: installConsoleBridge
-// (viewport-runtime-bridges.ts) monkeypatches console.* and re-emits every
-// call into the panel bridge -> shell store -> our store subscriber -> log
-// again = synchronous feedback storm that wedges the main thread. This module
-// evaluates before the viewport boots, so these captures are the UNWRAPPED
-// originals. Remove the probe block once the dead-gear issue is diagnosed.
-const rawProbeInfo: (...args: unknown[]) => void = /* @__PURE__ */ (() => {
-  try { return console.info.bind(console); } catch { return () => {}; }
-})();
-const probeLog = (...args: unknown[]): void => {
-  try { rawProbeInfo(...args); } catch { /* noop */ }
-};
-
 // keyboard-router convergence M4: the interface submodule's global-shortcuts
 // router is editor-agnostic (lint:agnostic forbids importing @forgeax/editor),
 // so we inject the editor-side callbacks it needs here — once, before React
@@ -86,14 +53,15 @@ const probeLog = (...args: unknown[]): void => {
 // global keydown listener (G-1 / AC-A1) while routing Delete/F2/Ctrl+D/Ctrl+A/G
 // through the one gateway door.
 import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
-import { registerAction } from '@forgeax/interface/lib/action-registry';
+import { dispatchAction, registerAction } from '@forgeax/interface/lib/action-registry';
 // keyboard-router deps builder is now shared (edit-runtime SSOT) so studio + this
 // standalone host produce the SAME dep object — no divergence (the old inline copy
 // here was silently missing from studio, killing its G/Esc keyboard path).
 import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
-import { projectGatewayOps } from '@forgeax/editor-edit-runtime';
-import { gateway } from '@forgeax/editor-core';
-import { installSettingsPanelRedirect } from './settings-redirect';
+import { projectViewportRuntimeOps } from '@forgeax/editor-edit-runtime/gateway-action-projection';
+import { setPathResolver } from '@forgeax/editor-core';
+import { isPanelVisible } from '@forgeax/interface/components/DockShell/DockRegion';
+import { installSettingsPanelRedirect, SETTINGS_PANEL_ID } from './settings-redirect';
 import { createStandaloneGameClient } from './game-service-client';
 
 // lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
@@ -107,7 +75,7 @@ import { createStandaloneGameClient } from './game-service-client';
 // Standalone's router deps = the shared SSOT builder + this host's DeleteGuardDialog
 // bus as the risky-multi-delete confirm gate (the one host-specific piece).
 function makeKeyboardRouterDeps(): KeyboardRouterDeps {
-  return buildKeyboardRouterDeps({
+  const deps = buildKeyboardRouterDeps({
     confirmDeleteAssets: (assets) => requestDeleteGuard({ assets }),
     // Folder/file delete confirm for the keyboard-router path. The editor-ui
     // `confirmDialog` (ConfirmProvider in the isolated #editor-overlay-root React
@@ -125,6 +93,19 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
       cancelText: 'Cancel',
     }),
   }) as KeyboardRouterDeps;
+  return {
+    ...deps,
+    // The shell owns the one global shortcut listener, while the iframe Runtime
+    // owns Gateway and document dirtiness. Reuse the Runtime-projected action;
+    // never dispatch against the shell's inert editor-core singleton.
+    save: () => {
+      void dispatchAction(
+        'saveDocToDisk',
+        { requestId: `save-human-${crypto.randomUUID()}` },
+        { source: 'human' },
+      );
+    },
+  };
 }
 
 // Injected by vite `define` (vite.config.ts) from FORGEAX_GAME_DIR's basename.
@@ -139,11 +120,10 @@ configureWorkbenchClient(createStandaloneGameClient(() => {
   window.setTimeout(() => window.location.reload(), 0);
 }));
 
-// ── panel renderer injection (single realm, PanelRenderers v9 shape) ──────────
+// ── shell panel injection + isolated Runtime carrier (PanelRenderers v9) ──────
 // v9 (2026-07-08) reclassified PanelRenderers into structural category slots:
-//   surfaces.SceneEditor — the in-process engine viewport (NOT an iframe).
-//     SurfaceKeepAliveLayer mounts it once above the dockview 'viewport' anchor.
-//     (replaces the pre-v9 `renderEdit(opts)` render function)
+//   surfaces.SceneEditor — the one Viewport Runtime carrier. SurfaceKeepAliveLayer
+//     mounts the iframe once above the dockview 'viewport' anchor.
 //   panels — Record<bareId, PanelDescriptor>; DockPanelHost looks each ep:*
 //     panel body up here. (replaces the pre-v9 `renderEditorPanel(id)`)
 //   editorPanelIds — the ep:* id list DockShell registers (SSOT: editor-core
@@ -167,7 +147,7 @@ const EDITOR_PANEL_TITLES: Record<string, string> = {
   history: 'History', capabilities: 'Capabilities',
   launcher: 'Launcher', 'asset-overview': 'Asset Overview',
   'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
-  'mi-preview': 'Preview', 'mi-properties': 'Properties',
+  'mat-preview': 'Preview', 'mi-preview': 'Preview', 'mi-properties': 'Properties',
   settings: 'Settings',
 };
 
@@ -180,20 +160,43 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
   }]),
 );
 
-// Module-scope named component (stable identity across renders — no re-mounts).
-// viewportOnly is accepted for slot-signature parity; the in-process component
-// always renders the full engine surface. The active game is the CLI `--game`
-// dir (its basename === slug), injected at build time as __FORGEAX_GAME_SLUG__.
-// game-backend addresses files by <slug>/<rel>, so gameRoot === slug here. Passed
-// as props (NOT `?scene=`/`?gameRoot=` URL params — the single realm removed the
-// iframe those addressed, so a stale URL can no longer override the CLI intent).
+// One replaceable carrier owns the authoritative Runtime realm. The shell keeps
+// its dock/panels alive when this iframe reloads; game identity is injected into
+// the edit-runtime build by the same fx process that starts this host.
+const STANDALONE_VIEWPORT_RUNTIME = {
+  version: 'viewport-runtime/v1',
+  runtimeId: 'standalone-edit-runtime',
+  runtimeGeneration: 1,
+  carrierId: 'standalone-viewport',
+  carrierKind: 'iframe',
+} as const;
+
 function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
+  const disposeActionsRef = useRef<(() => void) | null>(null);
+  const connectionRef = useRef<object | null>(null);
+  const onClient = useCallback((client: unknown | null) => {
+    disposeActionsRef.current?.();
+    disposeActionsRef.current = null;
+    const connection = client === null ? null : {};
+    connectionRef.current = connection;
+    if (connection === null) return;
+    void projectViewportRuntimeOps(registerAction)
+      .then((dispose) => {
+        if (connectionRef.current !== connection) {
+          dispose();
+          return;
+        }
+        disposeActionsRef.current = dispose;
+      })
+      .catch((error) => console.warn('[viewport-runtime] capability projection unavailable', error));
+  }, []);
+  useEffect(() => () => {
+    connectionRef.current = null;
+    disposeActionsRef.current?.();
+    disposeActionsRef.current = null;
+  }, []);
   return (
-    <ViewportComponent
-      gameSlug={__FORGEAX_GAME_SLUG__}
-      gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
-      runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
-    />
+    <ViewportRuntimeFrame src="/editor/" runtime={STANDALONE_VIEWPORT_RUNTIME} onClient={onClient} />
   );
 }
 
@@ -214,21 +217,15 @@ const standaloneEditorIntegrationExtension: AppExtension = {
         installBridge: installInterfaceBridge,
       },
     });
-    const disposeRedirect = installSettingsPanelRedirect(useShellStore, ctx.bus);
-    // ── troubleshooting probe (observation only, no logic) ─────────────────
-    // Echoes our own panel:open emit (proves the bus accepted it), then checks
-    // a tick later whether the Settings panel actually mounted in the DOM
-    // (proves DockRegion owned + reopened the panel).
-    const offProbe = ctx.bus.on('panel:open', (p) => {
-      probeLog('[standalone-probe] bus panel:open', p);
-      if (p?.id !== 'ep:settings') return;
-      setTimeout(() => {
-        const mounted = !!document.querySelector('[data-testid="panel-settings"]');
-        probeLog('[standalone-probe] ep:settings in DOM after open =', mounted);
-      }, 600);
-    });
-    probeLog('[standalone-probe] editor-integration setup done (panels + settings redirect + bus echo)');
-    return () => { offProbe(); disposeRedirect(); disposePanels(); };
+    // The redirect needs the dock's live panel-visibility mirror so Ctrl+, /
+    // the TopBar gear TOGGLES the ep:settings panel (open ↔ close) instead of
+    // only ever re-opening it (the overlay store alone can't track a dock panel).
+    const disposeRedirect = installSettingsPanelRedirect(
+      useShellStore,
+      ctx.bus,
+      () => isPanelVisible(SETTINGS_PANEL_ID),
+    );
+    return () => { disposeRedirect(); disposePanels(); };
   },
 };
 
@@ -261,6 +258,14 @@ function boot(): void {
     });
   }
 
+  // Disk-tree projection is shell-owned and talks to the shell's same-origin
+  // /api backend. This path mapper carries no Runtime state or AssetRegistry.
+  setPathResolver((relativePath) => {
+    const slug = __FORGEAX_GAME_SLUG__;
+    if (!slug) return relativePath;
+    return relativePath ? `${slug}/${relativePath}` : slug;
+  });
+
   // Pin the active game BEFORE React mounts so UI surfaces (GameSwitcher label,
   // session scope) read the right slug. setPinnedSlug persists to localStorage.
   // Clearing when no --game guarantees a stale pin from a prior run can't mislabel
@@ -287,45 +292,15 @@ function boot(): void {
     /* localStorage unavailable — worst case the wizard shows; not fatal */
   }
 
-  // ── troubleshooting probe (observation only, no logic) ─────────────────
-  // Chain under diagnosis: gear click -> openOverlay('settings') -> redirect
-  // -> panel:open -> dock panel mounts. probeLog bypasses the console bridge
-  // (see rawProbeInfo above) so logging itself cannot re-enter the store.
-  // (a) Capture-phase click listener: does the click even REACH the TopBar
-  //     gear button (vs. intercepted by an invisible layer / dead handler)?
-  // (b) Store transition log on THIS realm's useShellStore: if the gear opens
-  //     the overlay but this never logs, the host and TopBar hold TWO
-  //     interface-store module instances (dual-instance split) and the
-  //     redirect subscription can never fire.
-  document.addEventListener('click', (ev) => {
-    const target = ev.target as HTMLElement | null;
-    const btn = target?.closest?.('button');
-    if (!btn) return;
-    probeLog('[standalone-probe] click button:', btn.className, '| title =', btn.getAttribute('title'));
-  }, true);
-  useShellStore.subscribe((s, prev) => {
-    if (s.activeOverlay !== prev.activeOverlay) {
-      probeLog('[standalone-probe] store activeOverlay:', prev.activeOverlay, '->', s.activeOverlay);
-    }
-  });
-
   // Inject the editor-side keyboard-router callbacks (interface submodule stays
   // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks
   // them up at effect time.
   registerKeyboardRouterDeps(makeKeyboardRouterDeps());
-  // Command-palette actions are a pure projection of gateway.listOps(); the
-  // action registry owns discovery, while execution returns to gateway.dispatch.
-  const disposeGatewayActions = projectGatewayOps(gateway, registerAction);
-  // The standalone host has no component teardown boundary for this module;
-  // make the adapter's disposer the HMR/realm-reset boundary so reloading the
-  // host cannot leave stale projected commands in interface's registry.
-  import.meta.hot?.dispose(disposeGatewayActions);
-
   // Render the interface App directly — no hand-rolled StandaloneShell.
   // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +
   // ContextMenu (plan-strategy D-1: diff-set empty). The extension set injects
-  // standalone's in-process ViewportComponent + editor panel slots; chat/Forge
-  // never mount because nothing contributes them (AC-09, structural).
+  // standalone's isolated Viewport Runtime + in-process editor panel slots;
+  // chat/Forge never mount because nothing contributes them (AC-09, structural).
   try {
     createRoot(rootEl).render(
       <StrictMode>

@@ -1,0 +1,52 @@
+{
+  "cases": [
+    {
+      "name": "transient external transport can retry once",
+      "failureClass": "external-transport",
+      "transient": true,
+      "attemptCount": 1,
+      "retry": true,
+      "maxAttempts": 2
+    },
+    {
+      "name": "second external transport attempt is terminal",
+      "failureClass": "external-transport",
+      "transient": true,
+      "attemptCount": 2,
+      "retry": false,
+      "maxAttempts": 2
+    },
+    {
+      "name": "source failure does not retry",
+      "failureClass": "source",
+      "transient": true,
+      "attemptCount": 1,
+      "retry": false,
+      "maxAttempts": 1
+    },
+    {
+      "name": "environment failure does not retry",
+      "failureClass": "environment",
+      "transient": true,
+      "attemptCount": 1,
+      "retry": false,
+      "maxAttempts": 1
+    },
+    {
+      "name": "admission failure does not retry",
+      "failureClass": "admission",
+      "transient": true,
+      "attemptCount": 1,
+      "retry": false,
+      "maxAttempts": 1
+    },
+    {
+      "name": "non-transient transport does not retry",
+      "failureClass": "external-transport",
+      "transient": false,
+      "attemptCount": 1,
+      "retry": false,
+      "maxAttempts": 1
+    }
+  ]
+}

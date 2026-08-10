@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "427e8932-3ea3-49ad-a8ce-8c9561e53062",
+      "kind": "material",
+      "sourceKey": "arc-nova-flow.wgsl",
+      "payload": {
+        "kind": "material",
+        "passes": [
+          {
+            "name": "particle-billboard",
+            "program": {
+              "module": "sample_vfx::arc_nova_flow",
+              "vertexEntry": "vs_main",
+              "fragmentEntry": "fs_main"
+            },
+            "renderState": {
+              "cullMode": "none",
+              "depthCompare": "less-equal",
+              "depthWriteEnabled": false,
+              "blend": {
+                "color": { "srcFactor": "one", "dstFactor": "one", "operation": "add" },
+                "alpha": { "srcFactor": "one", "dstFactor": "one-minus-src-alpha", "operation": "add" }
+              }
+            }
+          }
+        ],
+        "parameters": [
+          { "name": "tint", "type": "color", "colorSpace": "linear" },
+          { "name": "distortion", "type": "f32" },
+          { "name": "edgePower", "type": "f32" },
+          { "name": "flowTexture", "type": "texture" }
+        ],
+        "values": {
+          "tint": [0.45, 0.72, 1.0, 1.0],
+          "distortion": 0.085,
+          "edgePower": 0.72,
+          "flowTexture": {
+            "texture": "6e6de455-9ff1-4d5c-a896-ff1426531791",
+            "sampler": "263c8135-3f53-4e3d-9038-6c7288afce3f"
+          }
+        }
+      },
+      "refs": [
+        "6e6de455-9ff1-4d5c-a896-ff1426531791",
+        "263c8135-3f53-4e3d-9038-6c7288afce3f"
+      ]
+    }
+  ]
+}

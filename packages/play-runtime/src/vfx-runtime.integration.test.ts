@@ -1,5 +1,5 @@
 // M3 integration contract: independent Play consumes the engine public
-// ParticleRuntimeHost, while compiler/importer code remains build-time only.
+// VfxRuntimeHost, while compiler/importer code remains build-time only.
 // Anchors: requirements AC-02/AC-03/AC-08, plan-strategy §2 D-1/D-5 and §7 M3.
 
 import { describe, expect, it } from 'bun:test';
@@ -13,11 +13,11 @@ function source(path: string): string {
 }
 
 describe('independent Play VFX runtime', () => {
-  it('attaches the cooked asset world through one public host and exposes readiness', async () => {
+  it('attaches the cooked asset world through one public host', async () => {
     const attached: Array<{ world: World; assets: object }> = [];
     const detached: World[] = [];
     const host = {
-      feature: { diagnostics: () => ({ readiness: 'ready', bucketCount: 1 }) },
+      feature: { identity: 'forgeax.vfx-render.gpu-particles' },
       async attachWorld(input: { world: World; assets: object }) {
         attached.push(input);
         return { ok: true as const, value: { state: 'attached' as const } };
@@ -36,7 +36,6 @@ describe('independent Play VFX runtime', () => {
 
     expect((await runtime.attachWorld(world, assets as never)).ok).toBe(true);
     expect(attached).toEqual([{ world, assets }]);
-    expect(runtime.readiness()).toMatchObject({ readiness: 'ready' });
     expect(runtime.detachWorld(world).ok).toBe(true);
     expect(detached).toEqual([world]);
   });

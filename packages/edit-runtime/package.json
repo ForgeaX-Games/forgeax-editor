@@ -14,6 +14,14 @@
       "types": "./src/host-boot.ts",
       "import": "./src/host-boot.ts"
     },
+    "./runtime-frame": {
+      "types": "./src/runtime/ViewportRuntimeFrame.tsx",
+      "import": "./src/runtime/ViewportRuntimeFrame.tsx"
+    },
+    "./gateway-action-projection": {
+      "types": "./src/gateway-action-projection.ts",
+      "import": "./src/gateway-action-projection.ts"
+    },
     "./viewport/viewport-component": {
       "types": "./src/viewport/ViewportComponent.tsx",
       "import": "./src/viewport/ViewportComponent.tsx"
@@ -58,6 +66,13 @@
     "preview": "vite preview",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
+  },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": {"lines": 30.73, "functions": 32.74}
+    }
   },
   "dependencies": {
     "@forgeax/editor-game-plugins": "workspace:*",

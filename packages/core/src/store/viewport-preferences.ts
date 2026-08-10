@@ -38,6 +38,7 @@ import {
   FOV_DEFAULT,
   ORTHO_HALF_HEIGHT_DEFAULT,
   type CameraProjection,
+  type ViewportView,
 } from './viewport-camera-limits';
 
 export const VIEWPORT_PREFERENCES_STORAGE_KEY = 'forgeax.viewport.preferences.v1';
@@ -82,6 +83,11 @@ export interface ViewportPreferences {
   flyBoostMultiplier: number;
   /** Last editor viewport projection, independent from authored Camera entities. */
   projection: CameraProjection;
+  /** Current UE-style view identity shown by the viewport view menu. Derived
+   *  from the camera pose (deriveActiveView) and mirrored in via
+   *  syncViewportPosePreferences — never settable through the
+   *  setViewportPreferences patch. */
+  activeView: ViewportView;
   /** Last perspective view scale. */
   fov: number;
   /** Last orthographic view scale; null means derive it from the initial orbit. */
@@ -141,6 +147,14 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+const VIEWPORT_VIEWS: readonly ViewportView[] = [
+  'perspective', 'orthographic', 'top', 'bottom', 'left', 'right', 'front', 'back',
+];
+
+function isViewportView(value: unknown): value is ViewportView {
+  return typeof value === 'string' && (VIEWPORT_VIEWS as readonly string[]).includes(value);
+}
+
 function parseBookmark(value: unknown): CameraBookmark | null {
   if (!isRecord(value)
     || !isFiniteVec3(value.target)
@@ -159,7 +173,9 @@ function parseBookmark(value: unknown): CameraBookmark | null {
   return {
     target: [...value.target],
     yaw: value.yaw,
-    pitch: clampPitch(value.pitch),
+    // Axis-aligned orthographic views legitimately sit at ±90° pitch — the
+    // perspective gesture clamp would silently corrupt a saved Top/Bottom view.
+    pitch: value.projection === 'orthographic' ? value.pitch : clampPitch(value.pitch),
     dist: clampDist(value.dist),
     camPos: [...value.camPos],
     fwd: [...value.fwd],
@@ -180,6 +196,7 @@ export function defaultViewportPreferences(): ViewportPreferences {
     wheelSpeedScalar: 1,
     flyBoostMultiplier: FLY_BOOST_MULTIPLIER,
     projection: 'perspective',
+    activeView: 'perspective',
     fov: FOV_DEFAULT,
     orthoHalfHeight: null,
     bookmarks: {},
@@ -214,6 +231,7 @@ export function normalizeViewportPreferences(value: unknown): ViewportPreference
       BOOST_MULTIPLIER_MAX,
     ),
     projection: value.projection === 'orthographic' ? 'orthographic' : 'perspective',
+    activeView: isViewportView(value.activeView) ? value.activeView : defaults.activeView,
     fov: clampFov(finiteOr(value.fov, defaults.fov)),
     orthoHalfHeight: !Object.prototype.hasOwnProperty.call(value, 'orthoHalfHeight')
       || value.orthoHalfHeight === null

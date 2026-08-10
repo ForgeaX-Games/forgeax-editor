@@ -451,6 +451,42 @@ input.drop-hot { outline: 1px dashed var(--accent, #6ab0ff); background: color-m
 }
 .vp-quality-control select:hover { border-color: var(--lime, #d4ff48); color: var(--fg, #e8eaed); }
 
+/* ViewportViewMenu — UE-style view-preset picker, top-left of the viewport */
+.vp-view-menu {
+  position: absolute; top: 8px; left: 8px; z-index: 1000;
+  font-size: 12px; pointer-events: auto;
+}
+.vp-view-label {
+  display: flex; align-items: center; gap: 4px;
+  background: rgba(21, 22, 24, 0.85); color: var(--fg, #e8eaed);
+  border: 1px solid var(--line, #2a2d30); border-radius: 5px;
+  padding: 3px 8px; font-size: 12px; cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+.vp-view-label:hover, .vp-view-label.on { border-color: var(--lime, #d4ff48); }
+.vp-view-label:disabled { opacity: 0.45; cursor: default; }
+.vp-view-label:disabled:hover { border-color: var(--line, #2a2d30); }
+.vp-view-caret { font-size: 9px; color: var(--fg3, #6b7177); }
+.vp-view-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; min-width: 150px;
+  display: flex; flex-direction: column; padding: 4px;
+  background: rgba(21, 22, 24, 0.95); border: 1px solid var(--line, #2a2d30);
+  border-radius: 6px; backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.vp-view-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: transparent; border: none; border-radius: 4px;
+  color: var(--fg2, #aaa); padding: 4px 8px; font-size: 12px;
+  cursor: pointer; text-align: left;
+}
+.vp-view-item:hover { background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed); }
+.vp-view-item.on { color: var(--lime, #d4ff48); }
+.vp-view-shortcut {
+  font-size: 10px; color: var(--fg3, #6b7177);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 /* SceneSwitcher — level/scene-file picker (multi-scene games) */
 .vp-scene-select {
   background: var(--bg2, #1b1d1f); color: var(--fg, #e8eaed);

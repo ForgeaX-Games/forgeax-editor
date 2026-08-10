@@ -20,6 +20,12 @@ describe('Editor Page contribution', () => {
       .toContain('ep:mesh-slots');
     expect(pages.find((page) => page.id.endsWith('/material'))?.panels.map((panel) => panel.id))
       .not.toContain('ep:mesh-slots');
+    // The Material page owns its 3D preview panel (UE-style material editor);
+    // the MI page keeps its own preview/properties pair.
+    const matPanels = pages.find((page) => page.id.endsWith('/material'))?.panels.map((panel) => panel.id) ?? [];
+    expect(matPanels).toContain('ep:mat-preview');
+    expect(matPanels).toContain('ep:asset-properties');
+    expect(matPanels).not.toContain('ep:mi-preview');
     const miPanels = pages.find((page) => page.id.endsWith('/material-instance'))?.panels.map((panel) => panel.id) ?? [];
     expect(miPanels).toContain('ep:mi-preview');
     expect(miPanels).toContain('ep:mi-properties');
@@ -103,5 +109,22 @@ describe('Editor Page contribution', () => {
     const extension = createEditorPageExtension(() => null);
     const mi = extension.contributes?.pages?.find((page) => page.id.endsWith('/material-instance'));
     expect(typeof mi?.createController).toBe('function');
+  });
+
+  it('bumps the Material page layoutVersion so pre-preview snapshots are discarded', () => {
+    // Regression: mat-preview was added to the Material page domain without a
+    // version bump, so persisted page-layout snapshots from before the panel
+    // existed were silently accepted (hasMountedPagePlacement passes as long
+    // as ANY domain panel mounts) and the Preview never appeared — or came
+    // back docked into a foreign group. The (pageTypeId, layoutVersion) key
+    // must change whenever the page's panel set / default arrangement does.
+    const extension = createEditorPageExtension(() => null);
+    const pages = extension.contributes?.pages ?? [];
+    const material = pages.find((page) => page.id.endsWith('/material'));
+    expect(material?.layoutVersion).toBe(2);
+    for (const suffix of ['/level', '/asset', '/mesh', '/material-instance']) {
+      const page = pages.find((candidate) => candidate.id.endsWith(suffix));
+      expect(page?.layoutVersion ?? 1, suffix).toBe(1);
+    }
   });
 });

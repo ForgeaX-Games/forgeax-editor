@@ -25,6 +25,7 @@ import {
   clampDist, clampFov, clampFlySpeed, clampOrthoHalfHeight, clampPitch,
   FLY_BOOST_MULTIPLIER, ORTHO_HALF_HEIGHT_MIN,
   type CameraProjection,
+  type ViewportView,
 } from '@forgeax/editor-core';
 export {
   clampDist, clampFov, clampFlySpeed, clampOrthoHalfHeight, clampPitch,
@@ -32,6 +33,7 @@ export {
   FOV_DEFAULT, FOV_MAX, FOV_MIN,
   ORTHO_HALF_HEIGHT_DEFAULT, ORTHO_HALF_HEIGHT_MAX, ORTHO_HALF_HEIGHT_MIN,
   type CameraProjection,
+  type ViewportView,
 } from '@forgeax/editor-core';
 
 import type { Vec3 } from './viewport-ray';
@@ -121,6 +123,79 @@ export function adjustOrthoHalfHeight(halfHeight: number, delta: number): number
 /** Keep the first orthographic view visually close to the perspective framing. */
 export function deriveOrthoHalfHeight(dist: number, fov: number): number {
   return clampOrthoHalfHeight(Math.max(ORTHO_HALF_HEIGHT_MIN, dist * Math.tan(clampFov(fov) / 2)));
+}
+
+// ── UE-style view presets (cameraSetView) ────────────────────────────────────
+
+/** Axis views sit at exactly ±90° pitch — beyond the ±86° perspective gesture
+ *  clamp. Orthographic cameras therefore clamp against this wider limit. */
+export const ORTHO_PITCH_LIMIT = Math.PI / 2;
+
+/** Projection-aware pitch clamp: perspective keeps the gimbal-safe ±86° gesture
+ *  range; orthographic allows the exact ±90° of the Top/Bottom presets. */
+export function clampPitchForProjection(pitch: number, projection: CameraProjection): number {
+  if (projection === 'orthographic') {
+    return Math.min(ORTHO_PITCH_LIMIT, Math.max(-ORTHO_PITCH_LIMIT, pitch));
+  }
+  return clampPitch(pitch);
+}
+
+/** Settable view presets (cameraSetView payload). 'orthographic' is excluded:
+ *  it labels a free ortho camera and is derive-only. */
+export type CameraViewPreset = Exclude<ViewportView, 'orthographic'>;
+
+/**
+ * Fixed orientation of each axis-aligned view preset, in the engine camera
+ * convention (qCam = yaw·Y × pitch·X, forward = qCam·[0,0,-1]):
+ *   front: camera at +Z looking −Z (yaw=0)      back: camera at −Z (yaw=π)
+ *   right: camera at +X looking −X (yaw=+π/2)   left: camera at −X (yaw=−π/2)
+ *   top:   camera at +Y looking down (pitch=−π/2)
+ *   bottom: UE-mirrored top (yaw=π, pitch=+π/2) — screen-right = world −X,
+ *           screen-up = world −Z, matching UE's Bottom view convention.
+ */
+const AXIS_VIEW_ORIENTATIONS = {
+  front: { yaw: 0, pitch: 0 },
+  back: { yaw: Math.PI, pitch: 0 },
+  right: { yaw: Math.PI / 2, pitch: 0 },
+  left: { yaw: -Math.PI / 2, pitch: 0 },
+  top: { yaw: 0, pitch: -Math.PI / 2 },
+  bottom: { yaw: Math.PI, pitch: Math.PI / 2 },
+} as const;
+
+/** Orientation of a view preset; 'perspective' carries none (the applier
+ *  keeps the current orbit direction), so it returns null. */
+export function viewPresetOrientation(view: CameraViewPreset): { yaw: number; pitch: number } | null {
+  return view === 'perspective' ? null : AXIS_VIEW_ORIENTATIONS[view];
+}
+
+const VIEW_MATCH_EPSILON = 1e-3;
+
+function angleMatches(a: number, b: number): boolean {
+  const d = Math.abs(a - b) % (2 * Math.PI);
+  return d < VIEW_MATCH_EPSILON || d > 2 * Math.PI - VIEW_MATCH_EPSILON;
+}
+
+/**
+ * Derive the menu-visible view identity from a camera pose. Perspective poses
+ * are always 'perspective'; an orthographic pose whose orientation matches an
+ * axis preset (within epsilon, yaw modulo 2π) is that preset, otherwise the
+ * free-'orthographic' label. Single derivation point (persistViewportState)
+ * keeps the menu label correct no matter which op/gesture moved the camera.
+ */
+export function deriveActiveView(pose: {
+  projection: CameraProjection;
+  yaw: number;
+  pitch: number;
+}): ViewportView {
+  if (pose.projection === 'perspective') return 'perspective';
+  const presets: readonly CameraViewPreset[] = ['top', 'bottom', 'left', 'right', 'front', 'back'];
+  for (const preset of presets) {
+    const o = viewPresetOrientation(preset);
+    if (o && angleMatches(pose.yaw, o.yaw) && Math.abs(pose.pitch - o.pitch) < VIEW_MATCH_EPSILON) {
+      return preset;
+    }
+  }
+  return 'orthographic';
 }
 
 /** Minimum view scale so a gizmo sitting exactly on the camera still gets a

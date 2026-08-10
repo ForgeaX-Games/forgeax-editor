@@ -1,5 +1,18 @@
 import { Component, Suspense, lazy } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
+import { buildOperationCenterRows, getOperationProjectionSource, subscribeOperationProjection } from './operations/run-view-model';
+
+const operationRuns = {
+  getSnapshot: () => getOperationProjectionSource().getSnapshot(),
+  subscribe: subscribeOperationProjection,
+  retry: (runId: string) => {
+    const source = getOperationProjectionSource();
+    const run = source.getSnapshot().runs.find((candidate) => candidate.runId === runId);
+    if (run === undefined) return;
+    const row = buildOperationCenterRows([run], source.getCommits?.() ?? [], source.resolveAsset)[0];
+    if (row !== undefined) source.dispatchRecovery?.('retry', row.runId, row);
+  },
+};
 
 const ContentBrowser = lazy(() =>
   import('@forgeax/editor-content-browser').then(m => {
@@ -25,7 +38,7 @@ export function AssetsPanel() {
   return (
     <CBErrorBoundary>
       <Suspense fallback={<div style={{ padding: 16, opacity: 0.5 }}>Loading Content Browser...</div>}>
-        <ContentBrowser />
+        <ContentBrowser operationRuns={operationRuns} />
       </Suspense>
     </CBErrorBoundary>
   );

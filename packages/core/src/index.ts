@@ -67,6 +67,7 @@ export type {
   AssetBrowserCatalogRelation,
   AssetBrowserCatalogRoot,
   AssetBrowserRegistry,
+  AssetBrowserRegistryEntry,
   AssetBrowserSnapshot,
   ActiveSceneSourceReference,
   AssetMutationOperation,
@@ -172,6 +173,20 @@ export type {
   RuntimeRevision,
 } from './public/gateway';
 export type { RuntimeReadinessDiagnostic } from './public/gateway';
+export {
+  bindViewportRuntimeClient,
+  discoverViewportRuntimeCapabilities,
+  dispatchViewportRuntimeOperation,
+  getViewportRuntimeClientSnapshot,
+  queryViewportRuntimeProjection,
+  retryViewportRuntimeOperationRun,
+  subscribeViewportRuntimeClient,
+} from './io/viewport-runtime-client';
+export { dispatchActiveEditorOperation } from './store/active-operation';
+export type {
+  ViewportRuntimeClientSnapshot,
+  ViewportRuntimeClientStatus,
+} from './io/viewport-runtime-client';
 
 // Runtime UI diagnostics are the typed read-only Gateway contract. The graph
 // remains internal; consumers receive only schema-valid status and counters.
@@ -284,12 +299,28 @@ export { planArrayEdit } from './scene/array-edit';
 export type { ArrayEditAction, ArrayEditRequest, ArrayEditPlan } from './scene/array-edit';
 // socket-calibration M1 (doc §3.2): read face for a skinned character's joint
 // names — the parent-bone dropdown source. Pure read over activeWorld.
+// socket-calibration M2 (doc §3.4 / §3.6): joint-root LCA, facing-pivot read,
+// socket enumeration for the derived JSON projection.
 export {
   findSkinEntity,
   listSkinJoints,
   listSkinJointsFor,
+  findJointRoot,
+  findFacingPivot,
+  readFacingYaw,
+  listSkinSockets,
+  FACING_PIVOT_NAME,
 } from './scene/skin-joints';
-export type { SkinJoint } from './scene/skin-joints';
+export type { SkinJoint, SkinSocket } from './scene/skin-joints';
+// socket-calibration M2 (doc §3.6 数据导出): derived JSON projection of the
+// authored socket + facing state — a read-only pure-numeric view of the scene
+// for one-click copy into external tools (scene-pack stays the SSOT).
+export { summarizeCalibration } from './scene/calibration-projection';
+export type {
+  CalibrationProjection,
+  CalibrationCharacterProjection,
+  CalibrationSocketProjection,
+} from './scene/calibration-projection';
 // Editor-owned component metadata overlay (SSOT), injected into
 // `Component.meta.editor` post-registration; the engine stays agnostic.
 export {
@@ -381,6 +412,26 @@ export {
   materialCatalogLookup,
   ensureMaterialChainCataloged,
 } from './assets/material-chain-catalog';
+export {
+  setMaterialPreviewParam,
+  clearMaterialPreviewParams,
+  getMaterialPreviewParams,
+  subscribeMaterialPreviewParams,
+} from './assets/material-preview-staging';
+export {
+  parseShaderParamSchemaIndex,
+  ensureShaderParamSchemaIndex,
+  resetShaderParamSchemaIndexCache,
+  resolveMaterialParamSchema,
+  deriveMaterialParamRows,
+  resolveTextureRefGuid,
+} from './assets/material-param-schema';
+export type {
+  MaterialParamDescriptor,
+  MaterialParamRow,
+  MaterialParamRowKind,
+  ShaderParamSchemaIndex,
+} from './assets/material-param-schema';
 export {
   materialInstanceLoader,
   registerMaterialInstanceLoader,
@@ -570,7 +621,7 @@ export {
   ORTHO_HALF_HEIGHT_MAX,
   ORTHO_HALF_HEIGHT_MIN,
 } from './store/viewport-camera-limits';
-export type { CameraProjection } from './store/viewport-camera-limits';
+export type { CameraProjection, ViewportView } from './store/viewport-camera-limits';
 
 // ── Entity operations ──
 export {
@@ -580,12 +631,14 @@ export {
   groupSelected,
   hideMany,
   hideUnselected,
-  setHiddenMany,
+  setVisibilityMany,
   showAllHidden,
   ungroupEntity,
   reparentEntity,
   reparentMany,
   reparentAt,
+  ensureFacingPivot,
+  setFacingYaw,
 } from './session/ops';
 
 // ── Context menu service ──
@@ -610,8 +663,16 @@ export { resolveMaterialCreateGameRelDir, clampMaterialPackPath } from './util/m
 // ── Run conditions (`and` combinator for RunCondition-shaped predicates) ──
 export { and } from './session/run-conditions';
 export type { RunCondition } from './session/run-conditions';
-// ── EditorHidden (editor-only marker component) ──
-export { EditorHidden } from './components/EditorHidden';
+// ── Engine-owned visibility contract ──
+export {
+  readEntityVisibility,
+  readVisibilityIntent,
+  resolveVisibility,
+  Visibility,
+  VisibilityStateValue,
+  visibilityStateFromU32,
+} from './visibility';
+export type { VisibilityResolution, VisibilitySnapshot, VisibilityState } from './visibility';
 
 // ── Viewport clip transport + view intents (preview animation scrubber) ──
 export {

@@ -52,6 +52,13 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"
   },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": {"lines": 71.54, "functions": 73.17}
+    }
+  },
   "dependencies": {
     "@forgeax/editor-product": "workspace:*",
     "zod": "^3.25.0",

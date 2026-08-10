@@ -11,7 +11,7 @@ describe('independent Play particle Pack registration', () => {
     expect(source).toContain('engineVitePreset');
     expect(preset).toContain("from '@forgeax/engine-vfx-compiler'");
     expect(preset).not.toContain('particleEffectImporter');
-    expect(preset).toContain('createParticleEffectNativeCooker(createStockParticleOperatorRegistry())');
+    expect(preset).toContain('createParticleCodeNativeCooker(discoverParticleCodeModules(packRoots))');
     expect(preset).toContain('importers: [');
     expect(preset).toContain('cookers: [');
   });

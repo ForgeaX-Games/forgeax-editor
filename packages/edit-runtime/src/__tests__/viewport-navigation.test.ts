@@ -35,6 +35,24 @@ describe('cameraGestureForPointer', () => {
     expect(cameraGestureForPointer({ button: 0 })).toBeNull();
     expect(cameraGestureForPointer({ button: 3 })).toBeNull();
   });
+
+  it('forbids rotation in orthographic views: RMB and Alt+LMB degenerate to pan', () => {
+    // UE axis views: RMB drag pans (never flies); rotation gestures become pan
+    // so a pointer gesture can never break axis alignment.
+    expect(cameraGestureForPointer({ button: 2 }, 'orthographic')).toBe('pan');
+    expect(cameraGestureForPointer({ button: 0, altKey: true }, 'orthographic')).toBe('pan');
+    // Zoom survives in ortho (it adjusts the ortho width, not angles).
+    expect(cameraGestureForPointer({ button: 2, altKey: true }, 'orthographic')).toBe('zoom');
+    expect(cameraGestureForPointer({ button: 0, altKey: true, ctrlKey: true }, 'orthographic')).toBe('zoom');
+    expect(cameraGestureForPointer({ button: 1 }, 'orthographic')).toBe('pan');
+    expect(cameraGestureForPointer({ button: 0, altKey: true, shiftKey: true }, 'orthographic')).toBe('pan');
+    // Plain left click still falls through to selection in ortho.
+    expect(cameraGestureForPointer({ button: 0 }, 'orthographic')).toBeNull();
+  });
+
+  it('defaults to perspective when projection is omitted', () => {
+    expect(cameraGestureForPointer({ button: 2 })).toBe('fly');
+  });
 });
 describe('cameraPoseChanged', () => {
   it('does not record a click with no visible pose change', () => {

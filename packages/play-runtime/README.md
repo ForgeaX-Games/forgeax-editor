@@ -13,7 +13,7 @@
 | 诊断遮罩 | WebGPU 不可用或 `createApp` 失败时展示带 `code`、`expected`、`hint` 的结构化诊断 |
 | VAG_CONSOLE 桥接 | 劫持 console、展示 `Error.detail`，并转发 Vite HMR build error |
 | 预览控制 | 通过 `VAG_PREVIEW_PAUSE` / `VAG_PREVIEW_PLAY` / `VAG_PREVIEW_RELOAD` postMessage 控制 |
-| VFX runtime | 通过 `@forgeax/engine-vfx-render` public API 创建一个 `ParticleRuntimeHost`，绑定独立 Play World 与 renderer assets |
+| VFX runtime | 通过 `@forgeax/engine-vfx-render` public API 创建一个 `VfxRuntimeHost`，绑定独立 Play World 与 renderer assets |
 
 ## 导入示例
 
@@ -34,7 +34,7 @@ import type { GameContext } from '@forgeax/editor-play-runtime';
 ```mermaid
 flowchart TD
     A["独立 Play 启动"] --> B["createPlayVfxRuntime"]
-    B --> C["创建一个 ParticleRuntimeHost"]
+    B --> C["创建一个 VfxRuntimeHost"]
     C --> D["createApp(features: host.feature)"]
     D --> E["取得 fresh Play World 与 renderer assets"]
     E --> F["host.attachWorld(World, assets)"]
@@ -53,7 +53,7 @@ flowchart TD
 | renderer `AssetRegistry` | 引擎 `createApp` | 由引擎提供并传给 host；Play runtime 不复制资产 registry |
 
 > [!IMPORTANT]
-> `compiler` 负责导入与构建期 catalog；`ParticleRuntimeHost` 负责已解析资产的运行时渲染接入。两者不能通过“运行时再 import compiler”拼接，否则独立 Play 的 bundle 边界和 `clone 即跑` 契约都会失效。
+> `compiler` 发现 `.vfx.wgsl` 并在构建期生成 GPU program artifact；`VfxRuntimeHost` 只负责已解析资产的运行时接入。两者不能通过“运行时再 import compiler”拼接，否则独立 Play 的 bundle 边界和 `clone 即跑` 契约都会失效。
 
 ### World 与 handle 契约
 

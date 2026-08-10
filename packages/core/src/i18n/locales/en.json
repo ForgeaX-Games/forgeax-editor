@@ -4,6 +4,36 @@
       "mainScene": "Main scene",
       "title": "What this window is editing (level/asset) — double-click another item in the Assets panel to switch"
     },
+    "viewportView": {
+      "menuTitle": "Viewport view preset",
+      "perspective": "Perspective",
+      "orthographic": "Orthographic",
+      "top": "Top",
+      "bottom": "Bottom",
+      "left": "Left",
+      "right": "Right",
+      "front": "Front",
+      "back": "Back",
+      "shortcutPerspective": "Alt+G",
+      "shortcutFront": "Alt+H",
+      "shortcutTop": "Alt+J",
+      "shortcutLeft": "Alt+K"
+    },
+    "viewportView": {
+      "menuTitle": "Viewport view preset",
+      "perspective": "Perspective",
+      "orthographic": "Orthographic",
+      "top": "Top",
+      "bottom": "Bottom",
+      "left": "Left",
+      "right": "Right",
+      "front": "Front",
+      "back": "Back",
+      "shortcutPerspective": "Alt+G",
+      "shortcutFront": "Alt+H",
+      "shortcutTop": "Alt+J",
+      "shortcutLeft": "Alt+K"
+    },
     "pageMenu": {
       "copyPath": "Copy Path",
       "revealInExplorer": "Reveal in File Explorer",
@@ -81,7 +111,7 @@
         "Entity": "Entity",
         "ChildOf": "Child Of",
         "Children": "Group",
-        "EditorHidden": "Hidden",
+        "Visibility": "Visibility",
         "SceneInstance": "Scene Instance",
         "CollidingEntities": "Colliding Entities"
       },

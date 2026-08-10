@@ -39,9 +39,10 @@ import {
   CAMERA_PROJECTION_PERSPECTIVE,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
+  type Renderer,
 } from '@forgeax/engine-render';
 import { setActiveCamera } from '@forgeax/engine-render/internal';
-import { Entity, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import {
@@ -73,11 +74,13 @@ import {
   registerPostAssetWriteCatalogSync,
   createAuthoredAssetCatalogBarrier,
   registerMaterialInstanceLoader,
+  getActiveRuntimeUiGraph,
 } from '@forgeax/editor-core';
 import { createSourceAuthoringRuntime, installCatalogReconcileProvider } from '../runtime/source-authoring-runtime';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import { isViewportCarrierKind } from '@forgeax/editor-product';
 import {
   sendVagMessage,
   VagCarrierHandshakeSchema,
@@ -87,6 +90,15 @@ import {
 } from '@forgeax/editor-core/protocol';
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
+import {
+  createViewportRuntimeTransportService,
+  installViewportRuntimeConnectionHost,
+  VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+  readViewportRuntimeHostOrigin,
+  readViewportRuntimeIdentity,
+  type ViewportRuntimeMessageSource,
+  type ViewportRuntimeMessageTarget,
+} from '../runtime/viewport-runtime-transport';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 import { captureGameplayViewport } from './gameplay-capture';
@@ -121,6 +133,8 @@ import { validatePerspectiveFov } from './render-diagnostics';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
 import { registerViewportSessionAppliers } from './viewport-session-appliers';
 import { createEditVfxRuntimeBridge, createParticleCameraSource } from './vfx-runtime-bridge';
+import { createAnimationDiagnosticsProvider } from './animation-diagnostics-provider';
+import { createEngineExecutionDiagnostics } from './execution-diagnostics-provider';
 import '../theme.css';
 
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
@@ -164,6 +178,11 @@ async function installManagedCarrierHealth(
   const params = new URLSearchParams(window.location.search);
   const managedRuntimeId = params.get('runtimeId')?.trim() || null;
   const challengeResponse = params.get('ownershipChallenge')?.trim() || null;
+  const requestedCarrierKind = params.get('carrierKind');
+  const carrierKind = isViewportCarrierKind(requestedCarrierKind) ? requestedCarrierKind : 'local';
+  const requestedRuntimeGeneration = Number(params.get('runtimeGeneration') ?? 1);
+  const runtimeGeneration = Number.isSafeInteger(requestedRuntimeGeneration) && requestedRuntimeGeneration > 0
+    ? requestedRuntimeGeneration : 1;
   const managed = managedRuntimeId !== null && challengeResponse !== null;
 
   const healthResponse = await fetch('/api/health', { cache: 'no-store' });
@@ -176,6 +195,7 @@ async function installManagedCarrierHealth(
 
   const pageNonce = crypto.randomUUID();
   const runtimeId = managedRuntimeId ?? `visible-${pageNonce}`;
+  const carrierId = params.get('carrierId')?.trim() || `${carrierKind}-${pageNonce}`;
   const pageIdentity = `${window.location.origin}${window.location.pathname}`;
   const canvasIdentity = `canvas-${pageNonce}`;
   const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
@@ -202,6 +222,9 @@ async function installManagedCarrierHealth(
   const payload = () => ({
     version: VAG_CARRIER_PROTOCOL_VERSION,
     runtimeId,
+    runtimeGeneration,
+    carrierId,
+    carrierKind,
     challengeResponse: challengeResponse ?? '',
     scope,
     pageNonce,
@@ -395,6 +418,7 @@ async function bootViewport(
   gameSession: HostGameSession,
 ): Promise<Viewport | null> {
   const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+  const runtimeIdentity = readViewportRuntimeIdentity(window.location.search);
 
   // AssetIOFacade is shared by editor-core's gateway/import operations. Bind it
   // to this exact generation before session configuration can run an integrity
@@ -478,11 +502,13 @@ async function bootViewport(
   emitBoot('boot ▸ createApp');
 
   let cameraEntity!: EntityHandle;
+  let vfxRenderer: Renderer | undefined;
   const vfxBridge = createEditVfxRuntimeBridge({
     camera: createParticleCameraSource({
       world: () => worldManager.editorWorld,
       cameraEntity: () => cameraEntity,
     }),
+    renderFeatureDiagnostics: () => vfxRenderer?.renderFeatureDiagnostics() ?? [],
   });
   // Main's profiler is the single owner of app/render phase observation. Keep
   // VFX diagnostics on that owner even when User Timing diagnostics are off.
@@ -496,6 +522,11 @@ async function bootViewport(
   // Keep the AI/panel diagnostics surface on the same engine-owned feature
   // facts used by the renderer; the Gateway owns only the bounded projection.
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(vfxBridge.diagnosticsProvider));
+  const animationDiagnostics = createAnimationDiagnosticsProvider({
+    getActiveWorld: () => gateway.activeWorld,
+  });
+  registerTeardown(gateway.registerRuntimeDiagnosticsProvider(animationDiagnostics.provider));
+  registerTeardown(animationDiagnostics.dispose);
 
   // ── createApp with GPU-failure auto-fallback ────────────────────────────
   // When no WebGPU adapter is available (headless browser, GPU-less CI), the
@@ -555,19 +586,12 @@ async function bootViewport(
   }
   const editorApp = app.value;
   const { world, renderer } = editorApp;
+  const executionDiagnostics = createEngineExecutionDiagnostics(editorApp.execution);
+  registerTeardown(gateway.registerRuntimeDiagnosticsProvider(executionDiagnostics.provider));
+  vfxRenderer = renderer;
   if (gameSession.runtimeBinding !== undefined) {
     renderer.assets.configureRuntimeBinding(gameSession.runtimeBinding);
   }
-  const vfxAttached = await vfxBridge.attachWorld(world, renderer.assets);
-  if (!vfxAttached.ok) {
-    console.error('[editor] Edit VFX host attach failed:', vfxAttached.error);
-    paintDiagnosticMessage(container, vfxAttached.error);
-    return null;
-  }
-  registerTeardown(() => {
-    const detached = vfxBridge.detachWorld(world);
-    if (!detached.ok) console.warn('[editor] Edit VFX host detach failed:', detached.error);
-  });
 
   // solo P7 round-31: selected collider chrome reuses the engine's existing
   // immediate-mode DebugDraw overlay. It reads the active scene-world SSOT each
@@ -606,6 +630,21 @@ async function bootViewport(
       console.warn('[editor] scoped catalog unavailable:', catalogResult.error);
     }
   }
+
+  // VFX preparation can resolve authored program and mesh assets on the first
+  // frame after attachment. Bind only after the scoped catalog has completed
+  // its initial enumeration, so the isolated viewport runtime never observes a
+  // partially populated AssetRegistry while resolving the first effect frame.
+  const vfxAttached = await vfxBridge.attachWorld(world, renderer.assets);
+  if (!vfxAttached.ok) {
+    console.error('[editor] Edit VFX host attach failed:', vfxAttached.error);
+    paintDiagnosticMessage(container, vfxAttached.error);
+    return null;
+  }
+  registerTeardown(() => {
+    const detached = vfxBridge.detachWorld(world);
+    if (!detached.ok) console.warn('[editor] Edit VFX host detach failed:', detached.error);
+  });
 
   // Inject the engine World + AssetRegistry into the editor session (was :410).
   // The createApp world IS the sceneWorld (authored content, save's only source —
@@ -851,34 +890,27 @@ async function bootViewport(
   registerTeardown(onViewportQuadrantChange(syncTransientMode));
 
   // active-camera derivation (was :658-710). Game-camera discovery walks the live
-  // authored/play world graph for its first Camera entity.
+  // authored/play world through the public query surface for its first enabled
+  // Camera entity.
   const discoverGameCameraFromWorld = (sourceWorld?: unknown): void => {
-    interface ArchCam { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }
-    interface WorldGraph { _getGraph: () => { archetypes: ArchCam[] } }
     const cameraWorld = (sourceWorld as World | undefined) ?? world;
-    const graph = (cameraWorld as unknown as WorldGraph)._getGraph();
-    for (const arch of graph.archetypes) {
-      if (!arch.columns.has(Camera.id)) continue;
-      const selfCol = arch.columns.get(Entity.id)?.get('self');
-      if (!selfCol) continue;
-      for (let row = 0; row < arch.size; row++) {
-        const packed = selfCol.view[row]!;
-        // `packed` belongs to cameraWorld. Never compare it with the editor
-        // camera's numeric handle: identical numbers in different Worlds are
-        // unrelated entities (especially across the fresh Play World boundary).
-        const cameraResult = cameraWorld.get(packed as unknown as EntityHandle, Camera);
-        if (cameraResult.ok && cameraResult.value.projection === CAMERA_PROJECTION_PERSPECTIVE) {
-          const diagnostic = validatePerspectiveFov(cameraResult.value.fov);
-          if (diagnostic !== undefined) {
-            console.error('[editor] render camera contract violation:', {
-              ...diagnostic,
-              entity: packed,
-            });
-          }
+    const cameras = cameraWorld.query({ read: [Camera] }).unwrap();
+    for (const row of cameras) {
+      const camera = row.get(Camera);
+      // The handle belongs to cameraWorld. Never compare it with the editor
+      // camera's numeric handle: identical numbers in different Worlds are
+      // unrelated entities (especially across the fresh Play World boundary).
+      if (camera.projection === CAMERA_PROJECTION_PERSPECTIVE) {
+        const diagnostic = validatePerspectiveFov(camera.fov);
+        if (diagnostic !== undefined) {
+          console.error('[editor] render camera contract violation:', {
+            ...diagnostic,
+            entity: row.entity,
+          });
         }
-        setGameCameraEntity(packed as unknown as number);
-        return;
       }
+      setGameCameraEntity(row.entity as unknown as number);
+      return;
     }
   };
   // The render draw-source makes editorWorld the cameraOwner in Edit and
@@ -1079,6 +1111,7 @@ async function bootViewport(
       return capture(frames);
     },
     world,
+    activeWorld: () => gateway.activeWorld,
   }));
 
   // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
@@ -1148,6 +1181,43 @@ async function bootViewport(
     console.error('[editor] runtime error:', error);
   }));
   editorApp.start();
+  // Cross-realm M1 boundary: the Runtime owns Gateway/World/Registry and serves
+  // their typed operation/projection surface over one transferred MessagePort.
+  // A top-level local viewport has no owning window and installs no listener.
+  const runtimeOwner = window.opener ?? (window.parent === window ? null : window.parent);
+  const runtimeUiGraph = getActiveRuntimeUiGraph();
+  if (runtimeOwner !== null && runtimeUiGraph !== null) {
+    const runtimeHostOrigin = readViewportRuntimeHostOrigin(window.location.search, window.location.origin);
+    const service = createViewportRuntimeTransportService({
+      runtime: runtimeIdentity,
+      graph: runtimeUiGraph,
+      gateway,
+      readViewportStatus: () => ({
+        quadrant: getViewportQuadrant(),
+        playPhase: gateway.playPhase,
+        lastPlayError: gateway.lastPlayError,
+        canUndo: gateway.canUndo(),
+        canRedo: gateway.canRedo(),
+      }),
+      readExecutionReport: executionDiagnostics.report,
+    });
+    registerTeardown(installViewportRuntimeConnectionHost({
+      target: window as unknown as ViewportRuntimeMessageTarget,
+      expectedSource: runtimeOwner as unknown as ViewportRuntimeMessageSource,
+      expectedOrigin: runtimeHostOrigin,
+      runtime: runtimeIdentity,
+      service,
+      onReject: (reason) => console.warn(`[editor] ${reason}`),
+    }));
+    registerTeardown(gateway.subscribeOperationRuns(() => {
+      runtimeOwner.postMessage({
+        type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+        runtime: runtimeIdentity,
+        projection: 'operations',
+        revision: gateway.operationRunSnapshot().revision,
+      }, runtimeHostOrigin);
+    }));
+  }
   // W1-L1H producer: a managed Studio page is the editor viewport carrier.
   // Publish identity/readiness from this same canvas/renderer and keep the
   // heartbeat owned by this realm; ordinary Studio pages stay silent.

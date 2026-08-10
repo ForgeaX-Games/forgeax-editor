@@ -14,7 +14,7 @@ import { defineConfig } from 'vite';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { engineVitePreset } from '../../engine-vite-preset';
+import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from '../../engine-vite-preset';
 import { readWorktreePorts, resolveWorktreePorts } from '../../scripts/lib/worktree-ports';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 
@@ -26,6 +26,7 @@ const assignedWorktreePorts = readWorktreePorts(worktreeRoot);
 const PORT = Number(process.env.FORGEAX_EDITOR_PORT ?? worktreePorts.editRuntime);
 const HOST = process.env.FORGEAX_EDITOR_HOST ?? '0.0.0.0';
 const BASE = '/editor/';
+const BASE_PATH = BASE.replace(/\/$/, '');
 
 // ── standalone `--game DIR` game root (abs) ───────────────────────────────────
 // The Play resolver (main.tsx resolveGameModuleForPlay) imports the game entry
@@ -57,9 +58,9 @@ const STANDALONE_RUNTIME_BINDING: RuntimeAssetBinding | undefined = (
   scopeId: STANDALONE_SCOPE_ID,
   generation: STANDALONE_GENERATION,
   status: 'ready',
-  catalogUrl: `${BASE}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'catalog.json')}`,
-  importUrlBase: `${BASE}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'import')}`,
-  packageUrlBase: `${BASE}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'asset')}`,
+  catalogUrl: `${BASE_PATH}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'catalog.json')}`,
+  importUrlBase: `${BASE_PATH}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'import')}`,
+  packageUrlBase: `${BASE_PATH}${runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'asset')}`,
 } : undefined;
 
 // D7: the shared engine-serve fragment (shader/pack serve + optimizeDeps.exclude
@@ -68,6 +69,12 @@ const STANDALONE_RUNTIME_BINDING: RuntimeAssetBinding | undefined = (
 const enginePreset = engineVitePreset({
   base: BASE,
   gameDirAbs: GAME_DIR_ABS,
+  // The iframe is now a real carrier boundary, so this host no longer needs
+  // symlink identity to distinguish it from the outer shell. Resolve workspace
+  // packages to their producer realpaths: Bun/pnpm keep transitive dependencies
+  // beside those realpaths, while the preserved virtual @forgeax path cannot
+  // see peers such as parse5/entities or css-tree/source-map-js.
+  preserveSymlinks: false,
   ...(STANDALONE_RUNTIME_BINDING === undefined ? {} : { runtimeBinding: STANDALONE_RUNTIME_BINDING }),
 });
 
@@ -96,6 +103,7 @@ export default defineConfig({
     host: HOST,
     strictPort: true,
     open: false,
+    headers: ENGINE_EXECUTION_ISOLATION_HEADERS,
     watch: { usePolling: true, interval: 300, ignored: ['**/node_modules/**'] },
     // fs.allow: editor tree (here + repo root) PLUS the standalone `--game DIR`
     // when it lives OUTSIDE the editor tree (e.g. a sibling forgeax-engine

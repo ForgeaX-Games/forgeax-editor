@@ -11,13 +11,19 @@ describe('setup process supervision', () => {
     expect(engineInstallEnv({})).toMatchObject({
       PNPM_CONFIG_NETWORK_CONCURRENCY: DEFAULT_PNPM_NETWORK_CONCURRENCY,
       PNPM_CONFIG_FETCH_RETRIES: DEFAULT_PNPM_FETCH_RETRIES,
+      PNPM_CONFIG_IGNORE_WORKSPACE_CYCLES: 'true',
+      SKIP_INSTALL_SIMPLE_GIT_HOOKS: '1',
     });
     expect(engineInstallEnv({
       PNPM_CONFIG_NETWORK_CONCURRENCY: '3',
       PNPM_CONFIG_FETCH_RETRIES: '4',
+      PNPM_CONFIG_IGNORE_WORKSPACE_CYCLES: 'false',
+      SKIP_INSTALL_SIMPLE_GIT_HOOKS: '0',
     })).toMatchObject({
       PNPM_CONFIG_NETWORK_CONCURRENCY: '3',
       PNPM_CONFIG_FETCH_RETRIES: '4',
+      PNPM_CONFIG_IGNORE_WORKSPACE_CYCLES: 'false',
+      SKIP_INSTALL_SIMPLE_GIT_HOOKS: '0',
     });
   });
 

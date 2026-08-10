@@ -29,9 +29,14 @@ function makeStore(): FakeStore {
   };
 }
 
-function makeBus(): PanelOpenBusLike & { opened: string[] } {
+function makeBus(): PanelOpenBusLike & { opened: string[]; closed: string[] } {
   const opened: string[] = [];
-  return { opened, emit: (_event, payload) => { opened.push(payload.id); } };
+  const closed: string[] = [];
+  return {
+    opened,
+    closed,
+    emit: (event, payload) => { (event === 'panel:close' ? closed : opened).push(payload.id); },
+  };
 }
 
 describe('standalone settings-redirect', () => {
@@ -79,6 +84,45 @@ describe('standalone settings-redirect', () => {
       store.open('settings');
       store.open('settings');
       expect(bus.opened).toEqual([SETTINGS_PANEL_ID, SETTINGS_PANEL_ID]);
+      expect(bus.closed).toEqual([]);
+    } finally {
+      dispose();
+    }
+  });
+
+  // Toggle parity with the studio overlay (2026-08-07 bug: "settings opens but
+  // won't close"): the redirect turns the intent into a DOCK panel, which the
+  // overlay store can't track — activeOverlay snaps back to null, so the next
+  // Ctrl+, would re-open instead of close. When the panel is already visible
+  // the redirect must emit panel:close (mirrors interface's app.panel.toggle).
+  it('toggles: a second open intent closes the panel when it is visible', () => {
+    const store = makeStore();
+    const bus = makeBus();
+    let panelVisible = false;
+    const dispose = installSettingsPanelRedirect(store, bus, () => panelVisible);
+    try {
+      store.open('settings');
+      expect(bus.opened).toEqual([SETTINGS_PANEL_ID]);
+      panelVisible = true; // dock mounted ep:settings
+      store.open('settings');
+      expect(bus.closed).toEqual([SETTINGS_PANEL_ID]);
+      expect(bus.opened).toEqual([SETTINGS_PANEL_ID]); // no second open
+      panelVisible = false; // dock closed it (panel:close → DockRegion)
+      store.open('settings');
+      expect(bus.opened).toEqual([SETTINGS_PANEL_ID, SETTINGS_PANEL_ID]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it('closes the overlay even when toggling shut (no stuck overlay state)', () => {
+    const store = makeStore();
+    const bus = makeBus();
+    const dispose = installSettingsPanelRedirect(store, bus, () => true);
+    try {
+      store.open('settings');
+      expect(store.getState().activeOverlay).toBeNull();
+      expect(bus.closed).toEqual([SETTINGS_PANEL_ID]);
     } finally {
       dispose();
     }

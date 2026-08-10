@@ -1,5 +1,20 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
-import { listComponentSchemas } from '@forgeax/editor-core';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  DIAGNOSTICS_SCHEMA_VERSION,
+  dispatchActiveEditorOperation,
+  getViewportRuntimeClientSnapshot,
+  listComponentSchemas,
+  queryViewportRuntimeProjection,
+  retryViewportRuntimeOperationRun,
+  subscribeViewportRuntimeClient,
+  type AssetBrowserRegistryEntry,
+  type DiagnosticsSnapshot,
+} from '@forgeax/editor-core';
+import {
+  EXECUTION_CAPABILITY_NAMES,
+  isExecutionReport,
+  type ExecutionReport,
+} from '@forgeax/engine-app';
 import {
   buildDiagnosticsRows,
   filterDiagnosticsRows,
@@ -43,11 +58,18 @@ async function copyDetails(row: DiagnosticsPanelRow): Promise<boolean> {
   }
 }
 
-function DiagnosticsPanel() {
-  const revision = useDiagnosticsRevision();
+function DiagnosticsPanel({
+  snapshot: runtimeSnapshot,
+  dispatchRuntimeAction,
+}: {
+  readonly snapshot?: DiagnosticsSnapshot;
+  readonly dispatchRuntimeAction?: (action: Exclude<DiagnosticsPanelAction, 'copy'>, row: DiagnosticsPanelRow) => void;
+}) {
+  const localRevision = useDiagnosticsRevision();
   const source = getDiagnosticsProjectionSource();
-  const snapshot = getDiagnosticsSnapshot();
-  const rows = useMemo(() => buildDiagnosticsRows(snapshot), [revision]);
+  const snapshot = runtimeSnapshot ?? getDiagnosticsSnapshot();
+  const revision = runtimeSnapshot?.revision ?? localRevision;
+  const rows = useMemo(() => buildDiagnosticsRows(snapshot), [snapshot]);
   const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState<DiagnosticsPanelSource | ''>('');
   const [severityFilter, setSeverityFilter] = useState<DiagnosticsPanelSeverity | ''>('');
@@ -61,6 +83,10 @@ function DiagnosticsPanel() {
   const onAction = (action: DiagnosticsPanelAction, row: DiagnosticsPanelRow): void => {
     if (action === 'copy') {
       void copyDetails(row).then((copied) => setCopiedId(copied ? row.id : null));
+      return;
+    }
+    if (dispatchRuntimeAction !== undefined) {
+      dispatchRuntimeAction(action, row);
       return;
     }
     source.dispatchAction?.(action, row);
@@ -130,7 +156,7 @@ function DiagnosticsPanel() {
                   key={action}
                   type="button"
                   data-testid={`cap-diagnostic-action-${action}`}
-                  disabled={action !== 'copy' && source.dispatchAction === undefined}
+                  disabled={action !== 'copy' && dispatchRuntimeAction === undefined && source.dispatchAction === undefined}
                   onClick={() => onAction(action, row)}
                 >
                   {copiedId === row.id && action === 'copy' ? 'Copied' : actionLabel(action)}
@@ -144,16 +170,160 @@ function DiagnosticsPanel() {
   );
 }
 
+interface RuntimeCapabilitiesProjection {
+  readonly diagnostics: DiagnosticsSnapshot;
+  readonly execution: ExecutionReport;
+}
+
+function isDiagnosticsSnapshot(value: unknown): value is DiagnosticsSnapshot {
+  return value !== null
+    && typeof value === 'object'
+    && (value as { schemaVersion?: unknown }).schemaVersion === DIAGNOSTICS_SCHEMA_VERSION;
+}
+
+function useRuntimeCapabilitiesProjection(): RuntimeCapabilitiesProjection | undefined {
+  const connection = useSyncExternalStore(
+    subscribeViewportRuntimeClient,
+    getViewportRuntimeClientSnapshot,
+    getViewportRuntimeClientSnapshot,
+  );
+  const [projection, setProjection] = useState<RuntimeCapabilitiesProjection | undefined>();
+  useEffect(() => {
+    if (connection.status !== 'ready') {
+      setProjection(undefined);
+      return;
+    }
+    let disposed = false;
+    let pending = false;
+    const refresh = async (): Promise<void> => {
+      if (pending) return;
+      pending = true;
+      try {
+        const [diagnosticsEnvelope, executionEnvelope] = await Promise.all([
+          queryViewportRuntimeProjection<DiagnosticsSnapshot>({ kind: 'diagnostics.snapshot' }),
+          queryViewportRuntimeProjection<ExecutionReport>({ kind: 'engine.execution' }),
+        ]);
+        if (disposed) return;
+        const diagnostics = diagnosticsEnvelope.status === 'ready' ? diagnosticsEnvelope.value : undefined;
+        const execution = executionEnvelope.status === 'ready' ? executionEnvelope.value : undefined;
+        if (!isDiagnosticsSnapshot(diagnostics) || !isExecutionReport(execution)) {
+          setProjection(undefined);
+          return;
+        }
+        setProjection({ diagnostics, execution });
+      } catch {
+        if (!disposed) setProjection(undefined);
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [connection.runtime?.runtimeGeneration, connection.runtime?.runtimeId, connection.status]);
+  return projection;
+}
+
+function dispatchRuntimeDiagnosticAction(
+  action: Exclude<DiagnosticsPanelAction, 'copy'>,
+  row: DiagnosticsPanelRow,
+): void {
+  if (action === 'retry' && row.requestId !== undefined) {
+    void retryViewportRuntimeOperationRun(row.requestId, crypto.randomUUID());
+    return;
+  }
+  if (action === 'open-source' && row.path !== undefined) {
+    void dispatchActiveEditorOperation({ kind: 'revealInFileManager', path: row.path });
+    return;
+  }
+  if (action !== 'locate') return;
+  const entityRef = row.objectRefs?.entity
+    ?? (row.subjectRef?.kind === 'entity-handle' ? row.subjectRef : undefined);
+  const entityId = Number(entityRef?.id ?? Number.NaN);
+  if (Number.isSafeInteger(entityId)) {
+    void dispatchActiveEditorOperation({ kind: 'setSelection', id: entityId });
+    return;
+  }
+  if (row.location?.kind === 'file') {
+    void dispatchActiveEditorOperation({
+      kind: 'setFolderSelection',
+      paths: [row.location.id],
+      items: [{ path: row.location.id, kind: 'file' }],
+    });
+    return;
+  }
+  if (row.location?.kind !== 'asset') return;
+  void queryViewportRuntimeProjection<{ readonly entries: readonly AssetBrowserRegistryEntry[] }>({ kind: 'assets.catalog' })
+    .then((envelope) => {
+      if (envelope.status !== 'ready') return;
+      const asset = envelope.value.entries.find((candidate) => candidate.guid.toLowerCase() === row.location?.id.toLowerCase());
+      if (asset === undefined) return;
+      return dispatchActiveEditorOperation({
+        kind: 'setAssetSelectionOne',
+        asset: {
+          guid: asset.guid,
+          kind: asset.kind,
+          name: asset.name ?? asset.guid,
+          packPath: asset.sourcePath ?? asset.packageUrl,
+        },
+      });
+    });
+}
+
+function EngineExecutionPanel({ report }: { readonly report: ExecutionReport | undefined }) {
+  if (report === undefined) return null;
+  const unavailable = EXECUTION_CAPABILITY_NAMES.filter((name) => !report.capabilities[name].available);
+  return (
+    <section
+      className="cap-diagnostics"
+      data-testid="cap-engine-execution"
+      data-requested-tier={report.requestedTier}
+      data-actual-tier={report.actualTier ?? 'pending'}
+      data-engine-health={report.engine.health}
+      data-world-health={report.world.health}
+    >
+      <div className="cap-diagnostics-header">
+        <div>
+          <h3>Engine execution</h3>
+          <span className="muted">requested {report.requestedTier} · actual {report.actualTier ?? 'pending'}</span>
+        </div>
+        <span className="cap-diagnostics-policy">{report.selectionReason ?? 'selecting'}</span>
+      </div>
+      <div className="cap-diagnostic-meta">
+        <span>engine {report.engine.health} ({report.engine.realm})</span>
+        <span>world {report.world.health}</span>
+        <span>shared evidence {report.sharedEvidencePassed ? 'passed' : 'not passed'}</span>
+      </div>
+      {unavailable.length > 0 && (
+        <details className="cap-diagnostic-details">
+          <summary>{unavailable.length} unavailable capabilities</summary>
+          <ul>
+            {unavailable.map((name) => (
+              <li key={name}><code>{name}</code>: {report.capabilities[name].reason}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {report.fault !== null && <pre>{JSON.stringify(report.fault, null, 2)}</pre>}
+    </section>
+  );
+}
+
 // Capabilities panel — the component schema registry, the SAME source the
 // Inspector reflects into widgets AND the AI bridge reflects into
 // getComponentSchema. Showing it makes the editor's vocabulary legible: every
 // component + field a human or AI can author. Read-only.
 export function CapabilitiesPanel() {
   const schemas = listComponentSchemas();
+  const runtime = useRuntimeCapabilitiesProjection();
   return (
     <div className="panel" data-testid="panel-capabilities">
       <h3>Capabilities</h3>
-      <DiagnosticsPanel />
+      <EngineExecutionPanel report={runtime?.execution} />
+      <DiagnosticsPanel snapshot={runtime?.diagnostics} dispatchRuntimeAction={runtime === undefined ? undefined : dispatchRuntimeDiagnosticAction} />
       <div className="cap-list" data-testid="cap-list">
         {schemas.map((cs) => (
           <div className="cap-comp" key={cs.name} data-testid={`cap-${cs.name}`}>

@@ -11,7 +11,7 @@
 import { defineConfig } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const createGameMode = process.env.FORGEAX_SMOKE_CREATE_GAME === '1';
@@ -36,9 +36,14 @@ if (sourceDir === undefined || !existsSync(resolve(sourceDir, 'forge.json'))) {
 }
 
 const gameId = process.env.FORGEAX_SMOKE_GAME_ID ?? basename(sourceDir);
-const tempRoot = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', `forgeax-editor-smoke-${gameId}-`));
-const gameDir = join(tempRoot, gameId);
-if (createGameMode) {
+const inheritedCreateGameDir = createGameMode && process.env.FORGEAX_SMOKE_GAME_DIR
+  ? resolve(process.env.FORGEAX_SMOKE_GAME_DIR)
+  : undefined;
+const tempRoot = inheritedCreateGameDir === undefined
+  ? mkdtempSync(join(process.env.TMPDIR ?? '/tmp', `forgeax-editor-smoke-${gameId}-`))
+  : dirname(inheritedCreateGameDir);
+const gameDir = inheritedCreateGameDir ?? join(tempRoot, gameId);
+if (createGameMode && inheritedCreateGameDir === undefined) {
   // Create mode starts with an empty slot. The browser smoke then submits
   // File → New Game with template=game-default; standalone/game-backend.ts
   // copies the selected engine template into this slot before the host reloads.
@@ -47,17 +52,20 @@ if (createGameMode) {
   mkdirSync(gameDir, { recursive: true });
   mkdirSync(join(gameDir, 'assets'), { recursive: true });
   cpSync(resolve(sourceDir, 'package.json'), join(gameDir, 'package.json'));
-} else {
+} else if (!createGameMode) {
   cpSync(sourceDir, gameDir, { recursive: true });
 }
 
 process.env.FORGEAX_SMOKE_GAME_DIR = gameDir;
-process.once('exit', () => rmSync(tempRoot, { recursive: true, force: true }));
+if (inheritedCreateGameDir === undefined) {
+  process.once('exit', () => rmSync(tempRoot, { recursive: true, force: true }));
+}
 
 const defaultPorts = gameId === 'game-default'
-  ? { host: '15590', api: '15581', engine: '15573' }
-  : { host: '15690', api: '15681', engine: '15673' };
+  ? { host: '15590', edit: '15580', api: '15581', engine: '15573' }
+  : { host: '15690', edit: '15680', api: '15681', engine: '15673' };
 const hostPort = process.env.FORGEAX_SMOKE_HOST_PORT ?? defaultPorts.host;
+const editPort = process.env.FORGEAX_SMOKE_EDIT_PORT ?? defaultPorts.edit;
 const apiPort = process.env.FORGEAX_SMOKE_API_PORT ?? defaultPorts.api;
 const enginePort = process.env.FORGEAX_SMOKE_ENGINE_PORT ?? defaultPorts.engine;
 const runtimeScopeSecret = process.env.FORGEAX_RUNTIME_SCOPE_SECRET ?? randomUUID();
@@ -65,8 +73,12 @@ const runtimeScopeId = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? `standalone-${gam
 const runtimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
 process.env.FORGEAX_SMOKE_GAME_ID = gameId;
 process.env.FORGEAX_SMOKE_HOST_PORT = hostPort;
+process.env.FORGEAX_SMOKE_EDIT_PORT = editPort;
 process.env.FORGEAX_SMOKE_API_PORT = apiPort;
 process.env.FORGEAX_SMOKE_ENGINE_PORT = enginePort;
+process.env.FORGEAX_RUNTIME_SCOPE_SECRET = runtimeScopeSecret;
+process.env.FORGEAX_RUNTIME_SCOPE_ID = runtimeScopeId;
+process.env.FORGEAX_RUNTIME_GENERATION = runtimeGeneration;
 
 const hostEnv = {
   ...process.env as Record<string, string>,
@@ -74,6 +86,7 @@ const hostEnv = {
   FORGEAX_ENGINE_PORT: enginePort,
   FORGEAX_INTERFACE_PORT: hostPort,
   FORGEAX_STANDALONE_PORT: hostPort,
+  FORGEAX_EDIT_RUNTIME_PORT: editPort,
   FORGEAX_GAME_API_PORT: apiPort,
   FORGEAX_GAME_ID: gameId,
   FORGEAX_RUNTIME_SCOPE_SECRET: runtimeScopeSecret,
@@ -104,6 +117,27 @@ export default defineConfig({
       cwd: root,
       env: hostEnv,
       url: `http://127.0.0.1:${hostPort}`,
+      reuseExistingServer: false,
+      timeout: 90_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+    {
+      command: 'bun run dev:edit-runtime',
+      cwd: root,
+      env: {
+        ...process.env as Record<string, string>,
+        FORGEAX_GAME_DIR: gameDir,
+        FORGEAX_EDITOR_PORT: editPort,
+        FORGEAX_INTERFACE_PORT: hostPort,
+        FORGEAX_HMR_CLIENT_PORT: hostPort,
+        FORGEAX_GAME_API_PORT: apiPort,
+        FORGEAX_SERVER_PORT: apiPort,
+        FORGEAX_RUNTIME_SCOPE_SECRET: runtimeScopeSecret,
+        FORGEAX_RUNTIME_SCOPE_ID: runtimeScopeId,
+        FORGEAX_RUNTIME_GENERATION: runtimeGeneration,
+      },
+      url: `http://127.0.0.1:${editPort}/editor/`,
       reuseExistingServer: false,
       timeout: 90_000,
       stdout: 'pipe',

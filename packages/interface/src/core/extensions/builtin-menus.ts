@@ -65,6 +65,10 @@ export const builtinMenusExtension: AppExtension = {
         labelKey: 'menu.file.openGameDirectory', commandId: 'game.open-directory', icon: 'folder-open' },
       { id: 'file.openRecent', menu: 'file', group: 'game', order: 30,
         labelKey: 'menu.file.openRecent', icon: 'clock',
+        // 事实:每个动态子项都执行 game.pick,子项 id = file.openRecent.<slug>。
+        // 门对账靠它把 catalog 的 game.switch(别名 game.pick)解析到这条链,
+        // 无需展开动态列表。
+        dynamicChildCommandId: 'game.pick', dynamicChildIdFromArg: 'slug',
         // Dynamic submenu: recent games (mtime-desc). Label uses the raw game
         // name as the i18n key — `t()` falls back to the key when unmatched, so
         // the display name shows as-is (same fallback the top-menu titles rely

@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {
+      "name": "missing owner",
+      "path": ["checks", 0, "owner"],
+      "operation": "delete",
+      "expectedCode": "schema-field-missing"
+    },
+    {
+      "name": "missing execution home",
+      "path": ["checks", 0, "executionHome"],
+      "operation": "delete",
+      "expectedCode": "schema-field-missing"
+    },
+    {
+      "name": "missing failure policy",
+      "path": ["failurePolicy"],
+      "operation": "delete",
+      "expectedCode": "schema-field-missing"
+    },
+    {
+      "name": "invalid package quality type",
+      "path": ["packageQuality"],
+      "operation": "replace",
+      "value": [],
+      "expectedCode": "schema-field-type"
+    },
+    {
+      "name": "invalid owner type",
+      "path": ["checks", 0, "owner"],
+      "operation": "replace",
+      "value": 7,
+      "expectedCode": "schema-field-type"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "cases": [
+    {
+      "name": "live ruleset unavailable",
+      "liveRuleset": null,
+      "jobs": [{"id": 901, "name": "typecheck", "conclusion": "success"}],
+      "expectedClass": "external-transport",
+      "expectedCode": "live-ruleset-unavailable"
+    },
+    {
+      "name": "required context drift",
+      "liveRuleset": {"requiredContexts": ["b2-self-boot"]},
+      "requiredContexts": ["b2-self-boot", "typecheck"],
+      "jobs": [{"id": 901, "name": "typecheck", "conclusion": "success"}],
+      "expectedClass": "admission",
+      "expectedCode": "required-context-drift"
+    },
+    {
+      "name": "zero jobs",
+      "liveRuleset": {"requiredContexts": ["typecheck"]},
+      "requiredContexts": ["typecheck"],
+      "jobs": [],
+      "expectedClass": "admission",
+      "expectedCode": "zero-job"
+    },
+    {
+      "name": "run and attempt mismatch",
+      "liveRuleset": {"requiredContexts": ["typecheck"]},
+      "requiredContexts": ["typecheck"],
+      "jobs": [{"id": 901, "name": "typecheck", "run_id": 800, "run_attempt": 1, "conclusion": "success"}],
+      "workflowRun": {"id": 801, "run_attempt": 2},
+      "expectedClass": "admission",
+      "expectedCode": "run-attempt-mismatch"
+    },
+    {
+      "name": "fixture does not prove live equality",
+      "liveRuleset": {"requiredContexts": ["typecheck"]},
+      "requiredContexts": ["typecheck"],
+      "jobs": [{"id": 901, "name": "typecheck", "conclusion": "success"}],
+      "liveEvidence": false,
+      "expectedClass": "external-transport",
+      "expectedCode": "live-evidence-unavailable"
+    }
+  ]
+}

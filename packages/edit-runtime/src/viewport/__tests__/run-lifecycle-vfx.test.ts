@@ -1,5 +1,5 @@
 // M3 RED contract: in-process Play owns a fresh World while sharing the Edit
-// AssetRegistry and ParticleRuntimeHost. Stop must detach Play before stopping
+// AssetRegistry and VfxRuntimeHost. Stop must detach Play before stopping
 // its App, then leave the Edit binding available for the next run.
 //
 // Anchors: requirements AC-03/AC-06/AC-08, plan-strategy §2 D-2/D-6 and §7 M3.
@@ -14,12 +14,7 @@ function createFakeHost() {
   const attached: Array<{ world: World; assets: object }> = [];
   const detached: World[] = [];
   const host = {
-    feature: {
-      diagnostics: () => ({
-        attachedWorlds: attached.length,
-        detachedWorlds: detached.length,
-      }),
-    },
+    feature: { identity: 'forgeax.vfx-render.gpu-particles' },
     async attachWorld(input: { world: World; assets: object }) {
       if (attached.some((entry) => entry.world === input.world)) {
         return { ok: true as const, value: { state: 'already-attached' as const } };
@@ -49,6 +44,7 @@ describe('in-process VFX Play lifecycle', () => {
     const fake = createFakeHost();
     const bridge = createEditVfxRuntimeBridge({
       camera: { read: () => undefined },
+      renderFeatureDiagnostics: () => [],
       hostFactory: () => fake.host as never,
     });
     const editAttach = await bridge.attachWorld(editWorld, assets as never);
@@ -120,6 +116,8 @@ describe('in-process VFX Play lifecycle', () => {
     lifecycle.stopSimulation();
     expect(fake.detached).toEqual(playWorlds);
     expect(fake.attached[0]?.world).toBe(editWorld);
-    expect(bridge.readDiagnostics() as unknown).toEqual({ attachedWorlds: 3, detachedWorlds: 2 });
+    expect(fake.attached.filter(({ world }) => !fake.detached.includes(world))).toEqual([
+      { world: editWorld, assets },
+    ]);
   });
 });

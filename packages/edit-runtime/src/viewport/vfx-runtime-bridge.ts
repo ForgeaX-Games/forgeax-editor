@@ -1,8 +1,8 @@
 // Edit VFX runtime bridge — the composition seam for the engine-owned host.
 //
 // The bridge owns no simulation, observation, registry, identity, or protocol
-// state. It creates one ParticleRuntimeHost, forwards the existing viewport
-// camera source, and exposes the host's readAll-backed diagnostics projection.
+// state. It creates one VfxRuntimeHost, forwards the existing viewport
+// camera source, and projects the Renderer-owned feature diagnostics.
 // The same host instance is attached to the persistent Edit World and each
 // fresh Play World; the host itself owns attach/detach idempotency.
 //
@@ -17,26 +17,22 @@ import { mat4, vec3 } from '@forgeax/engine-math';
 import { Camera } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 import {
-  createParticleRuntimeHost,
+  createVfxRuntimeHost,
   type ParticleRenderCamera,
-  type ParticleRenderFeatureOptions,
-  type ParticleRuntimeHost,
-  type ParticleRuntimeHostOptions,
-  type ParticleRuntimeHostResult,
-  type ParticleRuntimeHostAttachResult,
-  type ParticleRuntimeHostDetachResult,
+  type ParticleRenderCameraSource,
+  type VfxRuntimeHost,
+  type VfxRuntimeHostOptions,
 } from '@forgeax/engine-vfx-render';
+import type { RenderFeatureDiagnostics } from '@forgeax/engine-render';
 
 export interface EditVfxRuntimeBridge {
-  readonly host: ParticleRuntimeHost;
+  readonly host: VfxRuntimeHost;
   readonly attachWorld: (
     world: World,
     assets: AssetRegistry,
-  ) => Promise<ParticleRuntimeHostResult<ParticleRuntimeHostAttachResult>>;
-  readonly detachWorld: (
-    world: World,
-  ) => ParticleRuntimeHostResult<ParticleRuntimeHostDetachResult>;
-  readonly readDiagnostics: () => ReturnType<ParticleRuntimeHost['feature']['diagnostics']>;
+  ) => ReturnType<VfxRuntimeHost['attachWorld']>;
+  readonly detachWorld: (world: World) => ReturnType<VfxRuntimeHost['detachWorld']>;
+  readonly readDiagnostics: () => readonly RenderFeatureDiagnostics[];
   /** Gateway-ready projection of the same engine-owned render facts. */
   readonly diagnosticsProvider: RuntimeDiagnosticsProvider;
   /** Notify the Gateway when an engine-owned runtime transition was observed. */
@@ -44,17 +40,21 @@ export interface EditVfxRuntimeBridge {
 }
 
 export interface EditVfxRuntimeBridgeOptions {
-  readonly camera: ParticleRuntimeHostOptions['camera'];
-  readonly hostFactory?: (options: ParticleRuntimeHostOptions) => ParticleRuntimeHost;
+  readonly camera: VfxRuntimeHostOptions['camera'];
+  readonly renderFeatureDiagnostics: () => readonly RenderFeatureDiagnostics[];
+  readonly hostFactory?: (options: VfxRuntimeHostOptions) => VfxRuntimeHost;
 }
 
 /** Create the one Edit-side engine host bridge. */
 export function createEditVfxRuntimeBridge(
   options: EditVfxRuntimeBridgeOptions,
 ): EditVfxRuntimeBridge {
-  const factory = options.hostFactory ?? createParticleRuntimeHost;
+  const factory = options.hostFactory ?? createVfxRuntimeHost;
   const host = factory({ camera: options.camera });
-  const readDiagnostics = (): ReturnType<ParticleRuntimeHost['feature']['diagnostics']> => host.feature.diagnostics();
+  const readDiagnostics = (): readonly RenderFeatureDiagnostics[] =>
+    options.renderFeatureDiagnostics().filter(
+      (diagnostic) => diagnostic.identity === 'forgeax.vfx-render.gpu-particles',
+    );
   const diagnosticsListeners = new Set<() => void>();
   let lastDiagnosticsKey = diagnosticsKey(readDiagnostics());
   const notifyDiagnosticsChanged = (): void => {
@@ -65,7 +65,7 @@ export function createEditVfxRuntimeBridge(
   };
   const diagnosticsProvider: RuntimeDiagnosticsProvider = {
     id: 'editor-vfx',
-    snapshot: () => [particleRenderDiagnostic(readDiagnostics())],
+    snapshot: () => readDiagnostics().map(particleRenderDiagnostic),
     subscribe: (listener) => {
       diagnosticsListeners.add(listener);
       return () => diagnosticsListeners.delete(listener);
@@ -90,48 +90,38 @@ export function createEditVfxRuntimeBridge(
 }
 
 function diagnosticsKey(
-  diagnostics: ReturnType<ParticleRuntimeHost['feature']['diagnostics']>,
+  diagnostics: readonly RenderFeatureDiagnostics[],
 ): string {
-  return JSON.stringify([
-    diagnostics.readiness,
-    diagnostics.bucketCount,
-    diagnostics.generation,
-    diagnostics.error?.code,
-    diagnostics.error?.hint,
-    diagnostics.error?.expected,
-    diagnostics.error?.detail,
-  ]);
+  return JSON.stringify(diagnostics);
 }
 
 function particleRenderDiagnostic(
-  diagnostics: ReturnType<ParticleRuntimeHost['feature']['diagnostics']>,
+  diagnostics: RenderFeatureDiagnostics,
 ): RuntimeDiagnosticFact {
-  const error = diagnostics.error;
-  const failed = diagnostics.readiness === 'failed'
-    || diagnostics.readiness === 'disabled'
-    || diagnostics.readiness === 'unavailable';
+  const error = diagnostics.latestError;
+  const failed = diagnostics.status === 'failed' || diagnostics.status === 'disabled';
   const severity = error !== undefined || failed ? 'warn' : 'info';
-  const code = error?.code ?? `particle-render-${diagnostics.readiness}`;
+  const code = error?.code ?? `particle-render-${diagnostics.status}`;
   return Object.freeze({
     id: 'particle-render-feature',
     severity,
     code,
     title: 'Particle render feature',
-    message: error?.hint ?? `Particle renderer readiness is ${diagnostics.readiness}.`,
+    message: error?.hint ?? `Particle renderer status is ${diagnostics.status}.`,
     retryable: error !== undefined || failed,
     recoveryActions: Object.freeze(error !== undefined || failed ? ['stop', 'play'] : []),
     detail: Object.freeze({
-      readiness: diagnostics.readiness,
-      bucketCount: diagnostics.bucketCount,
-      generation: diagnostics.generation,
+      status: diagnostics.status,
+      identity: diagnostics.identity,
+      order: diagnostics.order,
       ...(error === undefined ? {} : { error }),
       ...(error !== undefined || failed
         ? { recovery: Object.freeze({ via: 'gateway.dispatch', operations: Object.freeze(['stop', 'play']) }) }
         : {}),
       provenance: Object.freeze({
         source: 'engine-vfx-render',
-        host: 'ParticleRuntimeHost',
-        feature: 'forgeax.vfx-render.particles',
+        host: 'VfxRuntimeHost',
+        feature: diagnostics.identity,
       }),
     }),
   });
@@ -150,7 +140,7 @@ export interface ParticleCameraSourceOptions {
  */
 export function createParticleCameraSource(
   options: ParticleCameraSourceOptions,
-): ParticleRenderFeatureOptions['camera'] {
+): ParticleRenderCameraSource {
   return {
     read: () => {
       const world = options.world();

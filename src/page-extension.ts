@@ -27,6 +27,7 @@ import { t } from '@forgeax/editor-core/i18n';
 import {
   DEFAULT_ASSET_EDITOR_DOCK_LAYOUT,
   DEFAULT_EDITOR_DOCK_LAYOUT,
+  DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT,
   DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
   DEFAULT_MI_EDITOR_DOCK_LAYOUT,
 } from './default-dock-layout';
@@ -63,6 +64,7 @@ const MATERIAL_INSTANCE_PAGE = pageId('material-instance');
 const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'checkpoints', 'events', 'ep:assets', 'ep:history', 'ep:capabilities', 'ep:settings'];
 const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview', 'ep:settings'];
 const MESH_PANELS = [...ASSET_PANELS, 'ep:mesh-slots'];
+const MATERIAL_PANELS = ['ep:mat-preview', ...ASSET_PANELS];
 const MATERIAL_INSTANCE_PANELS = ['ep:mi-preview', 'ep:mi-properties', 'ep:settings'];
 
 function placements(ids: readonly string[]): PagePanelPlacement[] {
@@ -102,11 +104,11 @@ function pathMenuItems(path: string | undefined): PageMenuItem[] {
 }
 
 // "Locate in Content Browser" — pure mechanism communication: this file NEVER
-// imports the content-browser package. It (1) brings the editor Level page + its
-// Assets panel up via interface commands, then (2) emits the neutral
-// `content-browser:reveal` bus event. A mounted Content Browser (a global
-// service) resolves the target and performs the navigation/selection through its
-// own gateway door. Decoupled both ways.
+// imports the content-browser package. It (1) reveals the global Content Browser
+// footer panel via an interface command, then (2) emits the neutral
+// `content-browser:reveal` bus event. A mounted Content Browser (a global footer
+// service, present on every Page) resolves the target and performs the
+// navigation/selection through its own gateway door. Decoupled both ways.
 function revealTargetFor(opts: {
   guid?: string | null | undefined;
   path?: string | undefined;
@@ -127,21 +129,14 @@ function revealTargetFor(opts: {
 async function revealInContentBrowser(target: ContentBrowserRevealTarget): Promise<void> {
   const host = hostRef;
   if (!host || (!target.guid && !target.path)) return;
-  // 1) The Content Browser (ep:assets) lives in the editor Level page layout —
-  //    focus it so the panel mounts + subscribes before we hand off the target.
-  const snap = host.pages.getSnapshot();
-  const level = snap.instances.find((p) => p.typeId === LEVEL_PAGE);
-  const onLevel = !!level && snap.activeKey === level.encodedKey;
-  try {
-    if (level) { if (!onLevel) await host.pages.focus(level.encodedKey); }
-    else await host.pages.open({ typeId: LEVEL_PAGE });
-  } catch { /* noop */ }
-  // 2) Reveal the Assets panel wherever it lives (grid tab / edge drawer).
+  // The Content Browser is global footer chrome now — mounted on every Page — so
+  // there is no need to switch to the Level page first. 1) Reveal the CB panel
+  // wherever it lives (footer edge drawer / a grid tab the user dragged it to).
+  // 2) Hand the locate instruction to the Content Browser over the neutral bus.
+  // The double rAF gives a freshly-expanded footer drawer a frame to mount +
+  // subscribe before the target arrives.
   try { await host.commands.execute('app.panel.reveal', { id: 'ep:assets' }); } catch { /* noop */ }
-  // 3) Hand the locate instruction to the Content Browser over the neutral bus.
-  const emit = () => host.bus.emit('content-browser:reveal', { target });
-  if (onLevel) emit();
-  else requestAnimationFrame(() => requestAnimationFrame(emit));
+  requestAnimationFrame(() => requestAnimationFrame(() => host.bus.emit('content-browser:reveal', { target })));
 }
 
 function locateMenuItems(target: ContentBrowserRevealTarget): PageMenuItem[] {
@@ -242,6 +237,13 @@ function page(
   layout: PageTypeRegistration['layout'],
   ids: readonly string[],
   createController?: PageTypeRegistration['createController'],
+  // Bump when the page's panel set / default arrangement changes: persisted
+  // page-layout snapshots are keyed on (pageTypeId, layoutVersion) and a
+  // mismatch discards the stale snapshot so the new default applies. Without
+  // a bump, a pre-change snapshot is silently accepted as long as ANY panel
+  // of the domain still mounts (hasMountedPagePlacement), and users never
+  // see newly added panels — the "mat-preview never appears" bug.
+  layoutVersion = 1,
 ): PageTypeRegistration {
   return {
     id,
@@ -249,7 +251,7 @@ function page(
     cardinality,
     restorePolicy: 'project',
     closable: id !== LEVEL_PAGE,
-    layoutVersion: 1,
+    layoutVersion,
     layout,
     panels: placements(ids),
     ...(createController ? { createController } : {}),
@@ -259,7 +261,7 @@ function page(
 export function createEditorPageExtension(
   renderPanel: (id: string) => ReactNode,
 ): AppExtension {
-  const allPanelIds = [...new Set([...LEVEL_PANELS, ...MESH_PANELS, ...MATERIAL_INSTANCE_PANELS])];
+  const allPanelIds = [...new Set([...LEVEL_PANELS, ...MESH_PANELS, ...MATERIAL_PANELS, ...MATERIAL_INSTANCE_PANELS])];
   return {
     id: OWNER,
     version: '2.0.0',
@@ -273,7 +275,7 @@ export function createEditorPageExtension(
         page(LEVEL_PAGE, 'Level', 'singleton', DEFAULT_EDITOR_DOCK_LAYOUT, LEVEL_PANELS, levelController),
         page(ASSET_PAGE, 'Asset', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
         page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS, fileController),
-        page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
+        page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT, MATERIAL_PANELS, fileController, 2),
         {
           ...page(
             MATERIAL_INSTANCE_PAGE,

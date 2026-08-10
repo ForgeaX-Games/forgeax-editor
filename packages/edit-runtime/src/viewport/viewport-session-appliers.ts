@@ -8,6 +8,11 @@
 
 import { getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
+import {
+  ParticleEffectPlayer,
+  VFX_GPU_RUNTIME_RESOURCE_KEY,
+  type VfxGpuRuntime,
+} from '@forgeax/engine-vfx';
 import { registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
 
 export interface ViewportSessionApplierDeps {
@@ -18,8 +23,14 @@ export interface ViewportSessionApplierDeps {
   readonly releaseGameControl: () => void;
   /** Optional engine RHI debug capture, injected by the runtime owner. */
   readonly captureFrame?: (frames: number) => Promise<unknown>;
+  /** Outer lifecycle deadline; injectable so the terminal-state contract is deterministic in tests. */
+  readonly captureTimeoutMs?: number;
   readonly world: World;
+  /** Late-bound because Play swaps the Gateway active World. */
+  readonly activeWorld: () => World;
 }
+
+const DEFAULT_CAPTURE_TIMEOUT_MS = 60_000;
 
 const invalidArgs = (hint: string) => ({ ok: false as const, error: { code: 'INVALID_ARGS' as const, hint } });
 
@@ -31,6 +42,12 @@ function rhiCaptureFailure(error: unknown) {
   const sourceHint = typeof candidate?.hint === 'string'
     ? candidate.hint
     : error instanceof Error ? error.message : String(error);
+  const terminalCode = sourceCode === 'capture-disk-space-insufficient'
+    || sourceCode === 'capture-artifact-write-failed'
+    || sourceCode === 'capture-timeout'
+    || sourceCode === 'capture-cancelled'
+    ? sourceCode
+    : 'rhi-capture-failed';
   const details = {
     ...(candidate?.expected === undefined ? {} : { expected: candidate.expected }),
     ...(candidate?.detail === undefined ? {} : { detail: candidate.detail }),
@@ -38,12 +55,14 @@ function rhiCaptureFailure(error: unknown) {
   return {
     ok: false as const,
     error: {
-      code: 'rhi-capture-failed' as const,
+      code: terminalCode,
       owner: 'engine',
       category: 'runtime',
       hint: sourceHint,
       retryable: true,
-      recoveryActions: ['capture.retry'],
+      recoveryActions: terminalCode === 'capture-artifact-write-failed'
+        ? ['capture.cleanup', 'capture.retry']
+        : ['capture.retry'],
       cause: {
         code: sourceCode,
         owner: 'engine',
@@ -52,6 +71,20 @@ function rhiCaptureFailure(error: unknown) {
       },
     },
   };
+}
+
+function captureWithDeadline(capture: () => Promise<unknown>, timeoutMs: number): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject({
+      code: 'capture-timeout',
+      expected: `captureFrame completes within ${timeoutMs} ms`,
+      hint: `RHI capture did not complete within ${timeoutMs} ms`,
+      detail: { timeoutMs, stage: 'capture' },
+    }), timeoutMs);
+  });
+  return Promise.race([Promise.resolve().then(capture), deadline])
+    .finally(() => { if (timer !== undefined) clearTimeout(timer); });
 }
 
 function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
@@ -88,7 +121,7 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
     });
     register('grantGameControl', () => { deps.grantGameControl(); return { ok: true }; }, 'Grant Game Control');
     register('releaseGameControl', () => { deps.releaseGameControl(); return { ok: true }; }, 'Release Game Control');
-    register('captureFrame', (op) => {
+    register('captureFrame', (op, ctx) => {
       const request = op as { frames?: unknown };
       const frames = request.frames === undefined ? 1 : request.frames;
       if (typeof frames !== 'number' || !Number.isInteger(frames) || frames < 1 || frames > 8) {
@@ -105,11 +138,33 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
           },
         };
       }
-      const completion = Promise.resolve().then(() => deps.captureFrame!(frames)).catch(rhiCaptureFailure);
+      const timeoutMs = deps.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
+      ctx?.operationRun?.reportProgress({ fraction: 0.05, stage: 'capturing' });
+      const completion = captureWithDeadline(() => deps.captureFrame!(frames), timeoutMs).catch(rhiCaptureFailure);
       return { ok: true as const, completion };
     }, 'Capture RHI Frame', {
       type: 'object',
       properties: { frames: { type: 'number', minimum: 1, maximum: 8 } },
+    });
+    register('replayParticleEffect', (op) => {
+      const entity = (op as { entity?: unknown }).entity;
+      if (typeof entity !== 'number' || !Number.isSafeInteger(entity) || entity < 0) {
+        return invalidArgs('entity must be a live non-negative entity handle');
+      }
+      const world = deps.activeWorld();
+      const player = world.get(entity as never, ParticleEffectPlayer);
+      if (!player.ok) {
+        return invalidArgs('entity must be a live ParticleEffectPlayer in the active World');
+      }
+      if (!world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) {
+        return invalidArgs('the active World has no VfxGpuRuntime resource');
+      }
+      world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY).replay(entity as never);
+      return { ok: true as const };
+    }, 'Replay Particle Effect', {
+      type: 'object',
+      properties: { entity: { type: 'number', minimum: 0 } },
+      required: ['entity'],
     });
     register('addSystem', (op) => {
       const name = (op as { name?: unknown }).name;

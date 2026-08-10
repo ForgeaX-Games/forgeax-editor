@@ -42,7 +42,7 @@ import {
   type PathSelectionItem,
 } from '@forgeax/editor-core';
 import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadrant';
-import { getViewportKeyHandler } from './viewport/viewport';
+import { routeViewportKeydown } from './viewport/viewport';
 import type { InputTarget } from './viewport/viewport-camera';
 import { createHumanSaveRequest } from './save-operation-projection';
 
@@ -127,7 +127,7 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
     deleteEntities: (ids: number[]) => deleteManyCascade(ids as never),
     duplicateEntities: (ids: number[]) => ids.forEach((id) => duplicateEntity(id as never)),
     // UE-parity editor hide (docs 2026-08-04-editor-hide-ue-parity-plan M2) —
-    // the shared core ops dispatch the same setHidden op a panel or AI would,
+    // the shared core ops dispatch the same setVisibility op a panel or AI would,
     // multi-entity gestures wrapped as ONE transaction (one undo step).
     hideEntities: (ids: number[]) => hideMany(ids as never),
     showAllHidden: () => showAllHidden(),
@@ -218,6 +218,10 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       if (trySaveActivePage()) return;
       gateway.dispatch(createHumanSaveRequest(), 'human');
     },
-    handleViewportKeyDown: (event) => { getViewportKeyHandler()?.(event); },
+    // routeViewportKeydown (not a raw getViewportKeyHandler()?.call) so discrete
+    // modified-key commands pressed during the async engine boot are buffered
+    // and flushed when createViewport installs the handler — before this they
+    // vanished silently (Alt+G/H/J/K dead on slow boots).
+    handleViewportKeyDown: (event) => { routeViewportKeydown(event); },
   };
 }

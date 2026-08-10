@@ -4,6 +4,36 @@
       "mainScene": "主场景",
       "title": "本窗口编辑的关卡/资产 — 在 Assets 面板双击其它条目可切换"
     },
+    "viewportView": {
+      "menuTitle": "视口视角预设",
+      "perspective": "透视",
+      "orthographic": "正交",
+      "top": "顶视图",
+      "bottom": "底视图",
+      "left": "左视图",
+      "right": "右视图",
+      "front": "前视图",
+      "back": "后视图",
+      "shortcutPerspective": "Alt+G",
+      "shortcutFront": "Alt+H",
+      "shortcutTop": "Alt+J",
+      "shortcutLeft": "Alt+K"
+    },
+    "viewportView": {
+      "menuTitle": "视口视角预设",
+      "perspective": "透视",
+      "orthographic": "正交",
+      "top": "顶视图",
+      "bottom": "底视图",
+      "left": "左视图",
+      "right": "右视图",
+      "front": "前视图",
+      "back": "后视图",
+      "shortcutPerspective": "Alt+G",
+      "shortcutFront": "Alt+H",
+      "shortcutTop": "Alt+J",
+      "shortcutLeft": "Alt+K"
+    },
     "pageMenu": {
       "copyPath": "复制路径",
       "revealInExplorer": "在文件资源管理器中显示",
@@ -81,7 +111,7 @@
         "Entity": "实体",
         "ChildOf": "父级引用",
         "Children": "组",
-        "EditorHidden": "隐藏",
+        "Visibility": "可见性",
         "SceneInstance": "场景实例",
         "CollidingEntities": "碰撞实体"
       },

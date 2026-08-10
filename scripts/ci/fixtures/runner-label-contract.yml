@@ -1,0 +1,21 @@
+name: runner-label-contract
+
+on:
+  workflow_dispatch:
+
+jobs:
+  standard-check:
+    runs-on: [self-hosted, Linux, X64, standard]
+    timeout-minutes: 5
+    steps:
+      - run: echo standard
+  heavy-check:
+    runs-on: [self-hosted, Linux, X64, heavy]
+    timeout-minutes: 5
+    steps:
+      - run: echo heavy
+  hosted-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo hosted

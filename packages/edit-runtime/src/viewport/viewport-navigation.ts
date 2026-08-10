@@ -18,18 +18,28 @@ export interface PointerGestureModifiers {
  * Priority deliberately mirrors the public UE-style contract:
  * RMB Alt = dolly, otherwise fly; MMB = pan; LMB Alt = orbit, with
  * Ctrl/Meta and Shift aliases taking precedence over orbit.
+ *
+ * Orthographic views (UE axis views) forbid rotation: the fly and orbit
+ * gestures degenerate to pan so the axis alignment can never be broken by a
+ * pointer gesture (zoom stays zoom — it adjusts the ortho width, not angles).
+ * Mapping to 'pan' instead of returning null also keeps Alt+LMB from falling
+ * through to entity picking.
  */
-export function cameraGestureForPointer(input: PointerGestureModifiers): CameraGestureMode | null {
+export function cameraGestureForPointer(
+  input: PointerGestureModifiers,
+  projection: 'perspective' | 'orthographic' = 'perspective',
+): CameraGestureMode | null {
   const alt = input.altKey === true;
   const ctrlOrMeta = input.ctrlKey === true || input.metaKey === true;
   const shift = input.shiftKey === true;
+  const ortho = projection === 'orthographic';
 
-  if (input.button === 2) return alt ? 'zoom' : 'fly';
+  if (input.button === 2) return alt ? 'zoom' : ortho ? 'pan' : 'fly';
   if (input.button === 1) return 'pan';
   if (input.button === 0 && alt) {
     if (ctrlOrMeta) return 'zoom';
     if (shift) return 'pan';
-    return 'orbit';
+    return ortho ? 'pan' : 'orbit';
   }
   return null;
 }

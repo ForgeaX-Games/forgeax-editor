@@ -1,0 +1,58 @@
+{
+  "report": {
+    "contractVersion": "forgeax-editor-ci-contract/v1",
+    "checkId": "typecheck",
+    "owner": "editor-ci",
+    "profile": "local-full",
+    "executionHome": "post-merge",
+    "terminalStatus": "failure",
+    "failureClass": "external-transport",
+    "code": "connection-reset",
+    "expected": "cloud evidence is readable",
+    "observed": "GitHub API connection reset",
+    "hint": "retry once after transport recovery",
+    "provenance": {
+      "kind": "cloud",
+      "timingDomain": "post-merge-workflow",
+      "targetSha": "target-sha-001",
+      "runId": 801,
+      "attempt": 1,
+      "htmlUrl": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801"
+    },
+    "firstFailure": {
+      "attempt": 1,
+      "attemptId": "attempt-1",
+      "code": "connection-reset",
+      "expected": "cloud evidence is readable",
+      "observed": "GitHub API connection reset"
+    },
+    "attempts": [{"attempt": 1, "attemptId": "attempt-1", "status": "failure", "transient": true}],
+    "sloClaim": null
+  },
+  "requiredKeys": [
+    "contractVersion",
+    "checkId",
+    "owner",
+    "profile",
+    "executionHome",
+    "terminalStatus",
+    "failureClass",
+    "code",
+    "expected",
+    "observed",
+    "hint",
+    "provenance",
+    "firstFailure",
+    "attempts",
+    "sloClaim"
+  ],
+  "navigationTokens": [
+    "CI contract",
+    "profile",
+    "execution home",
+    "ownership",
+    "provenance",
+    "failure",
+    "recovery"
+  ]
+}

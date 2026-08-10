@@ -1,5 +1,12 @@
 {
   "name": "@forgeax/editor-ui",
+  "forgeaxCi": {
+    "ownership": "intentionally non-tested host",
+    "obligations": {
+      "kind": "static",
+      "checks": ["bun run typecheck", "bun run lint"]
+    }
+  },
   "version": "0.1.0",
   "private": false,
   "type": "module",

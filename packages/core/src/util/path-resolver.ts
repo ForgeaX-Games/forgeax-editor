@@ -66,3 +66,23 @@ export function resolveGamePath(rel: string): string {
   if (!resolver) throw new EditorPathResolverError('PATH_RESOLVER_NOT_SET');
   return resolver(rel);
 }
+
+/**
+ * Accept a path from a public asset descriptor/op and return the host-resolved
+ * game path exactly once. Catalog rows expose host-resolved paths, while human
+ * and AI callers may supply game-relative paths. Both forms are legitimate
+ * inputs to the same Gateway operation; blindly resolving the former produces
+ * paths such as `sample/sample/assets/...`.
+ *
+ * Without an installed host resolver the input is preserved. This keeps pure
+ * unit/headless environments usable while real hosts remain the sole owner of
+ * the game-root mapping.
+ */
+export function resolveGamePathOnce(path: string): string {
+  if (!resolver) return path;
+  const normalize = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/g, '');
+  const root = normalize(resolver(''));
+  const candidate = normalize(path);
+  if (root && (candidate === root || candidate.startsWith(`${root}/`))) return candidate;
+  return resolver(path);
+}

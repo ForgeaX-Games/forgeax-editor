@@ -70,10 +70,8 @@ import {
   registerProjectValidationProvider,
 } from '@forgeax/editor-core';
 import { installAssetHmrBridge } from '@forgeax/editor-core/assets/asset-hmr-bridge';
-import {
-  installDiagnosticsProjectionSource,
-  installOperationProjectionSource,
-} from '@forgeax/editor-panels';
+import { installDiagnosticsProjectionSource } from '@forgeax/editor-panels/diagnostics-projection';
+import { installOperationProjectionSource } from '@forgeax/editor-panels/operation-projection';
 import {
   createHostSession,
   type HostSessionContext,

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "2.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "263c8135-3f53-4e3d-9038-6c7288afce3f",
+      "kind": "sampler",
+      "payload": {
+        "kind": "sampler",
+        "addressModeU": "repeat",
+        "addressModeV": "repeat",
+        "magFilter": "linear",
+        "minFilter": "linear",
+        "mipmapFilter": "linear"
+      },
+      "refs": []
+    }
+  ]
+}

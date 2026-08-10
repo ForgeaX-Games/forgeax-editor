@@ -128,7 +128,10 @@ describe('@forgeax/editor-core barrel export completeness', () => {
     const rel = file.slice(PKGS_ROOT.length + 1);
     test(`${rel} imports only names the barrel exports`, () => {
       const missingValues = values.filter((n) => !(n in barrel));
-      const missingTypes = types.filter((n) => !TYPE_SURFACE.has(n));
+      // A runtime-exported class/value also inhabits TypeScript's type
+      // namespace, so `import type { EditGateway }` is valid even when the
+      // barrel exposes it through a value re-export.
+      const missingTypes = types.filter((n) => !TYPE_SURFACE.has(n) && !(n in barrel));
       const missing = [...missingValues, ...missingTypes];
       expect(
         missing,

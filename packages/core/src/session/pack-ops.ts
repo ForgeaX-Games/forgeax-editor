@@ -10,7 +10,7 @@
 import { type PackFile } from '../scene/scene-pack';
 import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
-import { resolveGamePath } from '../util/path-resolver';
+import { resolveGamePath, resolveGamePathOnce } from '../util/path-resolver';
 import { clampMaterialPackPath } from '../util/material-pack-path';
 import type { DocApplierCtx } from './document';
 import { deletedEntryCache, renamedNameCache, duplicatedGuidCache } from '../io/asset-op-caches';
@@ -26,7 +26,10 @@ import {
 } from './authored-asset-write';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Materials } from '@forgeax/engine-render';
-import { defineParticleEffectSource } from '@forgeax/engine-vfx';
+import {
+  defineParticleEffectSourceV2,
+  PARTICLE_CODE_DEFAULT_MODULE_ID,
+} from '@forgeax/engine-vfx';
 import { classifyUiAuthoring } from '@forgeax/engine-ui/authoring';
 import { encodeMaterialPackRefs } from '../io/material-pack-refs';
 import {
@@ -485,51 +488,20 @@ function defaultPayloadFor(
       if (particleMaterialGuid === undefined) {
         throw new Error('particle-effect creation requires its generated material GUID');
       }
-      const source = defineParticleEffectSource({
-        schemaVersion: 1,
+      const source = defineParticleEffectSourceV2({
+        schemaVersion: 2,
         emitters: [{
           id: 'default',
-          capacity: 32,
-          space: 'world',
+          capacity: 256,
+          backend: { required: 'gpu' },
+          space: 'local',
           schedule: { rate: 8, bursts: [] },
-          bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
-          backendPolicy: { kind: 'required', backend: 'cpu' },
-          operators: {
-            spawn: [
-              { kind: 'shape', version: 1, params: { shape: 'sphere', radius: 0.2 } },
-            ],
-            initialize: [
-              { kind: 'lifetime', version: 1, params: { seconds: 2 } },
-              { kind: 'initial-velocity', version: 1, params: { velocity: [0, 0.8, 0] } },
-            ],
-            update: [
-              { kind: 'gravity', version: 1, params: { acceleration: [0, -0.4, 0] } },
-              { kind: 'drag', version: 1, params: { coefficient: 0.1 } },
-              {
-                kind: 'size-over-life',
-                version: 1,
-                params: { curve: { points: [{ time: 0, value: 0.22 }, { time: 1, value: 0.04 }] } },
-              },
-              {
-                kind: 'color-over-life',
-                version: 1,
-                params: {
-                  gradient: {
-                    stops: [
-                      { time: 0, color: [0.2, 0.6, 1, 1] },
-                      { time: 1, color: [0.05, 0.2, 1, 0] },
-                    ],
-                  },
-                },
-              },
-            ],
-            output: [{ kind: 'billboard', version: 1, params: {} }],
-          },
-          output: { kind: 'billboard', material: particleMaterialGuid },
+          bounds: { kind: 'sphere', center: [0, 1, 0], radius: 3 },
+          program: { module: PARTICLE_CODE_DEFAULT_MODULE_ID },
+          renderers: [{ kind: 'billboard', material: particleMaterialGuid, blend: 'alpha' }],
         }],
       });
-      if (!source.ok) throw new Error(source.error.hint);
-      return source.value as unknown as Record<string, unknown>;
+      return source as unknown as Record<string, unknown>;
     }
   }
 }
@@ -645,11 +617,9 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   // Caller paths stay game-relative; only the host resolver knows the disk root.
   let targetPack: string;
   try {
-    targetPack = resolveGamePath(
-      typeof packPath === 'string' && packPath.length > 0
-        ? packPath
-        : 'assets/materials.pack.json',
-    );
+    targetPack = typeof packPath === 'string' && packPath.length > 0
+      ? resolveGamePathOnce(packPath)
+      : resolveGamePath('assets/materials.pack.json');
   } catch {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires an active game path resolver; select a game before authoring a material' } };
   }

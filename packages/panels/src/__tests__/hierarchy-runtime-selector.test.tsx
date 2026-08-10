@@ -13,7 +13,7 @@ function world(rows: readonly HierarchyEntitySummary[], structureEpoch = 1) {
 }
 
 describe('Hierarchy runtime structure selector', () => {
-  it('rebuilds only after a structure epoch changes', () => {
+  it('keeps static identity but rebuilds when row content changes at the same structure epoch', () => {
     const graph = createRuntimeUiGraph();
     const current = { value: world([{ id: h(1), name: 'Root', typeId: 'entity', mobility: 'static', childIds: [] }]) };
     graph.bindWorld(current);
@@ -24,9 +24,13 @@ describe('Hierarchy runtime structure selector', () => {
     graph.publish();
     expect(mounted.getSnapshot()).toBe(first);
     expect(selector.stats().projectionRebuilds).toBe(1);
+    current.value = world([{ id: h(1), name: 'Renamed', typeId: 'entity', mobility: 'static', childIds: [] }]);
+    graph.publish();
+    expect(mounted.getSnapshot()?.rows[0]?.name).toBe('Renamed');
+    expect(selector.stats().projectionRebuilds).toBe(2);
     current.value = world([{ id: h(1), name: 'Root', typeId: 'entity', mobility: 'static', childIds: [] }], 2);
     graph.publish();
-    expect(selector.stats().projectionRebuilds).toBe(2);
+    expect(selector.stats().projectionRebuilds).toBe(3);
     mounted.unsubscribe();
   });
 

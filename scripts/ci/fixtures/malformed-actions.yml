@@ -1,0 +1,8 @@
+name: malformed-actions
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    needs: missing-job
+    steps:
+      - run: echo hello

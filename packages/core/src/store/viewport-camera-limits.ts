@@ -8,6 +8,14 @@
 
 export type CameraProjection = 'perspective' | 'orthographic';
 
+/** UE-style viewport view identity. The six axis names are orthographic
+ *  presets; 'perspective' is the perspective camera; 'orthographic' labels a
+ *  free (non-axis-aligned) orthographic camera and is derive-only — it is not
+ *  a settable cameraSetView preset. */
+export type ViewportView =
+  | CameraProjection
+  | 'top' | 'bottom' | 'left' | 'right' | 'front' | 'back';
+
 /** 飞行速度常量（单位/秒）。 */
 export const FLY_SPEED_DEFAULT = 8;
 export const FLY_SPEED_MIN = 0.5;

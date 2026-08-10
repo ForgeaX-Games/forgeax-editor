@@ -1,4 +1,4 @@
-// M3 RED contract: Edit owns one engine ParticleRuntimeHost bridge.
+// M3 RED contract: Edit owns one engine VfxRuntimeHost bridge.
 // Anchors: requirements AC-02/AC-07, plan-strategy §2 D-1/D-2/D-5 and §7 M3.
 // The implementation must keep the host feature and diagnostics engine-owned;
 // this test deliberately does not create a VFX store or a protocol command.
@@ -11,9 +11,7 @@ import { createFramePhaseProfiler } from '../frame-phase-profiler';
 import { createEditVfxRuntimeBridge } from '../vfx-runtime-bridge';
 
 function makeHost() {
-  const feature = {
-    diagnostics: () => ({ readiness: 'ready', bucketCount: 1 }),
-  };
+  const feature = { identity: 'forgeax.vfx-render.gpu-particles' };
   const attached: Array<{ world: unknown; assets: unknown }> = [];
   const detached: unknown[] = [];
   const host = {
@@ -38,21 +36,28 @@ describe('Edit VFX runtime bridge', () => {
     const editWorld = new World();
     const assets = { identity: 'shared-edit-registry' };
     const fake = makeHost();
+    const diagnostics = [{
+      identity: 'forgeax.vfx-render.gpu-particles',
+      order: 0,
+      status: 'active' as const,
+      latestError: undefined,
+    }];
     const bridge = createEditVfxRuntimeBridge({
       camera: { read: () => undefined },
+      renderFeatureDiagnostics: () => diagnostics,
       hostFactory: () => fake.host as never,
     });
 
     expect(bridge.host.feature as unknown).toBe(fake.host.feature as unknown);
-    expect(bridge.readDiagnostics() as unknown).toEqual(fake.host.feature.diagnostics());
+    expect(bridge.readDiagnostics()).toEqual(diagnostics);
     expect(bridge.diagnosticsProvider.snapshot()).toMatchObject([{
-      code: 'particle-render-ready',
+      code: 'particle-render-active',
       detail: {
-        readiness: 'ready',
+        status: 'active',
         provenance: {
           source: 'engine-vfx-render',
-          host: 'ParticleRuntimeHost',
-          feature: 'forgeax.vfx-render.particles',
+          host: 'VfxRuntimeHost',
+          feature: 'forgeax.vfx-render.gpu-particles',
         },
       },
     }]);
@@ -73,16 +78,35 @@ describe('Edit VFX runtime bridge', () => {
     const source = readFileSync(fileURLToPath(new URL('../vfx-runtime-bridge.ts', import.meta.url)), 'utf8');
     expect(source).not.toContain('editor-core/protocol');
     expect(source).not.toMatch(/store\/.*set[A-Z]/);
-    expect(source).toContain('createParticleRuntimeHost');
-    expect(source).toContain('readAll');
+    expect(source).toContain('createVfxRuntimeHost');
+    expect(source).toContain('renderFeatureDiagnostics');
+  });
+
+  it('attaches the Edit VFX world only after the scoped asset catalog is ready', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../ViewportComponent.tsx', import.meta.url)),
+      'utf8',
+    );
+    const configure = source.indexOf('renderer.assets.configureRuntimeBinding');
+    const enumerate = source.indexOf('await renderer.assets.enumerateCatalog()');
+    const attach = source.indexOf('await vfxBridge.attachWorld(world, renderer.assets)');
+
+    expect(configure).toBeGreaterThan(-1);
+    expect(enumerate).toBeGreaterThan(configure);
+    expect(attach).toBeGreaterThan(enumerate);
   });
 
   it('notifies Gateway subscribers only when the engine diagnostic changes', () => {
-    let readiness: 'ready' | 'failed' = 'ready';
+    let status: 'active' | 'failed' = 'active';
     const fake = makeHost();
-    fake.host.feature.diagnostics = () => ({ readiness, bucketCount: 1 });
     const bridge = createEditVfxRuntimeBridge({
       camera: { read: () => undefined },
+      renderFeatureDiagnostics: () => [{
+        identity: 'forgeax.vfx-render.gpu-particles',
+        order: 0,
+        status,
+        latestError: undefined,
+      }],
       hostFactory: () => fake.host as never,
     });
     let notifications = 0;
@@ -90,23 +114,27 @@ describe('Edit VFX runtime bridge', () => {
 
     bridge.notifyDiagnosticsChanged();
     expect(notifications).toBe(0);
-    readiness = 'failed';
+    status = 'failed';
     bridge.notifyDiagnosticsChanged();
     expect(notifications).toBe(1);
     bridge.notifyDiagnosticsChanged();
     expect(notifications).toBe(1);
     unsubscribe?.();
-    readiness = 'ready';
+    status = 'active';
     bridge.notifyDiagnosticsChanged();
     expect(notifications).toBe(1);
   });
 
   it('uses existing Gateway lifecycle operations as the executable recovery hint', () => {
-    let readiness: 'ready' | 'failed' = 'failed';
     const fake = makeHost();
-    fake.host.feature.diagnostics = () => ({ readiness, bucketCount: 0 });
     const bridge = createEditVfxRuntimeBridge({
       camera: { read: () => undefined },
+      renderFeatureDiagnostics: () => [{
+        identity: 'forgeax.vfx-render.gpu-particles',
+        order: 0,
+        status: 'failed',
+        latestError: undefined,
+      }],
       hostFactory: () => fake.host as never,
     });
 

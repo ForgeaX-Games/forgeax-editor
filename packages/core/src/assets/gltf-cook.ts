@@ -67,7 +67,11 @@ export async function cookGltfMeta(
   const existing = (existingMeta && typeof existingMeta === 'object'
     ? existingMeta
     : undefined) as Parameters<typeof toAssetPack>[1];
-  const { meta } = toAssetPack(docResult.value, existing, sourceName);
+  const packResult = toAssetPack(docResult.value, existing, sourceName);
+  if (!packResult.ok) {
+    return { ok: false, error: `${packResult.error.code}: ${packResult.error.hint}` };
+  }
+  const { meta } = packResult.value;
 
   const byKind: Record<string, number> = {};
   for (const sa of meta.subAssets) byKind[sa.kind] = (byKind[sa.kind] ?? 0) + 1;

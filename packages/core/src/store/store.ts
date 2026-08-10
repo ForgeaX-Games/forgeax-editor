@@ -106,7 +106,7 @@ export {
   writePlayConfig,
   createSceneFile,
   loadDocFromStorage,
-  stripEditorHiddenMarker,
+  stripDisabledMarker,
   loadDocFromDisk,
   instantiateSceneRefUnderWorld,
   resolveAssetRefToHandle,

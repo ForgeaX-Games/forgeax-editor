@@ -8,6 +8,9 @@ import {
 const basePayload = {
   version: 1 as const,
   runtimeId: 'runtime-a',
+  runtimeGeneration: 3,
+  carrierId: 'docked-viewport',
+  carrierKind: 'iframe' as const,
   challengeResponse: null,
   scope: { projectId: 'project-a', gameId: 'game-a' },
   pageNonce: 'page-nonce-a',
@@ -31,6 +34,8 @@ describe('carrier VAG protocol', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.payload.scope).toEqual({ projectId: 'project-a', gameId: 'game-a' });
+      expect(result.data.payload.runtimeGeneration).toBe(3);
+      expect(result.data.payload.carrierKind).toBe('iframe');
       expect(result.data.payload.pageNonce).toBe('page-nonce-a');
       expect(result.data.payload.canvasIdentity).toBe('canvas-a');
       expect(result.data.payload.rendererGeneration).toBe(4);
@@ -47,6 +52,19 @@ describe('carrier VAG protocol', () => {
 
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.payload.scope).toBeNull();
+  });
+
+  it('keeps legacy supervisors compatible when runtime carrier fencing is absent', () => {
+    const {
+      runtimeGeneration: _runtimeGeneration,
+      carrierId: _carrierId,
+      carrierKind: _carrierKind,
+      ...legacyPayload
+    } = basePayload;
+    expect(VagCarrierHandshakeSchema.safeParse({
+      type: 'VAG_CARRIER_HANDSHAKE',
+      payload: legacyPayload,
+    }).success).toBe(true);
   });
 
   it('requires protocol version one and monotonic heartbeat sentinel shape', () => {

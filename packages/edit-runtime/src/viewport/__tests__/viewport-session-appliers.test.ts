@@ -7,9 +7,19 @@ afterEach(() => { for (const dispose of registered.splice(0)) dispose(); });
 
 function deps() {
   const calls: string[] = [];
+  const runtime = {
+    replay: (entity: number) => {
+      calls.push(`replay:${entity}`);
+    },
+  };
   const world = {
     addSystem: () => ({ unwrap: () => { calls.push('addSystem'); } }),
     removeSystem: () => ({ unwrap: () => { calls.push('removeSystem'); } }),
+    get: (entity: number) => entity === 42
+      ? { ok: true as const, value: {} }
+      : { ok: false as const, error: new Error('missing player') },
+    hasResource: () => true,
+    getResource: () => runtime,
   } as never;
   return {
     calls,
@@ -21,12 +31,13 @@ function deps() {
       releaseGameControl: () => { calls.push('release'); },
       captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' }; },
       world,
+      activeWorld: () => world,
     },
   };
 }
 
 describe('viewport session applier registrar (M3)', () => {
-  it('registers all eight operations and routes calls to runtime deps', () => {
+  it('registers viewport operations and routes calls to runtime deps', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));
     expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toEqual({ ok: true });
@@ -35,9 +46,14 @@ describe('viewport session applier registrar (M3)', () => {
     expect(gateway.dispatch({ kind: 'setDisplay', display: 'game' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'grantGameControl' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'releaseGameControl' })).toEqual({ ok: true });
+    expect(gateway.dispatch({ kind: 'replayParticleEffect', entity: 42 })).toEqual({ ok: true });
+    expect(gateway.dispatch({ kind: 'replayParticleEffect', entity: 43 })).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGS' },
+    });
     expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });
-    expect(d.calls).toEqual(['play:last-saved', 'stop', 'display:game', 'grant', 'release', 'removeSystem']);
+    expect(d.calls).toEqual(['play:last-saved', 'stop', 'display:game', 'grant', 'release', 'replay:42', 'removeSystem']);
   });
 
   it('captures through the gateway and exposes the recorder result via OperationRun', async () => {
@@ -50,6 +66,7 @@ describe('viewport session applier registrar (M3)', () => {
       ok: true,
       value: {
         status: 'succeeded',
+        progress: { fraction: 1, stage: 'succeeded' },
         result: { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' },
       },
     });
@@ -127,6 +144,59 @@ describe('viewport session applier registrar (M3)', () => {
             details: {
               expected: 'frame-header resource snapshot completes within 30000 ms',
               detail: { completedResources: 17, currentKind: 'texture' },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it('keeps capture resource failures as the terminal Gateway error code', async () => {
+    const d = deps();
+    registered.push(registerViewportSessionAppliers({
+      ...d.value,
+      captureFrame: async () => {
+        throw {
+          code: 'capture-disk-space-insufficient',
+          hint: 'free disk space before retrying',
+          detail: { availableBytes: 100, requiredBytes: 2048, frames: 2 },
+        };
+      },
+    }));
+    gateway.dispatch({ kind: 'captureFrame', frames: 2, requestId: 'capture-low-space' }, 'ai');
+    expect(await gateway.waitOperationRun('capture-low-space')).toMatchObject({
+      ok: true,
+      value: {
+        status: 'failed',
+        error: {
+          code: 'capture-disk-space-insufficient',
+          retryable: true,
+          cause: { code: 'capture-disk-space-insufficient' },
+        },
+      },
+    });
+  });
+
+  it('fails a capture that never settles instead of leaving its OperationRun running forever', async () => {
+    const d = deps();
+    registered.push(registerViewportSessionAppliers({
+      ...d.value,
+      captureTimeoutMs: 10,
+      captureFrame: () => new Promise<never>(() => undefined),
+    }));
+    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-outer-timeout' }, 'ai')).toMatchObject({ ok: true });
+    expect(await gateway.waitOperationRun('capture-outer-timeout')).toMatchObject({
+      ok: true,
+      value: {
+        status: 'failed',
+        progress: { fraction: 1, stage: 'failed' },
+        error: {
+          code: 'capture-timeout',
+          cause: {
+            code: 'capture-timeout',
+            details: {
+              expected: 'captureFrame completes within 10 ms',
+              detail: { timeoutMs: 10, stage: 'capture' },
             },
           },
         },

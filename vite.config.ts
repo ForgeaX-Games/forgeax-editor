@@ -26,7 +26,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename, join } from 'node:path';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
-import { engineVitePreset } from './engine-vite-preset';
+import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from './engine-vite-preset';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolveWorktreePorts } from './scripts/lib/worktree-ports.ts';
 import tailwindcss from 'tailwindcss';
@@ -80,6 +80,7 @@ const STANDALONE_RUNTIME_BINDING: RuntimeAssetBinding | undefined = (
   packageUrlBase: runtimeScopePath({ scopeId: STANDALONE_SCOPE_ID, generation: STANDALONE_GENERATION }, 'asset'),
 } : undefined;
 const GAME_API_PORT = Number(process.env.FORGEAX_GAME_API_PORT ?? WORKTREE_PORTS.gameApi);
+const EDIT_RUNTIME_PORT = Number(process.env.FORGEAX_EDIT_RUNTIME_PORT ?? WORKTREE_PORTS.editRuntime);
 // The standalone host owns the editor chrome, while the pure engine preview is
 // served by the separate play-runtime. Keep the proxy target on the same port
 // SSOT used by `bun fx start --play`.
@@ -306,6 +307,7 @@ export default defineConfig({
     port: STANDALONE_PORT,
     strictPort: true,
     host: '127.0.0.1',
+    headers: ENGINE_EXECUTION_ISOLATION_HEADERS,
     fs: {
       // DockShell/EditorPanelFrame + design live under INTERFACE_DIR (the
       // vendored submodule when standalone, or the studio sibling when
@@ -321,10 +323,10 @@ export default defineConfig({
       ],
     },
     proxy: {
-      // D7: the `/editor` -> :15280 proxy is DELETED. The engine now boots
-      // in-process in this host window (single realm, AC-04), so there is no
-      // edit-runtime iframe to proxy to. The shader manifest + pack catalog are
-      // served locally by enginePreset.plugins.
+      // The persistent shell owns chrome/panels; the replaceable Viewport Runtime
+      // is served behind this same-origin carrier path. Worktree port assignment
+      // remains the only port policy.
+      '/editor': { target: `http://127.0.0.1:${EDIT_RUNTIME_PORT}`, changeOrigin: true, ws: true },
       //
       // The standalone preview is the opposite boundary: `/preview/` must stay
       // a pure play-runtime page, never the editor SPA fallback. Proxy its

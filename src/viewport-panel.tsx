@@ -31,7 +31,10 @@ import {
   FLY_SPEED_MIN,
   FOV_MAX,
   FOV_MIN,
+  dispatchActiveEditorOperation,
+  entComponents,
   gateway,
+  getViewportRuntimeClientSnapshot,
   getGizmoMode,
   getGizmoSpace,
   getSceneFile,
@@ -40,19 +43,19 @@ import {
   onGizmoModeChange,
   onGizmoSpaceChange,
   onSceneListChange,
+  queryViewportRuntimeProjection,
+  subscribeViewportRuntimeClient,
   useDocVersion,
   useGizmoPivot,
   useGizmoSpace,
   useSceneFile,
   useSceneList,
+  useSelection,
   useViewportPreferences,
   type ViewportPreferencesPatch,
 } from '@forgeax/editor-core';
 import { getLocale, useTranslation, type Locale } from '@forgeax/editor-core/i18n';
 import {
-  getViewportQuadrant,
-  setViewportQuadrant,
-  onViewportQuadrantChange,
   type DisplayMode,
   type RunMode,
 } from '@forgeax/editor-edit-runtime/viewport/quadrant';
@@ -65,15 +68,35 @@ function setContextKeys(host: AppHost, values: Record<string, ContextKeyValue>):
   for (const [key, value] of Object.entries(values)) host.contextKeys.set(key, value);
 }
 
-function syncViewportContext(host: AppHost): void {
-  const q = getViewportQuadrant();
+interface ViewportStatusProjection {
+  readonly quadrant: {
+    readonly run: RunMode;
+    readonly display: DisplayMode;
+    readonly control: 'editor' | 'game';
+  };
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+}
+
+const DISCONNECTED_VIEWPORT_STATUS: ViewportStatusProjection = {
+  quadrant: { run: 'edit', display: 'scene', control: 'editor' },
+  canUndo: false,
+  canRedo: false,
+};
+const viewportContextSignatures = new WeakMap<AppHost, string>();
+
+function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mounted: boolean): void {
+  const q = status.quadrant;
+  const signature = `${mounted}:${q.run}:${q.display}:${q.control}:${status.canUndo}:${status.canRedo}`;
+  if (viewportContextSignatures.get(host) === signature) return;
+  viewportContextSignatures.set(host, signature);
   const running = q.run !== 'edit';
   document.documentElement.dataset.forgeaxViewportRunning = String(running);
   window.dispatchEvent(new CustomEvent(APP_EVENTS.viewportRunChanged, {
     detail: { running },
   }));
   setContextKeys(host, {
-    'panel.viewport.mounted': true,
+    'panel.viewport.mounted': mounted,
     'panel.viewport.run': q.run,
     'panel.viewport.display': q.display,
     'panel.viewport.isEdit': q.run === 'edit',
@@ -83,14 +106,31 @@ function syncViewportContext(host: AppHost): void {
     'panel.viewport.isScene': q.display === 'scene',
     'panel.viewport.control': q.control,
     'panel.viewport.hasGameControl': q.control === 'game',
+    'panel.viewport.canUndo': status.canUndo,
+    'panel.viewport.canRedo': status.canRedo,
   });
+}
+
+async function refreshViewportContext(host: AppHost): Promise<void> {
+  if (getViewportRuntimeClientSnapshot().status !== 'ready') {
+    syncViewportContext(host, DISCONNECTED_VIEWPORT_STATUS, false);
+    return;
+  }
+  try {
+    const envelope = await queryViewportRuntimeProjection<ViewportStatusProjection>({ kind: 'viewport.status' });
+    if (envelope.status === 'ready' && envelope.value !== null) {
+      syncViewportContext(host, envelope.value, true);
+      return;
+    }
+  } catch {
+    // A carrier reload invalidates the cache; the next connected poll repopulates it.
+  }
+  syncViewportContext(host, DISCONNECTED_VIEWPORT_STATUS, false);
 }
 
 function syncEditorContext(host: AppHost): void {
   setContextKeys(host, {
     'panel.viewport.gizmo': getGizmoMode(),
-    'panel.viewport.canUndo': gateway.canUndo(),
-    'panel.viewport.canRedo': gateway.canRedo(),
     'panel.viewport.dirty': hasPendingDiskSave(),
     'panel.viewport.fps': getFps(),
     'panel.viewport.sceneId': getSceneFile() ?? getSceneId(),
@@ -216,22 +256,22 @@ async function captureRhiFrame(host: AppHost): Promise<void> {
 
 function setRunMode(mode: RunMode): void {
   if (mode === 'play') {
-    gateway.dispatch({ kind: 'play' });
+    void dispatchActiveEditorOperation({ kind: 'play', dirtyPolicy: 'last-saved' });
     return;
   }
-  gateway.dispatch({ kind: 'stop' });
+  void dispatchActiveEditorOperation({ kind: 'stop' });
 }
 
 function setDisplay(display: DisplayMode): void {
-  gateway.dispatch({ kind: 'setDisplay', display }, 'human');
+  void dispatchActiveEditorOperation({ kind: 'setDisplay', display }, 'human');
 }
 
 function releaseGameToSceneView(): void {
-  gateway.dispatch({ kind: 'setDisplay', display: 'scene' }, 'human');
+  void dispatchActiveEditorOperation({ kind: 'setDisplay', display: 'scene' }, 'human');
 }
 
 function possessGameFromSceneView(): void {
-  gateway.dispatch({ kind: 'setDisplay', display: 'game' }, 'human');
+  void dispatchActiveEditorOperation({ kind: 'setDisplay', display: 'game' }, 'human');
 }
 
 function openStandalonePreview(): void {
@@ -653,6 +693,39 @@ function FpsStatusControl(): ReactNode {
   );
 }
 
+function VfxReplayControl(): ReactNode {
+  const { i18n } = useTranslation();
+  const selection = useSelection();
+  const enabled = selection !== null
+    && 'ParticleEffectPlayer' in entComponents(gateway.activeWorld, selection);
+  const title = pickText(L('从头预览所选 VFX', 'Replay selected VFX from tick zero'), i18n.language);
+
+  return (
+    <TooltipProvider delayDuration={350} skipDelayDuration={100}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="fx-vp-menu-trigger no-motion-lift"
+            data-testid="vp-vfx-replay"
+            aria-label={title}
+            disabled={!enabled}
+            onClick={() => {
+              if (selection !== null) {
+                gateway.dispatch({ kind: 'replayParticleEffect', entity: selection }, 'human');
+              }
+            }}
+          >
+            <RotateCcw size={15} />
+            <span>VFX</span>
+          </button>
+        </TooltipTrigger>
+        <ViewportTooltipContent title={title} />
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function CoordinateMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
@@ -879,7 +952,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
     requires: ['commands', 'panelActions', 'panelControls', 'contextKeys'],
     setup(ctx) {
       const host = ctx.host;
-      syncViewportContext(host);
+      syncViewportContext(host, DISCONNECTED_VIEWPORT_STATUS, false);
       syncEditorContext(host);
       host.contextKeys.set('panel.viewport.rhiCapturing', false);
 
@@ -887,6 +960,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
         ...registerViewportCommands(host),
         ctx.contributePanelControls([
           { id: 'viewport.sceneStatus', render: () => <SceneStatusControl /> },
+          { id: 'viewport.vfxReplay', render: () => <VfxReplayControl /> },
           { id: 'viewport.fpsStatus', render: () => <FpsStatusControl /> },
           { id: 'viewport.coordMenu', render: () => <CoordinateMenuControl /> },
           { id: 'viewport.snapMenu', render: () => <SnapMenuControl /> },
@@ -932,6 +1006,17 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             when: 'panel.viewport.isPlay',
             enablement: 'panel.viewport.mounted',
             activeWhen: 'panel.viewport.isPlay',
+          },
+          {
+            kind: 'control',
+            id: 'viewport.vfx.replay.control',
+            panelId: 'viewport',
+            control: 'viewport.vfxReplay',
+            location: 'header/left',
+            order: 25,
+            overflowPriority: 950,
+            when: 'panel.viewport.isEdit',
+            enablement: 'panel.viewport.mounted',
           },
           {
             id: 'viewport.control.releaseGame.action',
@@ -1129,21 +1214,26 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             enablement: 'panel.viewport.mounted',
           },
         ]),
-        onViewportQuadrantChange(() => syncViewportContext(host)),
+        subscribeViewportRuntimeClient(() => { void refreshViewportContext(host); }),
         onGizmoModeChange(() => syncEditorContext(host)),
         onFpsChange(() => syncEditorContext(host)),
         onSceneListChange(() => syncEditorContext(host)),
         gateway.subscribe(() => {
           syncEditorContext(host);
-          const q = getViewportQuadrant();
-          if (q.run === 'play' && gateway.mode === 'edit' && gateway.playPhase !== 'starting') {
-            setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
-          }
         }),
       ];
 
       const dirtyTimer = window.setInterval(() => syncEditorContext(host), 500);
       cleanups.push(() => window.clearInterval(dirtyTimer));
+      let viewportRefreshInFlight = false;
+      const refreshProjectedViewport = (): void => {
+        if (viewportRefreshInFlight) return;
+        viewportRefreshInFlight = true;
+        void refreshViewportContext(host).finally(() => { viewportRefreshInFlight = false; });
+      };
+      refreshProjectedViewport();
+      const viewportTimer = window.setInterval(refreshProjectedViewport, 250);
+      cleanups.push(() => window.clearInterval(viewportTimer));
 
       return () => {
         for (const cleanup of cleanups.slice().reverse()) cleanup();

@@ -342,6 +342,38 @@ describe('keyboard router — camera projection, scale, and bookmark keys', () =
     const route = findByCombo(buildShortcuts(), 'Viewport camera and fly input');
     expect(route.match({ key: 'v', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false } as KeyboardEvent)).toBe(false);
   });
+
+  it('routes UE view-preset keys Alt+G/H/J/K to the viewport handler', () => {
+    const seen: string[] = [];
+    const deps = mockDeps({
+      handleViewportKeyDown: (event) => { seen.push(`alt+${event.key}`); },
+    });
+    registerKeyboardRouterDeps(deps);
+    const route = findByCombo(buildShortcuts(), 'Viewport camera and fly input');
+    for (const key of ['g', 'h', 'j', 'k']) {
+      const event = { key, ctrlKey: false, metaKey: false, altKey: true, shiftKey: false } as KeyboardEvent;
+      expect(route.match(event)).toBe(true);
+      expect(route.run(event)).toBe(true);
+    }
+    expect(seen).toEqual(['alt+g', 'alt+h', 'alt+j', 'alt+k']);
+  });
+
+  it('keeps non-preset Alt combos and modified preset keys out of the viewport route', () => {
+    const deps = mockDeps({ handleViewportKeyDown: () => true });
+    registerKeyboardRouterDeps(deps);
+    const route = findByCombo(buildShortcuts(), 'Viewport camera and fly input');
+    const base = { ctrlKey: false, metaKey: false, altKey: true, shiftKey: false };
+    // Other Alt+letters stay excluded; Ctrl/Shift variants of the preset keys
+    // belong to other shortcuts (Ctrl+H show-all-hidden, Shift+H isolate…).
+    expect(route.match({ ...base, key: 'x' } as KeyboardEvent)).toBe(false);
+    expect(route.match({ ...base, key: 'h', ctrlKey: true } as KeyboardEvent)).toBe(false);
+    expect(route.match({ ...base, key: 'g', shiftKey: true } as KeyboardEvent)).toBe(false);
+    // …and while the game owns Play input, presets yield like every camera key.
+    const playDeps = mockDeps({ getInputTarget: () => 'game', isPlayMode: () => true });
+    registerKeyboardRouterDeps(playDeps);
+    const playRoute = findByCombo(buildShortcuts(), 'Viewport camera and fly input');
+    expect(playRoute.match({ ...base, key: 'g' } as KeyboardEvent)).toBe(false);
+  });
 });
 
 describe('keyboard router — F2 / Ctrl+D / Ctrl+A routing (AC-C3/C4/C6)', () => {

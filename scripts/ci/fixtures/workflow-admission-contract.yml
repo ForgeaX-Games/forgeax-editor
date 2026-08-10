@@ -1,0 +1,13 @@
+name: workflow-admission-contract
+
+on:
+  workflow_dispatch:
+
+jobs:
+  contract-parser:
+    name: contract-parser
+    runs-on: [self-hosted, Linux, X64, standard]
+    timeout-minutes: 5
+    steps:
+      - name: Parse trusted workflow text
+        run: echo "workflow text only"

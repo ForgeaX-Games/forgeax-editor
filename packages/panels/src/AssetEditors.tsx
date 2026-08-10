@@ -7,6 +7,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   ensureAssetCataloged,
+  dispatchActiveEditorOperation,
   gateway,
   panelBridge,
   useActiveEditorAsset,
@@ -66,22 +67,24 @@ export function AssetOverviewPanel(): ReactElement {
         cancelText: 'Cancel',
       });
       if (newName && newName !== asset.name) {
-        gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
+        void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
       }
     })();
   }, [asset]);
 
   const handleDuplicate = useCallback(() => {
-    if (asset) gateway.dispatch({ kind: 'duplicateAsset', packPath: asset.packPath, guid: asset.guid }, 'human');
+    if (asset) void dispatchActiveEditorOperation({ kind: 'duplicateAsset', packPath: asset.packPath, guid: asset.guid }, 'human');
   }, [asset]);
 
   const handleDelete = useCallback(() => {
-    if (asset) gateway.dispatch({ kind: 'destroyAsset', guid: asset.guid }, 'human');
+    if (asset) void dispatchActiveEditorOperation({ kind: 'destroyAsset', guid: asset.guid }, 'human');
   }, [asset]);
 
   const handleShowInCB = useCallback(() => {
     if (!asset) return;
     const dir = asset.packPath.substring(0, asset.packPath.lastIndexOf('/')) || 'assets';
+    // Content Browser navigation is disposable shell chrome, not authored
+    // Runtime state. Keep it local until a multi-window navigation owner exists.
     gateway.dispatch({ kind: 'setCBPath', path: dir }, 'human');
   }, [asset]);
 
@@ -152,6 +155,24 @@ export function MaterialInstancePreviewPanel(): ReactElement {
       ) : (
         <div className="field muted">
           Material Instance preview viewport is not registered by the host.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Base Material 3D preview panel — same host-injected viewport as the MI
+ *  page; the registered component branches on the active asset kind. */
+export function MaterialPreviewPanel(): ReactElement {
+  const asset = useDocumentAsset();
+  const Preview = getMaterialInstancePreview();
+  return (
+    <div className="panel" data-testid="panel-mat-preview" data-subject-id={asset?.guid}>
+      {asset?.kind !== 'material' ? <EmptyAssetPage /> : Preview ? (
+        <Preview />
+      ) : (
+        <div className="field muted">
+          Material preview viewport is not registered by the host.
         </div>
       )}
     </div>

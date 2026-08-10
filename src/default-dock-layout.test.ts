@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_ASSET_EDITOR_DOCK_LAYOUT,
   DEFAULT_EDITOR_DOCK_LAYOUT,
+  DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT,
   DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
   DEFAULT_MI_EDITOR_DOCK_LAYOUT,
 } from './default-dock-layout';
@@ -116,5 +117,23 @@ describe('DEFAULT_MI_EDITOR_DOCK_LAYOUT', () => {
     expect(DEFAULT_MI_EDITOR_DOCK_LAYOUT.panels['ep:mi-properties']).toBeDefined();
     expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mi-preview']).toBeUndefined();
     expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mi-properties']).toBeUndefined();
+  });
+});
+
+describe('DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT', () => {
+  test('pairs the material preview viewport with properties + overview', () => {
+    expect(collectViews(DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
+      'ep:asset-overview',
+      'ep:asset-properties',
+      'ep:mat-preview',
+    ]);
+    for (const id of collectViews(DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT.grid.root)) {
+      expect(DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT.panels[id]).toBeDefined();
+    }
+    // The preview panel belongs to the Material page alone — Level/Mesh/MI
+    // layouts must not restore it.
+    expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mat-preview']).toBeUndefined();
+    expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mat-preview']).toBeUndefined();
+    expect(DEFAULT_MI_EDITOR_DOCK_LAYOUT.panels['ep:mat-preview']).toBeUndefined();
   });
 });

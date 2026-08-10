@@ -15,6 +15,22 @@
       "types": "./src/manifest.ts",
       "import": "./src/manifest.ts"
     },
+    "./hierarchy-projection": {
+      "types": "./src/hierarchy-projection.ts",
+      "import": "./src/hierarchy-projection.ts"
+    },
+    "./inspector-runtime-projection": {
+      "types": "./src/inspector-runtime-projection.ts",
+      "import": "./src/inspector-runtime-projection.ts"
+    },
+    "./diagnostics-projection": {
+      "types": "./src/diagnostics-projection.ts",
+      "import": "./src/diagnostics-projection.ts"
+    },
+    "./operation-projection": {
+      "types": "./src/operation-projection.ts",
+      "import": "./src/operation-projection.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
@@ -28,10 +44,18 @@
     "build": "tsc --noEmit",
     "test": "bun test"
   },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": {"lines": 27.64, "functions": 20.77}
+    }
+  },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-content-browser": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
+    "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",

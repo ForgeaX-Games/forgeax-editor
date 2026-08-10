@@ -17,6 +17,17 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
+/** 本页面的身份。surface id(host.sidebar 等)是"这类界面"的名字,不是"哪个页面"
+ *  的名字 —— 两个 ForgeaX 标签页注册同一个 id、共用同一条 pending 队列和同一份
+ *  snapshot。于是一次 AI 派发落在哪一页是随机的,而回读 snapshot 又必然"验证成功"
+ *  (那份 snapshot 正是执行了动作的那一页 PUT 上来的),工具就会向用户断言一个
+ *  他看不见的变化。轮询时把这个 id 带上,服务端据此数出"现在有几个页面在听",
+ *  >1 时工具改说"无法确认是哪一页动了",而不是继续断言。
+ *
+ *  只做**检测**不做路由:知道有几页 ≠ 知道用户在看哪一页(那需要焦点上报 +
+ *  按页分队列)。先把撒谎那部分干掉。 */
+const PAGE_ID = `p${Math.random().toString(36).slice(2, 9)}`;
+
 const POLL_INTERVAL_MS = 1000;
 
 /** 服务端 ui-surfaces.ts 的 JsonSchema 同构, 客户端不强约束. */
@@ -135,6 +146,14 @@ export function useSurface<S, AMap extends Record<string, UISurfaceActionDef>>(
       if (!def) {
         throw new Error(`[useSurface ${id}] unknown action: ${String(action)}`);
       }
+      // 单门账本对称:AI 路径每步落 ui.surface.action,人路径此前零记录。
+      // handler 已在本地跑,这里只补账 —— fire-and-forget,不挡交互,失败静默
+      // (账本是观测面,不是功能依赖)。
+      void fetch(`/api/bus/ui/surfaces/${encodeURIComponent(id)}/dispatched`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: def.id, args }),
+      }).catch(() => {});
       return await def.run(args, { source: "user", token: null });
     },
     [id],
@@ -147,6 +166,9 @@ export function useSurface<S, AMap extends Record<string, UISurfaceActionDef>>(
     const body = {
       id,
       layer,
+      // 注册即入册:注销要按**在册成员**判定,不能靠"最近有没有轮询"——只读面
+      // (所有 action 对 AI 隐藏)根本不进轮询循环(2026-08-06 外审)。
+      page: PAGE_ID,
       schema,
       snapshot: snapshotRef.current,
       exposedToAI: exposedToAI !== false,
@@ -181,7 +203,12 @@ export function useSurface<S, AMap extends Record<string, UISurfaceActionDef>>(
     return () => {
       cancelled = true;
       // best-effort DELETE -- 失败不影响 React 卸载.
-      void fetch(`/api/bus/ui/surfaces/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+      // 按页注销:多个标签页共用同一个 surface id,整删会把别的页面一起弄哑
+      // (2026-08-06 外审 MAJOR)。服务端只在没有其他存活页面时才真正移除记录。
+      void fetch(
+        `/api/bus/ui/surfaces/${encodeURIComponent(id)}?page=${encodeURIComponent(PAGE_ID)}`,
+        { method: "DELETE" },
+      ).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, layer, exposedToAI]);
@@ -209,7 +236,7 @@ export function useSurface<S, AMap extends Record<string, UISurfaceActionDef>>(
       if (stopped) return;
       let nextDelay = interval;
       try {
-        const r = await fetch(`/api/bus/ui/surfaces/${encodeURIComponent(id)}/pending`);
+        const r = await fetch(`/api/bus/ui/surfaces/${encodeURIComponent(id)}/pending?page=${PAGE_ID}`);
         if (!stopped && r.ok) {
           const body = (await r.json()) as { items: PendingActionWire[] };
           for (const item of body.items) {
@@ -223,7 +250,13 @@ export function useSurface<S, AMap extends Record<string, UISurfaceActionDef>>(
               const result = await def.run(item.args as never, { source: item.source, token: item.token });
               await ack(id, item.token, true, result, undefined);
             } catch (e) {
-              await ack(id, item.token, false, undefined, (e as Error).message);
+              // 结构化标记随回执上报;丢在这里,下游就只能去错误文案里捞子串。
+              // **只在为真时才传** —— `=== true` 会把"没有这个属性"变成 false,而 false
+              // 在协议里意思是"确定没开始执行"(可以安全回落重派),与"未知"后果相反。
+              // 2026-08-07:这条纪律我在别处写了三遍,却在这一行自己违反了,由新增的
+              // ack 请求体钉子照出来。
+              const started = (e as Error & { started?: boolean }).started === true ? true : undefined;
+              await ack(id, item.token, false, undefined, (e as Error).message, started);
             }
           }
         } else if (!stopped && r.status === 404) {
@@ -251,12 +284,15 @@ async function ack(
   ok: boolean,
   result: unknown,
   error: string | undefined,
+  started?: boolean,
 ): Promise<void> {
   try {
     await fetch(`/api/bus/ui/surfaces/${encodeURIComponent(id)}/ack`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token, ok, result, error }),
+      // started 缺省 = **未知**,不能用 false 冒充"确定没开始" —— 消费方据键的有无判断。
+      // (2026-08-07 外审 N3:此前这个信号只活在中文错误文案的子串里,重排一句话就失效。)
+      body: JSON.stringify({ token, ok, result, error, ...(started === undefined ? {} : { started }) }),
     });
   } catch {
     // 静默 -- ack 失败时上层 action 已 run, ledger 拿不到 applied 事件就是结果.

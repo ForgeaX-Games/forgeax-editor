@@ -9,6 +9,12 @@
       "hint": "Socket calibration — pick the parent bone this prop attaches to. Only shown for props inside a skinned character."
     }
   },
+  "Skin": {
+    "bespoke": {
+      "editorId": "facing-correction",
+      "hint": "Facing correction — yaw the whole skinned model by driving a pivot above the joint root. Also exposes a one-click copy of the calibration JSON."
+    }
+  },
   "AnimationPlayer": {
     "bespoke": {
       "editorId": "animation-transport",

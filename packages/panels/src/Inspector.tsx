@@ -8,7 +8,7 @@ import { componentTypeLabel } from './hierarchy-state';
 // M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
-import { createInspectorFieldSelector, gateway, getActiveRuntimeUiGraph, requestRefComponent, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
+import { createInspectorFieldSelector, dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, requestRefComponent, subscribeViewportRuntimeClient, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entComponent, entComponents } from '@forgeax/editor-core';
 // VERIFY finding-3 (defense-in-depth): the world-bound handle-pair + the live
 // active-read-world binding, so the primary Inspector reads run the three-layer
@@ -54,6 +54,7 @@ import { getBespokeEditor } from './bespoke-editors';
 import { inspectorFieldRendererKind, isUnsupportedRendererKind, isVectorRendererKind } from './inspector-field-shape';
 import './inspector.css';
 import { getOperationProjectionSource } from './operations/run-view-model';
+import type { InspectorRuntimeProjection } from './inspector-runtime-projection';
 
 // Component → header/section glyph (interaction spec). Falls back to `box`.
 const COMP_ICON: Record<string, ForgeaxIconName> = {
@@ -990,7 +991,106 @@ function useLiveFieldNumber(
   return typeof value === 'number' ? value : fallback;
 }
 
+function useRemoteInspectorProjection(): InspectorRuntimeProjection | undefined {
+  const connection = useSyncExternalStore(
+    subscribeViewportRuntimeClient,
+    getViewportRuntimeClientSnapshot,
+    getViewportRuntimeClientSnapshot,
+  );
+  const [projection, setProjection] = useState<InspectorRuntimeProjection | undefined>();
+  useEffect(() => {
+    if (connection.status !== 'ready') {
+      setProjection(undefined);
+      return;
+    }
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const envelope = await queryViewportRuntimeProjection<InspectorRuntimeProjection>({ kind: 'inspector.selection' });
+        if (disposed) return;
+        setProjection(envelope.status === 'ready'
+          ? envelope.value
+          : envelope.status === 'empty' ? { selectionIds: [] } : undefined);
+      } catch {
+        if (!disposed) setProjection(undefined);
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 100);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
+  return projection;
+}
+
+function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProjection | undefined }) {
+  const { t } = useTranslation();
+  const entity = projection?.entity;
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameAttempt, setRenameAttempt] = useState(0);
+  useEffect(() => setRenameError(null), [entity?.id]);
+  if (entity === undefined) {
+    return (
+      <div className="fx-inspector" data-testid="panel-inspector" data-runtime-projection="1">
+        <div className="dp-empty">{t('editor.inspector.noSelection')}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="fx-inspector" data-testid="panel-inspector" data-runtime-projection="1">
+      <div className="dp-name">
+        <span className="tico"><ForgeaxIcon name={headerIcon(entity.components as Record<string, unknown>)} size={15} /></span>
+        <NameField
+          key={`${entity.id}:${renameAttempt}`}
+          value={entity.name}
+          onCommit={(name) => {
+            if (!name || name === entity.name) return;
+            void dispatchActiveEditorOperation({ kind: 'rename', entity: entity.id, name })
+              .then((result) => {
+                if (result.ok) {
+                  setRenameError(null);
+                  return;
+                }
+                setRenameError(result.error.hint);
+                setRenameAttempt((attempt) => attempt + 1);
+              });
+          }}
+        />
+        <span className="idbadge" data-testid="insp-id">#{entity.id}</span>
+        <span className="badge">{deriveKind(entity.components as Record<string, unknown>)}</span>
+      </div>
+      {renameError && <div className="dp-note" role="alert">{renameError}</div>}
+      {Object.entries(entity.components)
+        .filter(([name]) => name !== 'Name' && !isComponentHidden(name))
+        .map(([name, value]) => (
+          <div className={`dp-comp ${compDim(name)}`} data-testid={`insp-comp-${name}`} key={name}>
+            <div className="ch">
+              <span className="ci"><ForgeaxIcon name={compIcon(name)} size={14} /></span>
+              <span className="lbl">{componentTypeLabel(name, t)}</span>
+            </div>
+            <pre className="dp-note" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+              {JSON.stringify(value, null, 2)}
+            </pre>
+          </div>
+        ))}
+    </div>
+  );
+}
+
 export function InspectorPanel() {
+  const remote = useRemoteInspectorProjection();
+  if (remote !== undefined) return <RemoteInspectorPanel projection={remote} />;
+  return <LocalInspectorPanel />;
+}
+
+function LocalInspectorPanel() {
   const { t } = useTranslation();
   const sel = useSelection();
   const selList = useSelectionList();

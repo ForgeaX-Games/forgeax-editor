@@ -13,7 +13,11 @@ import {
   adjustFov,
   clampOrthoHalfHeight,
   adjustOrthoHalfHeight,
+  clampPitchForProjection,
+  deriveActiveView,
   deriveOrthoHalfHeight,
+  viewPresetOrientation,
+  type CameraViewPreset,
   advanceFly,
   advanceFlyLook,
   computeFlyCamera,
@@ -448,4 +452,86 @@ test('flyToOrbit: clamps previousDist to allowed range', () => {
   const fly: FlyState = { pos: [0, 0, 0], yaw: 0, pitch: 0 };
   expect(flyToOrbit(fly, 1).dist).toBe(2);      // clamped up to DIST_MIN
   expect(flyToOrbit(fly, 500).dist).toBe(300);  // clamped down to DIST_MAX
+});
+
+// ── UE-style view presets (cameraSetView) ───────────────────────────────────
+
+test('viewPresetOrientation: axis view yaw/pitch table', () => {
+  expect(viewPresetOrientation('front')).toEqual({ yaw: 0, pitch: 0 });
+  expect(viewPresetOrientation('back')).toEqual({ yaw: Math.PI, pitch: 0 });
+  // fwd = [-cos(p)·sin(yaw), sin(p), -cos(p)·cos(yaw)]: right view looks −X
+  // from +X (yaw=+π/2); left view looks +X from −X (yaw=−π/2).
+  expect(viewPresetOrientation('right')).toEqual({ yaw: Math.PI / 2, pitch: 0 });
+  expect(viewPresetOrientation('left')).toEqual({ yaw: -Math.PI / 2, pitch: 0 });
+  expect(viewPresetOrientation('top')).toEqual({ yaw: 0, pitch: -Math.PI / 2 });
+  // UE bottom mirrors top: screen-right = world −X (yaw=π), not a 180° roll.
+  expect(viewPresetOrientation('bottom')).toEqual({ yaw: Math.PI, pitch: Math.PI / 2 });
+  // 'perspective' carries no orientation — the applier keeps the current one.
+  expect(viewPresetOrientation('perspective')).toBeNull();
+});
+
+test('view presets produce the expected look directions and camera sides', () => {
+  const target: Vec3 = [1, 2, 3];
+  const dist = 10;
+  const cases: Array<[Exclude<CameraViewPreset, 'perspective'>, Vec3, Vec3]> = [
+    // [view, expected fwd, expected (camPos - target) direction]
+    ['front', [0, 0, -1], [0, 0, 1]],
+    ['back', [0, 0, 1], [0, 0, -1]],
+    ['right', [-1, 0, 0], [1, 0, 0]],
+    ['left', [1, 0, 0], [-1, 0, 0]],
+    ['top', [0, -1, 0], [0, 1, 0]],
+    ['bottom', [0, 1, 0], [0, -1, 0]],
+  ];
+  for (const [view, fwd, side] of cases) {
+    const o = viewPresetOrientation(view)!;
+    const r = computeOrbitCamera(target, o.yaw, o.pitch, dist);
+    for (let i = 0; i < 3; i++) {
+      expect(r.fwd[i]).toBeCloseTo(fwd[i]!, 4);
+      expect((r.camPos[i]! - target[i]!) / dist).toBeCloseTo(side[i]!, 4);
+    }
+  }
+});
+
+test('view presets stay finite and orthonormal at ±90° pitch', () => {
+  for (const view of ['top', 'bottom'] as const) {
+    const o = viewPresetOrientation(view)!;
+    const r = computeOrbitCamera([0, 0, 0], o.yaw, o.pitch, 10);
+    for (const v of [r.camPos, r.fwd, r.rgt, r.upv, r.qCam]) {
+      for (const n of v) expect(Number.isFinite(n)).toBe(true);
+    }
+    expect(Math.hypot(...(r.rgt as [number, number, number]))).toBeCloseTo(1, 6);
+    expect(Math.hypot(...(r.upv as [number, number, number]))).toBeCloseTo(1, 6);
+  }
+});
+
+test('clampPitchForProjection: orthographic allows the exact ±90° presets', () => {
+  expect(clampPitchForProjection(-Math.PI / 2, 'orthographic')).toBe(-Math.PI / 2);
+  expect(clampPitchForProjection(Math.PI / 2, 'orthographic')).toBe(Math.PI / 2);
+  expect(clampPitchForProjection(2, 'orthographic')).toBe(Math.PI / 2);
+  // Perspective keeps the gimbal-safe gesture range.
+  expect(clampPitchForProjection(-Math.PI / 2, 'perspective')).toBe(-1.5);
+  expect(clampPitchForProjection(0.3, 'perspective')).toBe(0.3);
+});
+
+test('deriveActiveView: perspective poses are always perspective', () => {
+  expect(deriveActiveView({ projection: 'perspective', yaw: 0, pitch: 0 })).toBe('perspective');
+  // …even when the orientation happens to match an axis preset.
+  expect(deriveActiveView({ projection: 'perspective', yaw: 0, pitch: -Math.PI / 2 })).toBe('perspective');
+});
+
+test('deriveActiveView: orthographic poses map to presets or the free label', () => {
+  expect(deriveActiveView({ projection: 'orthographic', yaw: 0, pitch: -Math.PI / 2 })).toBe('top');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: Math.PI, pitch: Math.PI / 2 })).toBe('bottom');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: -Math.PI / 2, pitch: 0 })).toBe('left');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: Math.PI / 2, pitch: 0 })).toBe('right');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: 0, pitch: 0 })).toBe('front');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: Math.PI, pitch: 0 })).toBe('back');
+  // Free ortho (e.g. V-toggled from an orbited perspective) is not a preset.
+  expect(deriveActiveView({ projection: 'orthographic', yaw: 0.6, pitch: -0.5 })).toBe('orthographic');
+});
+
+test('deriveActiveView: yaw matching wraps modulo 2π with an epsilon', () => {
+  expect(deriveActiveView({ projection: 'orthographic', yaw: 2 * Math.PI, pitch: 0 })).toBe('front');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: 2 * Math.PI + 0.0005, pitch: 0 })).toBe('front');
+  expect(deriveActiveView({ projection: 'orthographic', yaw: 0.5, pitch: 0 })).toBe('orthographic');
 });

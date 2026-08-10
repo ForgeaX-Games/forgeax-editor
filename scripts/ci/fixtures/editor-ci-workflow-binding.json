@@ -1,0 +1,38 @@
+{
+  "graph": {
+    "schemaVersion": "forgeax-ci-baseline/v1",
+    "workflows": [
+      {
+        "file": "ci.yml",
+        "jobs": [
+          {"id": "b2-self-boot", "name": "b2-self-boot", "runner": {"kind": "self-hosted", "pool": "standard"}},
+          {"id": "typecheck", "name": "typecheck", "runner": {"kind": "self-hosted", "pool": "standard"}},
+          {"id": "submodule-pin", "name": "submodule-pin", "runner": {"kind": "self-hosted", "pool": "standard"}},
+          {"id": "smoke-play", "name": "smoke-play", "runner": {"kind": "self-hosted", "pool": "heavy"}}
+        ]
+      }
+    ],
+    "requiredContexts": [
+      {"context": "b2-self-boot", "checkId": "b2-self-boot", "matches": [{"workflow": "ci.yml", "jobId": "b2-self-boot", "jobName": "b2-self-boot"}]},
+      {"context": "typecheck", "checkId": "typecheck", "matches": [{"workflow": "ci.yml", "jobId": "typecheck", "jobName": "typecheck"}]},
+      {"context": "submodule-pin", "checkId": "submodule-pin", "matches": [{"workflow": "ci.yml", "jobId": "submodule-pin", "jobName": "submodule-pin"}]},
+      {"context": "smoke-play", "checkId": "smoke-play", "matches": [{"workflow": "ci.yml", "jobId": "smoke-play", "jobName": "smoke-play"}]}
+    ]
+  },
+  "mutations": {
+    "missing-binding": "missing-binding",
+    "one-to-many": "one-to-many",
+    "zero-job": "zero-job",
+    "doc-only": "doc-only",
+    "context-drift": "context-drift",
+    "runner-capacity": "runner-capacity"
+  },
+  "expectedErrors": {
+    "missing-binding": "required-context-missing",
+    "one-to-many": "required-context-ambiguous",
+    "zero-job": "zero-job",
+    "doc-only": "doc-only-evidence-insufficient",
+    "context-drift": "required-context-missing",
+    "runner-capacity": "runner-capacity-drift"
+  }
+}

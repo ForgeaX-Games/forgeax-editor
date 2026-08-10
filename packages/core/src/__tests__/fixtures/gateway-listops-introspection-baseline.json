@@ -532,6 +532,33 @@
     "title": "Set camera projection"
   },
   {
+    "id": "cameraSetView",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "view": {
+          "type": "string",
+          "enum": [
+            "perspective",
+            "top",
+            "bottom",
+            "left",
+            "right",
+            "front",
+            "back"
+          ],
+          "description": "UE-style view preset. Axis views switch to an orthographic camera looking straight down that axis (top=+Y down, front=+Z toward -Z, right=+X toward -X, and their opposites), keeping the current orbit target and view scale. \"perspective\" restores the perspective projection keeping the current view direction."
+        }
+      },
+      "required": [
+        "view"
+      ]
+    },
+    "title": "Set viewport view preset"
+  },
+  {
     "id": "cameraTeleport",
     "domain": "session",
     "source": "builtin",
@@ -773,7 +800,7 @@
         },
         "packPath": {
           "type": "string",
-          "description": "Optional game-relative target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. An AI normally omits this."
+          "description": "Optional game-relative or catalog-provided canonical target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. The host resolves either form exactly once; an AI normally omits this."
         },
         "refs": {
           "type": "array",
@@ -1927,6 +1954,24 @@
     "title": "Reparent"
   },
   {
+    "id": "replayParticleEffect",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number",
+          "description": "Live ParticleEffectPlayer entity in the active Edit or Play world. Re-query after Play/Stop."
+        }
+      },
+      "required": [
+        "entity"
+      ]
+    },
+    "title": "Replay Particle Effect"
+  },
+  {
     "id": "requestFrame",
     "domain": "session",
     "source": "builtin",
@@ -2443,27 +2488,6 @@
     "title": "Set Gizmo Pivot"
   },
   {
-    "id": "setHidden",
-    "domain": "document",
-    "source": "builtin",
-    "argsSchema": {
-      "type": "object",
-      "properties": {
-        "entity": {
-          "type": "number"
-        },
-        "hidden": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "entity",
-        "hidden"
-      ]
-    },
-    "title": "Set Hidden"
-  },
-  {
     "id": "setHoverEntity",
     "domain": "transient",
     "source": "builtin",
@@ -2720,6 +2744,32 @@
     "title": "Set Viewport Preferences"
   },
   {
+    "id": "setVisibility",
+    "domain": "document",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "number"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "inherited",
+            "hidden",
+            "visible"
+          ]
+        }
+      },
+      "required": [
+        "entity",
+        "state"
+      ]
+    },
+    "title": "Set Visibility"
+  },
+  {
     "id": "spawnEntity",
     "domain": "document",
     "source": "builtin",
@@ -2869,7 +2919,7 @@
       "properties": {
         "packPath": {
           "type": "string",
-          "description": ".pack.json or .meta.json path (game-relative) containing the material asset."
+          "description": ".pack.json or .meta.json path containing the material asset. Accepts either a game-relative path or the canonical path projected by the asset catalog; the host resolves it exactly once."
         },
         "guid": {
           "type": "string",

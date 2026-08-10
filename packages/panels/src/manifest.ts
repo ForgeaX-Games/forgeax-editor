@@ -22,6 +22,7 @@ import {
   AssetPropertiesPanel,
   MaterialInstancePreviewPanel,
   MaterialInstancePropertiesPanel,
+  MaterialPreviewPanel,
   MeshSlotsPanel,
 } from './AssetEditors';
 import { SettingsPanel } from './Settings';
@@ -54,5 +55,6 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   'mesh-slots': MeshSlotsPanel,
   'mi-preview': MaterialInstancePreviewPanel,
   'mi-properties': MaterialInstancePropertiesPanel,
+  'mat-preview': MaterialPreviewPanel,
   'operation-center': OperationCenter,
 };

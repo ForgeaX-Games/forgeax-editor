@@ -399,9 +399,14 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       group: 'edit',
       label: 'Viewport navigation and gizmo mode',
       match: (e) => {
-        if (deps.getInputTarget() === 'game' || e.altKey) return false;
+        if (deps.getInputTarget() === 'game') return false;
         const key = safeKeyLower(e);
         if (!key) return false;
+        // UE-style view presets (Alt+G/H/J/K) route to the viewport handler,
+        // which owns the camera. All other Alt combos stay excluded here.
+        if (e.altKey) {
+          return !mod(e) && !e.shiftKey && ['g', 'h', 'j', 'k'].includes(key);
+        }
         const plainCameraKey = !mod(e)
           && (['w', 'e', 'r', 'f', 'a', 's', 'd', 'q', 'v', 'z', 'c', 'escape', 'shift'].includes(key)
             || /^[1-9]$/.test(key));

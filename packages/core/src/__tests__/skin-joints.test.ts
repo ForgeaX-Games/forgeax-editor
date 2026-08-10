@@ -19,7 +19,13 @@ import {
   findSkinEntity,
   listSkinJoints,
   listSkinJointsFor,
+  findJointRoot,
+  findFacingPivot,
+  readFacingYaw,
+  listSkinSockets,
+  FACING_PIVOT_NAME,
 } from '../scene/skin-joints';
+import { summarizeCalibration } from '../scene/calibration-projection';
 
 function spawn(
   world: World,
@@ -103,5 +109,130 @@ describe('socket-calibration M1 — skin-joints read face', () => {
     const world = new World();
     const prop = spawn(world, 'looseProp');
     expect(listSkinJointsFor(world, prop)).toEqual([]);
+  });
+});
+
+// ── socket-calibration M2 — joint root / facing pivot / sockets / projection ──
+//
+// Tree used below:
+//   root(Skin) ─ boneSpine ─ boneArm
+//                └─ propSword        (ChildOf boneSpine; a socket)
+//   boneArm has a child bone (a joint, NOT a socket) and propShield (a socket).
+// A separate FacingPivot is inserted above the joint root to test the read.
+
+describe('socket-calibration M2 — joint root, facing pivot, sockets, projection', () => {
+  function buildSkinnedCharacter(world: World): {
+    skin: EntityHandle;
+    boneSpine: EntityHandle;
+    boneArm: EntityHandle;
+    boneHand: EntityHandle;
+    propSword: EntityHandle;
+    propShield: EntityHandle;
+  } {
+    const skin = spawn(world, 'Character');
+    const boneSpine = spawn(world, 'spine', skin);
+    const boneArm = spawn(world, 'arm', boneSpine);
+    const boneHand = spawn(world, 'hand', boneArm);
+    const propSword = spawn(world, 'sword', boneSpine);
+    const propShield = spawn(world, 'shield', boneHand);
+    const skinR = world.addComponent(skin, {
+      component: Skin,
+      data: { skeleton: 0 as never, joints: [boneSpine, boneArm, boneHand] },
+    });
+    if (!skinR.ok) throw new Error(`add Skin failed: ${String(skinR.error)}`);
+    return { skin, boneSpine, boneArm, boneHand, propSword, propShield };
+  }
+
+  it('findJointRoot returns the lowest common ancestor of all joints', () => {
+    const world = new World();
+    const { skin, boneSpine } = buildSkinnedCharacter(world);
+    // All joints (spine, arm, hand) descend from spine → spine is the LCA.
+    expect(findJointRoot(world, skin)).toBe(boneSpine);
+  });
+
+  it('findJointRoot returns null for a Skin with no joints', () => {
+    const world = new World();
+    const skin = spawn(world, 'Character', undefined, {
+      component: Skin,
+      data: { skeleton: 0, joints: [] },
+    });
+    expect(findJointRoot(world, skin)).toBeNull();
+  });
+
+  it('findFacingPivot returns null when no FacingPivot exists above the joint root', () => {
+    const world = new World();
+    const { skin, boneSpine } = buildSkinnedCharacter(world);
+    expect(findFacingPivot(world, boneSpine)).toBeNull();
+    expect(readFacingYaw(world, skin)).toBeNull();
+  });
+
+  it('findFacingPivot + readFacingYaw read a pivot inserted above the joint root', () => {
+    const world = new World();
+    const { skin, boneSpine } = buildSkinnedCharacter(world);
+    // Insert a FacingPivot above the joint root (spine): reparent spine under pivot.
+    const pivot = spawn(world, FACING_PIVOT_NAME, undefined, {
+      component: Transform,
+      data: {
+        // eulerToQuat(0, 90, 0) ≈ [0, sin(45°), 0, cos(45°)] = [0, 0.7071, 0, 0.7071]
+        pos: [0, 0, 0],
+        quat: [0, 0.70710678, 0, 0.70710678],
+        scale: [1, 1, 1],
+      },
+    });
+    const reparentR = world.addComponent(boneSpine, { component: ChildOf, data: { parent: pivot } });
+    if (!reparentR.ok) throw new Error(`reparent failed: ${String(reparentR.error)}`);
+    expect(findFacingPivot(world, boneSpine)).toBe(pivot);
+    // 90° yaw → read back ~90 (quatToEuler rounds to 1e-4).
+    expect(readFacingYaw(world, skin)).toBeCloseTo(90, 1);
+  });
+
+  it('listSkinSockets enumerates props (non-joint children of joints) with local TRS', () => {
+    const world = new World();
+    const { skin, propSword, propShield } = buildSkinnedCharacter(world);
+    // Give the sword a distinct local pos so the projection carries it.
+    const tfR = world.set(propSword, Transform, { pos: [2, 1, 0] } as never);
+    if (!tfR.ok) throw new Error(`set Transform failed: ${String(tfR.error)}`);
+    const sockets = listSkinSockets(world, skin);
+    expect(sockets.map((s) => s.propName).sort()).toEqual(['shield', 'sword']);
+    const sword = sockets.find((s) => s.propName === 'sword')!;
+    expect(sword.boneName).toBe('spine');
+    expect(sword.pos).toEqual([2, 1, 0]);
+    const shield = sockets.find((s) => s.propName === 'shield')!;
+    expect(shield.boneName).toBe('hand');
+  });
+
+  it('summarizeCalibration projects every skinned character to pure-numeric JSON', () => {
+    const world = new World();
+    const { skin, boneSpine, propSword } = buildSkinnedCharacter(world);
+    // Author a facing pivot + a socket TRS.
+    const pivot = spawn(world, FACING_PIVOT_NAME, undefined, {
+      component: Transform,
+      data: { pos: [0, 0, 0], quat: [0, 0.70710678, 0, 0.70710678], scale: [1, 1, 1] },
+    });
+    const reparentR = world.addComponent(boneSpine, { component: ChildOf, data: { parent: pivot } });
+    if (!reparentR.ok) throw new Error(`reparent failed: ${String(reparentR.error)}`);
+    const setR = world.set(propSword, Transform, { pos: [2, 1, 0] } as never);
+    if (!setR.ok) throw new Error(`set Transform failed: ${String(setR.error)}`);
+
+    const proj = summarizeCalibration(world);
+    expect(proj.schemaVersion).toBe('calibration-v1');
+    expect(proj.characters).toHaveLength(1);
+    const ch = proj.characters[0]!;
+    expect(ch.name).toBe('Character');
+    expect(ch.facingYawDeg).toBeCloseTo(90, 1);
+    const sword = ch.sockets.find((s) => s.name === 'sword')!;
+    expect(sword.bone).toBe('spine');
+    expect(sword.pos).toEqual([2, 1, 0]);
+    // No entity handles leak into the projection.
+    const json = JSON.stringify(proj);
+    expect(json).not.toContain('handle');
+    expect(json).not.toContain('EntityHandle');
+  });
+
+  it('summarizeCalibration returns empty characters for a scene with no Skin', () => {
+    const world = new World();
+    spawn(world, 'looseProp');
+    const proj = summarizeCalibration(world);
+    expect(proj.characters).toEqual([]);
   });
 });

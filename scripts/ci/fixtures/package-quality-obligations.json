@@ -1,0 +1,77 @@
+{
+  "cases": [
+    {
+      "name": "test-bearing package declares executable test and two floors",
+      "packageJson": {
+        "name": "@forgeax/editor-core",
+        "scripts": {"test": "bun test"},
+        "forgeaxCi": {"ownership": "Editor-owned", "quality": {"test": "bun test", "coverage": {"lines": 0, "functions": 0}}}
+      },
+      "expected": {"ok": true}
+    },
+    {
+      "name": "missing package test script is rejected",
+      "packageJson": {
+        "name": "@forgeax/editor-core",
+        "scripts": {},
+        "forgeaxCi": {"ownership": "Editor-owned", "quality": {"test": "bun test", "coverage": {"lines": 0, "functions": 0}}}
+      },
+      "expectedError": "quality-test-entry-missing"
+    },
+    {
+      "name": "missing lines floor is rejected",
+      "packageJson": {
+        "name": "@forgeax/editor-core",
+        "scripts": {"test": "bun test"},
+        "forgeaxCi": {"ownership": "Editor-owned", "quality": {"test": "bun test", "coverage": {"functions": 0}}}
+      },
+      "expectedError": "quality-lines-floor-missing"
+    },
+    {
+      "name": "missing functions floor is rejected",
+      "packageJson": {
+        "name": "@forgeax/editor-core",
+        "scripts": {"test": "bun test"},
+        "forgeaxCi": {"ownership": "Editor-owned", "quality": {"test": "bun test", "coverage": {"lines": 0}}}
+      },
+      "expectedError": "quality-functions-floor-missing"
+    },
+    {
+      "name": "coverage floors stay in the declared range",
+      "packageJson": {
+        "name": "@forgeax/editor-core",
+        "scripts": {"test": "bun test"},
+        "forgeaxCi": {"ownership": "Editor-owned", "quality": {"test": "bun test", "coverage": {"lines": 101, "functions": -1}}}
+      },
+      "expectedError": "quality-floor-out-of-range"
+    },
+    {
+      "name": "test files cannot be silently left without an obligation",
+      "testFiles": ["src/example.test.ts"],
+      "packageJson": {
+        "name": "@forgeax/editor-core",
+        "scripts": {"test": "bun test"},
+        "forgeaxCi": {"ownership": "Editor-owned"}
+      },
+      "expectedError": "quality-obligation-missing"
+    },
+    {
+      "name": "intentional host carries a static obligation",
+      "packageJson": {
+        "name": "@forgeax/editor-ui",
+        "scripts": {"typecheck": "tsc --noEmit"},
+        "forgeaxCi": {"ownership": "intentionally non-tested host", "obligations": {"kind": "static", "checks": ["bun run typecheck"]}}
+      },
+      "expected": {"ok": true}
+    },
+    {
+      "name": "intentional host without a static obligation is rejected",
+      "packageJson": {
+        "name": "@forgeax/editor-ui",
+        "scripts": {"typecheck": "tsc --noEmit"},
+        "forgeaxCi": {"ownership": "intentionally non-tested host"}
+      },
+      "expectedError": "host-obligation-missing"
+    }
+  ]
+}

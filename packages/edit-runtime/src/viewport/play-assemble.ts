@@ -62,14 +62,11 @@
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
 
 import { createApp, inputPlugin } from '@forgeax/engine-app';
-import type { GameProjectionRegistrar } from '@forgeax/engine-app';
+import type { GamePluginInstallResult, GameProjectionRegistrar } from '@forgeax/engine-app';
 import {
   World,
   Time,
   Update,
-  createQueryState,
-  queryRun,
-  Entity,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
 import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
@@ -77,14 +74,17 @@ import { animationPlugin } from '@forgeax/engine-animation';
 import { Camera, CAMERA_PROJECTION_PERSPECTIVE, perspective } from '@forgeax/engine-render';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
-import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener } from '@forgeax/engine-audio';
 import {
+  AUDIO_ENGINE_RESOURCE_KEY,
+  AudioListener,
   audioPlugin,
+} from '@forgeax/engine-audio';
+import {
   createWebAudioBackend,
   WebAudioEngine,
   syncListenerFromWorldMatrix,
 } from '@forgeax/engine-audio-webaudio';
-import type { ParticleRuntimeHost } from '@forgeax/engine-vfx-render';
+import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import { normalizeAnimationPlayerSceneAsset, type SceneAsset } from '@forgeax/editor-core';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 
@@ -225,8 +225,13 @@ export interface AssemblePlayWorldDeps {
     install(): void;
     clear(): void;
   };
+  /** Install the engine-owned producer contract after the scene is present. */
+  readonly installGamePlugins?: (deps: {
+    readonly world: World;
+    readonly gameProjection?: GameProjectionRegistrar;
+  }) => Promise<GamePluginInstallResult>;
   /** The one host created by Edit; attach it to this fresh Play world. */
-  readonly vfxRuntimeHost?: ParticleRuntimeHost;
+  readonly vfxRuntimeHost?: VfxRuntimeHost;
   /** Observe render phases through the current profiler owner. */
   readonly onRenderPhaseEnd?: (phase: string) => void;
 }
@@ -517,19 +522,15 @@ export async function assemblePlayWorld(
       after: [PROPAGATE_TRANSFORMS_SYSTEM],
       queries: [],
       fn: () => {
-        const query = createQueryState({ with: [AudioListener, Entity] });
-        queryRun(query, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
-          const entitySelf = bundle.Entity.self;
-          for (let i = 0; i < entitySelf.length; i++) {
-            const entity = (entitySelf[i] ?? 0) as EntityHandle;
-            const tf = (playWorld as { get(e: EntityHandle, c: unknown): { ok: boolean; value: { world: Float32Array } } }).get(entity, Transform);
-            if (!tf.ok) continue;
-            const listener = backend.listener;
-            if (listener === undefined) break;
-            syncListenerFromWorldMatrix(listener, tf.value.world);
-            break;
-          }
-        });
+        const query = (playWorld as World).query({ with: [AudioListener] }).unwrap();
+        for (const row of query) {
+          const tf = (playWorld as { get(e: EntityHandle, c: unknown): { ok: boolean; value: { world: Float32Array } } }).get(row.entity, Transform);
+          if (!tf.ok) continue;
+          const listener = backend.listener;
+          if (listener === undefined) break;
+          syncListenerFromWorldMatrix(listener, tf.value.world);
+          break;
+        }
       },
     }).unwrap();
   }
@@ -567,23 +568,20 @@ export async function assemblePlayWorld(
         const canvasH = canvas.height;
         if (canvasW <= 0 || canvasH <= 0) return;
         const aspect = canvasW / canvasH;
-        const query = createQueryState({ with: [Camera, Entity] });
-        queryRun(query, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
-          const entitySelf = bundle.Entity.self;
-          for (let i = 0; i < entitySelf.length; i++) {
-            const entity = (entitySelf[i] ?? 0) as EntityHandle;
-            const r = (playWorld as World).get(entity, Camera);
-            if (!r.ok) continue;
-            if (r.value.autoAspect !== true) continue;
-            if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
-            // Structural cast (same discipline as the fallback spawn below):
-            // Gate A (lint-unique-mutator) owns EDIT-world writes through the
-            // EngineFacade; the play world is the game runtime's world (north
-            // star §0 GameRuntimePort / D-8), outside that facade by design.
-            (playWorld as { set(e: EntityHandle, c: unknown, patch: unknown): { ok: boolean } })
-              .set(entity, Camera, { aspect });
-          }
-        });
+        const query = (playWorld as World).query({ with: [Camera] }).unwrap();
+        for (const row of query) {
+          const entity = row.entity;
+          const r = (playWorld as World).get(entity, Camera);
+          if (!r.ok) continue;
+          if (r.value.autoAspect !== true) continue;
+          if (r.value.projection !== CAMERA_PROJECTION_PERSPECTIVE) continue;
+          // Structural cast (same discipline as the fallback spawn below):
+          // Gate A (lint-unique-mutator) owns EDIT-world writes through the
+          // EngineFacade; the play world is the game runtime's world (north
+          // star §0 GameRuntimePort / D-8), outside that facade by design.
+          (playWorld as { set(e: EntityHandle, c: unknown, patch: unknown): { ok: boolean } })
+            .set(entity, Camera, { aspect });
+        }
       },
     }).unwrap();
   }
@@ -621,18 +619,15 @@ export async function assemblePlayWorld(
           addComponent(e: EntityHandle, d: unknown): { ok: boolean };
         };
         const targets: EntityHandle[] = [];
-        const query = createQueryState({ with: [Collider, Entity] });
-        queryRun(query, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
-          const entitySelf = bundle.Entity.self;
-          for (let i = 0; i < entitySelf.length; i++) {
-            const entity = (entitySelf[i] ?? 0) as EntityHandle;
-            const col = w.get(entity, Collider);
-            if (!col.ok || col.value.isSensor !== true) continue;
-            // already a receiver? skip (CollidingEntities.get is {ok:false} when absent)
-            if (w.get(entity, CollidingEntities as never).ok) continue;
-            targets.push(entity);
-          }
-        });
+        const query = (playWorld as World).query({ with: [Collider] }).unwrap();
+        for (const row of query) {
+          const entity = row.entity;
+          const col = w.get(entity, Collider);
+          if (!col.ok || col.value.isSensor !== true) continue;
+          // already a receiver? skip (CollidingEntities.get is {ok:false} when absent)
+          if (w.get(entity, CollidingEntities as never).ok) continue;
+          targets.push(entity);
+        }
         for (const e of targets) {
           w.addComponent(e, { component: CollidingEntities, data: { entities: [] } });
         }
@@ -729,6 +724,27 @@ export async function assemblePlayWorld(
     }
   }
 
+  // Producer installation is deliberately after scene instantiation and before
+  // bootstrap: the producer sees the same fresh world that the game entry sees,
+  // while its actions/reads are registered on the same projection carrier.
+  if (deps.installGamePlugins) {
+    let installed: GamePluginInstallResult;
+    try {
+      installed = await deps.installGamePlugins({
+        world: playWorld as World,
+        ...(gameProjection !== undefined ? { gameProjection: gameProjection.registrar } : {}),
+      });
+    } catch (error) {
+      cleanupFailedAssembly();
+      return { ok: false, error: startupError('game-plugin-registration-failed', error) };
+    }
+    if (!installed.ok) {
+      cleanupFailedAssembly();
+      return { ok: false, error: installed.error };
+    }
+    cleanups.push(() => installed.value.dispose());
+  }
+
   // ── bootstrap: run the game entry on the fresh world (same contract as
   // play-runtime — host instantiates defaultScene BEFORE entry runs). The module
   // was resolved before statePlugin() so module-level state tokens are registered;
@@ -764,10 +780,11 @@ export async function assemblePlayWorld(
   // perspective projection; games that spawn their own camera are unaffected
   // (their camera takes precedence via the renderer's first-hit behavior).
   let hasCameraInPlayWorld = false;
-  const cameraQuery = createQueryState({ with: [Camera, Entity] });
-  queryRun(cameraQuery, playWorld as never, (bundle: { Entity: { self: ArrayLike<number> } }) => {
-    if (bundle.Entity.self.length > 0) hasCameraInPlayWorld = true;
-  });
+  const cameraQuery = (playWorld as World).query({ with: [Camera] }).unwrap();
+  for (const _row of cameraQuery) {
+    hasCameraInPlayWorld = true;
+    break;
+  }
   if (!hasCameraInPlayWorld) {
     console.warn('[editor] ▶ Play: no Camera entity in play world — spawning fallback camera');
     (playWorld as { spawn(...args: unknown[]): { unwrap(): number } }).spawn(

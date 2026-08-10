@@ -41,23 +41,14 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
             },
           ],
         },
+        // Center column is the viewport alone. Content Browser lives in the
+        // global footer edge group (below); History / Capabilities are no longer
+        // seeded here — they open on demand (Window menu / command), same as
+        // ep:settings — so the viewport owns the full center height by default.
         {
-          type: 'branch',
+          type: 'leaf',
           size: 620,
-          data: [
-            { type: 'leaf', size: 500, data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' } },
-            {
-              type: 'leaf',
-              // Keep enough default height for the Content Browser grid.
-              // History is a peer tab here rather than a dedicated strip.
-              size: 312,
-              data: {
-                views: ['ep:assets', 'ep:history', 'ep:capabilities'],
-                activeView: 'ep:assets',
-                id: 'g-content-browser',
-              },
-            },
-          ],
+          data: { views: ['viewport'], activeView: 'viewport', id: 'g-viewport' },
         },
         {
           type: 'leaf',
@@ -69,15 +60,17 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
   },
   panels: {
     'ep:hierarchy': { id: 'ep:hierarchy', contentComponent: 'ep:hierarchy', title: 'Hierarchy' },
-    'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Assets' },
+    // Content Browser is footer chrome now (bottom edge group below) — a global
+    // panel shown in the footer across every Page, not a main-grid document panel.
+    'ep:assets': { id: 'ep:assets', contentComponent: 'ep:assets', title: 'Content Browser' },
     'ep:inspector': { id: 'ep:inspector', contentComponent: 'ep:inspector', title: 'Inspector' },
-    'ep:history': { id: 'ep:history', contentComponent: 'ep:history', title: 'History' },
-    'ep:capabilities': { id: 'ep:capabilities', contentComponent: 'ep:capabilities', title: 'Capabilities' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     chat: { id: 'chat', contentComponent: 'chat', title: 'ForgeaX CLI' },
-    // Interface-owned footer chrome panels — Info / Checkpoints / Events default
-    // into the merged bottom EDGE group (relocated into the StatusBar footer by
-    // edgeDrawer). Present across every workbench; titles localize via
+    // Footer chrome panels default into the merged bottom EDGE group (relocated
+    // into the StatusBar footer by edgeDrawer). Content Browser (ep:assets) is
+    // editor-owned but promoted to global footer chrome (interface
+    // FOOTER_PANEL_ID_LIST); Info / Checkpoints / Events are interface-owned.
+    // Present across every workbench AND every Page; titles localize via
     // interface i18n `dockShell.panelTitles.*`.
     info: { id: 'info', contentComponent: 'info', title: 'Info' },
     checkpoints: { id: 'checkpoints', contentComponent: 'checkpoints', title: 'Checkpoints' },
@@ -88,7 +81,11 @@ export const DEFAULT_EDITOR_DOCK_LAYOUT: SerializedDockview = {
       size: 280,
       visible: true,
       collapsed: true,
-      group: { id: 'edge-bottom', views: ['info', 'checkpoints', 'events'], activeView: 'info' },
+      group: {
+        id: 'edge-bottom',
+        views: ['ep:assets', 'info', 'checkpoints', 'events'],
+        activeView: 'ep:assets',
+      },
     },
   },
   activeGroup: 'g-chat',
@@ -207,6 +204,73 @@ export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     },
   },
   activeGroup: 'g-mesh-properties',
+};
+
+/** Material document family: UE-style material editor — 3D preview viewport on
+ *  the left, schema-driven parameter panel + asset overview stacked right. */
+export const DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT: SerializedDockview = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as Orientation,
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf',
+          size: 680,
+          data: {
+            views: ['ep:mat-preview'],
+            activeView: 'ep:mat-preview',
+            id: 'g-mat-preview',
+          },
+        },
+        {
+          type: 'branch',
+          size: 520,
+          data: [
+            {
+              type: 'leaf',
+              size: 520,
+              data: {
+                views: ['ep:asset-properties'],
+                activeView: 'ep:asset-properties',
+                id: 'g-mat-properties',
+              },
+            },
+            {
+              type: 'leaf',
+              size: 292,
+              data: {
+                views: ['ep:asset-overview'],
+                activeView: 'ep:asset-overview',
+                id: 'g-mat-overview',
+              },
+            },
+          ],
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:mat-preview': {
+      id: 'ep:mat-preview',
+      contentComponent: 'ep:mat-preview',
+      title: 'Preview',
+    },
+    'ep:asset-properties': {
+      id: 'ep:asset-properties',
+      contentComponent: 'ep:asset-properties',
+      title: 'Material Parameters',
+    },
+    'ep:asset-overview': {
+      id: 'ep:asset-overview',
+      contentComponent: 'ep:asset-overview',
+      title: 'Asset Overview',
+    },
+  },
+  activeGroup: 'g-mat-properties',
 };
 
 /** Material Instance editor: left preview viewport + right properties panel.

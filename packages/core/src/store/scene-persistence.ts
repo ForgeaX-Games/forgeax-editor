@@ -964,7 +964,7 @@ export const loadDocFromStorage = storage.loadDocFromStorage;
 // disk-watch imports scenePath + ctx from HERE (echo detection now reads
 // ctx.lastSelfSave rather than re-serialising via worldToPack);
 // the store.ts barrel forwards flushPendingSaveBeacon / replaceDoc /
-// instantiateSceneRefUnderWorld / stripEditorHiddenMarker / inlineAssetCount.
+// instantiateSceneRefUnderWorld / stripDisabledMarker / inlineAssetCount.
 /** @internal-store — disk-watch READS this (D-6 seam). Not in facade/barrel. */
 export const scenePath = diskIo.scenePath;
 /** Read-only public projection for host consumers that must address the active
@@ -1024,7 +1024,7 @@ export const instantiateSceneRefUnderWorld = diskIo.instantiateSceneRefUnderWorl
 export const resolveAssetRefToHandle = diskIo.resolveAssetRefToHandle;
 export const flushPendingSaveBeacon = diskIo.flushPendingSaveBeacon;
 export const replaceDoc = diskIo.replaceDoc;
-export const stripEditorHiddenMarker = diskIo.stripEditorHiddenMarker;
+export const stripDisabledMarker = diskIo.stripDisabledMarker;
 export const inlineAssetCount = diskIo.inlineAssetCount;
 // Pure load-floor strip guard (#101) — no deps, so re-exported straight from
 // disk-io rather than composed onto the diskIo instance. store.ts forwards it.

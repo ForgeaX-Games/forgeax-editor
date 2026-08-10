@@ -5,6 +5,8 @@ import {
   entComponentsPresent,
   gateway,
   listComponentSchemas,
+  readEntityVisibility,
+  resolveVisibility,
   worldComponentNames,
   worldEntityHandles,
   type EntityHandle,
@@ -37,9 +39,8 @@ export interface HierarchyEntitySummary {
   readonly name: string;
   readonly typeId: string;
   readonly hidden?: boolean;
-  /** UE-parity recursive hide: at least one strict ancestor carries EditorHidden.
-   *  The row dims (lighter than own-hidden) and the viewport already skips the
-   *  subtree — derived here so panels never walk ChildOf per render. */
+  /** Engine-resolved inherited hide: an ancestor's hidden Visibility intent
+   *  reaches this row while the row itself remains inherited. */
   readonly ancestorHidden?: boolean;
   readonly mobility: 'static' | 'movable' | 'stationary' | '';
   readonly childIds: readonly EntityHandle[];
@@ -48,6 +49,12 @@ export interface HierarchyEntitySummary {
 export interface HierarchyStructureProjection {
   readonly structureEpoch: number;
   readonly rows: readonly HierarchyEntitySummary[];
+}
+
+/** Disposable shell-facing read model. Runtime owns both facts; panels cache it. */
+export interface HierarchyRuntimeProjection {
+  readonly structure: HierarchyStructureProjection;
+  readonly selectionIds: readonly EntityHandle[];
 }
 
 export interface HierarchyStructureSelector {
@@ -63,6 +70,26 @@ export interface HierarchyStructureSelector {
 }
 
 type StructureReader = (world: unknown) => HierarchyStructureProjection;
+
+function sameHierarchyRows(
+  left: readonly HierarchyEntitySummary[],
+  right: readonly HierarchyEntitySummary[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((row, index) => {
+    const next = right[index];
+    if (next === undefined
+      || row.id !== next.id
+      || row.name !== next.name
+      || row.typeId !== next.typeId
+      || row.hidden !== next.hidden
+      || row.ancestorHidden !== next.ancestorHidden
+      || row.mobility !== next.mobility
+      || row.childIds.length !== next.childIds.length
+    ) return false;
+    return row.childIds.every((child, childIndex) => child === next.childIds[childIndex]);
+  });
+}
 
 /**
  * Derive the hierarchy mobility label from the component schema facts.
@@ -99,49 +126,23 @@ function readWorldStructure(world: unknown): HierarchyStructureProjection {
     ? Number((typedWorld as { getStructureEpoch: () => number }).getStructureEpoch())
     : 0;
   const namesByEntity = worldComponentNames(typedWorld);
+  const visibility = resolveVisibility(typedWorld);
   const rows = worldEntityHandles(typedWorld).map((id) => {
     const names = namesByEntity.get(id) ?? [];
+    const resolution = readEntityVisibility(typedWorld, id, visibility);
     return {
       id,
       name: entName(typedWorld, id),
       typeId: getHierarchyEntityType(names, typedWorld, id).id,
-      hidden: names.includes('EditorHidden'),
+      hidden: resolution.intent === 'hidden',
+      ancestorHidden: resolution.effective === 'hidden' && resolution.intent !== 'hidden',
       mobility: hierarchyMobility(entComponentsPresent(typedWorld, id, names)),
       childIds: childrenOf(typedWorld, id),
     };
   });
-  // Recursive-hide derivation (UE parity §1): parent map from childIds, then a
-  // memoized walk so each row knows whether an ANCESTOR hides it. One O(n) pass —
-  // cheaper than walking ChildOf per row per render.
-  const parentOf = new Map<EntityHandle, EntityHandle>();
-  const hiddenSet = new Set<EntityHandle>();
-  for (const row of rows) {
-    if (row.hidden) hiddenSet.add(row.id);
-    for (const child of row.childIds) parentOf.set(child, row.id);
-  }
-  const ancestorHiddenCache = new Map<EntityHandle, boolean>();
-  const visiting = new Set<EntityHandle>();
-  const isAncestorHidden = (id: EntityHandle): boolean => {
-    const cached = ancestorHiddenCache.get(id);
-    if (cached !== undefined) return cached;
-    const parent = parentOf.get(id);
-    if (parent === undefined) {
-      ancestorHiddenCache.set(id, false);
-      return false;
-    }
-    if (hiddenSet.has(parent) || visiting.has(parent)) {
-      ancestorHiddenCache.set(id, hiddenSet.has(parent));
-      return hiddenSet.has(parent);
-    }
-    visiting.add(id);
-    const result = isAncestorHidden(parent);
-    visiting.delete(id);
-    ancestorHiddenCache.set(id, result);
-    return result;
-  };
   return {
     structureEpoch,
-    rows: Object.freeze(rows.map((row) => ({ ...row, ancestorHidden: isAncestorHidden(row.id) }))),
+    rows: Object.freeze(rows),
   };
 }
 
@@ -164,7 +165,9 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
     },
     read: (world) => {
       const next = reader(world);
-      if (projection?.structureEpoch === next.structureEpoch) return projection;
+      if (projection?.structureEpoch === next.structureEpoch
+        && sameHierarchyRows(projection.rows, next.rows)
+      ) return projection;
       projection = { structureEpoch: next.structureEpoch, rows: next.rows };
       projectionRebuilds += 1;
       return projection;
@@ -210,7 +213,7 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
 // `Entity` is the id=0 marker component the engine puts on EVERY entity, so it
 // must sit at the floor too — otherwise it beats a real component alphabetically
 // (e.g. Entity < Skylight) and every node reads "entity".
-const LOW_TIER_COMPONENTS: ReadonlySet<string> = new Set(['Entity', 'Transform', 'EditorHidden', 'ChildOf', 'Name']);
+const LOW_TIER_COMPONENTS: ReadonlySet<string> = new Set(['Entity', 'Transform', 'Visibility', 'ChildOf', 'Name']);
 
 // The relationship component the engine mirrors onto a parent entity. Its
 // presence is the "this node is a group" signal; ranked above infra but below

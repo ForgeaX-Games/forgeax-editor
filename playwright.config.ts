@@ -1,15 +1,15 @@
-// Playwright config for @forgeax/editor — single-realm e2e gate.
+// Playwright config for @forgeax/editor — isolated viewport Runtime gate.
 //
-// The :15290 host boots the engine in-process (engine-vite-preset serves the
-// shader manifest + pack catalog locally) and renders the viewport + panels as
-// in-process components — no /editor iframe is needed. Servers used here:
-//   - :15290 — the standalone host (`bun run dev`, cwd '.'). The single
-//              document under test; boots the engine in-process.
+// The :15290 host owns chrome and in-process panels. The :15280 Edit Runtime is
+// served through the same-origin /editor proxy and owns Gateway, Edit World,
+// AssetRegistry and canvas. Servers used here:
+//   - :15290 — standalone shell host (`bun run dev`, cwd '.')
+//   - :15280 — replaceable Edit Runtime (`bun run dev:edit-runtime`)
 //   - :15173 — play-runtime preview. Kept for e2e that open
 //              `/preview/?game=<slug>` (fullscreen play path).
 //
 // Anchors:
-//   requirements AC-04/AC-05 (single realm — no panel iframe, in-host canvas)
+//   viewport Runtime architecture (one carrier iframe, no panel iframes)
 //   requirements AC-09 (hideChatAndForge=true hides chat-panel + forge-entry)
 //   requirements AC-14 (bun -F editor test:e2e exit 0)
 //   research F-4 (webServer array + 10s expect.poll fallback)
@@ -23,9 +23,11 @@ import { basename, join, resolve } from 'node:path';
 // evidence may supply private ports so a fresh current-HEAD server never
 // reuses or terminates an unrelated root/studio service.
 const e2eHostPort = process.env.FORGEAX_E2E_PORT ?? '15290';
+const e2eEditPort = process.env.FORGEAX_E2E_EDIT_PORT ?? '15280';
 const e2eApiPort = process.env.FORGEAX_E2E_API_PORT ?? '15281';
 const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
 const e2eTemplateHostPort = process.env.FORGEAX_E2E_TEMPLATE_PORT ?? '15490';
+const e2eTemplateEditPort = process.env.FORGEAX_E2E_TEMPLATE_EDIT_PORT ?? '15480';
 const e2eTemplateApiPort = process.env.FORGEAX_E2E_TEMPLATE_API_PORT ?? '15481';
 const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
 const e2eRuntimeScopeId = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'standalone-sample';
@@ -77,21 +79,21 @@ export default defineConfig({
     timeout: 10_000,
   },
   use: {
+    // Stuck clicks (overlay / re-render) must fail fast — do not burn the full
+    // 120s test timeout retrying actionability (see H-02~H-05, P-02/P-05/P-14).
+    actionTimeout: 15_000,
     baseURL: `http://127.0.0.1:${e2eHostPort}`,
     headless: true,
     trace: 'off',
   },
   webServer: [
     {
-      // editor standalone chrome host on :15290 — renders <DockShell
-      // hideChatAndForge /> and boots the engine IN-PROCESS on module load
-      // (single realm). Started via `bun run dev` so the root vite.config.ts
-      // (root=standalone/, port=15290, engine-vite-preset serve) applies.
-      // This is the ONLY document the e2e specs load.
+      // Editor shell host on :15290 — renders <DockShell hideChatAndForge /> and
+      // proxies its one /editor carrier to the separately started Edit Runtime.
+      // Started via `bun run dev` so the root vite.config.ts applies.
       //
-      // Injects FORGEAX_GAME_DIR=games/sample so the standalone host boots with
-      // a real game loaded — the GAME_DIR env activates vite's /api -> :15281
-      // proxy and define __FORGEAX_GAME_SLUG__.
+      // Injects FORGEAX_GAME_DIR so shell metadata and the /api proxy use the
+      // same game identity as the authoritative Runtime.
       // FORGEAX_INTERFACE_PORT=15290 prevents edit-runtime HMR from hammering the
       // non-existent studio port :18920 (AGENTS.md port map).
       command: 'bun run dev',
@@ -102,12 +104,35 @@ export default defineConfig({
         FORGEAX_ENGINE_PORT: e2eEnginePort,
         FORGEAX_INTERFACE_PORT: e2eHostPort,
         FORGEAX_STANDALONE_PORT: e2eHostPort,
+        FORGEAX_EDIT_RUNTIME_PORT: e2eEditPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
         FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
         FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
       },
       url: `http://127.0.0.1:${e2eHostPort}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+    {
+      // The host owns chrome/panels; this separately reloadable realm owns the
+      // one Edit World, Gateway, AssetRegistry and GPU canvas behind /editor/.
+      command: 'bun run dev:edit-runtime',
+      cwd: '.',
+      env: {
+        ...process.env as Record<string, string>,
+        FORGEAX_GAME_DIR: e2eGameDir,
+        FORGEAX_EDITOR_PORT: e2eEditPort,
+        FORGEAX_INTERFACE_PORT: e2eHostPort,
+        FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
+        FORGEAX_GAME_API_PORT: e2eApiPort,
+        FORGEAX_SERVER_PORT: e2eApiPort,
+        FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
+        FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
+      },
+      url: `http://127.0.0.1:${e2eEditPort}/editor/`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
       stdout: 'pipe',
@@ -162,12 +187,36 @@ export default defineConfig({
         FORGEAX_ENGINE_PORT: e2eEnginePort,
         FORGEAX_INTERFACE_PORT: e2eTemplateHostPort,
         FORGEAX_STANDALONE_PORT: e2eTemplateHostPort,
+        FORGEAX_EDIT_RUNTIME_PORT: e2eTemplateEditPort,
         FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
         FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
         FORGEAX_RUNTIME_GENERATION: '1',
         FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
       },
       url: `http://127.0.0.1:${e2eTemplateHostPort}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+    {
+      // The template shell uses the same carrier architecture as the primary
+      // standalone host, so it needs its own authoritative Runtime realm rather
+      // than falling through to the primary game's Edit Runtime port.
+      command: 'bun run dev:edit-runtime',
+      cwd: '.',
+      env: {
+        ...process.env as Record<string, string>,
+        FORGEAX_GAME_DIR: e2eTemplateGameDir,
+        FORGEAX_EDITOR_PORT: e2eTemplateEditPort,
+        FORGEAX_INTERFACE_PORT: e2eTemplateHostPort,
+        FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
+        FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
+        FORGEAX_SERVER_PORT: e2eTemplateApiPort,
+        FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
+        FORGEAX_RUNTIME_GENERATION: '1',
+      },
+      url: `http://127.0.0.1:${e2eTemplateEditPort}/editor/`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
       stdout: 'pipe',

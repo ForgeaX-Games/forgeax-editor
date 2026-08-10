@@ -86,6 +86,7 @@ import {
   type MenuItemDef,
 } from '../../lib/menu-registry';
 import { prettyCombo } from '../../lib/global-shortcuts';
+import { useMenubarSurface } from './menubar-surface';
 import { isTauri } from '../../lib/platform/runtime';
 import {
   getRecentGamesRevision,
@@ -184,7 +185,12 @@ const TOP_MENUS: readonly Exclude<MenuId, 'brand' | 'publish'>[] = [
 
 // ── Item rendering (recursive: children reuse the same walker) ───────────
 
-type Execute = (id: string, args?: unknown) => void;
+/** 第三个参数 itemId 是**记账用**的稳定菜单项 id(如 file.save)。可选,所以
+ *  只传两参的既有调用点照常编译。为什么需要它:人机同账要求两侧记录形状一致 ——
+ *  AI 那路按 itemId 派发,人这路手上只有解析后的 commandId,不带上 itemId 的话
+ *  两条记录对不上号(help.shortcuts 与 overlay.open 是同一动作的两个名字),
+ *  比对"人和 AI 是不是做了同一件事"就得二次查菜单注册表。 */
+type Execute = (id: string, args?: unknown, itemId?: string) => void;
 
 /** Compute the resolved enabled flag for one item.
  *  - Explicit `enabled()` always wins.
@@ -265,7 +271,7 @@ function MenuItemRow({ item, t, execute }: RowProps) {
       className={['fx-menubar-item', dangerCls].filter(Boolean).join(' ')}
       onSelect={(e) => {
         if (!enabled || !item.commandId) { e.preventDefault(); return; }
-        execute(item.commandId, item.args);
+        execute(item.commandId, item.args, item.id);
       }}
     >
       {leftNode}
@@ -359,15 +365,49 @@ function TopMenu({ menu, items, t, execute, open, onOpenChange, onTriggerEnter }
 // ── Public component ─────────────────────────────────────────────────────
 
 export function MenuBar() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const menus = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const host = useHost();
   // Same command bus TopBar uses. Fire-and-forget: menu clicks never await
   // the command result — that would block dropdown-close animation.
+  // 纯执行,不记账。AI 经 host.menubar.invoke 走的就是这一个 —— 它那一路已经由
+  // dispatchToSurface 记了 source:'ai',这里再补一次会变成同一次操作在账本里既是
+  // ai 又是 user(而 /dispatched 端点无条件打 source:'user',分不出调用方)。
   const execute = useCallback<Execute>(
     (id, args) => { void host.commands.execute(id, args); },
     [host],
   );
+  // 人点菜单项才走这个:先补账再执行。人机同账的语义是"同一条 handler、只用 source
+  // 区分",所以记账必须挂在**人这条调用点**上,不能挂在两路共用的 execute 里。
+  // 两侧统一记 { itemId, commandId } —— 不统一的话账本里 AI 记 itemId、人记
+  // commandId,同一个动作两种名字,离线比对还得回查注册表(2026-08-05 实测)。
+  // fire-and-forget,失败静默(账本是观测面,不是功能依赖)。
+  const executeFromClick = useCallback<Execute>(
+    (id, args, itemId) => {
+      void fetch('/api/bus/ui/surfaces/host.menubar/dispatched', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'invoke', args: { itemId, commandId: id, args } }),
+      }).catch(() => {});
+      execute(id, args);
+    },
+    [execute],
+  );
+  // AI 面(host.menubar.invoke)的执行器:**await 命令本体** —— 命令失败要变成
+  // ack ok=false,agent 才不会把失败说成"已完成"(2026-08-06 外审 B6①:此前同步
+  // 返回,file.save 失败也被 ack 成功)。人点击仍走上面的 fire-and-forget(不卡
+  // 下拉动画);两者只差等不等结果,handler 是同一个 commands.execute。
+  const executeForSurface = useCallback(
+    (id: string, args?: unknown) => Promise.resolve(host.commands.execute(id, args)),
+    [host],
+  );
+  // Dual-modality projection: publish the menu tree + an `invoke` action that
+  // runs the SAME execute a human click runs. Must sit before the isTauri()
+  // early return (hooks rule); the registry stays the SSOT either way.
+  // 传 i18n.language 而不是 t:`t` 是模块级恒定标识(i18n/index.ts 刻意如此,
+  // 免得列进依赖数组造成无限重渲染),用它当依赖等于永不重投影 —— 切语言后 DOM
+  // 变了、snapshot 还是旧语言,AI 按 label 导航与用户所见错位(2026-08-06 探测)。
+  useMenubarSurface(menus, t, executeForSurface, i18n.language);
 
   // One shared "which top-level menu is open" value for the whole bar. This is
   // what makes it behave like a native/UE menu bar rather than N unrelated
@@ -416,7 +456,9 @@ export function MenuBar() {
             menu="brand"
             items={menus.brand}
             t={t}
-            execute={execute}
+            // 人点击走 executeFromClick(先补账再执行),不是共用的 execute ——
+            // 人机同账靠的就是记账挂在人这条调用点上。main 新加的悬停切换 props 照收。
+            execute={executeFromClick}
             open={openMenu === 'brand'}
             onOpenChange={handleOpenChange('brand')}
             onTriggerEnter={handleTriggerEnter('brand')}
@@ -428,7 +470,7 @@ export function MenuBar() {
             menu={m}
             items={menus[m]}
             t={t}
-            execute={execute}
+            execute={executeFromClick}
             open={openMenu === m}
             onOpenChange={handleOpenChange(m)}
             onTriggerEnter={handleTriggerEnter(m)}

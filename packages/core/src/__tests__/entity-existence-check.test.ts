@@ -37,10 +37,10 @@ describe('Entity existence check uses _e2h mapping, not Name component', () => {
     expect(r1.ok).toBe(true);
     expect(entName(gateway.activeWorld, id)).toBe('Cube');
 
-    const r2 = gateway.dispatch({ kind: 'setHidden', entity: id, hidden: true } as EditorOp);
+    const r2 = gateway.dispatch({ kind: 'setVisibility', entity: id, state: 'hidden' } as EditorOp);
     expect(r2.ok).toBe(true);
 
-    const r3 = gateway.dispatch({ kind: 'setHidden', entity: id, hidden: false } as EditorOp);
+    const r3 = gateway.dispatch({ kind: 'setVisibility', entity: id, state: 'visible' } as EditorOp);
     expect(r3.ok).toBe(true);
   });
 
@@ -53,7 +53,7 @@ describe('Entity existence check uses _e2h mapping, not Name component', () => {
     const r2 = gateway.dispatch({ kind: 'removeComponent', entity: fakeId, component: 'Transform' } as EditorOp);
     expect(r2.ok).toBe(false);
 
-    const r3 = gateway.dispatch({ kind: 'setHidden', entity: fakeId, hidden: true } as EditorOp);
+    const r3 = gateway.dispatch({ kind: 'setVisibility', entity: fakeId, state: 'hidden' } as EditorOp);
     expect(r3.ok).toBe(false);
     if (!r3.ok) expect(r3.error.code).toBe('NO_SUCH_ENTITY');
   });

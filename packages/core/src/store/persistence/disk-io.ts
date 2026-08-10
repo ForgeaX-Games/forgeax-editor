@@ -153,7 +153,7 @@ export interface DiskIoDeps {
 export interface DiskIo {
   scenePath(): string | null;
   worldToPack(doc: EditSession, sceneGuid?: string): string | null;
-  stripEditorHiddenMarker(asset: unknown): unknown;
+  stripDisabledMarker(asset: unknown): unknown;
   inlineAssetCount(pack: unknown): number;
   loadSceneByGuid(sceneGuid: string): Promise<boolean>;
   loadImportedScenePreviewState(facts: {
@@ -172,25 +172,21 @@ export interface DiskIo {
   replaceDoc(doc: EditSession): void;
 }
 
-/** Remove the editor-only `EditorHidden` marker from a collected SceneAsset's
- *  entities so it never lands in the persisted pack (AC-04), while the entities
- *  themselves stay (AC-05). The derived engine `Disabled` marker (synced by
- *  applySetHidden so hidden entities leave the viewport render) is stripped
- *  alongside — hide state is editor-only; Play must show every entity (UE PIE
- *  parity, docs 2026-08-04-editor-hide-ue-parity-plan §3.3).
- *  SceneAsset/entities are readonly, so rebuild.
+/** Remove the engine-internal `Disabled` marker from a collected SceneAsset.
+ *  Disabled is a query/render implementation detail owned by the engine; the
+ *  authored `Visibility` component is intentionally retained and round-trips
+ *  with the scene. SceneAsset/entities are readonly, so rebuild.
  *  Pure — no deps; exported standalone so scene-persistence re-exports it. */
-export function stripEditorHiddenMarker(asset: unknown): unknown {
+export function stripDisabledMarker(asset: unknown): unknown {
   const a = asset as { kind: string; entities?: ReadonlyArray<{ localId: unknown; components: Record<string, unknown> }> };
   if (!a || !Array.isArray(a.entities)) return asset;
   return {
     ...a,
     entities: a.entities.map((e) => {
       if (!e.components) return e;
-      const hasHidden = 'EditorHidden' in e.components;
       const hasDisabled = 'Disabled' in e.components;
-      if (!hasHidden && !hasDisabled) return e;
-      const { EditorHidden: _dropH, Disabled: _dropD, ...rest } = e.components;
+      if (!hasDisabled) return e;
+      const { Disabled: _dropD, ...rest } = e.components;
       return { ...e, components: rest };
     }),
   };
@@ -408,7 +404,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       return null;
     }
     // Collect ALL root entities (visible AND hidden) so hidden entities survive
-    // the round-trip (AC-05); only the EditorHidden MARKER is stripped (AC-04).
+    // the round-trip; only the engine-internal Disabled marker is stripped.
     // The load path records the exact flat top-level roots in currentSceneEntities.
     // Keep those roots in the save set even when the live Name query cannot see
     // them (e.g. a scene entity with no Name component); the world walk still
@@ -422,10 +418,9 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       console.warn('[editor-core] worldToPack: rootsToSceneAsset failed:', assetR.error);
       return null;
     }
-    // Strip the editor-only EditorHidden marker from every collected entity — a
-    // registered component rootsToSceneAsset would otherwise emit (AC-04). The
-    // entity itself stays (AC-05). SceneAsset is readonly → rebuild without it.
-    const strippedAsset = stripEditorHiddenMarker(assetR.value) as SceneAsset;
+    // Strip only the engine-internal Disabled marker. Visibility is authored
+    // data and must remain in the SceneAsset so Edit and Play agree.
+    const strippedAsset = stripDisabledMarker(assetR.value) as SceneAsset;
     const packR = serializeSceneAssetToPack(strippedAsset, sceneGuid);
     if (!packR.ok) {
       console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
@@ -1159,7 +1154,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   return {
     scenePath,
     worldToPack,
-    stripEditorHiddenMarker,
+    stripDisabledMarker,
     inlineAssetCount,
     loadSceneByGuid,
     loadImportedScenePreviewState,

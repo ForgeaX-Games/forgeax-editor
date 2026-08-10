@@ -19,14 +19,22 @@ import { toShared } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { parseScenePayload } from '@forgeax/engine-assets-runtime';
-import type { ParticleRuntimeHost } from '@forgeax/engine-vfx-render';
+import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { createRuntimeUiGraph, entComponent, normalizeAnimationPlayerSceneAsset, panelBridge, publishMeshStats } from '@forgeax/editor-core';
 import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDirtyPolicy, SelectedAsset } from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
-import { ensureGamePluginsLoaded, addGamePluginSystems, getPlayPluginFailure, type GamePluginLoad } from '@forgeax/editor-game-plugins';
+import {
+  ensureGamePluginsLoaded,
+  addGamePluginSystems,
+  describeGamePluginSystems,
+  getPlayPluginFailure,
+  installGamePluginProducers,
+  type GamePluginInstallation,
+  type GamePluginLoad,
+} from '@forgeax/editor-game-plugins';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -113,7 +121,7 @@ export interface HostSessionContext {
    */
   readonly physics: PhysicsBackend | undefined;
   /** Shared engine-owned VFX host; Edit and each fresh Play world use this instance. */
-  readonly vfxRuntimeHost: ParticleRuntimeHost;
+  readonly vfxRuntimeHost: VfxRuntimeHost;
   /** Publish render-feature diagnostic transitions through the Gateway provider. */
   readonly onVfxDiagnosticsChanged?: () => void;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
@@ -738,6 +746,9 @@ export function createHostSession(deps: HostSessionDeps): {
             error: pluginFailure,
           };
         }
+        let reloadGamePlugins: (() => Promise<unknown>) | undefined;
+        let attachedGamePluginSystems: readonly string[] = [];
+        let installedGamePlugins: GamePluginInstallation | undefined;
         const res = await assemblePlayWorld({
           renderer: renderer as never,
           loadDefaultScene,
@@ -755,11 +766,57 @@ export function createHostSession(deps: HostSessionDeps): {
           // lifetime: install only after gateway.enterPlay, clear on every teardown.
           createGameProjection: () => {
             const registry = gateway.createGameProjectionRegistry();
+            if (pluginLoad.plugins.some((plugin) => plugin.descriptor !== undefined)) {
+              registry.registrar.registerRead({
+                id: 'game.plugins',
+                title: 'Gameplay Producers',
+                description: 'Versioned producer descriptors and attached systems for this Play run',
+                read: () => pluginLoad.plugins
+                  .filter((plugin) => plugin.descriptor !== undefined)
+                  .map((plugin) => ({
+                    contract: plugin.descriptor!.contract,
+                    version: plugin.descriptor!.version,
+                    id: plugin.descriptor!.id,
+                    title: plugin.descriptor!.title,
+                    sourcePath: plugin.clientPath,
+                    components: plugin.components,
+                    systems: describeGamePluginSystems(pluginLoad, attachedGamePluginSystems).map(
+                      ({ pluginId, system, status }) => ({ pluginId, system, status }),
+                    ),
+                    diagnostics: installedGamePlugins?.diagnostics().map(
+                      ({ code, severity, pluginId, message }) => ({ code, severity, pluginId, message }),
+                    ) ?? [],
+                  })),
+              });
+              registry.registrar.registerAction({
+                id: 'game.plugins.reload',
+                title: 'Reload Gameplay Producers',
+                description: 'Run producer-owned recovery for the active gameplay modules',
+                run: async () => {
+                  const reload = reloadGamePlugins;
+                  if (!reload) throw new Error('game-plugin-reload-unsupported: producer installation is not ready');
+                  const result = await reload();
+                  if (typeof result === 'object' && result !== null && 'ok' in result && result.ok === false) {
+                    const error = (result as { error?: { code?: string; hint?: string } }).error;
+                    throw new Error(`${error?.code ?? 'game-plugin-reload-failed'}: ${error?.hint ?? 'producer reload failed'}`);
+                  }
+                },
+              });
+            }
             return {
               registrar: registry.registrar,
               install: () => gateway.installGameProjection(registry),
               clear: () => gateway.clearGameProjection(),
             };
+          },
+          installGamePlugins: ({ world, gameProjection }) => {
+            return installGamePluginProducers(pluginLoad, { world, gameProjection }).then((result) => {
+              if (result.ok) {
+                installedGamePlugins = result.value;
+                reloadGamePlugins = () => result.value.reload();
+              }
+              return result;
+            });
           },
           ...(ctx.physics ? { physics: ctx.physics } : {}),
           vfxRuntimeHost: ctx.vfxRuntimeHost,
@@ -778,7 +835,11 @@ export function createHostSession(deps: HostSessionDeps): {
         // (GC) — the persistent edit world never gets them.
         if (res.ok && pluginLoad.systems.length > 0) {
           const added = addGamePluginSystems(res.value.playWorld as never, pluginLoad);
+          attachedGamePluginSystems = added;
           if (added.length > 0) emitBoot(`play ▸ game systems added: ${added.join(', ')}`);
+          const diagnostics = describeGamePluginSystems(pluginLoad, added);
+          const missing = diagnostics.filter((entry) => entry.status === 'missing');
+          if (missing.length > 0) emitBoot(`play ▸ missing game systems: ${missing.map((entry) => entry.system).join(', ')}`, 'warn');
         }
         return res;
       },

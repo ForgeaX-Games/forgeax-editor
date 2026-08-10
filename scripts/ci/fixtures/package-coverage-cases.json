@@ -1,0 +1,58 @@
+{
+  "cases": [
+    {
+      "name": "both package dimensions meet their individual floors",
+      "input": {
+        "packageName": "@forgeax/editor-core",
+        "floors": {"lines": 80, "functions": 70},
+        "observed": {"packageName": "@forgeax/editor-core", "lines": 82, "functions": 71, "lcovPath": "coverage/lcov.info"}
+      },
+      "expected": {"ok": true}
+    },
+    {
+      "name": "missing package result fails closed",
+      "input": {
+        "packageName": "@forgeax/editor-core",
+        "floors": {"lines": 0, "functions": 0},
+        "observed": null
+      },
+      "expectedError": "coverage-result-missing"
+    },
+    {
+      "name": "one dimension cannot stand in for the other",
+      "input": {
+        "packageName": "@forgeax/editor-core",
+        "floors": {"lines": 80, "functions": 70},
+        "observed": {"packageName": "@forgeax/editor-core", "lines": 99, "lcovPath": "coverage/lcov.info"}
+      },
+      "expectedError": "coverage-functions-missing"
+    },
+    {
+      "name": "low lines coverage fails independently",
+      "input": {
+        "packageName": "@forgeax/editor-core",
+        "floors": {"lines": 80, "functions": 70},
+        "observed": {"packageName": "@forgeax/editor-core", "lines": 79, "functions": 99, "lcovPath": "coverage/lcov.info"}
+      },
+      "expectedError": "coverage-lines-below-floor"
+    },
+    {
+      "name": "low functions coverage fails independently",
+      "input": {
+        "packageName": "@forgeax/editor-core",
+        "floors": {"lines": 80, "functions": 70},
+        "observed": {"packageName": "@forgeax/editor-core", "lines": 99, "functions": 69, "lcovPath": "coverage/lcov.info"}
+      },
+      "expectedError": "coverage-functions-below-floor"
+    },
+    {
+      "name": "aggregate evidence cannot impersonate a package",
+      "input": {
+        "packageName": "@forgeax/editor-core",
+        "floors": {"lines": 0, "functions": 0},
+        "observed": {"kind": "aggregate", "lines": 100, "functions": 100, "lcovPath": "coverage/lcov.info"}
+      },
+      "expectedError": "coverage-package-identity-missing"
+    }
+  ]
+}

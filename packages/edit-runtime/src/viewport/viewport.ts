@@ -43,11 +43,13 @@ export {
   deriveInputTarget, clampPitch, clampDist, advanceOrbit, computeOrbitCamera, clampFlySpeed,
   applyFlyWheelSpeed, advanceFly, advanceFlyLook, computeFlyCamera, orbitToFly, flyToOrbit,
   clampFov, adjustFov, clampOrthoHalfHeight, adjustOrthoHalfHeight, deriveOrthoHalfHeight,
+  clampPitchForProjection, viewPresetOrientation, deriveActiveView, ORTHO_PITCH_LIMIT,
   gizmoViewScale, GIZMO_VIEW_SCALE_MIN,
   FLY_SPEED_DEFAULT, FLY_SPEED_MIN, FLY_SPEED_MAX, FLY_SPEED_STEP, FLY_BOOST_MULTIPLIER,
   FOV_DEFAULT, FOV_MIN, FOV_MAX, FOV_STEP, ORTHO_HALF_HEIGHT_DEFAULT,
   ORTHO_HALF_HEIGHT_MIN, ORTHO_HALF_HEIGHT_MAX, ORTHO_ZOOM_STEP,
   type RunMode, type DisplayMode, type InputTarget, type ControlOwner, type CameraProjection,
+  type CameraViewPreset, type ViewportView,
   type OrbitState, type OrbitCameraResult, type FlyState, type FlyInput, type Quat,
 } from './viewport-camera';
 export {
@@ -68,7 +70,7 @@ import { type Vec3, num, ndcFromClient, rayDirection, rayAABB, rayPlaneY, closes
 import {
   advanceOrbit, computeOrbitCamera, advanceFly, advanceFlyLook, computeFlyCamera,
   applyFlyWheelSpeed, flyToOrbit, deriveOrthoHalfHeight, adjustOrthoHalfHeight,
-  gizmoViewScale,
+  clampOrthoHalfHeight, deriveActiveView, gizmoViewScale,
   FOV_MIN, FOV_MAX,
   ORTHO_HALF_HEIGHT_MIN, ORTHO_HALF_HEIGHT_MAX,
   type InputTarget, type FlyInput, type CameraProjection,
@@ -76,6 +78,7 @@ import {
 import { cameraGestureForPointer, cameraPoseChanged, type CameraGestureMode, type CameraPoseSnapshot } from './viewport-navigation';
 import { createViewportCursorCapture, type ViewportCursorCapture } from './viewport-cursor';
 import { createCameraOps, registerCameraAppliers, type CameraBookmark } from './viewport-camera-appliers';
+import { viewportBootInput } from './viewport-boot-input';
 import {
   getViewportPreferences,
   onViewportPreferencesChange,
@@ -87,11 +90,11 @@ import { createGizmoPool, type GizmoAnchor } from './viewport-gizmo';
 import { createParamGizmo } from './viewport-param-gizmo';
 import { buildDragGroup, translatedMemberTarget, type DragGroupMember } from './viewport-drag-group';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
-import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntHidden, type EditorTransform } from './viewport-entity-read';
+import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntEffectivelyHidden, type EditorTransform } from './viewport-entity-read';
 import { pickMeshFallback } from './viewport-pick-fallback';
 
 import type { EditorOp, OpHandle, EngineFacade } from '@forgeax/editor-core';
-import { entExists, entComponents } from '@forgeax/editor-core';
+import { entExists, entComponents, resolveVisibility } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
 // (a document continuous op) uses the gateway lifecycle begin/update*/commit so
@@ -157,11 +160,26 @@ export interface Viewport {
   resetCamera(): void;
 }
 
-let activeViewportKeyHandler: ((event: KeyboardEvent) => void) | null = null;
+// Boot-window input bridge (viewport-boot-input.ts): the React chrome (view
+// menu + global keyboard router) mounts seconds BEFORE createViewport()
+// finishes the async engine boot. Discrete modified-key commands pressed in
+// that window are buffered and flushed on install; plain fly keys are dropped
+// (replaying them would wedge keyState). The readiness mirror lets the chrome
+// disable the view menu until the camera ops it dispatches have an applier.
 
-/** Read-only bridge consumed by the single interface keyboard router. */
-export function getViewportKeyHandler(): ((event: KeyboardEvent) => void) | null {
-  return activeViewportKeyHandler;
+export function isViewportInputReady(): boolean {
+  return viewportBootInput.isReady();
+}
+
+export function onViewportInputReadyChange(listener: (ready: boolean) => void): () => void {
+  return viewportBootInput.onReadyChange(listener);
+}
+
+/** Router entry point: deliver immediately once the viewport is live; during
+ *  the boot window, buffer discrete modified-key commands and flush them when
+ *  createViewport() installs the handler. */
+export function routeViewportKeydown(event: KeyboardEvent): void {
+  viewportBootInput.route(event);
 }
 
 export function createViewport({
@@ -203,9 +221,12 @@ export function createViewport({
       }
     }
     // Route through the store SSOT (chrome mirror path) so the op-readable
-    // state and the persisted snapshot never diverge.
+    // state and the persisted snapshot never diverge. activeView is DERIVED
+    // from the pose here (single derivation point) so the view-menu label
+    // stays correct no matter which op/gesture path moved the camera.
     syncViewportPosePreferences({
       projection,
+      activeView: deriveActiveView({ projection, yaw, pitch }),
       fov,
       orthoHalfHeight,
       flySpeed,
@@ -314,6 +335,7 @@ export function createViewport({
       persistViewportState();
     },
     applyCamera,
+    cancelNavigation,
     getBookmark: (slot) => bookmarks.get(slot),
     setBookmark: (slot, bookmark) => {
       if (bookmark === null) bookmarks.delete(slot);
@@ -426,6 +448,8 @@ export function createViewport({
    * editor-level ancestor. Returns the handle, or null if hidden / none found.
    */
   function resolveEditorEntity(world: World, handle: EntityHandle): EntityHandle | null {
+    const visibility = resolveVisibility(world);
+    if (isEntEffectivelyHidden(world, handle, visibility)) return null;
     let cur: EntityHandle | undefined = handle;
     let candidate: EntityHandle | null = null;
     const seen = new Set<number>();
@@ -433,10 +457,6 @@ export function createViewport({
       if (seen.has(cur as number)) break;
       seen.add(cur as number);
       if (entExists(world, cur)) {
-        // UE-parity recursive hide: an EditorHidden anywhere up the editor-level
-        // chain hides the whole subtree — the hit resolves to nothing, matching
-        // the Disabled-driven render exclusion.
-        if (isEntHidden(world, cur)) return null;
         if (candidate === null) candidate = cur;
       }
       // merge origin/main: main's ChildOf-walk read the raw `world`; the IoC
@@ -695,14 +715,8 @@ export function createViewport({
       ctrlKey: e.ctrlKey,
       metaKey: e.metaKey,
       shiftKey: e.shiftKey,
-    });
+    }, projection);
     if (cameraMode !== null) {
-      // Orthographic navigation has no meaningful perspective fly velocity.
-      // Keep RMB from silently switching to a different movement semantic.
-      if (cameraMode === 'fly' && projection === 'orthographic') {
-        e.preventDefault();
-        return;
-      }
       beginCameraGesture(cameraMode, e);
       if (cameraMode === 'fly') {
         lastFlyTime = performance.now();
@@ -1106,7 +1120,7 @@ export function createViewport({
     const maxHalf = Math.max(half[0], half[1], half[2]);
     dist = Math.max(4, maxHalf * 4);
     if (projection === 'orthographic') {
-      orthoHalfHeight = Math.max(ORTHO_HALF_HEIGHT_MIN, maxHalf * 1.25);
+      orthoHalfHeight = clampOrthoHalfHeight(Math.max(ORTHO_HALF_HEIGHT_MIN, maxHalf * 1.25));
     }
     applyCamera();
   }
@@ -1141,7 +1155,21 @@ export function createViewport({
       }
       return;
     }
-    if (e.altKey) return;
+    if (e.altKey) {
+      // UE-style view presets. The global-shortcuts viewport matcher only lets
+      // Alt+G/H/J/K through, so no other Alt combo reaches this branch. The
+      // cameraSetView applier cancels any in-progress fly gesture itself.
+      const view = k === 'g' ? 'perspective'
+        : k === 'h' ? 'front'
+        : k === 'j' ? 'top'
+        : k === 'k' ? 'left'
+        : null;
+      if (view !== null) {
+        e.preventDefault();
+        gateway.dispatch({ kind: 'cameraSetView', view }, 'human');
+      }
+      return;
+    }
     // T2 risk-1: in fly mode WASD/QE drive movement — do NOT hijack W/E/R for
     // gizmo mode switching. Frame (F) is likewise ambiguous while flying.
     if (mode === 'fly') return;
@@ -1202,7 +1230,9 @@ export function createViewport({
   window.addEventListener('blur', onBlur);
   document.addEventListener('visibilitychange', onVisibilityChange);
   canvas.addEventListener('dblclick', onDblClick);
-  if (!orbitOnly) activeViewportKeyHandler = handleViewportKeyDown;
+  // install() also flushes any discrete modified-key commands buffered during
+  // the async engine boot (see viewport-boot-input.ts).
+  if (!orbitOnly) viewportBootInput.install(handleViewportKeyDown);
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
   // Inspector changing a light's range or a camera's fov).
@@ -1266,7 +1296,7 @@ export function createViewport({
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       canvas.removeEventListener('dblclick', onDblClick);
-      if (!orbitOnly && activeViewportKeyHandler === handleViewportKeyDown) activeViewportKeyHandler = null;
+      if (!orbitOnly) viewportBootInput.uninstall(handleViewportKeyDown);
       if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
       cursorCapture?.dispose();
       cursorCapture = null;

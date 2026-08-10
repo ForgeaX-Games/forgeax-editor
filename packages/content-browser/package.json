@@ -30,6 +30,13 @@
     "build": "tsc --noEmit",
     "test": "bun test"
   },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": {"lines": 24.41, "functions": 15.10}
+    }
+  },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",

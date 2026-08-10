@@ -2,15 +2,18 @@
 // AssetBrowserReadModel. It owns subscription/debounce only; catalog/tree/meta
 // join semantics remain in editor-core.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { CatalogDelta } from '@forgeax/engine-types';
 import {
   createAssetBrowserReadModel,
+  getViewportRuntimeClientSnapshot,
   gateway,
   panelBridge,
+  queryViewportRuntimeProjection,
   resolveGamePath,
+  subscribeViewportRuntimeClient,
 } from '@forgeax/editor-core';
-import type { AssetBrowserCatalogRoot, AssetBrowserRegistry, AssetBrowserSnapshot } from '@forgeax/editor-core';
+import type { AssetBrowserCatalogRoot, AssetBrowserRegistry, AssetBrowserRegistryEntry, AssetBrowserSnapshot } from '@forgeax/editor-core';
 
 const EMPTY_SNAPSHOT: AssetBrowserSnapshot = Object.freeze({
   generation: 0,
@@ -81,7 +84,14 @@ export function useAssetBrowserSnapshot(
   catalogRoots: readonly AssetBrowserCatalogRoot[],
 ): UseAssetBrowserSnapshotResult {
   const [registryRevision, setRegistryRevision] = useState(0);
-  const registry = gateway.doc.registry as AssetBrowserRegistry | undefined;
+  const remoteEntries = useRemoteAssetCatalog();
+  const remoteRegistry = useMemo<AssetBrowserRegistry | undefined>(() => remoteEntries === undefined
+    ? undefined
+    : { listCatalog: () => remoteEntries }, [remoteEntries]);
+  // The outer shell may still carry a bootstrap Gateway for chrome commands;
+  // it is never the asset authority while the Runtime projection is present.
+  const registry = remoteRegistry
+    ?? gateway.doc.registry as AssetBrowserRegistry | undefined;
   const model = useMemo(() => {
     if (!gameSlug || gameSlug === 'default' || !registry) return null;
     return createAssetBrowserReadModel({
@@ -139,4 +149,48 @@ export function useAssetBrowserSnapshot(
   }, [model, reload]);
 
   return { snapshot, loading, reload, reconcile };
+}
+
+function useRemoteAssetCatalog(): readonly AssetBrowserRegistryEntry[] | undefined {
+  const connection = useSyncExternalStore(
+    subscribeViewportRuntimeClient,
+    getViewportRuntimeClientSnapshot,
+    getViewportRuntimeClientSnapshot,
+  );
+  const [entries, setEntries] = useState<readonly AssetBrowserRegistryEntry[] | undefined>();
+  const signatureRef = useRef('');
+  useEffect(() => {
+    if (connection.status !== 'ready') {
+      signatureRef.current = '';
+      setEntries(undefined);
+      return;
+    }
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const envelope = await queryViewportRuntimeProjection<{ readonly entries: readonly AssetBrowserRegistryEntry[] }>({ kind: 'assets.catalog' });
+        if (disposed) return;
+        const next = envelope.status === 'ready' ? envelope.value.entries : envelope.status === 'empty' ? [] : undefined;
+        const signature = next === undefined ? '' : JSON.stringify(next);
+        if (signature !== signatureRef.current) {
+          signatureRef.current = signature;
+          setEntries(next);
+        }
+      } catch {
+        if (!disposed) setEntries(undefined);
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 250);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
+  return entries;
 }

@@ -233,9 +233,9 @@ describe('defaultComponentData field values match engine defaults', () => {
     expect(data.fov).toBe(Math.PI / 3);
   });
 
-  it('Camera.clearColor defaults to [0,0,0,1]', () => {
+  it('Camera.clearColor defaults to transparent black [0,0,0,0]', () => {
     const data = defaultComponentData('Camera');
-    expect(data.clearColor).toEqual([0, 0, 0, 1]);
+    expect(data.clearColor).toEqual([0, 0, 0, 0]);
   });
 
   it('SpriteRegionOverride.region defaults to [0,0,1,1]', () => {

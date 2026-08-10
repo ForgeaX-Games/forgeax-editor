@@ -1,16 +1,23 @@
-// MaterialPreviewViewport — isolated MI 3D preview (M5/C1–C5).
+// MaterialPreviewViewport — isolated material 3D preview (M5/C1–C5, generalized
+// to base materials for the Material page).
 //
-// Own canvas + createApp world. Staging changes → resolveOverrides → mutate
-// preview MaterialAsset.values in place. Orbit-only interaction (no pick/gizmo).
+// Own canvas + createApp world. Value source depends on the active asset kind:
+// MI staging → resolveOverrides, or base material → live catalog resolve +
+// transient drag overlay; both mutate the preview MaterialAsset.values in
+// place. Orbit-only interaction (no pick/gizmo).
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { createApp, type App } from '@forgeax/engine-app';
 import {
+  clearMaterialPreviewParams,
   createEngineFacade,
   ensureMaterialChainCataloged,
+  getMaterialPreviewParams,
   getMiStaging,
   materialCatalogLookup,
+  panelBridge,
   resolveOverrides,
+  subscribeMaterialPreviewParams,
   subscribeMiStaging,
   useActiveEditorAsset,
   gateway,
@@ -135,32 +142,73 @@ export function MaterialPreviewViewport(): ReactElement {
     };
   }, []);
 
-  // Staging → preview material hot refresh. Gated on `status` so the first
-  // apply cannot land before assembleMaterialPreviewWorld created the material:
-  // the boot is async, and staging opens (and notifies) while it is still in
-  // flight, so a subscription-only apply would leave the preview on its
-  // unresolved baseline until the user next touched a field.
+  // Material values → preview material hot refresh. Gated on `status` so the
+  // first apply cannot land before assembleMaterialPreviewWorld created the
+  // material: the boot is async, and staging opens (and notifies) while it is
+  // still in flight, so a subscription-only apply would leave the preview on
+  // its unresolved baseline until the user next touched a field.
+  //
+  // Two value sources by asset kind:
+  //   - material-instance: the MI staging buffer (resolveOverrides over the
+  //     parent chain), re-applied on every staging notify;
+  //   - material: the live catalog payload resolved over its parent chain,
+  //     re-applied on `assetsChanged` (the updateMaterialParams applier
+  //     invalidates the envelope post-write, so the chain is re-warmed before
+  //     resolving), overlaid with the transient drag channel
+  //     (material-preview-staging) so slider drags repaint without a commit.
   useEffect(() => {
     if (status !== 'ready') return;
-    const apply = () => {
+    let cancelled = false;
+
+    const applyMi = () => {
       const assembly = assemblyRef.current;
       if (!assembly || !asset || asset.kind !== 'material-instance') return;
       const staging = getMiStaging(asset.guid)?.staging;
       if (!staging) return;
       assembly.applyResolvedValues(resolveOverrides(staging, materialCatalogLookup(gateway.doc.registry)));
     };
-    apply();
-    // The parent is only in registry.assetCatalog once loadByGuid ran for it —
-    // warm the whole chain, then re-resolve so inherited values actually show.
-    let cancelled = false;
-    const staging = asset?.kind === 'material-instance' ? getMiStaging(asset.guid)?.staging : undefined;
-    if (staging) {
-      void ensureMaterialChainCataloged(gateway.doc.registry, staging).then(() => {
-        if (!cancelled) apply();
+
+    const applyMaterial = () => {
+      const assembly = assemblyRef.current;
+      if (!assembly || !asset || asset.kind !== 'material') return;
+      assembly.applyResolvedValues({
+        ...resolveOverrides(asset.guid, materialCatalogLookup(gateway.doc.registry)),
+        ...getMaterialPreviewParams(asset.guid),
       });
+    };
+
+    if (asset?.kind === 'material-instance') {
+      applyMi();
+      // The parent is only in registry.assetCatalog once loadByGuid ran for
+      // it — warm the whole chain, then re-resolve so inherited values show.
+      const staging = getMiStaging(asset.guid)?.staging;
+      if (staging) {
+        void ensureMaterialChainCataloged(gateway.doc.registry, staging).then(() => {
+          if (!cancelled) applyMi();
+        });
+      }
+      const unsubscribe = subscribeMiStaging(applyMi);
+      return () => { cancelled = true; unsubscribe(); };
     }
-    const unsubscribe = subscribeMiStaging(apply);
-    return () => { cancelled = true; unsubscribe(); };
+
+    if (asset?.kind === 'material') {
+      const warmAndApply = () => {
+        void ensureMaterialChainCataloged(gateway.doc.registry, asset.guid).then(() => {
+          if (cancelled) return;
+          // Post-commit the catalog is the SSOT again — drop the transient
+          // drag overlay so it cannot mask the resolved values. (Clearing
+          // notifies the staging subscriber, which simply re-applies.)
+          clearMaterialPreviewParams(asset.guid);
+          applyMaterial();
+        });
+      };
+      warmAndApply();
+      const offAssets = panelBridge.on('assetsChanged', warmAndApply);
+      const offStaged = subscribeMaterialPreviewParams((guid) => {
+        if (guid === asset.guid.toLowerCase()) applyMaterial();
+      });
+      return () => { cancelled = true; offAssets(); offStaged(); };
+    }
   }, [asset?.guid, asset?.kind, status]);
 
   useEffect(() => {

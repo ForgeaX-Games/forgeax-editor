@@ -21,8 +21,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { AUDIO_ENGINE_RESOURCE_KEY } from '@forgeax/engine-audio';
-import { AUDIO_TICK_SYSTEM_NAME } from '@forgeax/engine-audio-webaudio';
+import { AUDIO_ENGINE_RESOURCE_KEY, AUDIO_TICK_SYSTEM_NAME } from '@forgeax/engine-audio';
 import { assemblePlayWorld } from '../play-assemble';
 
 function makeFakeRenderer() {

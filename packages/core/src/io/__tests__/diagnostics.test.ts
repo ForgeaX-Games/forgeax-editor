@@ -178,7 +178,7 @@ describe('R0-07C diagnostics read model', () => {
         detail: {
           readiness: 'unavailable',
           feature: 'forgeax.vfx-render.particles',
-          provenance: { source: 'engine-vfx-render', host: 'ParticleRuntimeHost' },
+          provenance: { source: 'engine-vfx-render', host: 'VfxRuntimeHost' },
         },
       }],
       subscribe: (fn) => {

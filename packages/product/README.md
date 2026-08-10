@@ -128,6 +128,30 @@ The wire version is `TRANSPORT_PROTOCOL_VERSION`. A client should call
 `discover` before dispatch and branch on `availabilityByHost` rather than
 assuming that a capability is available in every carrier.
 
+### Browser MessagePort carrier
+
+After an iframe or popup has completed its source/origin/challenge handshake,
+transfer a dedicated `MessagePort` and attach the canonical service directly:
+
+```ts
+const carrier = createMessagePortCarrier(port, service);
+const client = createMessagePortTransportClient(peerPort, { defaultTimeoutMs: 5_000 });
+const response = await client.request(request);
+```
+
+The adapter validates `editor-transport/v1`, correlates responses, rejects
+duplicate in-flight ids, and fails pending work when its runtime generation is
+disposed. Handshake, active-runtime lease, and generation fencing remain host
+responsibilities; the carrier never creates another capability registry.
+
+### Viewport Runtime boundary
+
+`viewport-runtime/v1` separates the replaceable Runtime authority from its
+carrier (`local`, iframe, browser page, or Tauri WebView). `runtimeGeneration`
+fences late messages after a restart or relocation and is deliberately distinct
+from renderer generation. Panel read models cross the boundary as projection
+envelopes whose `empty`, `unavailable`, and `faulted` states are not conflated.
+
 ## Canonical text request/response
 
 Requests and responses are newline-delimited JSON objects. The same request

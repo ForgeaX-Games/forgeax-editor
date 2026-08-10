@@ -463,16 +463,16 @@ const builtinOps: ReadonlyArray<{
     title: 'Remove Component',
   },
   {
-    id: 'setHidden', domain: 'document',
+    id: 'setVisibility', domain: 'document',
     argsSchema: {
       type: 'object',
       properties: {
         entity: { type: 'number' },
-        hidden: { type: 'boolean' },
+        state: { type: 'string', enum: ['inherited', 'hidden', 'visible'] },
       },
-      required: ['entity', 'hidden'],
+      required: ['entity', 'state'],
     },
-    title: 'Set Hidden',
+    title: 'Set Visibility',
   },
   {
     id: 'instantiateSceneAsset', domain: 'document',
@@ -606,7 +606,7 @@ const builtinOps: ReadonlyArray<{
         roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
         baseColorTexture: { type: 'string', description: 'Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format).' },
         alphaCutoff: { type: 'number', description: 'Optional alpha-cutoff 0..1 (UE-Masked equivalent): baseColorTexture alpha below the cutoff is discarded. Omit for a fully opaque material.' },
-        packPath: { type: 'string', description: 'Optional game-relative target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. An AI normally omits this.' },
+        packPath: { type: 'string', description: 'Optional game-relative or catalog-provided canonical target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. The host resolves either form exactly once; an AI normally omits this.' },
         refs: { type: 'array', items: { type: 'string' } },
       },
       required: ['guid', 'name', 'baseColor'],
@@ -639,7 +639,7 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        packPath: { type: 'string', description: '.pack.json or .meta.json path (game-relative) containing the material asset.' },
+        packPath: { type: 'string', description: '.pack.json or .meta.json path containing the material asset. Accepts either a game-relative path or the canonical path projected by the asset catalog; the host resolves it exactly once.' },
         guid: { type: 'string', description: 'Material asset GUID to update.' },
         paramPatch: {
           type: 'object',
@@ -816,6 +816,19 @@ const builtinOps: ReadonlyArray<{
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
     },
+  },
+  { id: 'replayParticleEffect', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: {
+          type: 'number',
+          description: 'Live ParticleEffectPlayer entity in the active Edit or Play world. Re-query after Play/Stop.',
+        },
+      },
+      required: ['entity'],
+    },
+    title: 'Replay Particle Effect',
   },
   { id: 'requestRename', domain: 'session',
     argsSchema: { type: 'object', properties: { entity: { type: 'number' } }, required: ['entity'] },
@@ -1076,6 +1089,20 @@ const builtinOps: ReadonlyArray<{
     title: 'Set camera projection',
   },
   { id: 'cameraToggleProjection', domain: 'session', argsSchema: null, title: 'Toggle camera projection' },
+  { id: 'cameraSetView', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        view: {
+          type: 'string',
+          enum: ['perspective', 'top', 'bottom', 'left', 'right', 'front', 'back'],
+          description: 'UE-style view preset. Axis views switch to an orthographic camera looking straight down that axis (top=+Y down, front=+Z toward -Z, right=+X toward -X, and their opposites), keeping the current orbit target and view scale. "perspective" restores the perspective projection keeping the current view direction.',
+        },
+      },
+      required: ['view'],
+    },
+    title: 'Set viewport view preset',
+  },
   { id: 'cameraAdjustFov', domain: 'session',
     argsSchema: {
       type: 'object',

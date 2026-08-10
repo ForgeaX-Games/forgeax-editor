@@ -81,7 +81,7 @@ describe('listOps source validation (m4-w1, RED)', () => {
 describe('listOps builtin full coverage (m4-w1, RED)', () => {
   const DOCUMENT_9 = [
     'spawnEntity', 'destroyEntity', 'rename', 'reparent',
-    'setComponent', 'addComponent', 'removeComponent', 'setHidden', 'transaction',
+    'setComponent', 'addComponent', 'removeComponent', 'setVisibility', 'transaction',
   ];
 
   const SESSION_OPS = [
@@ -96,9 +96,9 @@ describe('listOps builtin full coverage (m4-w1, RED)', () => {
     // UE-style viewport camera capabilities (session-only, no document undo).
     'cameraOrbit', 'cameraFly', 'cameraTeleport', 'cameraLookAt',
     'cameraSetProjection', 'cameraToggleProjection', 'cameraAdjustFov',
-    'cameraZoom', 'cameraBookmark',
+    'cameraZoom', 'cameraBookmark', 'cameraSetView',
     // Viewport interaction preferences (session-only; clamped partial patch).
-    'setViewportPreferences',
+    'setViewportPreferences', 'replayParticleEffect',
   ];
 
   const TRANSIENT_OPS = [

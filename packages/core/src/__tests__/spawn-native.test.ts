@@ -92,6 +92,17 @@ describe('spawn entity — cube', () => {
       expect(mats.length).toBe(0);
     }
   });
+
+  it('keeps an explicitly requested empty MeshRenderer as a real component', () => {
+    const s = createSession();
+    const eH = spawnNative(s, 'ExplicitRenderer', {
+      MeshFilter: { assetHandle: HANDLE_CUBE },
+      MeshRenderer: {},
+    });
+    const mr = s.world.get(eH, MeshRenderer);
+    expect(mr.ok).toBe(true);
+    if (mr.ok) expect(mr.value.materials.length).toBe(0);
+  });
 });
 
 // ── Cylinder spawn ────────────────────────────────────────────────────────────

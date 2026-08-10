@@ -145,6 +145,35 @@ describe('createMaterial dispatch (document applier — validation)', () => {
 // is a real Materials.standard() material carrying the authored baseColor/metallic/
 // roughness — the exact data-loss the friction was about (a material with no params).
 describe('createMaterial applier builds a real Materials.standard() POD', () => {
+  it('canonicalizes both game-relative and already-resolved pack paths exactly once', async () => {
+    const { applyCreateMaterial } = await import('../session/pack-ops');
+    setPathResolver((relativePath) => relativePath ? `sample/${relativePath}` : 'sample');
+    const captured: string[] = [];
+    const fakeCtx = {
+      assetIO: {
+        createAssetInPack(opts: { packPath: string }) {
+          captured.push(opts.packPath);
+          return Promise.resolve({ ok: true });
+        },
+      },
+    } as never;
+
+    for (const [guid, packPath] of [
+      ['11111111-1111-4111-8111-111111111111', 'assets/materials.pack.json'],
+      ['22222222-2222-4222-8222-222222222222', 'sample/assets/materials.pack.json'],
+    ] as const) {
+      const result = applyCreateMaterial(fakeCtx, {
+        kind: 'createMaterial', guid, name: guid, baseColor: [1, 1, 1, 1], packPath,
+      } as never);
+      expect(result.ok).toBe(true);
+    }
+
+    expect(captured).toEqual([
+      'sample/assets/materials.pack.json',
+      'sample/assets/materials.pack.json',
+    ]);
+  });
+
   it('the pack entry carries kind:material + the authored PBR params', async () => {
     const { applyCreateMaterial } = await import('../session/pack-ops');
     interface CapturedCreate {
@@ -316,6 +345,35 @@ describe('createMaterial baseColorTexture phantom-ref validation', () => {
 });
 
 describe('AssetIOFacade authored pack version', () => {
+  it('does not resolve an already-canonical host path a second time', async () => {
+    setPathResolver((relativePath) => relativePath ? `sample/${relativePath}` : 'sample');
+    const originalFetch = globalThis.fetch;
+    const paths: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body)) as { path?: unknown };
+      if (typeof body?.path === 'string') paths.push(body.path);
+      return init?.method === 'POST'
+        ? new Response('{}', { status: 200 })
+        : new Response(null, { status: 404 });
+    }) as typeof fetch;
+    try {
+      const result = await new AssetIOFacade().createAssetInPack({
+        packPath: 'sample/assets/materials.pack.json',
+        asset: {
+          guid: '019fc6d1-4a9f-74d2-af06-a41a3f0563ce',
+          kind: 'material',
+          name: 'Canonical Path',
+          payload: { kind: 'material', values: {} },
+          refs: [],
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(paths).toEqual(['sample/assets/materials.pack.json']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('writes a new material pack in the runtime Pack v2 envelope', async () => {
     const originalFetch = globalThis.fetch;
     let posted: Record<string, unknown> | null = null;

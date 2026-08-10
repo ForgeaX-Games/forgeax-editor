@@ -1,6 +1,8 @@
 import {
   createApp,
   addGamePluginSystems,
+  describeGamePluginSystems,
+  installGamePluginProducers,
   loadGame,
   loadGamePluginModules,
   type GamePluginLoad,
@@ -269,7 +271,7 @@ if (gpResult?.ok) {
   }
 }
 
-// The independent Play host owns one ParticleRuntimeHost. Its camera source is
+// The independent Play host owns one VfxRuntimeHost. Its camera source is
 // late-bound because createApp yields the fresh World only after construction.
 // The same public host feature is supplied to createApp and the same world plus
 // renderer AssetRegistry are attached after the app has been created.
@@ -637,6 +639,21 @@ if (entry) {
 if (gamePluginLoad.systems.length > 0) {
   const added = addGamePluginSystems(world, gamePluginLoad);
   if (added.length > 0) console.log(`[engine] game systems added: ${added.join(', ')}`);
+  const diagnostics = describeGamePluginSystems(gamePluginLoad, added);
+  const missing = diagnostics.filter((entry) => entry.status === 'missing');
+  if (missing.length > 0) console.warn(`[engine] missing game systems: ${missing.map((entry) => entry.system).join(', ')}`);
+}
+
+// Pure preview has no Editor Gateway, but it still consumes the same producer
+// contract. This validates descriptor registration and producer-owned lifecycle
+// recovery without inventing a second action/read carrier for the no-editor host.
+if (gamePluginLoad.plugins.some((plugin) => plugin.producer !== undefined)) {
+  const producerResult = await installGamePluginProducers(gamePluginLoad, { world });
+  if (!producerResult.ok) {
+    console.error(`[engine] gameplay producer failed: ${producerResult.error.pluginId}: ${producerResult.error.hint}`);
+  } else {
+    console.log(`[engine] gameplay producers admitted: ${producerResult.value.descriptors.map((descriptor) => `${descriptor.id}@${descriptor.version}`).join(', ')}`);
+  }
 }
 
 // ── Start the frame loop ──

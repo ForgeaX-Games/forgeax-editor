@@ -14,7 +14,7 @@
 //     pack-ops low-level primitives readPack / writePack / deleteAsset.
 import { normalizePackForRuntime, type PackFile } from '../scene/scene-pack';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
-import { resolveGamePath } from '../util/path-resolver';
+import { resolveGamePathOnce } from '../util/path-resolver';
 import {
   readPack, writePack, deleteAsset, generateAssetGuid,
   readPackDetailed, writePackDetailed,
@@ -440,7 +440,7 @@ export class AssetIOFacade {
     recordAssetLeaf('assetIO.createAssetInPack');
     let resolvedPackPath: string;
     try {
-      resolvedPackPath = resolveGamePath(opts.packPath);
+      resolvedPackPath = resolveGamePathOnce(opts.packPath);
     } catch {
       resolvedPackPath = opts.packPath;
     }

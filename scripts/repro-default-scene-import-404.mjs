@@ -81,6 +81,31 @@ async function waitForHost(getLog) {
   throw new Error(`standalone host did not become ready\n${getLog().slice(-3000)}`);
 }
 
+async function waitForRuntimeEvalChannel(page) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const frame = page.frames().find((candidate) => {
+      try {
+        return new URL(candidate.url()).pathname.startsWith('/editor/');
+      } catch {
+        return false;
+      }
+    });
+    if (frame) {
+      try {
+        const ready = await frame.evaluate(() => (
+          typeof globalThis.__forgeaxEval?.eval === 'function'
+        ));
+        if (ready) return frame;
+      } catch {
+        // The Runtime frame may be navigating during cold startup.
+      }
+    }
+    await sleep(250);
+  }
+  throw new Error('authoritative Runtime eval channel unavailable');
+}
+
 async function main() {
   const child = spawn(
     'bun',
@@ -189,7 +214,8 @@ async function main() {
     // load well beyond the catalog response, especially on CI runners.
     await page.waitForTimeout(30_000);
 
-    const runtime = await page.evaluate(() => {
+    const runtimeFrame = await waitForRuntimeEvalChannel(page);
+    const runtime = await runtimeFrame.evaluate(() => {
       const channel = globalThis.__forgeaxEval;
       if (!channel || typeof channel.eval !== 'function') {
         return { ok: false, error: 'standalone eval channel unavailable' };

@@ -43,6 +43,12 @@ export interface MenuItemDef {
   args?: unknown;
   /** 键位组合 (canonical),例:'Ctrl+S'。Web 用 prettyCombo 显示,原生转为 accelerator。 */
   keybinding?: string;
+  /** 动态子菜单的**事实**(供投影/门对账消费,不是行为指南):
+   *  所有动态子项共用的 commandId(如「打开最近」的每一行都是 game.pick)。 */
+  dynamicChildCommandId?: string;
+  /** 动态子项 id 的构成事实:`\${本项id}.\${args[该键]}`(如 file.openRecent.<slug>)。
+   *  有了它,外部调用方无需展开动态列表就能按参数定位到具体子项。 */
+  dynamicChildIdFromArg?: string;
   /** 可见性谓词 —— 返回 false 时该项从菜单中**隐藏** (原生序列化时直接 drop)。 */
   when?: () => boolean;
   /** 显式启用谓词 —— 缺省时默认为 `!!commandId` (无命令则不可点)。 */

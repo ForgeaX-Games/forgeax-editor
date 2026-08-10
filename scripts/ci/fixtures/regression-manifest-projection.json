@@ -1,0 +1,145 @@
+{
+  "manifestVersion": "forgeax-regression/v1",
+  "checks": [
+    {
+      "id": "b2-self-boot",
+      "name": "b2-self-boot",
+      "command": "bun",
+      "args": ["scripts/selfcheck-standalone-b2.mjs"],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["fast", "full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      }
+    },
+    {
+      "id": "typecheck",
+      "name": "typecheck",
+      "command": "bun",
+      "args": ["run", "typecheck"],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["fast", "full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      }
+    },
+    {
+      "id": "r0-sample-vfx-skill",
+      "name": "r0-sample-vfx-skill",
+      "command": "bun",
+      "args": ["scripts/lint-sample-vfx-skill.mjs"],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["fast", "full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      }
+    },
+    {
+      "id": "r0-engine-dogfood-diagnostics",
+      "name": "r0-engine-dogfood-diagnostics",
+      "command": "pnpm",
+      "args": [
+        "-C",
+        "packages/engine",
+        "exec",
+        "vitest",
+        "run",
+        "--project=@forgeax/engine-animation",
+        "packages/animation/src/__tests__/animation-diagnostic.unit.test.ts",
+        "--project=@forgeax/engine-vite-plugin-rhi-debug",
+        "packages/vite-plugin-rhi-debug/src/__tests__/trigger.test.ts"
+      ],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["fast", "full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      }
+    },
+    {
+      "id": "submodule-pin",
+      "name": "submodule-pin",
+      "command": "node",
+      "args": ["scripts/check-submodule-pins.mjs"],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": false,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      }
+    },
+    {
+      "id": "smoke-play",
+      "name": "smoke-play",
+      "command": "bun",
+      "args": ["run", "test:e2e", "--", "e2e/smoke-boot-play.spec.ts"],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": false,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      }
+    }
+  ],
+  "profiles": {
+    "fast": ["b2-self-boot", "typecheck", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
+    "full": ["b2-self-boot", "typecheck", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"]
+  },
+  "requiredContexts": [
+    {"context": "b2-self-boot", "checkId": "b2-self-boot"},
+    {"context": "typecheck", "checkId": "typecheck"},
+    {"context": "submodule-pin", "checkId": "submodule-pin"},
+    {"context": "smoke-play", "checkId": "smoke-play"}
+  ]
+}

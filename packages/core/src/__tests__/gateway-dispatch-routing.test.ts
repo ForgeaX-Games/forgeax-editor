@@ -100,15 +100,15 @@ describe('EditGateway dispatch routing — document domain (m1-w3, RED)', () => 
     expect(readPosX(bus, id)).toBe(0);
   });
 
-  it('all 9 document kind are routable: spawnEntity/destroyEntity/rename/reparent/setComponent/addComponent/removeComponent/setHidden/transaction', () => {
-    // RED: verify that current dispatch handles all 9 existing kinds.
+  it('all 9 document kind are routable: spawnEntity/destroyEntity/rename/reparent/setComponent/addComponent/removeComponent/setVisibility/transaction', () => {
+    // Verify that current dispatch handles all 9 document kinds.
     // After m1-w6, these go through documentAppliers table but behavior is identical.
     const id = spawnEntity(bus, 'box');
     const results = [
       bus.dispatch({ kind: 'rename', entity: id, name: 'renamed' }),
       bus.dispatch({ kind: 'reparent', entity: id, parent: null }),
       bus.dispatch({ kind: 'setComponent', entity: id, component: 'Transform', patch: { pos: [1, 0, 0] } }),
-      bus.dispatch({ kind: 'setHidden', entity: id, hidden: false }),
+      bus.dispatch({ kind: 'setVisibility', entity: id, state: 'visible' }),
     ];
     for (const r of results) {
       expect(r.ok).toBe(true);

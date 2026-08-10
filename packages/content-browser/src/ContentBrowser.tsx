@@ -5,8 +5,9 @@ import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-she
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { describeSceneActivation, generateAssetGuid, gateway, getSelection, requestAddAssetsToChat, resolveGamePath, showContextMenu,
+import { describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, requestAddAssetsToChat, resolveGamePath, showContextMenu,
   ResizeHandle, useLocalSize, useSceneReadModel, validateAssetBasename } from '@forgeax/editor-core';
+import type { OperationRun } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
 // (Dialog / AlertDialog) mounted once at the app root via EditorOverlayProvider
 // (standalone main.tsx / studio editorRenderers.tsx). Both are async.
@@ -99,7 +100,23 @@ const favoriteRef = (item: CBViewItem): CBFavoriteRef => (
 // Asset invalidation is owned by useAssetBrowserSnapshot via assetsChanged; this
 // component only consumes the resulting read model through useCBData.
 
-export function ContentBrowser() {
+export interface ContentBrowserOperationRuns {
+  readonly getSnapshot: () => { readonly revision: number; readonly runs: readonly OperationRun[] };
+  readonly subscribe?: (listener: () => void) => () => void;
+  readonly retry?: (runId: string, requestId?: string) => void;
+}
+
+export interface ContentBrowserProps {
+  readonly operationRuns?: ContentBrowserOperationRuns;
+}
+
+const localOperationRuns: ContentBrowserOperationRuns = {
+  getSnapshot: () => gateway.operationRunSnapshot(),
+  subscribe: (listener) => gateway.subscribeOperationRuns(() => listener()),
+  retry: (runId, requestId) => { gateway.retryOperationRun(requestId ?? runId, crypto.randomUUID(), 'human'); },
+};
+
+export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const host = useHost();
   const { t } = useTranslation();
   useContentBrowserPanelContributions();
@@ -107,10 +124,11 @@ export function ContentBrowser() {
   // Subscribe to the existing scene-list signal so the read model is rebuilt
   // from the real slug instead of remaining on the initial `default` guard.
   const sceneModel = useSceneReadModel();
-  const operationRunRevision = useSyncExternalStore(
-    (listener) => gateway.subscribeOperationRuns(() => listener()),
-    () => gateway.operationRunSnapshot().revision,
-    () => gateway.operationRunSnapshot().revision,
+  const operationRunSource = operationRuns ?? localOperationRuns;
+  const operationRunSnapshot = useSyncExternalStore(
+    (listener) => operationRunSource.subscribe?.(listener) ?? (() => {}),
+    () => operationRunSource.getSnapshot(),
+    () => operationRunSource.getSnapshot(),
   );
   // The standalone host already has the authoritative slug at compile time;
   // use it during the async host-session gap, then let the scene-list signal
@@ -148,13 +166,14 @@ export function ContentBrowser() {
   const [sourceMutationAsset, setSourceMutationAsset] = useState<CBAsset | null>(null);
   useEffect(() => {
     if (sourceMutationAsset?.sourceKey === undefined) return;
-    const result = gateway.dispatch({
+    void dispatchActiveEditorOperation({
       kind: 'asset.preflight',
       guid: sourceMutationAsset.guid,
       scope: { sourceKey: sourceMutationAsset.sourceKey },
       requestId: crypto.randomUUID(),
-    }, 'human');
-    if (!result.ok) console.warn('[content-browser] source preflight rejected', result.error);
+    }, 'human').then((result) => {
+      if (!result.ok) console.warn('[content-browser] source preflight rejected', result.error);
+    });
   }, [sourceMutationAsset]);
   // Selection/preview for files & folders is anchored on the disk PATH
   // (viewItemKey), which is exactly what a rename mutates — so after the catalog
@@ -413,7 +432,7 @@ export function ContentBrowser() {
 
       for (const asset of current) {
         if (asset.kind !== 'scene') {
-          const result = gateway.dispatch({ kind: 'destroyAsset', guid: asset.guid }, 'human');
+          const result = await dispatchActiveEditorOperation({ kind: 'destroyAsset', guid: asset.guid }, 'human');
           if (!result.ok) {
             setDeleteError(result.error.hint);
             return;
@@ -551,7 +570,7 @@ export function ContentBrowser() {
           // D6: rename routes through the ONE gateway door (document op, undoable).
           // The applier reaches pack IO via ctx.assetIO and fires the in-process
           // assetsChanged notification; the Content Browser listener reloads.
-          gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
+          void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
         }
       })();
     },
@@ -582,7 +601,7 @@ export function ContentBrowser() {
 
   const sourceMutationViewModel = useMemo(() => {
     if (!sourceMutationAsset?.sourceKey) return null;
-    const runs = gateway.operationRunSnapshot().runs;
+    const runs = operationRunSnapshot.runs;
     const preflightRun = findSourceMutationPreflightRun(runs, sourceMutationAsset.guid, sourceMutationAsset.sourceKey);
     const preflight = preflightRun === undefined ? undefined : sourceMutationPreflightFromRun(preflightRun);
     if (preflight === undefined) return null;
@@ -608,14 +627,15 @@ export function ContentBrowser() {
       ...(preflight.confirmation === undefined ? {} : { confirmation: preflight.confirmation }),
       now: Date.now(),
     });
-  }, [operationRunRevision, sourceMutationAsset]);
+  }, [operationRunSnapshot, sourceMutationAsset]);
 
   const dispatchCatalogReconcile = useCallback(() => {
-    const result = gateway.dispatch({
+    void dispatchActiveEditorOperation({
       kind: 'catalog.reconcile',
       requestId: crypto.randomUUID(),
-    }, 'human');
-    if (!result.ok) console.warn('[content-browser] catalog reconcile rejected', result.error);
+    }, 'human').then((result) => {
+      if (!result.ok) console.warn('[content-browser] catalog reconcile rejected', result.error);
+    });
   }, []);
 
   const handleSourceMutationAction = useCallback((action: SourceMutationAction) => {
@@ -626,26 +646,27 @@ export function ContentBrowser() {
     if (action === 'reimport') {
       dispatchReimportAsset({ ...asset, revision: viewModel.impact.expectedRevision });
     } else if (action === 'discard' && viewModel.confirmationToken) {
-      const result = gateway.dispatch({
+      void dispatchActiveEditorOperation({
         kind: 'discardSourceOverridesAndReimport',
         guid: asset.guid,
         scope: { sourceKey: asset.sourceKey! },
         expectedRevision: viewModel.impact.expectedRevision,
         confirmationToken: viewModel.confirmationToken,
         requestId: crypto.randomUUID(),
-      }, 'human');
-      if (!result.ok) console.warn('[content-browser] discard source overrides rejected', result.error);
+      }, 'human').then((result) => {
+        if (!result.ok) console.warn('[content-browser] discard source overrides rejected', result.error);
+      });
     } else if (action === 'retry') {
       const run = findRetryableSourceMutationRun(
-        gateway.operationRunSnapshot().runs,
+        operationRunSnapshot.runs,
         asset.guid,
         sourceKey,
       );
-      if (run) gateway.retryOperationRun(run.requestId ?? run.runId, crypto.randomUUID(), 'human');
+      if (run) operationRunSource.retry?.(run.runId, run.requestId);
     } else if (action === 'reconcile') {
       dispatchCatalogReconcile();
     }
-  }, [dispatchCatalogReconcile, sourceMutationAsset, sourceMutationViewModel]);
+  }, [dispatchCatalogReconcile, operationRunSnapshot, operationRunSource, sourceMutationAsset, sourceMutationViewModel]);
 
   const createFolderInCurrentPath = useCallback(() => {
     void (async () => {

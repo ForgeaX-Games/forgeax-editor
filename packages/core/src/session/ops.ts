@@ -18,10 +18,16 @@ import {
   entName,
   worldEntityHandles,
 } from '../store/entity-state';
-import { EditorHidden } from '../components/EditorHidden';
+import { readVisibilityIntent, type VisibilityState } from '../visibility';
 import { Transform } from '@forgeax/engine-scene';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
+import {
+  FACING_PIVOT_NAME,
+  findFacingPivot,
+  findJointRoot,
+} from '../scene/skin-joints';
+import { eulerToQuat } from '../util/euler-quat';
 
 // ── Transaction forward-reference placeholder allocator ─────────────────────
 // A negative counter mints unique placeholder handles for entities a transaction
@@ -192,46 +198,42 @@ export function deleteManyCascade(handles: EntityHandle[]): void {
   gateway.dispatch({ kind: 'setSelection', id: null });
 }
 
-// ── Hide operations (UE parity §1 — docs 2026-08-04-editor-hide-ue-parity-plan) ──
-// All three gestures route through the same `setHidden` document op (one gateway
-// door, AI-equal); multi-entity gestures are ONE transaction = ONE undo step,
-// matching deleteManyCascade. Panels and the keyboard router share these —
-// no UI-layer reimplementation (north-star §3.2).
+// ── Visibility operations ─────────────────────────────────────────────────────
+// All gestures route through the same `setVisibility` document op (one gateway
+// door, AI-equal); multi-entity gestures are ONE transaction = ONE undo step.
+// Visibility.state is authored intent; the engine resolves inheritance for
+// rendering and the editor reads that same resolution for hierarchy/picking.
 
-function isHiddenEnt(world: World, h: EntityHandle): boolean {
-  return world.get(h, EditorHidden).ok;
-}
-
-/** Set EditorHidden to `hidden` on every handle whose state differs, as ONE
- *  transaction (one undo step). Shared by the Hierarchy eye toggle, the scene
- *  folder eye, and H/Ctrl+H — no UI-layer reimplementation (north-star §3.2). */
-export function setHiddenMany(handles: readonly EntityHandle[], hidden: boolean): void {
+/** Set Visibility.state on every handle whose intent differs, as ONE
+ * transaction (one undo step). Shared by the Hierarchy eye toggle, the scene
+ * folder eye, and H/Ctrl+H — no UI-layer reimplementation. */
+export function setVisibilityMany(handles: readonly EntityHandle[], state: VisibilityState): void {
   const world = gateway.activeWorld;
-  const targets = handles.filter((h) => entExists(world, h) && isHiddenEnt(world, h) !== hidden);
+  const targets = handles.filter((h) => entExists(world, h) && readVisibilityIntent(world, h) !== state);
   if (targets.length === 0) return;
   if (targets.length === 1) {
-    gateway.dispatch({ kind: 'setHidden', entity: targets[0]!, hidden });
+    gateway.dispatch({ kind: 'setVisibility', entity: targets[0]!, state });
     return;
   }
-  const commands: EditorOp[] = targets.map((e) => ({ kind: 'setHidden', entity: e, hidden }));
-  gateway.dispatch({ kind: 'transaction', label: `${hidden ? 'hide' : 'show'} x${targets.length}`, commands });
+  const commands: EditorOp[] = targets.map((e) => ({ kind: 'setVisibility', entity: e, state }));
+  gateway.dispatch({ kind: 'transaction', label: `${state === 'hidden' ? 'hide' : 'show'} x${targets.length}`, commands });
 }
 
 /** H — hide the given entities (skips already-hidden). */
 export function hideMany(handles: readonly EntityHandle[]): void {
-  setHiddenMany(handles, true);
+  setVisibilityMany(handles, 'hidden');
 }
 
-/** Ctrl+H — show every entity carrying EditorHidden. */
+/** Ctrl+H — show every entity with explicit hidden intent. */
 export function showAllHidden(): void {
   const world = gateway.activeWorld;
-  const hidden = worldEntityHandles(world).filter((h) => isHiddenEnt(world, h));
+  const hidden = worldEntityHandles(world).filter((h) => readVisibilityIntent(world, h) === 'hidden');
   if (hidden.length === 0) return;
   if (hidden.length === 1) {
-    gateway.dispatch({ kind: 'setHidden', entity: hidden[0]!, hidden: false });
+    gateway.dispatch({ kind: 'setVisibility', entity: hidden[0]!, state: 'visible' });
     return;
   }
-  const commands: EditorOp[] = hidden.map((e) => ({ kind: 'setHidden', entity: e, hidden: false }));
+  const commands: EditorOp[] = hidden.map((e) => ({ kind: 'setVisibility', entity: e, state: 'visible' }));
   gateway.dispatch({ kind: 'transaction', label: `show all hidden x${hidden.length}`, commands });
 }
 
@@ -243,7 +245,7 @@ export function hideUnselected(selection: ReadonlySet<EntityHandle>): void {
   const sel = new Set<number>([...selection] as number[]);
   if (sel.size === 0) return;
   const targets = worldEntityHandles(world).filter((h) => {
-    if (sel.has(h as number) || isHiddenEnt(world, h)) return false;
+    if (sel.has(h as number) || readVisibilityIntent(world, h) === 'hidden') return false;
     for (const s of sel) {
       // Keep the selected entity's ancestors visible: recursively hiding a
       // parent would take the isolated child down with it.
@@ -255,10 +257,10 @@ export function hideUnselected(selection: ReadonlySet<EntityHandle>): void {
   });
   if (targets.length === 0) return;
   if (targets.length === 1) {
-    gateway.dispatch({ kind: 'setHidden', entity: targets[0]!, hidden: true });
+    gateway.dispatch({ kind: 'setVisibility', entity: targets[0]!, state: 'hidden' });
     return;
   }
-  const commands: EditorOp[] = targets.map((e) => ({ kind: 'setHidden', entity: e, hidden: true }));
+  const commands: EditorOp[] = targets.map((e) => ({ kind: 'setVisibility', entity: e, state: 'hidden' }));
   gateway.dispatch({ kind: 'transaction', label: `isolate selection (hide x${targets.length})`, commands });
 }
 
@@ -418,4 +420,69 @@ export function duplicateEntity(handle: EntityHandle): void {
   if (roots.length > 0) {
     gateway.dispatch({ kind: 'setSelection', id: roots[0]! });
   }
+}
+
+// ── Facing correction (socket-calibration M2, doc §3.4 朝向标定) ──────────────
+// Reuses the engine's rig-driving contract (skin.ts:45-46): yaw the whole skinned
+// model by parenting its joint root under a dedicated pivot entity and setting a
+// pure-yaw Transform on the pivot. The Skin entity's own Transform is ignored at
+// render, so the pivot MUST sit above the joint root — never on the Skin entity.
+// The pivot is identified by the conventional Name `FACING_PIVOT_NAME` (a scene-
+// level convention, not a new component); the tool inserts one when none exists.
+// Every write is a gateway dispatch (invariant 7): pivot creation is a single
+// transaction (spawn + reparent), yaw edits are setComponent on the pivot.
+
+/**
+ * Resolve the facing pivot for `skinEntity`, creating one above its joint root if
+ * none exists yet. Returns the pivot handle (live), or null when the Skin has no
+ * joints (no joint root to drive). Creation is one undo step: spawn the pivot as
+ * a sibling of the joint root under the joint root's current parent, then
+ * reparent the joint root under the pivot (world-preserving — the pivot starts at
+ * identity so the rig does not jump).
+ */
+export function ensureFacingPivot(skinEntity: EntityHandle): EntityHandle | null {
+  const world = gateway.activeWorld;
+  if (world === null) return null;
+  if (!entExists(world, skinEntity)) return null;
+  const jointRoot = findJointRoot(world, skinEntity);
+  if (jointRoot === null) return null;
+  const existing = findFacingPivot(world, jointRoot);
+  if (existing !== null) return existing;
+
+  // Insert a pivot between the joint root and its current parent.
+  const pivotRef = nextPlaceholder();
+  const oldParent = entParent(world, jointRoot);
+  const commands: EditorOp[] = [
+    {
+      kind: 'spawnEntity',
+      name: FACING_PIVOT_NAME,
+      parent: oldParent,
+      components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+      _id: pivotRef,
+    },
+    { kind: 'reparent', entity: jointRoot, parent: pivotRef },
+  ];
+  const r = gateway.dispatch({ kind: 'transaction', label: 'create facing pivot', commands });
+  if (!r.ok || !r.result) return null;
+  // Only the pivot's spawnEntity creates a root; reparent creates none.
+  return (r.result.created[0] as EntityHandle) ?? null;
+}
+
+/**
+ * Apply a pure-yaw correction (degrees) to the skinned model owning `skinEntity`.
+ * Ensures the pivot exists, then writes `eulerToQuat(0, yaw, 0)` to the pivot's
+ * Transform.quat (a single setComponent dispatch — one undo step). Pure yaw
+ * replaces any prior rotation on the pivot; pitch/roll are intentionally zeroed
+ * (doc §3.4 scopes facing correction to yaw only).
+ */
+export function setFacingYaw(skinEntity: EntityHandle, yawDeg: number): void {
+  const pivot = ensureFacingPivot(skinEntity);
+  if (pivot === null) return;
+  const quat = eulerToQuat(0, yawDeg, 0);
+  gateway.dispatch({
+    kind: 'setComponent',
+    entity: pivot,
+    component: 'Transform',
+    patch: { quat },
+  });
 }

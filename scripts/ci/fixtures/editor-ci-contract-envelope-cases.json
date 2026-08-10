@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "name": "admission failure does not retry",
+      "failureClass": "admission",
+      "transient": false,
+      "expectedRetry": false,
+      "expectedMaxAttempts": 1
+    },
+    {
+      "name": "environment failure does not retry",
+      "failureClass": "environment",
+      "transient": true,
+      "expectedRetry": false,
+      "expectedMaxAttempts": 1
+    },
+    {
+      "name": "source failure does not retry",
+      "failureClass": "source",
+      "transient": true,
+      "expectedRetry": false,
+      "expectedMaxAttempts": 1
+    },
+    {
+      "name": "transient external transport retries once",
+      "failureClass": "external-transport",
+      "transient": true,
+      "expectedRetry": true,
+      "expectedMaxAttempts": 2
+    },
+    {
+      "name": "non-transient external transport does not retry",
+      "failureClass": "external-transport",
+      "transient": false,
+      "expectedRetry": false,
+      "expectedMaxAttempts": 1
+    }
+  ]
+}

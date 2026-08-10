@@ -12,7 +12,18 @@ import {
 } from '@forgeax/engine-app';
 
 export type { GamePluginLoad, GamePluginModule, LoadedGamePlugin } from '@forgeax/engine-app';
-export { addGamePluginSystems, getPlayPluginFailure, loadGamePluginModules } from '@forgeax/engine-app';
+export type {
+  GamePluginInstallResult,
+  GamePluginInstallation,
+  GamePluginSystemDiagnostic,
+} from '@forgeax/engine-app';
+export {
+  addGamePluginSystems,
+  describeGamePluginSystems,
+  getPlayPluginFailure,
+  installGamePluginProducers,
+  loadGamePluginModules,
+} from '@forgeax/engine-app';
 
 export interface GamePluginDeps {
   readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;

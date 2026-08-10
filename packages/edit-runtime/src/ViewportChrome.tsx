@@ -12,6 +12,7 @@ import { gateway, VISUAL_QUALITY_PRESETS, type VisualQualityPreset } from '@forg
 import { getViewportQuadrant, onViewportQuadrantChange } from './viewport/viewport-quadrant';
 import { GameOverlay } from './GameOverlay';
 import { PlayTerminal } from './PlayTerminal';
+import { ViewportViewMenu } from './ViewportViewMenu';
 
 interface ViewportChromeProps {
   fps: number;
@@ -50,6 +51,7 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControl
   return (
     <>
       <PlayTerminal onPlay={onPlay} onStop={onStop} />
+      <ViewportViewMenu />
       <div className="vp-quality-control" data-testid="vp-visual-quality-control">
         <label htmlFor="vp-visual-quality">Visual quality</label>
         <select

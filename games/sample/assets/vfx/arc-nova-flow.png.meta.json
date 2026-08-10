@@ -1,0 +1,20 @@
+{
+  "kind": "external-asset-package",
+  "importer": "image",
+  "schemaVersion": "1.0.0",
+  "source": "arc-nova-flow.png",
+  "importSettings": {
+    "colorSpace": "srgb",
+    "mipmap": true,
+    "addressMode": "repeat",
+    "filterMode": "linear",
+    "compressionMode": "none"
+  },
+  "subAssets": [
+    {
+      "guid": "6e6de455-9ff1-4d5c-a896-ff1426531791",
+      "sourceIndex": 0,
+      "kind": "texture"
+    }
+  ]
+}

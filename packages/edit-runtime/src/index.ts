@@ -16,8 +16,37 @@ export { ViewportBar } from './ViewportBar';
 
 // ── Engine ──
 export { createViewport } from './viewport/viewport';
-export { projectGatewayActions, projectGatewayOps } from './gateway-action-projection';
-export type { GatewayActionSource, ProjectedGatewayAction, RegisterGatewayAction } from './gateway-action-projection';
+export { projectGatewayActions, projectGatewayOps, projectViewportRuntimeOps } from './gateway-action-projection';
+export {
+  VIEWPORT_RUNTIME_CONNECT,
+  VIEWPORT_RUNTIME_CONNECTED,
+  VIEWPORT_RUNTIME_READY,
+  createViewportProjectionQuery,
+  createViewportRuntimeTransportService,
+  installViewportRuntimeConnectionHost,
+  isViewportRuntimeConnectMessage,
+  isViewportRuntimeConnectedMessage,
+  isViewportRuntimeReadyMessage,
+  readViewportRuntimeIdentity,
+  readViewportRuntimeHostOrigin,
+  viewportRuntimeTransportScope,
+} from './runtime/viewport-runtime-transport';
+export { ViewportRuntimeFrame, buildViewportRuntimeUrl } from './runtime/ViewportRuntimeFrame';
+export type { ViewportRuntimeFrameProps, ViewportRuntimeFrameStatus } from './runtime/ViewportRuntimeFrame';
+export type {
+  ViewportRuntimeConnectMessage,
+  ViewportRuntimeConnectedMessage,
+  ViewportRuntimeReadyMessage,
+  ViewportRuntimeConnectionHostOptions,
+  ViewportRuntimeMessageSource,
+  ViewportRuntimeMessageTarget,
+} from './runtime/viewport-runtime-transport';
+export type {
+  GatewayActionSource,
+  ProjectedGatewayAction,
+  RegisterGatewayAction,
+  ViewportGatewayActionSource,
+} from './gateway-action-projection';
 
 // Public host seam for a managed Studio page. The port wraps the existing
 // RunLifecycle; it does not create a second World or own the editor session.

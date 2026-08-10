@@ -14,7 +14,7 @@
 //      pivot unit-cube — off-pivot clicks on walls/roof hit;
 //   2. unnamed mesh nodes ARE candidates (GLB mount members without Name);
 //   3. nearest tmin wins; miss → null;
-//   4. EditorHidden on an ancestor excludes the subtree (UE recursive hide);
+//   4. hidden Visibility on an ancestor excludes the subtree;
 //   5. meshes without a populated aabb keep the legacy entityBox heuristic;
 //   6. rotation / parent translation come from Transform.world (the old
 //      heuristic read local scale only and could not do this at all).
@@ -22,10 +22,9 @@
 import { describe, expect, it } from 'bun:test';
 import { World, type EntityHandle, type Handle } from '@forgeax/engine-ecs';
 import { box3, mat4 } from '@forgeax/engine-math';
-import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { MeshFilter, MeshRenderer, Visibility, VisibilityStateValue } from '@forgeax/engine-render';
 import { ChildOf, Name, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
-import { EditorHidden } from '@forgeax/editor-core';
 import { pickMeshFallback } from '../viewport-pick-fallback';
 import { aabbToWorldBox, entityBox } from '../viewport-ray';
 
@@ -116,7 +115,7 @@ describe('bug-20260806 pickMeshFallback — GLB house pickable by real mesh AABB
     expect(pickMeshFallback(world, [50, 50, 20], [0, 0, -1])).toBeNull();
   });
 
-  it('EditorHidden on the wrapper ancestor excludes the whole subtree (UE recursive hide)', () => {
+  it('hidden Visibility on the wrapper ancestor excludes the whole subtree', () => {
     const { world, meshHandle } = makeHouseScene();
     const wrapper = world.spawn(
       { component: Name, data: { value: 'House' } },
@@ -127,7 +126,7 @@ describe('bug-20260806 pickMeshFallback — GLB house pickable by real mesh AABB
     propagateTransforms(world);
     expect(pickMeshFallback(world, [0, 0, 20], [0, 0, -1])).not.toBeNull();
 
-    const hide = world.addComponent(wrapper.value, { component: EditorHidden, data: {} });
+    const hide = world.addComponent(wrapper.value, { component: Visibility, data: { state: VisibilityStateValue.hidden } });
     if (!hide.ok) throw new Error('addComponent failed');
     expect(pickMeshFallback(world, [0, 0, 20], [0, 0, -1])).toBeNull();
   });

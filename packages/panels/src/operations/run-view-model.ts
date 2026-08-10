@@ -322,6 +322,8 @@ const EMPTY_SOURCE: OperationProjectionSource = Object.freeze({
 });
 
 let activeSource: OperationProjectionSource = EMPTY_SOURCE;
+let releaseActiveSource: () => void = () => {};
+const projectionListeners = new Set<() => void>();
 let rowsCache: {
   readonly source: OperationProjectionSource;
   readonly revision: number;
@@ -329,11 +331,22 @@ let rowsCache: {
   readonly rows: readonly OperationCenterRow[];
 } | undefined;
 
+function publishProjectionChange(): void {
+  for (const listener of [...projectionListeners]) listener();
+}
+
+function activateProjectionSource(source: OperationProjectionSource): void {
+  releaseActiveSource();
+  activeSource = source;
+  releaseActiveSource = source.subscribe?.(publishProjectionChange) ?? (() => {});
+  publishProjectionChange();
+}
+
 export function installOperationProjectionSource(source: OperationProjectionSource): () => void {
   const previous = activeSource;
-  activeSource = source;
+  activateProjectionSource(source);
   return () => {
-    if (activeSource === source) activeSource = previous;
+    if (activeSource === source) activateProjectionSource(previous);
   };
 }
 
@@ -359,5 +372,6 @@ export function getOperationCenterRows(source: OperationProjectionSource = activ
 }
 
 export function subscribeOperationProjection(listener: () => void): () => void {
-  return activeSource.subscribe?.(listener) ?? (() => {});
+  projectionListeners.add(listener);
+  return () => projectionListeners.delete(listener);
 }

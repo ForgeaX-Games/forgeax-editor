@@ -1,0 +1,71 @@
+{
+  "evidence": {
+    "core": "TN:\nSF:packages/core/src/index.ts\nDA:1,1\nFNF:2\nFNH:2\nLF:1\nLH:1\nend_of_record\n",
+    "product": "TN:\nSF:packages/product/src/index.ts\nDA:1,1\nFNF:1\nFNH:1\nLF:1\nLH:1\nend_of_record\n"
+  },
+  "cases": [
+    {
+      "name": "clean baseline binds both dimensions and LCOV",
+      "input": {
+        "runId": "clean-baseline-1",
+        "records": [
+          {"packageName": "@forgeax/editor-core", "lines": 100, "functions": 100, "lcovPath": "core.lcov", "status": "pass"},
+          {"packageName": "@forgeax/editor-product", "lines": 100, "functions": 100, "lcovPath": "product.lcov", "status": "pass"}
+        ]
+      },
+      "expected": {"packageCount": 2}
+    },
+    {
+      "name": "repeated clean baseline is stable",
+      "repeat": true,
+      "input": {
+        "runId": "clean-baseline-1",
+        "records": [
+          {"packageName": "@forgeax/editor-core", "lines": 100, "functions": 100, "lcovPath": "core.lcov", "status": "pass"}
+        ]
+      },
+      "expected": {"packageCount": 1}
+    },
+    {
+      "name": "missing LCOV artifact is not downgraded",
+      "input": {
+        "runId": "clean-baseline-2",
+        "records": [
+          {"packageName": "@forgeax/editor-core", "lines": 100, "functions": 100, "lcovPath": "missing.lcov", "status": "pass"}
+        ]
+      },
+      "expectedError": "coverage-artifact-missing"
+    },
+    {
+      "name": "duplicate package identity is rejected",
+      "input": {
+        "runId": "clean-baseline-3",
+        "records": [
+          {"packageName": "@forgeax/editor-core", "lines": 100, "functions": 100, "lcovPath": "core.lcov", "status": "pass"},
+          {"packageName": "@forgeax/editor-core", "lines": 99, "functions": 99, "lcovPath": "core.lcov", "status": "pass"}
+        ]
+      },
+      "expectedError": "coverage-package-identity-duplicate"
+    },
+    {
+      "name": "unbound result is rejected",
+      "input": {
+        "runId": "clean-baseline-4",
+        "records": [
+          {"lines": 100, "functions": 100, "lcovPath": "core.lcov", "status": "pass"}
+        ]
+      },
+      "expectedError": "coverage-package-identity-missing"
+    },
+    {
+      "name": "non-reproducible path is rejected",
+      "input": {
+        "runId": "clean-baseline-5",
+        "records": [
+          {"packageName": "@forgeax/editor-core", "lines": 100, "functions": 100, "lcovPath": "../core.lcov", "status": "pass"}
+        ]
+      },
+      "expectedError": "coverage-artifact-path-invalid"
+    }
+  ]
+}

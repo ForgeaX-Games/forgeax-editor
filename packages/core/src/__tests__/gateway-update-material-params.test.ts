@@ -23,6 +23,7 @@ import { createEditSession } from '../session/document';
 import { assetIO, type AssetEntry } from '../io/asset-io-facade';
 import { validatePackShell } from '../scene/scene-pack';
 import type { EditorOp, EditSession } from '../types';
+import { setPathResolver } from '../util/path-resolver';
 import '../session/material-ops'; // applier registration side effect
 
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
@@ -68,12 +69,15 @@ function setup(): { gateway: EditGateway } {
 
 describe('updateMaterialParams — envelope AssetRef[] → wire string[] projection', () => {
   let written: AssetEntry[] = [];
+  let writtenPaths: string[] = [];
   const originalWritePackEntry = assetIO.writePackEntry;
 
   beforeEach(() => {
     written = [];
+    writtenPaths = [];
     // Capture the entry the applier writes instead of hitting the network.
-    assetIO.writePackEntry = (async (_packPath: string, entry: AssetEntry) => {
+    assetIO.writePackEntry = (async (packPath: string, entry: AssetEntry) => {
+      writtenPaths.push(packPath);
       written.push(entry);
       return true;
     }) as typeof assetIO.writePackEntry;
@@ -81,6 +85,21 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
 
   afterEach(() => {
     assetIO.writePackEntry = originalWritePackEntry;
+    setPathResolver(null);
+  });
+
+  it('canonicalizes a game-relative pack path through the active host resolver', async () => {
+    setPathResolver((relativePath) => relativePath ? `sample/${relativePath}` : 'sample');
+    const { gateway } = setup();
+    const r = gateway.dispatch({
+      kind: 'updateMaterialParams',
+      packPath: 'assets/base-material.pack.json',
+      guid: MATERIAL_GUID,
+      paramPatch: { roughness: 0.4 },
+    } as unknown as EditorOp, 'ai');
+    expect(r.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(writtenPaths).toEqual(['sample/assets/base-material.pack.json']);
   });
 
   it('prefills _oldRefs / _oldEntry.refs as GUID STRINGS, not AssetRef objects', () => {

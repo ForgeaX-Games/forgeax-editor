@@ -3,7 +3,7 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // (resolves GUID → shared<T> handle) instead of setComponent with deprecated names.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  gateway, getSelection, entComponent, validateAssetBasename,
+  dispatchActiveEditorOperation, gateway, getSelection, entComponent, validateAssetBasename,
   awaitAuthoredMaterialReady, broadcastAssetsError,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
@@ -108,14 +108,15 @@ function getAssetsInSelection(selection: CBSelection): CBAsset[] {
 export function dispatchReimportAsset(asset: CBAsset): void {
   const expectedRevision = asset.metaRevision ?? asset.revision;
   if (!asset.sourceKey || !expectedRevision) return;
-  const result = gateway.dispatch({
+  void dispatchActiveEditorOperation({
     kind: 'reimportAsset',
     guid: asset.guid,
     scope: { sourceKey: asset.sourceKey },
     expectedRevision,
     requestId: crypto.randomUUID(),
-  }, 'human');
-  if (!result.ok) console.warn('[content-browser] reimport dispatch rejected', result.error);
+  }, 'human').then((result) => {
+    if (!result.ok) console.warn('[content-browser] reimport dispatch rejected', result.error);
+  });
 }
 
 export interface CRUDCallbacks {
@@ -175,7 +176,7 @@ export function buildAssetContextMenu(
             // D6: rename routes through the ONE gateway door (document op, undoable).
             // The applier reaches pack IO via ctx.assetIO and fires the in-process
             // assetsChanged notification itself; Content Browser reloads from it.
-            gateway.dispatch({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
+            void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
           }
         })();
       }
@@ -193,7 +194,7 @@ export function buildAssetContextMenu(
       for (const a of targets) {
         // D6: duplicate routes through the gateway (document op, undoable). The new
         // guid is allocated inside the applier's assetIO gate; no direct facade call.
-        gateway.dispatch({ kind: 'duplicateAsset', packPath: a.packPath, guid: a.guid }, 'human');
+        void dispatchActiveEditorOperation({ kind: 'duplicateAsset', packPath: a.packPath, guid: a.guid }, 'human');
       }
     }},
     { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {

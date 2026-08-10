@@ -22,8 +22,16 @@ export {
 export { AssetsPanel } from './Assets';
 export { CapabilitiesPanel } from './Capabilities';
 export { HierarchyPanel } from './Hierarchy';
+export { createHierarchyStructureSelector } from './hierarchy-state';
+export type { HierarchyRuntimeProjection } from './hierarchy-state';
+export type {
+  HierarchyEntitySummary,
+  HierarchyStructureProjection,
+  HierarchyStructureSelector,
+} from './hierarchy-state';
 export { HistoryPanel } from './History';
 export { InspectorPanel } from './Inspector';
+export type { InspectorRuntimeEntityProjection, InspectorRuntimeProjection } from './inspector-runtime-projection';
 export { AssetPicker } from './AssetPicker';
 export type { AssetPickerProps } from './AssetPicker';
 // M6/M7 collapse: MaterialGraphPanel + TimelinePanel deleted (engine has no

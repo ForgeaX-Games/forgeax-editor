@@ -18,6 +18,7 @@ import { broadcastAssetsError } from '../store/assets-error-bus';
 import type { DocApplierCtx } from './document';
 import type { ApplyResult, EditorOp } from '../types';
 import { encodeMaterialPackRefs } from '../io/material-pack-refs';
+import { resolveGamePathOnce } from '../util/path-resolver';
 
 interface UpdateMaterialParamsOp {
   kind: 'updateMaterialParams';
@@ -117,14 +118,15 @@ export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): A
   // identical in both forms.
   const liveParams: Record<string, unknown> = { ...nextParams };
 
+  const resolvedPackPath = resolveGamePathOnce(packPath);
   const engine = ctx.engine;
-  void ctx.assetIO.writePackEntry(packPath, nextEntry as never)
+  void ctx.assetIO.writePackEntry(resolvedPackPath, nextEntry as never)
     .then((written) => {
       // writePackEntry resolves false (not throw) when the pack read/write
       // failed (e.g. the file backend rejected the path with HTTP 400) —
       // without this guard the op looked successful while nothing hit disk.
       if (!written) {
-        broadcastAssetsError({ op: 'updateMaterialParams', path: packPath, hint: _ioFailHint('updateMaterialParams', packPath, new Error('writePackEntry returned false (pack read/write failed)')) });
+        broadcastAssetsError({ op: 'updateMaterialParams', path: resolvedPackPath, hint: _ioFailHint('updateMaterialParams', resolvedPackPath, new Error('writePackEntry returned false (pack read/write failed)')) });
         return;
       }
       // Hot-reload: mutate the live material payload in place so the viewport
@@ -137,7 +139,7 @@ export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): A
       engine.patchLiveMaterialParams(guid, liveParams);
       broadcastAssetsChanged();
     })
-    .catch((e) => broadcastAssetsError({ op: 'updateMaterialParams', path: packPath, hint: _ioFailHint('updateMaterialParams', packPath, e) }));
+    .catch((e) => broadcastAssetsError({ op: 'updateMaterialParams', path: resolvedPackPath, hint: _ioFailHint('updateMaterialParams', resolvedPackPath, e) }));
 
   const inversePatch: Record<string, unknown> = {};
   for (const k of Object.keys(paramPatch)) inversePatch[k] = beforePayload[k];
@@ -146,7 +148,7 @@ export function applyUpdateMaterialParams(ctx: DocApplierCtx, _cmd: EditorOp): A
     ok: true,
     inverse: {
       kind: 'updateMaterialParams',
-      packPath,
+      packPath: resolvedPackPath,
       guid,
       paramPatch: inversePatch,
       textureGuids: textureGuids ? invertTextureGuids(beforeRefs, textureGuids, beforePayload) : undefined,

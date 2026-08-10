@@ -214,24 +214,24 @@ describe('Hierarchy multi-select batch operations', () => {
     expect(childrenOf(gateway.activeWorld, null).length).toBe(0);
   });
 
-  it('visibility sync: setHidden dispatches successfully on multiple entities', () => {
+  it('visibility sync: setVisibility dispatches successfully on multiple entities', () => {
     for (let i = 0; i < 3; i++) {
       gateway.dispatch({ kind: 'spawnEntity', name: `E${i}`, parent: null, components: {} } as EditorOp);
     }
     const ids = childrenOf(gateway.activeWorld, null);
     expect(ids.length).toBe(3);
 
-    const r1 = gateway.dispatch({ kind: 'setHidden', entity: ids[0]!, hidden: true } as EditorOp);
-    const r2 = gateway.dispatch({ kind: 'setHidden', entity: ids[1]!, hidden: true } as EditorOp);
+    const r1 = gateway.dispatch({ kind: 'setVisibility', entity: ids[0]!, state: 'hidden' } as EditorOp);
+    const r2 = gateway.dispatch({ kind: 'setVisibility', entity: ids[1]!, state: 'hidden' } as EditorOp);
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
 
-    const r3 = gateway.dispatch({ kind: 'setHidden', entity: ids[0]!, hidden: false } as EditorOp);
-    const r4 = gateway.dispatch({ kind: 'setHidden', entity: ids[1]!, hidden: false } as EditorOp);
+    const r3 = gateway.dispatch({ kind: 'setVisibility', entity: ids[0]!, state: 'visible' } as EditorOp);
+    const r4 = gateway.dispatch({ kind: 'setVisibility', entity: ids[1]!, state: 'visible' } as EditorOp);
     expect(r3.ok).toBe(true);
     expect(r4.ok).toBe(true);
 
-    const rNoop = gateway.dispatch({ kind: 'setHidden', entity: ids[2]!, hidden: false } as EditorOp);
+    const rNoop = gateway.dispatch({ kind: 'setVisibility', entity: ids[2]!, state: 'visible' } as EditorOp);
     expect(rNoop.ok).toBe(true);
   });
 });

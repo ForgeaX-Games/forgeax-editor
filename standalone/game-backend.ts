@@ -37,7 +37,8 @@ if (!gameDir) {
 }
 
 const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
-const gameSlug = basename(resolve(gameDir));
+const instanceRootAbs = resolve(gameDir);
+const gameSlug = basename(instanceRootAbs);
 const engineTemplatesRoot = resolve(import.meta.dir, '../packages/engine/templates');
 
 const GAME_TEMPLATE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
@@ -295,7 +296,9 @@ const server = Bun.serve({
       });
     }
     if (url.pathname === '/api/health') {
-      return new Response(JSON.stringify({ ok: true, uptime: process.uptime(), port }), {
+      // Runtime carriers use this stable absolute root as their managed-instance
+      // identity. iframe, page and Tauri WebView hosts all consume the same fact.
+      return new Response(JSON.stringify({ ok: true, uptime: process.uptime(), port, instanceRootAbs }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });

@@ -21,6 +21,7 @@ export const EDITOR_PANELS = [
   'mesh-slots',
   'mi-preview',
   'mi-properties',
+  'mat-preview',
   'settings',
 ] as const;
 

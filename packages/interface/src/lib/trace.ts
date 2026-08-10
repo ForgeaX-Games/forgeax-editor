@@ -209,19 +209,27 @@ export function chatFirstToken(agentId: string): void {
 }
 
 /** turn 结束:收尾 ui.request/ui.stream,起 ui.render,rAF 后(真实上屏帧)结束 ui.render + ui.send root。 */
-export function chatTurnEnd(agentId: string, ok: boolean, errMessage?: string): void {
+export function chatTurnEnd(agentId: string, outcome: 'ok' | 'cancelled' | 'error', errMessage?: string): void {
   const a = active.get(agentId);
   if (!a || a.ended) return;
   a.ended = true;
   clearStall(a); // 轮结束 → 撤销失速看门狗
-  const status: { code: 'ok' | 'error'; message?: string } = ok ? { code: 'ok' } : { code: 'error', ...(errMessage ? { message: errMessage } : {}) };
+  // 三值而不是布尔:取消**不算错误**(标成 error,错误率里就全是用户主动停的假失败),
+  // 但也不能就此与成功同形 —— 那等于亲手销毁取消信号,误触取消风暴在监控里会和健康流量
+  // 一模一样。所以 status 走 ok,取消另由下面 rootAttrs 的 cancelled 位留痕。
+  const status: { code: 'ok' | 'error'; message?: string } =
+    outcome === 'error' ? { code: 'error', ...(errMessage ? { message: errMessage } : {}) } : { code: 'ok' };
   if (a.request && !a.firstTokenSeen) endSpan(a.request, status); // 无 token 直接结束的退化轮
   if (a.stream) endSpan(a.stream, status);
   const render = startSpan('ui.render', { traceId: a.traceId, parentSpanId: a.root.spanId, agentId, sid: a.root.sid });
   const finish = (hidden: boolean): void => {
     // hidden=true:标签页失焦时浏览器会暂停 rAF → 不等真实绘制帧、立即收口并标 paintDeferred,
     //   否则 ui.render / ui.send 会被「标签页多久才回前台」污染成几十秒的假耗时(不是渲染慢)。
-    const rootAttrs = { ...(a.kernel ? { kernel: a.kernel } : {}), ...(hidden ? { paintDeferred: true } : {}) };
+    const rootAttrs = {
+      ...(a.kernel ? { kernel: a.kernel } : {}),
+      ...(outcome === 'cancelled' ? { cancelled: true } : {}), // 取消可审计:与成功区分开
+      ...(hidden ? { paintDeferred: true } : {}),
+    };
     const renderAttrs = hidden ? { paintDeferred: true } : undefined;
     endSpan(render, status, renderAttrs); // 上屏完成(或失焦延后)
     endSpan(a.root, status, Object.keys(rootAttrs).length ? rootAttrs : undefined); // 整轮(ui.send)结束(保留 kernel)

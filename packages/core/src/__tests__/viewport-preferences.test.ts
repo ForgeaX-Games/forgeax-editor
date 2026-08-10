@@ -40,9 +40,35 @@ describe('viewport preferences persistence', () => {
   it('uses editor-safe defaults without touching authored state', () => {
     const preferences = defaultViewportPreferences();
     expect(preferences.projection).toBe('perspective');
+    expect(preferences.activeView).toBe('perspective');
     expect(preferences.flySpeed).toBe(8);
     expect(preferences.orthoHalfHeight).toBeNull();
     expect(preferences.bookmarks).toEqual({});
+  });
+
+  it('round-trips the activeView menu identity and rejects unknown values', () => {
+    const storage = new MemoryStorage();
+    const preferences = defaultViewportPreferences();
+    preferences.activeView = 'top';
+    expect(writeViewportPreferences(preferences, storage)).toBe(true);
+    expect(readViewportPreferences(storage).activeView).toBe('top');
+
+    storage.setItem(VIEWPORT_PREFERENCES_STORAGE_KEY, JSON.stringify({ v: 1, activeView: 'isometric' }));
+    expect(readViewportPreferences(storage).activeView).toBe('perspective');
+  });
+
+  it('preserves ±90° orthographic bookmark pitch but still clamps perspective bookmarks', () => {
+    const storage = new MemoryStorage();
+    const preferences = defaultViewportPreferences();
+    preferences.bookmarks[1] = { ...makeBookmark(), projection: 'orthographic', pitch: -Math.PI / 2 };
+    preferences.bookmarks[2] = { ...makeBookmark(), projection: 'perspective', pitch: -Math.PI / 2 };
+    expect(writeViewportPreferences(preferences, storage)).toBe(true);
+
+    const restored = readViewportPreferences(storage);
+    // Axis-aligned views (Top/Bottom) legitimately sit at exactly ±90° — the
+    // perspective gesture clamp must not corrupt them in persistence.
+    expect(restored.bookmarks[1]?.pitch).toBe(-Math.PI / 2);
+    expect(restored.bookmarks[2]?.pitch).toBe(-1.5);
   });
 
   it('round-trips navigation settings and complete camera bookmarks', () => {

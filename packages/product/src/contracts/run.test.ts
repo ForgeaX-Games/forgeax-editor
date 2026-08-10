@@ -52,6 +52,36 @@ test('OperationRun accepts running and exactly one terminal state', () => {
   expect(isTerminalRunStatus(succeeded.value.status)).toBe(true);
   expect(succeeded.value.result).toEqual({ guid: 'asset-1' });
   expect(succeeded.value.error).toBeUndefined();
+  expect(succeeded.value.progress).toEqual({ fraction: 1, stage: 'succeeded' });
+});
+
+test('every terminal event closes progress instead of preserving a stale running stage', () => {
+  const terminalEvents = [
+    event('failed', {
+      sequence: 3,
+      at: 3,
+      error: {
+        code: 'asset-write-failed',
+        hint: 'The resource write failed.',
+        retryable: true,
+        recoveryActions: ['operation.retry'],
+      },
+    }),
+    event('cancelled', { sequence: 3, at: 3 }),
+  ] as const;
+
+  for (const terminalEvent of terminalEvents) {
+    const accepted = createOperationRun({ ...request, runId: 'run-1' }, 1);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) continue;
+    const running = reduceOperationRun(accepted.value, event('running', { sequence: 2, at: 2 }));
+    expect(running.ok).toBe(true);
+    if (!running.ok) continue;
+    const terminal = reduceOperationRun(running.value, terminalEvent);
+    expect(terminal.ok).toBe(true);
+    if (!terminal.ok) continue;
+    expect(terminal.value.progress).toEqual({ fraction: 1, stage: terminal.value.status });
+  }
 });
 
 test('accepted and running are never terminal or successful', () => {

@@ -212,9 +212,9 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
 
     expect(terminal).toMatchObject({
       ok: true,
-      value: { status: 'succeeded', progress: { stage: 'cooking', fraction: 1 } },
+      value: { status: 'succeeded', progress: { stage: 'succeeded', fraction: 1 } },
     });
-    expect(observed).toEqual(['sidecar', 'cooking']);
+    expect(observed).toEqual(['sidecar', 'cooking', 'succeeded']);
   });
 
   it('publishes a structured terminal failure instead of resolving success', async () => {
