@@ -78,20 +78,7 @@ function isLocale(v: unknown): v is Locale {
   return typeof v === 'string' && SUPPORTED_LOCALES.some((l) => l.code === v);
 }
 
-/** First-run default from the OS/browser locale: any `zh*` (zh, zh-CN, zh-TW…)
- *  → Chinese; everything else → English. Only used when nothing is persisted
- *  yet (once the user picks a language it's saved and wins). */
-function detectSystemLocale(): Locale {
-  if (typeof navigator === 'undefined') return DEFAULT_LOCALE;
-  const langs = navigator.languages?.length ? navigator.languages : [navigator.language];
-  for (const l of langs) {
-    if (typeof l === 'string' && l.toLowerCase().startsWith('zh')) return 'zh';
-  }
-  return 'en';
-}
-
-/** Read the persisted locale (no side effects). Falls back to the detected
- *  system locale on first run (no stored value). */
+/** Read the persisted locale (no side effects). New installs start in English. */
 function readPersisted(): Locale {
   if (typeof window === 'undefined') return DEFAULT_LOCALE;
   try {
@@ -100,7 +87,7 @@ function readPersisted(): Locale {
   } catch {
     /* private mode */
   }
-  return detectSystemLocale();
+  return DEFAULT_LOCALE;
 }
 
 /**

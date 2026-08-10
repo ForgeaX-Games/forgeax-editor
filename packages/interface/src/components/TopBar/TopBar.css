@@ -769,6 +769,11 @@
   color: var(--text-primary); font-size: 11px;
   padding: 4px 8px; border-radius: 3px; cursor: pointer;
 }
+/* provider 行里的权限档位下拉:`.settings-select` 自带 flex:1(为 Models 那种独占
+   一行的场景设计),放进 settings-provider-head 会把「设为使用」挤出去 → 这里收成
+   内容宽度,并给个上限防长文案(如「跟随默认（全权限（危险））」)撑破行。 */
+.settings-perm-select { flex: 0 0 auto; max-width: 190px; margin-left: auto; }
+
 .settings-help { font-size: 10px; color: var(--text-muted, rgba(255,255,255,0.45)); margin-top: 6px; line-height: 1.5; }
 .settings-help code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 2px; font-size: 10px; color: var(--color-kind-cli-provider); }
 /* Links otherwise inherit browser-default blue — invisible on the dark panel. */

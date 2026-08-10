@@ -205,6 +205,8 @@ export class OperationRunRegistry {
   private activeSaveRunId: string | null = null;
   private nextRun = 0;
   private _revision = 0;
+  private _snapshotCache: OperationRunSnapshot | null = null;
+  private _snapshotCacheRevision = -1;
 
   constructor(options: OperationRunRegistryOptions = {}) {
     this.scope = options.scope ?? 'editor';
@@ -221,12 +223,26 @@ export class OperationRunRegistry {
     return this._revision;
   }
 
-  /** Return one versioned, bounded read of every retained Gateway-owned run. */
+  /** Return one versioned, bounded read of every retained Gateway-owned run.
+   *
+   *  Revision-keyed cache: `useSyncExternalStore` consumers (e.g. the global
+   *  Content Browser footer) call getSnapshot() repeatedly per render and compare
+   *  identity with Object.is. Returning a freshly-frozen object on every call
+   *  reads as "the store changed again" and drives an infinite re-render (React's
+   *  "getSnapshot should be cached to avoid an infinite loop" → Maximum update
+   *  depth). `_revision` bumps on every published fact (see notify), so a
+   *  revision-keyed cache hands back a STABLE reference between mutations. */
   snapshot(): OperationRunSnapshot {
-    return Object.freeze({
+    if (this._snapshotCache !== null && this._snapshotCacheRevision === this._revision) {
+      return this._snapshotCache;
+    }
+    const next = Object.freeze({
       revision: this._revision,
       runs: this.journal.listRuns(),
     });
+    this._snapshotCache = next;
+    this._snapshotCacheRevision = this._revision;
+    return next;
   }
 
   acceptSave(

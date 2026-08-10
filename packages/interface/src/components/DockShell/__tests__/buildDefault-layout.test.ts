@@ -104,7 +104,9 @@ describe('BUILTIN_WORKBENCHES layout data integrity', () => {
 
 describe('footer chrome SSOT', () => {
   it('FOOTER_PANEL_ID_LIST is the ordered footer chrome set; FOOTER_PANEL_IDS mirrors it', () => {
-    expect(FOOTER_PANEL_ID_LIST).toEqual(['info', 'checkpoints', 'events']);
+    // Content Browser (ep:assets) is promoted to global footer chrome, listed
+    // first so it is the default-active footer tab across every Page.
+    expect(FOOTER_PANEL_ID_LIST).toEqual(['ep:assets', 'info', 'checkpoints', 'events']);
     expect(new Set(FOOTER_PANEL_IDS)).toEqual(new Set(FOOTER_PANEL_ID_LIST));
   });
 });

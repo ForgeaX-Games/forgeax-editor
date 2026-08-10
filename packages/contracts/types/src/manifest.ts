@@ -88,6 +88,11 @@ const ProvidesWorkbenchSchema = z.object({
   icon: z.string().optional(),
   position: z.number().optional(),
   panelSize: z.enum(['sm', 'md', 'lg']).optional(),
+  // Dock tab chrome hint for a single-tab group. 'hideTitle' collapses the tab
+  // strip (chat / viewport style); the interface manifest adapter maps this to
+  // PanelDescriptor.dockChrome.singleTab. It is only the DEFAULT — a user can
+  // still reveal the title via the tab context menu (explicit override wins).
+  singleTab: z.enum(['default', 'full', 'hideTitle']).optional(),
   surface: z.string().optional(), // "split" 等
   panes: z
     .object({

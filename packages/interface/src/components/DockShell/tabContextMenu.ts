@@ -79,7 +79,11 @@ export function buildTabContextMenuItems(
     }
   }
 
-  if (titleOptions?.groupPanelCount === 1) {
+  // Title-bar hiding is a primary-dock affordance only: a panel parked on a
+  // left/right side strip renders through the collapsed edge chrome, which has
+  // no title bar to hide — so suppress the option there (offering it did
+  // nothing but confuse). Bottom/AuxBar keep their existing behavior.
+  if (titleOptions?.groupPanelCount === 1 && !sideEdge?.onSideEdge) {
     const titleHidden = titleOptions.titleHidden === true;
     const action = titleHidden ? titleOptions.onShowTitle : titleOptions.onHideTitle;
     if (action) {
@@ -93,6 +97,17 @@ export function buildTabContextMenuItems(
         },
       );
     }
+  }
+
+  // Chat lives in its own ChatDock column by default. Once it has been dragged
+  // out into another region, offer a one-click "show in default position" that
+  // sends it home. Suppressed while chat is already in ChatDock (nothing to
+  // reset), so the item only appears where it does something.
+  if (panelId === 'chat' && region !== 'ChatDock') {
+    items.push('separator', {
+      label: panelT('dockShell.chatToDefault'),
+      action: () => moveTo('chat', 'ChatDock'),
+    });
   }
   return items;
 }

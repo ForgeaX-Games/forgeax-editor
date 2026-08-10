@@ -18,7 +18,6 @@ import { GameDirectoryModalHost } from './components/TopBar/ProjectSwitcher';
 import { GameModalHost } from './components/TopBar/GameSwitcher';
 import { ActivityRail } from './components/ActivityRail/ActivityRail';
 import { PageTabStrip } from './components/PageTabs/PageTabStrip';
-import { ChatColumn } from './components/ChatColumn/ChatColumn';
 import { DockRegion } from './components/DockShell/DockRegion';
 import { PanelRenderersProvider, DEFAULT_PANEL_RENDERERS } from './components/DockShell/panelRenderers';
 import { SurfaceKeepAliveLayer } from './components/Surfaces/SurfaceKeepAliveLayer';
@@ -147,9 +146,12 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
             <SurfaceKeepAliveLayer />
             {/* ActivityRail + chat are fixed shell columns on the right, so the
                 rail sits immediately left of the (drag-resizable) chat column
-                regardless of dock layout. */}
+                regardless of dock layout. Chat is its own ChatDock dockview
+                instance (native tab chrome + draggable into the centre grid);
+                it collapses to nothing when chat is dragged out (DockRegion
+                returns null for a non-DockShell region with zero members). */}
             <ActivityRail />
-            <ChatColumn />
+            <DockRegion region="ChatDock" />
           </div>
           <DrawerHostView />
           <StripHostView />

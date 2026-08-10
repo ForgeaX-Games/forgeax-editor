@@ -16,7 +16,6 @@ import {
   FolderSearch,
   Minus,
   Pin,
-  Plus,
   Save,
   X,
   type LucideIcon,
@@ -85,11 +84,6 @@ export function PageTabStrip(): ReactElement | null {
   const host = useHost();
   const { t } = useTranslation();
   const snapshot = useSyncExternalStore(host.pages.subscribe, host.pages.getSnapshot, host.pages.getSnapshot);
-  const registry = useSyncExternalStore(
-    host.pageRegistry.subscribe,
-    host.pageRegistry.getSnapshot,
-    host.pageRegistry.getSnapshot,
-  );
 
   const listRef = useRef<HTMLDivElement>(null);
   const dragKeyRef = useRef<string | null>(null);
@@ -101,12 +95,6 @@ export function PageTabStrip(): ReactElement | null {
   const [, setDirtyTick] = useState(0);
 
   const { instances, activeKey } = snapshot;
-
-  // Page types the "+" button can open blank — resource pages need a resource,
-  // so only singleton / multi-instance types are eligible.
-  const openableTypes = [...registry.pageTypes.values()]
-    .filter((t) => t.status === 'available' && t.definition.cardinality !== 'resource')
-    .map((t) => ({ typeId: t.definition.id, title: t.definition.title }));
 
   const focus = useCallback((key: string) => void host.pages.focus(key).catch(() => {}), [host]);
 
@@ -278,29 +266,6 @@ export function PageTabStrip(): ReactElement | null {
             );
           })}
         </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" className="page-tab-btn page-tab-new no-motion-lift" title={t('pageTabs.newPage')} aria-label={t('pageTabs.newPage')}>
-              <Plus className="page-tab-btn__icon" aria-hidden />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[200px]">
-            {openableTypes.length === 0 ? (
-              <DropdownMenuItem disabled>{t('pageTabs.noOpenableTypes')}</DropdownMenuItem>
-            ) : (
-              openableTypes.map((t) => {
-                const Icon = iconForPage({ typeId: t.typeId });
-                return (
-                  <DropdownMenuItem key={t.typeId} onSelect={() => void host.pages.open({ typeId: t.typeId }).catch(() => {})}>
-                    <Icon aria-hidden />
-                    {t.title}
-                  </DropdownMenuItem>
-                );
-              })
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
 
         <div className="page-tab-actions">
           {overflowing && (

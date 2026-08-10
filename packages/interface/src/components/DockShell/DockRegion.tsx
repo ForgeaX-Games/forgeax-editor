@@ -27,6 +27,8 @@ import { buildTabContextMenuItems } from './tabContextMenu';
 import { isDockTitleHidden, setDockTitleHidden } from './dockTitle';
 import { AuxBarResizer } from './AuxBarResizer';
 import { useAuxBarWidth } from './useAuxBarWidth';
+import { ChatDockResizer } from './ChatDockResizer';
+import { useChatWidth } from '../ChatColumn/useChatWidth';
 import {
   getCurrentProject,
   loadWorkbenchList,
@@ -235,6 +237,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // AuxBar. Hook called UNCONDITIONALLY (per rules-of-hooks) even for other
   // regions; the value is simply unused there.
   const auxBarWidth = useAuxBarWidth((s) => s.width);
+  // ChatDock's persisted width — same unconditional-hook pattern as auxBarWidth;
+  // only consumed when this region is 'ChatDock'.
+  const chatWidth = useChatWidth((s) => s.width);
   // Panel-descriptor registry (Task 3) + user overrides (Task 2). Combined we
   // can compute which panel ids belong to THIS region. The filter is applied
   // where panel-id iteration happens (layout-menu enumeration); buildDefault
@@ -255,6 +260,12 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     );
   }, [activePageInstance, activeResolvedPage]);
   const activePageScope = useMemo(() => {
+    // ChatDock is global chrome (like the footer): it seeds chat ONCE in onReady
+    // and is never page-scoped, so a page switch can't clear+rebuild it (which
+    // would unmount/remount the chat panel). Forcing scope null here routes it
+    // through the workspace-level (non-page) restore/persist path and makes the
+    // applyPageScope effect below a no-op for this region.
+    if (region === 'ChatDock') return null;
     if (!activePageInstance || !activeResolvedPage || activeResolvedPage.status !== 'available' || !activePageDockLayout) return null;
     const identity: PageLayoutIdentity = {
       pageTypeId: activePageInstance.typeId,
@@ -266,7 +277,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       layout: activePageDockLayout,
       panelIds: activeResolvedPage.panels.map((placement) => placement.id),
     };
-  }, [activePageDockLayout, activePageInstance, activeResolvedPage]);
+  }, [activePageDockLayout, activePageInstance, activeResolvedPage, region]);
   const pagePanelIds = useMemo(
     () => activePageScope === null ? null : new Set(activePageScope.panelIds),
     [activePageScope],
@@ -280,14 +291,22 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   }, [activePageScope]);
   const panelLocations = activeWorkbench?.panelLocations ?? {};
   const { moveTo, resetPanelLocations } = useWorkbenchActions();
+  // Latest panelLocations for non-React callbacks (the F1 chat-toggle handler
+  // below runs from a window event, so its closure would otherwise pin the
+  // panelLocations captured when the listener was registered).
+  const panelLocationsRef = useRef(panelLocations);
+  useLayoutEffect(() => { panelLocationsRef.current = panelLocations; }, [panelLocations]);
   const isMember = useCallback((id: string): boolean => {
     // ep:* ids are host-owned: a persisted layout may not resurrect a panel
     // which is absent from this host's injected editor manifest.
     if (id.startsWith('ep:') && !editorPanelIds.includes(id.slice(3))) return false;
-    // chat now lives in the shell-level ChatColumn (fixed column right of the
-    // ActivityRail), never inside the dock — dropped from every seeded layout by
-    // filterLayoutByMembership, and closeStrayPanels evicts it from restores.
-    if (id === 'chat') return false;
+    // chat lives in its own ChatDock instance (fixed column right of the
+    // ActivityRail) by default, but can be dragged OUT into DockShell's centre
+    // grid. Its home follows the panelLocations override; absent one it belongs
+    // to ChatDock. This single line makes ChatDock claim chat, keeps DockShell
+    // from claiming it by default, and lets a drag-to-centre (which writes
+    // panelLocations['chat']='DockShell') flip ownership so ChatDock collapses.
+    if (id === 'chat') return region === (panelLocations['chat'] ?? 'ChatDock');
     // A semantic editor document owns a closed panel domain. A mesh/material
     // page cannot accumulate Level panels (or vice versa) through restore,
     // reopen, drag, or the layout menu. EXCEPTION: footer chrome (Info /
@@ -426,6 +445,14 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   const sidebarCollapsed = useShellStore((s) => s.sidebarCollapsed);
   const chatpanelCollapsed = useShellStore((s) => s.chatpanelCollapsed);
   const fullscreen = useShellStore((s) => s.fullscreen);
+  // ChatDock only: whether a chat panel is CURRENTLY mounted in this dock's
+  // dockview. This is the single source of truth for showing/collapsing the chat
+  // column — driven purely by onDidAddPanel/onDidRemovePanel below, so EVERY way
+  // chat can leave the dock (tab ×, context-menu close, Ctrl+Shift+C collapse,
+  // programmatic close) converges here. When false we display:none the column
+  // (see render) WITHOUT unmounting the dockview instance, so the api survives
+  // and F1 (forgeax:chat-toggle) can re-add chat without a full remount.
+  const [chatColumnMounted, setChatColumnMounted] = useState(true);
   // Mirror chat availability into a ref so onReady (memoised with [] deps to
   // satisfy dockview's once-per-mount contract) and async restore branches
   // can read the latest value without re-binding.
@@ -508,6 +535,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       const t = e.getData?.();
       if (!t) return;
       if (t.viewId === api.id) return; // same-instance, dockview handles natively
+      // One-way door: the ChatDock column only accepts chat itself (so chat can
+      // be dragged back home after being pulled into the centre grid), never a
+      // foreign panel — no other panel can dock into the chat column. Every
+      // other region accepts any cross-instance drop as before.
+      if (regionRef.current === 'ChatDock' && t.panelId !== 'chat') return;
       e.accept();
     });
     onReadyCleanupsRef.current.push(() => { try { overlaySub.dispose(); } catch { /* noop */ } });
@@ -526,10 +558,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     const addSub = api.onDidAddPanel((p) => {
       ownedIds.add(p.id);
       _setPanelVisibility(p.id, true);
+      if (regionRef.current === 'ChatDock' && p.id === 'chat') setChatColumnMounted(true);
     });
     const remSub = api.onDidRemovePanel((p) => {
       ownedIds.delete(p.id);
       _setPanelVisibility(p.id, false);
+      // Single convergence point for chat leaving the dock by ANY route.
+      if (regionRef.current === 'ChatDock' && p.id === 'chat') setChatColumnMounted(false);
     });
     onReadyCleanupsRef.current.push(() => {
       try { addSub.dispose(); } catch { /* noop */ }
@@ -552,7 +587,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // DockShell's slot, so a dragged layout was saved or lost depending on which
     // region's onDidLayoutChange fired last ("拖动布局刷新有时保存有时不保存").
     api.onDidLayoutChange(() => {
-      persistLayout(prevWorkspaceIdRef.current, api.toJSON());
+      // ChatDock is the global single-chat column: its layout is fixed (one chat
+      // panel), so persisting it is pointless AND harmful — a transient empty /
+      // closed state would be restored as an EMPTY column on next load (the "刷新
+      // 只剩空 dockview" bug). Never persist it; onReady always seeds it fresh.
+      if (regionRef.current !== 'ChatDock') persistLayout(prevWorkspaceIdRef.current, api.toJSON());
       bump();
       // Tell the keep-alive surface layer to re-track its anchors — panel
       // resize/drag/close moves the Play/Edit anchor rects the fixed surfaces
@@ -659,6 +698,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
             // migration: try the old single-layout key
             restored = tryRestore(localStorage.getItem(LS_KEY));
           }
+        } else if (regionRef.current === 'ChatDock') {
+          // Global chat column: NEVER restore. A persisted layout here can only
+          // be a stale/empty snapshot (chat is the sole panel) and restoring it
+          // is exactly what left an empty dockview after refresh. Evict any old
+          // slot and fall through to a clean buildDefault seed below.
+          try { localStorage.removeItem(layoutKey(activeId)); } catch { /* noop */ }
+          restored = false;
         } else {
           restored = tryRestore(localStorage.getItem(layoutKey(activeId)), activeId);
         }
@@ -681,6 +727,13 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         try { api.getPanel('chat')?.api.close(); } catch { /* noop */ }
       }
     }
+
+    // ChatDock: sync the column-mounted flag from the SEEDED/RESTORED result.
+    // buildDefault/restore go through api.fromJSON, which does NOT reliably emit
+    // onDidAddPanel — so read the truth once here (otherwise the flag stays at
+    // its pre-seed value and the column display:none's away a chat that's
+    // actually there). onDidAddPanel/onDidRemovePanel keep it live afterwards.
+    if (regionRef.current === 'ChatDock') setChatColumnMounted(!!api.getPanel('chat'));
 
     // Tab names are DERIVED at render by DockTab (i18n key ← panel id), so a
     // restore never needs to re-push titles — the baked title in the layout
@@ -754,6 +807,11 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // restores the target's saved layout or builds its default. Single source of
   // the switch logic, shared by every trigger below.
   const applyWorkspace = useCallback((api: DockviewApi, newId: string): void => {
+    // ChatDock is global chrome: chat is seeded once in onReady and must survive
+    // every workspace switch without a remount. A workspace switch here would
+    // api.clear()+buildDefault (rebuilding the chat panel), so skip it entirely —
+    // chat is the same panel regardless of the active workbench.
+    if (regionRef.current === 'ChatDock') return;
     // Force a reconcile when the PROJECT id changed even if the workbench id is
     // unchanged: the dock may have been built under the transient 'default'
     // scope before the game list resolved, so we must re-restore from the real
@@ -1048,6 +1106,10 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // storage or on a fresh machine). Then apply the active workspace's layout if
   // the dock is ready and localStorage was empty before init.
   useEffect(() => {
+    // ChatDock is global chrome seeded in onReady. This effect hydrates the
+    // server-synced DockShell *workbench* layout; running it here would fromJSON
+    // a foreign (tools/main/viewport) layout into the chat column. Skip it.
+    if (region === 'ChatDock') return;
     let cancelled = false;
     const { activeId } = loadWorkbenchList();
     const started = {
@@ -1181,6 +1243,66 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       }
     }
   }, [chatpanelCollapsed, reopen]);
+
+  // F1 → 3-state chat toggle (global-shortcuts dispatches forgeax:chat-toggle).
+  // Owned by ChatDock because it's the only region holding chat's dockview api.
+  //   1) closed            → open at the default position (ChatDock)
+  //   2) open, not default  → move it home to ChatDock
+  //   3) open, at default   → close it
+  // Route-agnostic: chat may have been closed via tab ×, context menu, or the
+  // Ctrl+Shift+C collapse — all converge to isPanelVisible(false)/collapsed.
+  useEffect(() => {
+    if (region !== 'ChatDock') return;
+    const onToggle = (): void => {
+      const api = apiRef.current;
+      if (!api) return;
+      const store = useShellStore.getState();
+      // "shown" = chat panel mounted in some region AND not collapsed away.
+      const open = isPanelVisible('chat') && !store.chatpanelCollapsed;
+      const loc = panelLocationsRef.current['chat'] ?? 'ChatDock';
+
+      if (open && loc === 'ChatDock') {
+        // (3) at default & visible → close. Route through the store collapse so
+        // it's identical to Ctrl+Shift+C (keeps hiddenByToggleRef consistent and
+        // lets a later toggle reopen cleanly). onDidRemovePanel collapses column.
+        store.toggleChatpanel();
+        return;
+      }
+
+      if (open && loc !== 'ChatDock') {
+        // (2) visible but living in the centre grid → send it home. moveTo mutates
+        // panelLocations; the panelLocations reconcile effect evicts it from the
+        // old region and re-adds it here, converging chatColumnMounted via events.
+        moveTo('chat', 'ChatDock');
+        requestAnimationFrame(() => {
+          try { apiRef.current?.getPanel('chat')?.api.setActive(); } catch { /* noop */ }
+        });
+        return;
+      }
+
+      // (1) closed → open at the default position. Make sure it belongs to
+      // ChatDock, reveal the column FIRST (lift display:none — adding a panel into
+      // a 0×0 container never mounts the chat body), uncollapse, then on the next
+      // frame re-add chat + force a relayout once the container actually has size.
+      if (loc !== 'ChatDock') moveTo('chat', 'ChatDock');
+      setChatColumnMounted(true);
+      if (store.chatpanelCollapsed) store.toggleChatpanel(); // collapsed effect reopens
+      requestAnimationFrame(() => {
+        const a = apiRef.current;
+        if (!a) return;
+        if (!a.getPanel('chat')) reopenRef.current?.('chat');
+        try {
+          const el = wrapRef.current;
+          if (el && el.clientWidth > 0 && el.clientHeight > 0) {
+            a.layout(el.clientWidth, el.clientHeight, true);
+          }
+        } catch { /* noop */ }
+        try { a.getPanel('chat')?.api.setActive(); } catch { /* noop */ }
+      });
+    };
+    window.addEventListener('forgeax:chat-toggle', onToggle);
+    return () => window.removeEventListener('forgeax:chat-toggle', onToggle);
+  }, [region, moveTo]);
 
   // Fullscreen (Ctrl+Shift+F / TopBar): collapse to just Main, restoring the
   // side panels that were open when fullscreen exits.
@@ -1318,9 +1440,19 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       className={`fx-dockwrap fx-dockregion fx-dockregion-${region}`}
       ref={wrapRef}
       data-fx-slot={region}
-      style={region === 'AuxBar' ? { width: auxBarWidth } : undefined}
+      style={
+        region === 'AuxBar'
+          ? { width: auxBarWidth }
+          : region === 'ChatDock'
+            // Collapse the whole column (no empty dockview left behind) whenever
+            // chat isn't mounted; keep the dockview instance alive via display so
+            // F1 can re-add chat without a remount.
+            ? { width: chatWidth, ...(chatColumnMounted ? null : { display: 'none' }) }
+            : undefined
+      }
     >
       {region === 'AuxBar' && <AuxBarResizer />}
+      {region === 'ChatDock' && <ChatDockResizer />}
       <DockviewReact
         className="dockview-theme-abyss fx-dockshell"
         components={components}
@@ -1417,14 +1549,21 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         // rendering inside the tab strip in a confusing position. Pop-out is
         // still available via drag-to-outside-window (Tauri) or the 布局 menu.
       />
-      <LayoutControl
-        apiRef={apiRef}
-        onReopen={reopen}
-        pagePanels={pagePanels}
-        isMember={isMember}
-        editorPanelIds={editorPanelIds}
-        titleFor={titleFor}
-      />
+      {/* The layout menu is a GLOBAL affordance (TopBar 布局 button → the shared
+          dock:layout-toggle bus event). Every DockRegion listens for that event,
+          so rendering LayoutControl in more than one region stacks duplicate
+          portalled menus (visible once ChatDock — unlike the usually-empty
+          AuxBar — is always mounted). Own it solely from the primary dock. */}
+      {region === 'DockShell' && (
+        <LayoutControl
+          apiRef={apiRef}
+          onReopen={reopen}
+          pagePanels={pagePanels}
+          isMember={isMember}
+          editorPanelIds={editorPanelIds}
+          titleFor={titleFor}
+        />
+      )}
     </div>
   );
 }

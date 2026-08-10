@@ -5,6 +5,7 @@ import {
 } from '@forgeax/types';
 import { listExtensions, type ExtensionInfo } from '../../lib/extension-api';
 import { WorkbenchExtensionPanel } from '../../components/DockShell/WorkbenchExtensionPanel';
+import { getLocale } from '../../i18n';
 import type { AppExtension } from './types';
 import type {
   ActivityRegistration,
@@ -14,7 +15,9 @@ import type {
 } from '../page-platform';
 
 function title(value: string | { zh?: string; en?: string; ja?: string }): string {
-  return typeof value === 'string' ? value : value.zh ?? value.en ?? value.ja ?? '';
+  if (typeof value === 'string') return value;
+  const locale = getLocale();
+  return value[locale] ?? value.en ?? value.zh ?? value.ja ?? '';
 }
 
 export function catalogExtensionItems(payload: unknown): readonly ExtensionInfo[] {

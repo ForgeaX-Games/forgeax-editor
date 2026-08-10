@@ -54,6 +54,10 @@ export function appExtensionFromManifest(input: ManifestExtensionInput): AppExte
           title: pickTitle(manifest),
           order: wb.position,
           icon: wb.icon,
+          // Declarative single-tab chrome (e.g. chat → 'hideTitle'): a group
+          // with only this panel drops its tab strip by default. Mirrors the
+          // interface-side viewport descriptor; user override still wins.
+          ...(wb.singleTab ? { dockChrome: { singleTab: wb.singleTab } } : {}),
           render: () => createElement(Component),
         },
       },

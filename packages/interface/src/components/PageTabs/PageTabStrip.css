@@ -40,6 +40,7 @@
   align-items: center;
   gap: 6px;
   height: calc(var(--page-tab-h) - 5px);
+  min-width: 120px;
   max-width: 220px;
   padding: 0 8px 0 9px;
   border: 1px solid transparent;
@@ -73,6 +74,22 @@
 .page-tab.is-drag {
   opacity: 0.45;
 }
+/* Inactive tabs are transparent and sit only 2px apart, so a run of them reads
+   as one undivided block. Draw a short hairline in the gap BETWEEN two adjacent
+   inactive tabs (VSCode/browser pattern). The adjacent-sibling selector keeps it
+   off the first tab and off both sides of the active tab — the active tab's
+   raised surface + border already reads as separated, so a divider there is
+   redundant noise. */
+.page-tab:not(.is-active) + .page-tab:not(.is-active)::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--color-border-subtle);
+  pointer-events: none;
+}
 
 .page-tab__icon {
   width: 13px;
@@ -80,6 +97,8 @@
   flex-shrink: 0;
 }
 .page-tab__label {
+  flex: 1;
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -98,6 +117,7 @@
   height: 13px;
   color: var(--color-text-tertiary);
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .page-tab__close {
@@ -114,6 +134,7 @@
   visibility: hidden;
   cursor: pointer;
   flex-shrink: 0;
+  margin-left: auto;
   padding: 0;
 }
 .page-tab:hover .page-tab__close,
@@ -129,7 +150,7 @@
   height: 11px;
 }
 
-/* Action buttons (+ / all-pages / rules). */
+/* Action buttons (all-pages overflow / rules). */
 .page-tab-actions {
   display: flex;
   align-items: center;
@@ -137,10 +158,6 @@
   align-self: center;
   flex-shrink: 0;
   margin-left: auto;
-}
-.page-tab-new {
-  align-self: center;
-  flex-shrink: 0;
 }
 .page-tab-btn {
   height: 22px;
@@ -167,21 +184,6 @@
   width: 12px;
   height: 12px;
 }
-.page-tab-new.page-tab-btn {
-  width: 24px;
-  padding: 0;
-  justify-content: center;
-  border-color: transparent;
-  color: var(--color-text-tertiary);
-}
-.page-tab-new .page-tab-btn__icon {
-  width: 16px;
-  height: 16px;
-}
-.page-tab-new:hover {
-  color: var(--color-text-primary);
-}
-
 /* All-pages dropdown rows. */
 .page-tab-menu__mark {
   font-size: 10px;

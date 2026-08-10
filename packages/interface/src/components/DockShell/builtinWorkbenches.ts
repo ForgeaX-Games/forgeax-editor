@@ -38,6 +38,18 @@ const FOOTER_EDGE_GROUPS = {
   },
 } as const;
 
+// The Content Browser (editor `ep:assets`) is promoted to GLOBAL footer chrome
+// too: same page-domain exemption + bottom-edge reconciler as Info/Checkpoints/
+// Events, so every Page (Level / Asset / Mesh / Material Instance) shows the CB
+// tab in the footer. It is EDITOR-owned though, so — unlike the interface-alone
+// panels above — it is deliberately NOT seeded into the AI/Scene fallback layouts
+// (its `ep:assets` component only exists when an editor host injects it; the
+// reconciler's addPanel is wrapped so a missing component is skipped, and
+// isMember already drops `ep:*` ids absent from the host manifest). Listed first
+// so the CB is the default-active footer tab. Keeping it out of FOOTER_EDGE_PANELS
+// keeps the interface-alone seeds free of `ep:*` business ids.
+const GLOBAL_FOOTER_EXTRA_IDS: readonly string[] = ['ep:assets'];
+
 // SSOT for "which panels are interface-level footer chrome", in tab order. The
 // footer is present regardless of the active workbench OR the active Page — a
 // Page's closed panel domain (a mesh page can't accumulate a Level's panels) is
@@ -45,7 +57,10 @@ const FOOTER_EDGE_GROUPS = {
 // exempt from that membership gate (see DockRegion.isMember) and, rather than
 // being re-seeded into every layout, is owned by a single reconciler that keeps
 // it in the bottom edge group under any layout (see edgeDrawer.ensureFooterPanels).
-export const FOOTER_PANEL_ID_LIST: readonly string[] = Object.keys(FOOTER_EDGE_PANELS);
+export const FOOTER_PANEL_ID_LIST: readonly string[] = [
+  ...GLOBAL_FOOTER_EXTRA_IDS,
+  ...Object.keys(FOOTER_EDGE_PANELS),
+];
 export const FOOTER_PANEL_IDS: ReadonlySet<string> = new Set(FOOTER_PANEL_ID_LIST);
 
 export interface BuiltinWorkbenchSpec {

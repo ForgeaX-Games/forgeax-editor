@@ -112,4 +112,15 @@ describe('buildTabContextMenuItems', () => {
     });
     expect(items.some((x) => typeof x === 'object' && x.label === 'Hide Panel Title Bar')).toBe(false);
   });
+
+  it('side-edge single-panel groups do not offer a title-bar hide action', () => {
+    const items = buildTabContextMenuItems(
+      'DockShell',
+      'hierarchy',
+      () => {},
+      { groupPanelCount: 1, onHideTitle: () => {} },
+      { onSideEdge: true, nearerSide: 'left', onMoveToSide: () => {}, onMoveOffSide: () => {} },
+    );
+    expect(items.some((x) => typeof x === 'object' && x.label === 'Hide Panel Title Bar')).toBe(false);
+  });
 });

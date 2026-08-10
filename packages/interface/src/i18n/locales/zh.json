@@ -13,6 +13,26 @@
     "today": "今天",
     "yesterday": "昨天"
   },
+  "statusBar": {
+    "diagnostics": {
+      "title": "诊断",
+      "tooltip": "诊断 · 设备与运行时状态",
+      "checking": "检测中…",
+      "webgpuUnavailable": "WebGPU 不可用",
+      "unknownDevice": "未知设备",
+      "cores": "核",
+      "device": "设备",
+      "memory": "内存",
+      "unavailable": "不可用",
+      "engine": "引擎",
+      "processMemory": "进程内存",
+      "uptime": "运行时长",
+      "wsConnections": "WS 连接",
+      "project": "项目",
+      "scene": "当前场景",
+      "assets": "资产"
+    }
+  },
   "onboarding": {
     "step": {
       "welcome": "欢迎 · 语言 · 连接模型",
@@ -188,6 +208,20 @@
       "lowestTokenUsage": "Token 消耗最少",
       "additionalTokenCost": "会额外消耗少量 Token",
       "additionalTokenHint": "{{kernel}} 的记忆沉淀会额外消耗少量 Token。如不需要，可在此关闭。"
+    },
+    "kernelPermissions": {
+      "title": "每个内核的权限档位",
+      "hint": "默认全部以「{{mode}}」启动。改这里只影响基线放行姿态；permissions.deny 规则与 hook 拦截仍然生效。",
+      "followDefault": "跟随默认（{{mode}}）",
+      "singleGearHint": "{{kernel}} 只支持这一档：这是它 headless 形态的真实能力，收窄请用 deny 规则或 hook。",
+      "denyStillApplies": "即便是全权限档，deny 规则、受保护路径与 PreToolUse hook 仍会拦下操作。",
+      "mode": {
+        "gated": "逐项审批",
+        "autoEdits": "自动编辑",
+        "planning": "只读规划",
+        "unrestricted": "全权限（危险）"
+      },
+      "riskyGearHint": "{{kernel}} 在低于「全权限」的档位下，携带项目 MCP 的轮次可能卡住等审批（这是该内核的真实限制，我们不再替你偷偷抬档）。"
     },
     "env": {
       "saved": "已写入 {{count}} 个变量到 .env（重启 stack 后生效）"
@@ -1155,6 +1189,7 @@
     "browserFullscreen": "浏览器全屏(PPT 放映式)· 浏览器原生 fullscreen API(连标签栏 / 地址栏一起消失)",
     "toggleSidebar": "切换左侧 Sidebar(工作台栏)",
     "toggleChatPanel": "切换右侧 ChatPanel",
+    "revealChat": "切换 chat(隐藏则调出 / 非默认位则归位 / 默认位则关闭)",
     "toggleDashboard": "切换 Dashboard 总览面板",
     "toggleSettings": "打开 / 关闭 Settings 浮层",
     "openChangelog": "Settings → Changelog(版本迭代记录)",
@@ -1244,6 +1279,7 @@
     "moveToSide": "移动到侧边",
     "moveOffSide": "移出侧边",
     "moveToPrimaryDock": "移回主停靠区",
+    "chatToDefault": "在默认位置显示",
     "tabContext": {
       "close": "关闭",
       "closeOthers": "关闭其他"

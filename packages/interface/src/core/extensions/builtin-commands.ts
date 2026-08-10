@@ -14,6 +14,7 @@
 import type { AppExtension } from '../app-shell/types';
 import { useShellStore } from '../../store';
 import { bumpDockResetEpoch } from '../../components/DockShell/dockResetEpoch';
+import { useChatWidth, CHAT_DEFAULT_WIDTH } from '../../components/ChatColumn/useChatWidth';
 import { isPanelVisible } from '../../components/DockShell/DockRegion';
 import { isTauri } from '../../lib/platform/runtime';
 
@@ -134,6 +135,10 @@ export const builtinCommandsExtension: AppExtension = {
         // still apply this reset exactly once when they become ready.
         bumpDockResetEpoch();
         ctx.bus.emit('dock:reset', {});
+        // The chat column's WIDTH is a shell store (ChatDockResizer), not part of
+        // the dockview layout the dock:reset rebuild restores — reset it here at
+        // the single command entry point so 重置布局 also restores chat's width.
+        try { useChatWidth.getState().setWidth(CHAT_DEFAULT_WIDTH); } catch { /* noop */ }
         return { status: 'completed' as const };
       },
     }));

@@ -523,7 +523,7 @@
 }
 .dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-open > .dv-content-container {
   top: var(--fx-edge-drawer-top);
-  height: var(--fx-edge-drawer-width, 300px);
+  height: var(--fx-edge-drawer-height, 300px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.22);
 }
 .dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-animating > .dv-content-container {
@@ -532,7 +532,7 @@
 .dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-open > .dv-content-container {
   top: auto;
   bottom: var(--fx-edge-drawer-bottom);
-  height: var(--fx-edge-drawer-width, 300px);
+  height: var(--fx-edge-drawer-height, 300px);
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.30), 0 -1px 3px rgba(0, 0, 0, 0.22);
 }
 .dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-animating > .dv-content-container {
@@ -587,6 +587,12 @@
    without a CSS variable dance. Default + clamping live in the store.
    position: relative anchors the .fx-auxbar-resizer absolutely at the left edge. */
 .fx-dockregion-AuxBar { flex: 0 0 auto; position: relative; }
+
+/* ChatDock — the fixed-width chat column right of the ActivityRail. Same
+   fixed-basis override as AuxBar so the inline width from useChatWidth wins
+   instead of splitting space with DockShell (which keeps .fx-dockwrap's
+   flex:1). Left border restores the separator the old .studio-chat-col drew. */
+.fx-dockregion-ChatDock { flex: 0 0 auto; position: relative; border-left: 1px solid var(--color-border-default); }
 
 /* While dragging a dockview TAB/GROUP (fx-dock-dragging is scoped to tab-strip
    drags in DockRegion — NOT in-panel HTML5 drags like Hierarchy rows), make the

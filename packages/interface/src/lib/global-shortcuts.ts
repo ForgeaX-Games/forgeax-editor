@@ -473,6 +473,18 @@ export function buildShortcuts(): ShortcutDef[] {
       match: (e) => mod(e) && e.shiftKey && e.code === 'KeyC',
       run: () => { store().toggleChatpanel(); return true; },
     },
+    {
+      // 3-state chat toggle: closed → open at default (ChatDock); open but dragged
+      // into the centre grid → move it home; open at default → close. ChatDock owns
+      // the actual work (it holds chat's dockview api + panelLocations) — we just
+      // fire the intent so a single handler converges every route. preventDefault
+      // always so F1 never opens the browser help page.
+      combo: 'F1',
+      group: 'layout',
+      label: t('shortcuts.revealChat'),
+      match: (e) => !mod(e) && !e.shiftKey && !e.altKey && (e.key === 'F1' || e.code === 'F1'),
+      run: () => { window.dispatchEvent(new CustomEvent('forgeax:chat-toggle')); return true; },
+    },
 
     // ── Overlay (Dashboard / Settings) ──
     {

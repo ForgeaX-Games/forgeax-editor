@@ -4,11 +4,11 @@ import { registerDockviewApi } from './dockviewRegistry';
 
 function mkApi(id: string) {
   const closed: string[] = [];
-  const added: Array<{ id: string; component: string; title?: string }> = [];
+  const added: Array<{ id: string; component: string; title?: string; position?: unknown }> = [];
   const api = {
     id,
     getPanel: (pid: string) => ({ api: { close() { closed.push(pid); } } }),
-    addPanel: (opts: { id: string; component: string; title?: string }) => added.push(opts),
+    addPanel: (opts: { id: string; component: string; title?: string; position?: unknown }) => added.push(opts),
   };
   return { api, closed, added };
 }
@@ -67,5 +67,39 @@ describe('handleCrossInstanceDrop', () => {
     );
     expect(moves).toEqual([]);
     expect(target.added).toEqual([]);
+  });
+
+  it('adds INTO the hovered group as a tab when dropped at center', () => {
+    const target = mkApi('target-vid');
+    const grp = { __group: true };
+    handleCrossInstanceDrop(
+      { api: target.api, position: 'center', group: grp, getData: () => ({ viewId: 'src', panelId: 'chat' }) },
+      'DockShell',
+      () => {},
+    );
+    expect(target.added).toEqual([
+      { id: 'chat', component: 'chat', title: undefined, position: { referenceGroup: grp, direction: 'within' } },
+    ]);
+  });
+
+  it('splits relative to the hovered group for an edge drop (top → above)', () => {
+    const target = mkApi('target-vid');
+    const grp = { __group: true };
+    handleCrossInstanceDrop(
+      { api: target.api, position: 'top', group: grp, getData: () => ({ viewId: 'src', panelId: 'chat' }) },
+      'DockShell',
+      () => {},
+    );
+    expect(target.added[0]?.position).toEqual({ referenceGroup: grp, direction: 'above' });
+  });
+
+  it('splits relative to the root grid when there is no target group', () => {
+    const target = mkApi('target-vid');
+    handleCrossInstanceDrop(
+      { api: target.api, position: 'right', getData: () => ({ viewId: 'src', panelId: 'chat' }) },
+      'DockShell',
+      () => {},
+    );
+    expect(target.added[0]?.position).toEqual({ direction: 'right' });
   });
 });
