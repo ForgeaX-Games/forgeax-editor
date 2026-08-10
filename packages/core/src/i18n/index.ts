@@ -36,16 +36,6 @@ function isLocale(v: unknown): v is Locale {
   return typeof v === 'string' && SUPPORTED_LOCALES.some((l) => l.code === v);
 }
 
-/** Match interface i18n: first-run with no persisted value follows OS/browser. */
-function detectSystemLocale(): Locale {
-  if (typeof navigator === 'undefined') return DEFAULT_LOCALE;
-  const langs = navigator.languages?.length ? navigator.languages : [navigator.language];
-  for (const l of langs) {
-    if (typeof l === 'string' && l.toLowerCase().startsWith('zh')) return 'zh';
-  }
-  return DEFAULT_LOCALE;
-}
-
 function readPersisted(): Locale {
   if (typeof window === 'undefined') return DEFAULT_LOCALE;
   try {
@@ -57,7 +47,7 @@ function readPersisted(): Locale {
   if (typeof document !== 'undefined' && isLocale(document.documentElement.lang)) {
     return document.documentElement.lang;
   }
-  return detectSystemLocale();
+  return DEFAULT_LOCALE;
 }
 
 let current: Locale = readPersisted();
