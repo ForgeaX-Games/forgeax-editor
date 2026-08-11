@@ -79,6 +79,10 @@ export async function loadCatalogPageExtensions(
       icon: activity.icon,
       category: activity.category,
       order: activity.order,
+      // Host-injected source layer — scanner-loaded extensions are all
+      // installed-tier, so they sort AFTER builtin core nav regardless of the
+      // `order` they declare (or omit). Never taken from the manifest.
+      sourceLayer: 'installed',
       pageTypeId: activity.pageType
         ? resolveContributionRef(item.id, 'page', activity.pageType) as PageTypeRegistration['id']
         : undefined,

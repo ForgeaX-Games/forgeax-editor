@@ -291,6 +291,7 @@ export function createEditorPageExtension(
         id: activityId('editor'),
         title: 'Editor',
         category: 'builtin',
+        sourceLayer: 'builtin',
         order: 0,
         pageTypeId: LEVEL_PAGE,
       }],

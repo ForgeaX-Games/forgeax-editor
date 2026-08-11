@@ -1,5 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
-import { Box, MoreHorizontal, Pin } from 'lucide-react';
+import { Box, MoreHorizontal, Pin, icons as LucideIcons, type LucideIcon } from 'lucide-react';
 import type { QualifiedActivityId } from '@forgeax/types';
 import { useHost } from '../../core/app-shell';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
@@ -18,6 +18,28 @@ function readPinned(): string[] | null {
 
 function writePinned(ids: readonly string[]): void {
   try { localStorage.setItem(STORAGE_KEYS.activityRailPinned, JSON.stringify(ids)); } catch { /* quota */ }
+}
+
+/** kebab / snake / spaced → lucide registry PascalCase key ("folder-tree" → "FolderTree"). */
+function toPascal(name: string): string {
+  return name.replace(/(^|[-_ ])(\w)/g, (_match, _sep, ch: string) => ch.toUpperCase());
+}
+
+/**
+ * Resolve an activity's `icon` string to something renderable. Three branches:
+ *   1. a lucide glyph name ("bot" / "folder-tree" / "LayoutTemplate") → the icon
+ *   2. any other non-empty string (emoji "🖼️" / arbitrary char) → render as text
+ *   3. absent / unknown → neutral Box fallback
+ * Extensions in the wild mix emoji and lucide names, so we can't assume either.
+ */
+type ResolvedIcon = { kind: 'lucide'; Icon: LucideIcon } | { kind: 'text'; char: string };
+function resolveActivityIcon(icon?: string): ResolvedIcon {
+  if (icon) {
+    const Lucide = LucideIcons[toPascal(icon) as keyof typeof LucideIcons] as LucideIcon | undefined;
+    if (Lucide) return { kind: 'lucide', Icon: Lucide };
+    return { kind: 'text', char: icon };
+  }
+  return { kind: 'lucide', Icon: Box };
 }
 
 export function ActivityRail() {
@@ -44,6 +66,7 @@ export function ActivityRail() {
 
   const button = (activity: (typeof catalog.activities)[number], pinnedItem: boolean) => {
     const active = activity.pageTypeId === activeTypeId;
+    const icon = resolveActivityIcon(activity.icon);
     return (
       <Tooltip key={activity.id}>
         <TooltipTrigger asChild>
@@ -55,7 +78,11 @@ export function ActivityRail() {
             data-activity-id={activity.id}
             onClick={() => void host.activities.launch(activity.id as QualifiedActivityId)}
           >
-            <span className="activity-rail-item-ic" aria-hidden><Box size={22} strokeWidth={1.7} /></span>
+            <span className="activity-rail-item-ic" aria-hidden>
+              {icon.kind === 'lucide'
+                ? <icon.Icon size={22} strokeWidth={1.7} />
+                : <span className="activity-rail-item-emoji">{icon.char}</span>}
+            </span>
             <span className="activity-rail-item-lb">{activity.title}</span>
           </button>
         </TooltipTrigger>

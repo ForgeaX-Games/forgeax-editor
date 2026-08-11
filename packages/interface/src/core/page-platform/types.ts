@@ -121,6 +121,15 @@ export interface ActivityRegistration {
   readonly icon?: string;
   readonly category?: string;
   readonly order?: number;
+  /**
+   * Registration source, injected by the host at the assembly seam — NEVER
+   * self-declared by an extension. It is the primary rail sort key: builtin
+   * activities always precede installed/project ones, so an unranked plugin
+   * can never jump ahead of the core nav. `order` only breaks ties WITHIN a
+   * layer (VSCode `group@order` philosophy — the layer caps the reach of any
+   * plugin's number). Absent ⇒ treated as `installed`.
+   */
+  readonly sourceLayer?: 'builtin' | 'installed' | 'project' | 'user';
   readonly pageTypeId?: QualifiedPageTypeId;
   readonly commandId?: string;
 }

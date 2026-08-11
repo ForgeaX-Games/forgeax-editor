@@ -40,4 +40,33 @@ describe('ActivityRegistry', () => {
     await registry.launch(activityId);
     expect(opened).toEqual([pageTypeId]);
   });
+
+  it('sorts by sourceLayer first, then order (unranked plugins fall to layer middle, never the front)', () => {
+    const owner = '@forgeax/activity-order-test';
+    const mk = (local: string) => qualifyContributionId(owner, 'activity', local);
+    const builtinLate = mk('builtin-late');     // builtin, order 20
+    const builtinEarly = mk('builtin-early');   // builtin, order 10
+    const installedRanked = mk('installed-5');  // installed, order 5 (small, but installed)
+    const installedUnranked = mk('installed-x'); // installed, NO order → ORDER_BASE
+    const contributions = createContributionRegistry<PagePlatformContribution>();
+    const registry = createActivityRegistry(contributions, {} as PagePort, createCommandsRegistry());
+
+    contributions.contribute(owner, {
+      activities: [
+        { id: installedUnranked, title: 'Plugin', sourceLayer: 'installed' },
+        { id: builtinLate, title: 'B2', sourceLayer: 'builtin', order: 20 },
+        { id: installedRanked, title: 'Plugin', sourceLayer: 'installed', order: 5 },
+        { id: builtinEarly, title: 'B1', sourceLayer: 'builtin', order: 10 },
+      ],
+    });
+
+    // builtin layer wins outright over installed — an installed plugin with
+    // order:5 still ranks BELOW builtin order:20; unranked plugin sits last.
+    expect(registry.getSnapshot().activities.map((item) => item.id)).toEqual([
+      builtinEarly,
+      builtinLate,
+      installedRanked,
+      installedUnranked,
+    ]);
+  });
 });

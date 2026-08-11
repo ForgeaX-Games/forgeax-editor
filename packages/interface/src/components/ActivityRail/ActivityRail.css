@@ -77,6 +77,12 @@
   place-items: center;
   flex-shrink: 0;
 }
+/* Emoji-icon plugins render their glyph as text; size it to match the 22px
+ * lucide box so mixed emoji/lucide rails stay vertically aligned. */
+.activity-rail-item-emoji {
+  font-size: 19px;
+  line-height: 1;
+}
 .activity-rail-item-lb {
   max-width: 50px;
   font-size: 8.5px;

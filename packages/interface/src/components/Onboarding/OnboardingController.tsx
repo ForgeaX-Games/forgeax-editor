@@ -382,7 +382,7 @@ export function OnboardingController() {
 
   // Create/link materializes the game; selection uses the one active-game write.
   const enterHomeWith = useCallback(async (slug: string) => {
-    if (slug) { try { await setActiveGame(slug); } catch { /* store surfaced the error */ } }
+    if (slug) await setActiveGame(slug);
     // Latch Scene + default layout intent before shell mounts (onReady race).
     if (!loadOnboarding().done.tour) latchTourShellDefaults();
     setPhase('home');

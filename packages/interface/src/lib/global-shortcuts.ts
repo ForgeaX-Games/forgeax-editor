@@ -53,12 +53,13 @@ export interface ShortcutDef {
 // Exported for unit tests (T4-9 typing-target-guard coverage).
 export function isTypingTarget(e: KeyboardEvent): boolean {
   const t = e.target;
+  if (typeof document !== 'undefined' && document.querySelector('.im-editor[data-listening="1"]')) return true;
   if (!t || !(t instanceof Element)) return false;
   const tag = (t as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
   if ((t as HTMLElement).isContentEditable) return true;
-  // RichInput composer (custom contenteditable wrapper)
-  if (t.closest('.kc-composer-rich, [data-kc-composer], [contenteditable="true"]')) return true;
+  // RichInput composer / Input Map panel
+  if (t.closest('.im-editor, .kc-composer-rich, [data-kc-composer], [contenteditable="true"]')) return true;
   return false;
 }
 
@@ -370,6 +371,7 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       combo: 'Ctrl+Z',
       group: 'edit',
       label: 'Undo',
+      allowInInput: true,
       match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyZ' || safeKeyLower(e) === 'z'),
       run: () => { deps.undo(); return true; },
     },
@@ -377,6 +379,7 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       combo: 'Ctrl+Shift+Z',
       group: 'edit',
       label: 'Redo',
+      allowInInput: true,
       match: (e) => mod(e) && !e.altKey && e.shiftKey && (e.code === 'KeyZ' || safeKeyLower(e) === 'z'),
       run: () => { deps.redo(); return true; },
     },
@@ -384,6 +387,7 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       combo: 'Ctrl+Y',
       group: 'edit',
       label: 'Redo',
+      allowInInput: true,
       match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyY' || safeKeyLower(e) === 'y'),
       run: () => { deps.redo(); return true; },
     },
@@ -391,6 +395,10 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
       combo: 'Ctrl+S',
       group: 'edit',
       label: 'Save',
+      // Must fire while typing in Input Map / MI fields (⌘/Ctrl+S is a document
+      // command, not a text-editing key). Without this, focus inside `.im-editor`
+      // makes isTypingTarget true and silently drops save.
+      allowInInput: true,
       match: (e) => mod(e) && !e.altKey && !e.shiftKey && (e.code === 'KeyS' || safeKeyLower(e) === 's'),
       run: () => { deps.save(); return true; },
     },
