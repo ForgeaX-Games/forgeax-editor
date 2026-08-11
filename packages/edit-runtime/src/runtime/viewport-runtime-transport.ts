@@ -104,6 +104,10 @@ export interface ViewportRuntimeConnectionHostOptions {
   readonly onReject?: (reason: string, received: unknown) => void;
 }
 
+export interface DisposableViewportRuntimeTransportService extends TransportService {
+  dispose(): void;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -469,7 +473,7 @@ export function createViewportRuntimeTransportService(options: {
   readonly readAssetPayload?: (guid: string) => unknown | Promise<unknown>;
   readonly readViewportStatus?: () => unknown;
   readonly readExecutionReport?: () => ExecutionReport;
-}): TransportService {
+}): DisposableViewportRuntimeTransportService {
   const retryOperationRun = (
     requestId: string,
     retryRequestId: string,
@@ -493,6 +497,7 @@ export function createViewportRuntimeTransportService(options: {
   };
   const adapter = createGatewayCapabilityAdapter({
     listOps: () => options.gateway.listOps(),
+    subscribeOps: (listener) => options.gateway.subscribeOperationCapabilities(listener),
     dispatch: (command, origin) => options.gateway.dispatch(command, origin),
     operationRuns: {
       get: (requestId) => options.gateway.getOperationRunResult(requestId),
@@ -535,7 +540,7 @@ export function createViewportRuntimeTransportService(options: {
     readOperationRuns: () => options.gateway.operationRunSnapshot(),
     readDiagnostics: () => options.gateway.diagnostics.snapshot(),
   });
-  return createTransportService({
+  const service = createTransportService({
     journal: new RunJournal({ scope }),
     product: adapter.product(),
     operationRuns: adapter.saveOperationRuns,
@@ -550,6 +555,15 @@ export function createViewportRuntimeTransportService(options: {
         await ensureAssetCataloged(options.gateway.doc.registry, parsed.guid);
       }
       return projectionQuery(input);
+    },
+  });
+  let disposed = false;
+  return Object.assign(service, {
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      hierarchy.unsubscribe();
+      adapter.dispose();
     },
   });
 }

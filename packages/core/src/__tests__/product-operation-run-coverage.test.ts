@@ -26,6 +26,7 @@ test('gateway exposes the ten representative operations through one run surface'
       argsSchema: null,
       source: 'builtin' as const,
       title: id,
+      availability: { available: true as const },
     })),
     dispatch: (command) => ({ ok: true, result: command.kind }),
   });
@@ -53,6 +54,7 @@ test('run coverage is terminal-query based and does not use a completion side ch
       argsSchema: null,
       source: 'builtin' as const,
       title: 'Play',
+      availability: { available: true as const },
     }],
     dispatch: () => ({ ok: true }),
   });
@@ -84,6 +86,7 @@ test('product capability execution waits for a nested Gateway operation run', as
       argsSchema: null,
       source: 'builtin' as const,
       title: 'Switch Scene File',
+      availability: { available: true as const },
     }],
     dispatch: () => ({ ok: true, result: { created: [], operationRun: accepted } }),
     operationRuns: {
@@ -121,6 +124,7 @@ test('createMaterial capability waits for disk commit and live catalog visibilit
         argsSchema: null,
         source: 'builtin' as const,
         title: 'Create Material',
+        availability: { available: true as const },
         completion: { kind: 'asset-visible' as const, guidField: 'guid' },
       }],
       dispatch: () => {
@@ -162,6 +166,7 @@ test('destroyAsset capability waits for disk commit and reports background failu
       argsSchema: null,
       source: 'builtin' as const,
       title: 'Destroy Asset',
+      availability: { available: true as const },
       completion: { kind: 'asset-write' as const, guidField: 'guid' },
     }],
     dispatch: () => {

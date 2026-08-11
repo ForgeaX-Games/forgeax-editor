@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 
 import { EditGateway } from '../io/gateway';
-import { sessionAppliers, type SessionApplier } from '../io/appliers';
+import { registerApplier, type SessionApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 
 interface Deferred<T> {
@@ -35,14 +35,12 @@ function makeSaveGateway(): {
     effects.push(effect);
     return { ok: true, completion: effect.promise };
   };
-  const previousApplier = sessionAppliers.get('saveDocToDisk');
-  sessionAppliers.set('saveDocToDisk', fakeApplier);
+  const restoreApplier = registerApplier('session', 'saveDocToDisk', fakeApplier);
   return {
     gateway: new EditGateway(createEditSession()),
     effects,
     restore(): void {
-      if (previousApplier === undefined) sessionAppliers.delete('saveDocToDisk');
-      else sessionAppliers.set('saveDocToDisk', previousApplier);
+      restoreApplier();
     },
   };
 }

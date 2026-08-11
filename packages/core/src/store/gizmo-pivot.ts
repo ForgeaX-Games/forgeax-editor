@@ -9,7 +9,7 @@
 
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 
 export type GizmoPivot = 'center' | 'lastSelected';
 let gizmoPivot: GizmoPivot = 'center';
@@ -24,7 +24,7 @@ function applySetGizmoPivot(op: EditorOp): { ok: true } {
   }
   return { ok: true };
 }
-sessionAppliers.set('setGizmoPivot', applySetGizmoPivot);
+registerApplier('session', 'setGizmoPivot', applySetGizmoPivot);
 
 export function onGizmoPivotChange(fn: () => void): () => void {
   pivotListeners.add(fn);

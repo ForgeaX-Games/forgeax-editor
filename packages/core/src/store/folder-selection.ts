@@ -17,7 +17,7 @@
 //   Plan-E: typed items + dedup guard (empty→empty no-op, prevents domain pollution).
 
 import { useSyncExternalStore } from 'react';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 // Single-active-selection-domain: selecting a path clears any entity selection so
 // Delete / blank-click resolve to one target. Direct clear (guarded on non-empty)
 // goes through the shared selection-domain seam.
@@ -91,7 +91,7 @@ function sameItems(a: PathSelectionItem[], b: PathSelectionItem[]): boolean {
 
 // ── Session applier ───────────────────────────────────────────────────────────
 
-sessionAppliers.set('setFolderSelection', (op) => {
+registerApplier('session', 'setFolderSelection', (op) => {
   const raw = op as { paths?: string[]; items?: PathSelectionItem[] };
   // Support both shapes: new typed `items` OR legacy `paths` (backward compat).
   let next: PathSelectionItem[];

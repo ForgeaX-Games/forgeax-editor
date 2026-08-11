@@ -7,19 +7,9 @@ afterEach(() => { for (const dispose of registered.splice(0)) dispose(); });
 
 function deps() {
   const calls: string[] = [];
-  const runtime = {
-    replay: (entity: number) => {
-      calls.push(`replay:${entity}`);
-    },
-  };
   const world = {
     addSystem: () => ({ unwrap: () => { calls.push('addSystem'); } }),
     removeSystem: () => ({ unwrap: () => { calls.push('removeSystem'); } }),
-    get: (entity: number) => entity === 42
-      ? { ok: true as const, value: {} }
-      : { ok: false as const, error: new Error('missing player') },
-    hasResource: () => true,
-    getResource: () => runtime,
   } as never;
   return {
     calls,
@@ -29,6 +19,19 @@ function deps() {
       setDisplay: (display: 'scene' | 'game') => { calls.push(`display:${display}`); },
       grantGameControl: () => { calls.push('grant'); },
       releaseGameControl: () => { calls.push('release'); },
+      replayParticleEffect: (entity: number) => {
+        if (entity !== 42) {
+          return {
+            ok: false as const,
+            error: {
+              code: 'vfx-host-control-player-unavailable' as const,
+              hint: 'target a live VFX player owned by the active World',
+            },
+          };
+        }
+        calls.push(`replay:${entity}`);
+        return { ok: true as const };
+      },
       captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' }; },
       world,
       activeWorld: () => world,
@@ -50,7 +53,7 @@ describe('viewport session applier registrar (M3)', () => {
     expect(gateway.dispatch({ kind: 'replayParticleEffect', entity: 42 })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'replayParticleEffect', entity: 43 })).toMatchObject({
       ok: false,
-      error: { code: 'INVALID_ARGS' },
+      error: { code: 'vfx-host-control-player-unavailable' },
     });
     expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });

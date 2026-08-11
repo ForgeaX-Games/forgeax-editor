@@ -16,7 +16,7 @@
 //   requirements AC-03: transient goes through gateway, leaves no trace.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp, EntityId } from '../types';
-import { transientAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 
 // Transient field-preview signal: while a viewport gizmo is being dragged it
 // publishes the live scalar (keyed by a namespaced field id like
@@ -40,7 +40,7 @@ function applySetFieldPreview(op: EditorOp): { ok: true } {
   for (const fn of fieldListeners) fn();
   return { ok: true };
 }
-transientAppliers.set('setFieldPreview', applySetFieldPreview);
+registerApplier('transient', 'setFieldPreview', applySetFieldPreview);
 
 // M3 t22 (S10 / AC-21/22): setFieldPreview write-side sugar deleted — callers
 // dispatch gateway.dispatch({ kind: 'setFieldPreview', id, key, value }) directly.

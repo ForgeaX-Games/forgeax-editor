@@ -40,9 +40,15 @@ export type {
 } from '../io/scene-authoring-session';
 export { createEngineFacade } from '../io/engine-facade';
 export type { EngineFacade } from '../io/engine-facade';
-export { registerSessionApplier } from '../io/appliers';
+export { registerSessionApplier, registerTransientApplier } from '../io/appliers';
 export type { SessionApplier, SessionApplierMeta } from '../io/appliers';
-export type { ArgsSchema, OpDescriptor } from '../io/catalog';
+export type {
+  ArgsSchema,
+  GatewayOpAvailability,
+  GatewayOpDescriptor,
+  GatewayOpSnapshot,
+  OpDescriptor,
+} from '../io/catalog';
 export { createCatalogReconcileProvider } from '../io/catalog';
 export type {
   CatalogReconcileProvider,
@@ -59,7 +65,6 @@ export type {
   OperationRunSnapshot,
 } from '../io/operation-runs';
 export {
-  createEditorProductFromGateway,
   createGatewayCapabilityAdapter,
 } from '../product/gateway-executor';
 export { createGatewayCommitCollar } from '../product/commit-collar';

@@ -14,6 +14,7 @@ import { describe, expect, it, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
+import { registerTransientApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, EntityId } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
@@ -126,6 +127,29 @@ describe('defineOp OP_ID_CONFLICT (m4-w2, RED)', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('OP_ID_CONFLICT');
+    }
+  });
+
+  it('does not overwrite a live downstream applier with a defined operation', () => {
+    const operationId = 'test.livePreviewLease';
+    const unregister = registerTransientApplier(operationId, () => ({ ok: true }), {
+      title: 'Live Preview Lease',
+    });
+    try {
+      const result = gw.defineOp({
+        id: operationId,
+        domain: 'session',
+        argsSchema: null,
+        plan: () => [],
+      });
+      expect(result).toMatchObject({ ok: false, error: { code: 'OP_ID_CONFLICT' } });
+      expect(gw.listOps().find((entry) => entry.id === operationId)).toMatchObject({
+        source: 'registered',
+        domain: 'transient',
+        availability: { available: true },
+      });
+    } finally {
+      unregister();
     }
   });
 });

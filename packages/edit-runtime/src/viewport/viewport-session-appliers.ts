@@ -8,11 +8,6 @@
 
 import { getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { World } from '@forgeax/engine-ecs';
-import {
-  ParticleEffectPlayer,
-  VFX_GPU_RUNTIME_RESOURCE_KEY,
-  type VfxGpuRuntime,
-} from '@forgeax/engine-vfx';
 import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type EditGateway, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
 
 export interface ViewportSessionApplierDeps {
@@ -21,6 +16,8 @@ export interface ViewportSessionApplierDeps {
   readonly setDisplay: (display: 'scene' | 'game') => void;
   readonly grantGameControl: () => void;
   readonly releaseGameControl: () => void;
+  /** Host-owned VFX control; the applier never reaches into World resources. */
+  readonly replayParticleEffect: (entity: number) => DispatchResult;
   /** Optional engine RHI debug capture, injected by the runtime owner. */
   readonly captureFrame?: (frames: number) => Promise<unknown>;
   /** Outer lifecycle deadline; injectable so the terminal-state contract is deterministic in tests. */
@@ -223,16 +220,7 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       if (typeof entity !== 'number' || !Number.isSafeInteger(entity) || entity < 0) {
         return invalidArgs('entity must be a live non-negative entity handle');
       }
-      const world = deps.activeWorld();
-      const player = world.get(entity as never, ParticleEffectPlayer);
-      if (!player.ok) {
-        return invalidArgs('entity must be a live ParticleEffectPlayer in the active World');
-      }
-      if (!world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) {
-        return invalidArgs('the active World has no VfxGpuRuntime resource');
-      }
-      world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY).replay(entity as never);
-      return { ok: true as const };
+      return deps.replayParticleEffect(entity);
     }, 'Replay Particle Effect', {
       type: 'object',
       properties: { entity: { type: 'number', minimum: 0 } },

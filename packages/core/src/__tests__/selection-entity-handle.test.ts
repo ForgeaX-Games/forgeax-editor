@@ -30,14 +30,14 @@ import {
   isSelected,
   clearSelection,
 } from '../store/selection';
-import { sessionAppliers } from '../io/appliers';
+import { applierFor } from '../io/appliers';
 
 function h(n: number): EntityHandle {
   return n as EntityHandle;
 }
 
 function applySel(kind: string, payload: Record<string, unknown>): void {
-  const applier = sessionAppliers.get(kind);
+  const applier = applierFor(kind, 'session');
   if (!applier) throw new Error(`no applier for ${kind}`);
   const r = applier({ kind, ...payload } as never, undefined as never);
   if (!r.ok) throw new Error(`applier ${kind} failed`);

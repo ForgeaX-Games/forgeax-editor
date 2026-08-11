@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 
 export type GizmoSpace = 'world' | 'local';
 let gizmoSpace: GizmoSpace = 'local';
@@ -15,7 +15,7 @@ function applySetGizmoSpace(op: EditorOp): { ok: true } {
   }
   return { ok: true };
 }
-sessionAppliers.set('setGizmoSpace', applySetGizmoSpace);
+registerApplier('session', 'setGizmoSpace', applySetGizmoSpace);
 
 export function onGizmoSpaceChange(fn: () => void): () => void {
   spaceListeners.add(fn);

@@ -59,7 +59,9 @@ export interface ProjectedOp {
  * @returns a readonly ProjectedOp[] whose ids are a subset-by-construction of
  *          the input ids.
  */
-export function projectOps(ops: readonly OpDescriptor[]): readonly ProjectedOp[] {
+export function projectOps(
+  ops: readonly Pick<OpDescriptor, 'id' | 'domain' | 'argsSchema' | 'title'>[],
+): readonly ProjectedOp[] {
   return ops.map((descriptor) => {
     // Field-by-field derive. descriptor.domain / .argsSchema flow with no `as`
     // (AC-09 projection side). `source` is deliberately omitted (D-7).

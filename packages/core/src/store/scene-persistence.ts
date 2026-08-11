@@ -64,7 +64,7 @@
 //   requirements AC-09: pure structural migration — every read/write is
 //     behaviorally identical (OOS-1 zero behavior change).
 import { gateway } from './gateway';
-import { domainOf, sessionAppliers } from '../io/appliers';
+import { domainOf, registerApplier } from '../io/appliers';
 import { notifyDocChanged } from './doc-version';
 import { createEditSession } from '../session/document';
 import {
@@ -330,11 +330,11 @@ function applySetSceneId(op: EditorOp): { ok: true } {
   ctx.currentSceneId = v || 'default';
   return { ok: true };
 }
-sessionAppliers.set('setSceneId', applySetSceneId);
+registerApplier('session', 'setSceneId', applySetSceneId);
 
 // R0-02D: scene-list owns the project-config effect; this composition root
 // exposes it as one request-correlated Gateway operation for both UI and AI.
-sessionAppliers.set('setDefaultScene', (op) => {
+registerApplier('session', 'setDefaultScene', (op) => {
   const o = op as { sceneGuid: string; requestId: string };
   if (typeof o.requestId !== 'string' || o.requestId.trim() === '') {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'setDefaultScene.requestId must be a non-empty caller-minted id for OperationRun correlation' } };
@@ -346,7 +346,7 @@ sessionAppliers.set('setDefaultScene', (op) => {
 
 // R0-02E: scene-list owns the reference/current/default guard and the
 // post-delete read-model publication; the Gateway owns the OperationRun.
-sessionAppliers.set('deleteScene', (op) => {
+registerApplier('session', 'deleteScene', (op) => {
   const o = op as { sceneGuid: string; requestId: string };
   if (typeof o.requestId !== 'string' || o.requestId.trim() === '') {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'deleteScene.requestId must be a non-empty caller-minted id for OperationRun correlation' } };
@@ -391,7 +391,7 @@ type SceneSwitchEffect =
       };
     };
 
-sessionAppliers.set('switchSceneFile', (op, applierCtx) => {
+registerApplier('session', 'switchSceneFile', (op, applierCtx) => {
   const sceneOp = op as { id: string; dirtyPolicy?: SceneSwitchDirtyPolicy; requestId: string };
   if (sceneOp.id === sceneList.getSceneFile()) {
     return {
@@ -494,7 +494,7 @@ export function switchSceneFile(id: string, dirtyPolicy?: SceneSwitchDirtyPolicy
   return gateway.waitOperationRun(requestId).then((terminal) => terminal.ok && terminal.value.status === 'succeeded');
 }
 
-sessionAppliers.set('previewImportedScene', (op) => {
+registerApplier('session', 'previewImportedScene', (op) => {
   const preview = op as {
     guid: string;
     sourceKey: string;
@@ -649,7 +649,7 @@ function promotionSourceState(op: PromoteImportedSceneOp): ImportedPreviewSessio
     : null;
 }
 
-sessionAppliers.set('promoteImportedScene', (rawOp) => {
+registerApplier('session', 'promoteImportedScene', (rawOp) => {
   const op = rawOp as PromoteImportedSceneOp;
   const target = validatePromotionTarget(op);
   if (!target.ok) return target;
@@ -941,7 +941,7 @@ async function doCreateSceneFile(
 
 // Session op (M2 D-1): createSceneFile is request-correlated and returns its
 // canonical effect to Gateway rather than stashing a detached boolean.
-sessionAppliers.set('createSceneFile', (op) => {
+registerApplier('session', 'createSceneFile', (op) => {
   const o = op as { id: string; duplicateCurrent: boolean; requestId: string };
   if (typeof o.requestId !== 'string' || o.requestId.trim() === '') {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createSceneFile.requestId must be a non-empty caller-minted id for OperationRun correlation' } };
@@ -1049,7 +1049,7 @@ export function loadDocFromDisk(): Promise<boolean> {
 // returns that completion to Gateway. The Gateway owns accepted/running/terminal
 // state and publishes the session ledger entry only after succeeded. The legacy
 // asyncOpResult slot below remains exclusively for load/switch paths.
-sessionAppliers.set('saveDocToDisk', (op, applierCtx) => {
+registerApplier('session', 'saveDocToDisk', (op, applierCtx) => {
   // Animation-preview save-pollution defense (M1): restore the
   // reflection-declared runtime fields (times/speeds/paused) to their
   // pre-preview authored values BEFORE serialization so a preview never leaks
@@ -1084,7 +1084,7 @@ function runAsyncOp(impl: () => Promise<boolean>): void {
   ctx.asyncOpResult = pr;
 }
 function registerAsyncSessionOp(kind: string, impl: () => Promise<boolean>): void {
-  sessionAppliers.set(kind, () => { runAsyncOp(impl); return { ok: true }; });
+  registerApplier('session', kind, () => { runAsyncOp(impl); return { ok: true }; });
 }
 function dispatchAsyncSessionOp(op: EditorOp): Promise<boolean> {
   ctx.asyncOpResult = Promise.resolve(false);

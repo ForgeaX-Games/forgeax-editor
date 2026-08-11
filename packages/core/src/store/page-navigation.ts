@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { CommandError, EditorOp } from '../types';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import type { SelectedAsset } from './asset-selection';
 
 export interface EditorPageNavigation {
@@ -74,7 +74,7 @@ export function useActiveEditorAsset(): SelectedAsset | null {
   return useSyncExternalStore(subscribeActiveEditorAsset, getActiveEditorAsset, getActiveEditorAsset);
 }
 
-sessionAppliers.set('openAssetEditor', (op: EditorOp) => {
+registerApplier('session', 'openAssetEditor', (op: EditorOp) => {
   const asset = (op as { asset: SelectedAsset }).asset;
   if (registrations.length === 0) {
     const error: CommandError = {

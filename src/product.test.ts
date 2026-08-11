@@ -67,7 +67,8 @@ void (null as unknown as PublicProductTypes);
 
 describe('@forgeax/editor/product public surface', () => {
   test('exposes the Gateway-backed product adapter through the facade', () => {
-    expect(typeof (product as Record<string, unknown>).createEditorProductFromGateway).toBe('function');
+    expect(typeof (product as Record<string, unknown>).createGatewayCapabilityAdapter).toBe('function');
+    expect((product as Record<string, unknown>).createEditorProductFromGateway).toBeUndefined();
   });
 
   test('exposes host-composition runtime constructors through the public subpath', () => {

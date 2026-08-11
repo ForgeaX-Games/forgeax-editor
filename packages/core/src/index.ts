@@ -54,6 +54,8 @@ export type {
   CommandOrigin,
   DispatchResult,
   EngineFacade,
+  GatewayOpDescriptor,
+  GatewayOpSnapshot,
   HistoryDiff,
   OpDescriptor,
   OpHandle,
@@ -375,7 +377,7 @@ export type { InterfaceBridgeHandlers } from './io/interface-bridge';
 
 // ── CB nav / folder selection (session-domain appliers) ──
 // Side-effect imports: register cb-nav + folder-selection appliers into
-// sessionAppliers at module eval. Boot timing: after gateway singleton creation,
+// the unified applier registry at module eval. Boot timing: after gateway singleton creation,
 // before Content Browser first render.
 import './store/cb-nav';
 import './store/folder-selection';

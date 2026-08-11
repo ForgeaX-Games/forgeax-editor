@@ -55,10 +55,10 @@ describe('listOps field completeness (m4-w1, RED)', () => {
     }
   });
 
-  it('every entry has source ∈ {builtin,defined}', () => {
+  it('every entry identifies its static or live registration source', () => {
     const ops = gw.listOps();
     for (const op of ops) {
-      expect(['builtin', 'defined']).toContain(op.source);
+      expect(['builtin', 'defined', 'registered']).toContain(op.source);
     }
   });
 });
@@ -66,10 +66,10 @@ describe('listOps field completeness (m4-w1, RED)', () => {
 // ── (b) source only 'builtin' or 'defined' ──
 
 describe('listOps source validation (m4-w1, RED)', () => {
-  it('all builtins have source builtin', () => {
+  it('all non-defined, non-runtime entries have source builtin', () => {
     const ops = gw.listOps();
     for (const op of ops) {
-      if (op.source !== 'defined') {
+      if (op.source !== 'defined' && op.source !== 'registered') {
         expect(op.source).toBe('builtin');
       }
     }

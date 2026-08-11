@@ -32,6 +32,14 @@ and structured error fields. A successful import terminal result reports only
 `committedRevision`, `residentRevision`, and `hint`; it never presents a commit as
 visible-ready.
 
+`gateway.listOps()` is a live capability projection, not a static promise. Every
+descriptor joins its catalog contract with the currently registered applier and
+reports `availability`; downstream Runtime registrations publish a monotonically
+increasing revision through `operationCapabilitySnapshot()` and
+`subscribeOperationCapabilities()`. Unmounting an owner removes its executor from
+the projection. Consumers must rediscover after a revision change instead of caching
+boot-time operation availability.
+
 <details>
 <summary>Errors, recovery, and boundaries</summary>
 

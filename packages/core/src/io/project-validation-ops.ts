@@ -2,14 +2,14 @@
 // The host supplies the provider; this applier never reads project files or
 // duplicates scripts/game-validation.mjs rules.
 
-import { sessionAppliers } from './appliers';
+import { registerApplier } from './appliers';
 import {
   getProjectValidationProvider,
   normalizeProjectValidationResult,
   type ProjectValidationOptions,
 } from './project-validation';
 
-sessionAppliers.set('validateGameProject', (op) => {
+registerApplier('session', 'validateGameProject', (op) => {
   const provider = getProjectValidationProvider();
   if (provider === undefined) {
     return {

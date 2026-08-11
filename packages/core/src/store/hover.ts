@@ -17,7 +17,7 @@
 //   requirements AC-03: transient goes through gateway, leaves no trace.
 import { useCallback, useSyncExternalStore } from 'react';
 import type { EditorOp, EntityId } from '../types';
-import { transientAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 
 // Hover-highlight signal: a transient "the pointer is over a handle that refers
 // to entity N" pulse. The viewport/engine sync rings that marker so a reference
@@ -35,7 +35,7 @@ function applySetHoverEntity(op: EditorOp): { ok: true } {
   }
   return { ok: true };
 }
-transientAppliers.set('setHoverEntity', applySetHoverEntity);
+registerApplier('transient', 'setHoverEntity', applySetHoverEntity);
 
 // M3 t22 (S10 / AC-21/22): setHoverEntity write-side sugar deleted — callers
 // dispatch gateway.dispatch({ kind: 'setHoverEntity', id }) directly. Read-side

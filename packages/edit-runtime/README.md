@@ -86,6 +86,13 @@ Panel 读取使用按需 projection envelope。每个 envelope 携带
 Registry、DOM 节点和函数闭包都不跨 Realm 传输；shell 命令面板也只投影
 Runtime `discover` 返回的 operation，不维护第二份 capability 清单。
 
+Runtime operation discovery follows the unified applier registry live. Static
+catalog entries whose executor is not mounted remain discoverable but explicitly
+`unavailable`; downstream session/transient registrations appear at their registry
+revision and disappear on disposal. The transport service owns that subscription
+together with its hierarchy selector and releases both when the carrier generation
+is torn down, so a reconnected panel cannot retain stale executable capabilities.
+
 > [!WARNING]
 > Stop 的顺序是固定契约：先 `detachBeforeStop`，再清理 Play 投影、停止 Play app、释放 assembly。禁止在 Play app 停止后才让 VFX host 读取或 detach 已失效的 Play World。
 

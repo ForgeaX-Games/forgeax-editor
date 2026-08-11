@@ -10,6 +10,7 @@ test('gateway run adapter exposes progress and cancellation through the product 
       argsSchema: null,
       source: 'builtin' as const,
       title: 'Import Asset',
+      availability: { available: true as const },
     }],
     dispatch: () => ({ ok: true }),
   });
@@ -34,6 +35,7 @@ test('retry query retains the original terminal failure and links the new attemp
       argsSchema: null,
       source: 'builtin' as const,
       title: 'Import Asset',
+      availability: { available: true as const },
     }],
     dispatch: () => ({ ok: false, error: { code: 'IMPORT_FAILED', hint: 'Cook failed' } }),
   });

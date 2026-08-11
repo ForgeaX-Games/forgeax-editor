@@ -20,7 +20,7 @@ import {
   type RunJournalEventInput,
 } from '@forgeax/editor-product';
 import { RunJournal } from '@forgeax/editor-product';
-import type { ArgsSchema, OpDescriptor } from '../io/catalog';
+import type { ArgsSchema, GatewayOpDescriptor, GatewayOpSnapshot } from '../io/catalog';
 import type { CommandOrigin } from '../io/gateway-history';
 import type { EditorOp } from '../types';
 import { awaitAssetWriteCompletion } from '../session/authored-asset-write';
@@ -31,7 +31,8 @@ export interface GatewayDispatchResult {
 }
 
 export interface GatewayCapabilitySource {
-  readonly listOps: () => readonly OpDescriptor[];
+  readonly listOps: () => readonly GatewayOpDescriptor[];
+  readonly subscribeOps?: (listener: (snapshot: GatewayOpSnapshot) => void) => () => void;
   readonly dispatch?: (command: EditorOp, origin?: CommandOrigin) => GatewayDispatchResult;
   /** The Gateway-owned request-correlated run projection. */
   readonly operationRuns?: GatewayOperationRunPort;
@@ -48,8 +49,8 @@ export type GatewayRunResult = RunJournalAcceptResult;
 export interface GatewayCapabilityAdapter {
   readonly registry: CapabilityRegistry;
   capabilities(): readonly CapabilityDescriptor[];
-  registerInto(registry: CapabilityRegistry): void;
   product(): EditorProduct;
+  dispose(): void;
   /** The product transport's save port; facts remain owned by the Gateway. */
   readonly saveOperationRuns: SaveOperationRunPort;
   acceptRun(operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult;
@@ -76,9 +77,17 @@ function argsSchemaToCapabilitySchema(schema: ArgsSchema | null): Record<string,
 }
 
 function gatewayAvailability(
-  descriptor: OpDescriptor,
+  descriptor: GatewayOpDescriptor,
   hasExecutor: boolean,
 ): CapabilityRegistration['availability'] {
+  if (!descriptor.availability.available) {
+    return {
+      available: false,
+      code: 'executor-unavailable',
+      reason: descriptor.availability.reason,
+      resolution: descriptor.availability.resolution ?? 'Connect the Runtime owner that registers this operation.',
+    };
+  }
   if (hasExecutor) return { available: true };
   return {
     available: false,
@@ -110,7 +119,7 @@ function replaceGatewayOperationRun(
 
 async function executeGatewayCommand(
   source: GatewayCapabilitySource,
-  descriptor: OpDescriptor,
+  descriptor: GatewayOpDescriptor,
   input: unknown,
 ): Promise<GatewayDispatchResult> {
   const args = input !== null && typeof input === 'object'
@@ -188,11 +197,11 @@ function unavailableRunAccept(): OperationRunAcceptResult {
 }
 
 function registrationFor(
-  descriptor: OpDescriptor,
+  descriptor: GatewayOpDescriptor,
   source: GatewayCapabilitySource,
 ): CapabilityRegistration {
   const id = `editor.${descriptor.id}`;
-  const hasExecutor = source.dispatch !== undefined;
+  const hasExecutor = source.dispatch !== undefined && descriptor.availability.available;
   const registration: CapabilityRegistration = {
     id,
     kind: 'operation',
@@ -214,18 +223,30 @@ function registrationFor(
 function populateRegistry(
   source: GatewayCapabilitySource,
   registry: CapabilityRegistry,
-): void {
-  for (const descriptor of source.listOps()) {
+  descriptors: readonly GatewayOpDescriptor[],
+): readonly string[] {
+  const ids: string[] = [];
+  for (const descriptor of descriptors) {
     registry.register(registrationFor(descriptor, source));
+    ids.push(`editor.${descriptor.id}`);
   }
+  return ids;
 }
 
 export function createGatewayCapabilityAdapter(
   source: GatewayCapabilitySource,
 ): GatewayCapabilityAdapter {
   const registry = new CapabilityRegistry();
-  populateRegistry(source, registry);
-  const descriptors = new Map(source.listOps().map((descriptor) => [descriptor.id, descriptor]));
+  const descriptors = new Map<string, GatewayOpDescriptor>();
+  let managedIds: readonly string[] = [];
+  const syncCapabilities = (next: readonly GatewayOpDescriptor[] = source.listOps()): void => {
+    for (const id of managedIds) registry.unregister(id);
+    descriptors.clear();
+    for (const descriptor of next) descriptors.set(descriptor.id, descriptor);
+    managedIds = populateRegistry(source, registry, next);
+  };
+  syncCapabilities();
+  const unsubscribeCapabilities = source.subscribeOps?.((snapshot) => syncCapabilities(snapshot.ops)) ?? (() => undefined);
   const journals = new Map<string, RunJournal>();
   let generatedRun = 0;
   const journalFor = (scope: string): RunJournal => {
@@ -242,7 +263,12 @@ export function createGatewayCapabilityAdapter(
   const saveOperationRuns: SaveOperationRunPort = {
     dispatchSave(requestId, input, actor) {
       const descriptor = descriptors.get('saveDocToDisk');
-      if (descriptor === undefined || source.dispatch === undefined || source.operationRuns === undefined) return unavailableRunAccept();
+      if (
+        descriptor === undefined
+        || !descriptor.availability.available
+        || source.dispatch === undefined
+        || source.operationRuns === undefined
+      ) return unavailableRunAccept();
       const result = source.dispatch(
         {
           kind: 'saveDocToDisk',
@@ -291,8 +317,17 @@ export function createGatewayCapabilityAdapter(
     },
   };
   const acceptRun = (operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult => {
-    if (descriptors.get(operationId) === undefined) {
+    const descriptor = descriptors.get(operationId);
+    if (descriptor === undefined) {
       return { ok: false, error: { code: 'not-supported', hint: `operation "${operationId}" is not registered.`, retryable: false, recoveryActions: ['editor.discover'] } };
+    }
+    if (!descriptor.availability.available) {
+      return { ok: false, error: {
+        code: 'executor-unavailable',
+        hint: descriptor.availability.reason,
+        retryable: true,
+        recoveryActions: ['editor.discover'],
+      } };
     }
     if (source.dispatch === undefined) {
       return { ok: false, error: { code: 'executor-unavailable', hint: `gateway executor for "${operationId}" is not connected.`, retryable: false, recoveryActions: ['editor.discover'] } };
@@ -349,9 +384,6 @@ export function createGatewayCapabilityAdapter(
   return {
     registry,
     capabilities: () => registry.discover({ includeUnavailable: true }),
-    registerInto(target) {
-      populateRegistry(source, target);
-    },
     product: () => createEditorProduct({
       capabilityRegistry: registry,
       availability: {
@@ -360,6 +392,12 @@ export function createGatewayCapabilityAdapter(
         code: 'product-available',
       },
     }),
+    dispose() {
+      unsubscribeCapabilities();
+      for (const id of managedIds) registry.unregister(id);
+      managedIds = [];
+      descriptors.clear();
+    },
     saveOperationRuns,
     acceptRun,
     dispatchRun,
@@ -422,10 +460,4 @@ export function createGatewayCapabilityAdapter(
       return saveOperationRuns.retry(requestId, retryRequestId, actor);
     },
   };
-}
-
-export function createEditorProductFromGateway(
-  source: GatewayCapabilitySource,
-): EditorProduct {
-  return createGatewayCapabilityAdapter(source).product();
 }

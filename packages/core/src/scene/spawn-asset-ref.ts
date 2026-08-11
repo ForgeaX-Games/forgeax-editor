@@ -7,7 +7,7 @@ import { walkMaterialPassesOverSharedRefs } from '@forgeax/engine-assets-runtime
 import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
 import { recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { planAssetPlacement } from '../assets/asset-placement-plan';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import { syncAnimationSlotColumns, type AnimationSlotSyncIo } from './animation-slot-sync';
 import { broadcastAssetsError } from '../store/assets-error-bus';
 import { fieldSchema } from './schema';
@@ -335,7 +335,7 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string, requestId: 
 // (undoable, marks dirty); the nested SceneInstance subtree is the engine's
 // by-design derived cache, round-tripping as one mounts[] entry via the wrapper's
 // SceneInstance ref.
-sessionAppliers.set('addSceneAssetToScene', (op) => {
+registerApplier('session', 'addSceneAssetToScene', (op) => {
   const { sceneGuid, name, requestId } = op as { sceneGuid: string; name?: string; requestId: string };
   if (typeof sceneGuid !== 'string' || sceneGuid.length === 0) {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'addSceneAssetToScene requires a non-empty `sceneGuid` (a catalogued scene sub-asset GUID)' } };
@@ -647,7 +647,7 @@ function isScalarSharedField(component: string, field: string): boolean {
   }
 }
 
-sessionAppliers.set('bindAssetRef', (op) => {
+registerApplier('session', 'bindAssetRef', (op) => {
   const { entity, component, field, assetType, guids, slot, requestId } = op as {
     entity: number; component: string; field: string; assetType: string; guids: string[]; slot?: number; requestId: string;
   };

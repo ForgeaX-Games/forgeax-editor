@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 
 import { EditGateway } from '../io/gateway';
-import { sessionAppliers, type SessionApplier } from '../io/appliers';
+import { registerApplier, type SessionApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 
 interface Deferred<T> {
@@ -17,9 +17,8 @@ function deferred<T>(): Deferred<T> {
 
 test('deleteScene is a human/AI-equal request-correlated OperationRun', async () => {
   const completion = deferred<unknown>();
-  const previousApplier = sessionAppliers.get('deleteScene');
   const fakeApplier: SessionApplier = () => ({ ok: true, completion: completion.promise });
-  sessionAppliers.set('deleteScene', fakeApplier);
+  const restoreApplier = registerApplier('session', 'deleteScene', fakeApplier);
   try {
     const gateway = new EditGateway(createEditSession());
     const missingRequestId = gateway.dispatch({ kind: 'deleteScene', sceneGuid: 'guid-lvl2' } as never, 'ai');
@@ -55,7 +54,6 @@ test('deleteScene is a human/AI-equal request-correlated OperationRun', async ()
     });
     expect(gateway.ledger).toHaveLength(0);
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('deleteScene');
-    else sessionAppliers.set('deleteScene', previousApplier);
+    restoreApplier();
   }
 });

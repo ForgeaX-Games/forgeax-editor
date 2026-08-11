@@ -9,13 +9,8 @@
 // callers. registerSessionApplier demoted to thin wrapper over registerApplier.
 // applierFromApply adapter removed.
 //
-// M1 scope: documentAppliers seeded with the 9 existing applyCommand cases.
-// sessionAppliers / transientAppliers start empty — filled in M2.
-//
-// Backward compatibility: documentAppliers / sessionAppliers / transientAppliers
-// remain exported as Map objects for consumers (gateway.ts dispatch, store modules)
-// that read from or write to them directly. registerApplier synchronizes writes to
-// both the unified table and the legacy Map. domainOf reads from the unified table.
+// Module-owned document/session/transient registrations all enter this table;
+// downstream Runtime owners use the same seam and dispose their scoped entry.
 //
 // Anchors:
 //   plan-strategy §2 D-1: single registration table
@@ -45,16 +40,12 @@ import {
   applyTransaction,
 } from '../session/document';
 import { applyVisualQualityPreset } from '../session/visual-quality';
-import { registerBuiltinOp as catalogRegisterBuiltinOp } from './catalog';
 
 // ── Applier types ────────────────────────────────────────────────────────────
 
 /** A DOCUMENT applier: takes the session and op, returns ApplyResult (with an
  *  inverse for free Undo). */
 export type ApplierFn = (session: unknown, cmd: EditorOp) => ApplyResult;
-
-/** Type alias for the document registration map: op kind → applier function. */
-export type ApplierMap = Map<string, ApplierFn>;
 
 /** The IoC context a session/transient applier receives as its SECOND arg
  *  (M3 t20d). Structurally mirrors the gateway's ApplierCtx `engine` field — kept
@@ -100,44 +91,48 @@ export interface SessionApplierCtx {
  *  inverse (session/transient ops are not undoable). The applier mutates the store
  *  module's own state (and, via ctx.engine, the engine world) and fires its own
  *  listeners; the gateway records the ledger entry (session) or nothing (transient)
- *  purely from which table the kind is registered in. */
+ *  purely from the domain on the active registry entry. */
 export type SessionApplier = (op: EditorOp, ctx?: SessionApplierCtx) =>
   | { ok: true; completion?: Promise<unknown> }
   | { ok: false; error: CommandError };
 
-/** Type alias for the session/transient registration map. */
-export type SessionApplierMap = Map<string, SessionApplier>;
-
-/** Domain derived from which table the applier is registered in. */
+/** Domain carried by the active unified-registry entry. */
 export type OpDomain = 'document' | 'session' | 'transient';
 
 // ── Unified table (SSOT, plan-strategy §2 D-1) ───────────────────────────────
 
 interface ApplierTableEntry {
-  domain: OpDomain;
-  applier: ApplierFn | SessionApplier;
-  meta?: SessionApplierMeta;
+  readonly domain: OpDomain;
+  readonly applier: ApplierFn | SessionApplier;
+  readonly meta?: SessionApplierMeta;
 }
 
 /** Single SSOT registration table. Domain is a field on each entry —
  *  readers never need to guess which table a kind lives in (§1). */
-const _applierTable = new Map<string, ApplierTableEntry>();
+const _applierTable = new Map<string, ApplierTableEntry[]>();
+let _applierRevision = 0;
+const _applierListeners = new Set<(revision: number) => void>();
 
-// ── Backward-compatible Map exports ──────────────────────────────────────────
-// These Maps are synchronized with _applierTable: every write syncs to both.
-// They remain exported so existing consumers (gateway.ts dispatch, store modules)
-// work unchanged — the transition to reading from _applierTable is M1 t2-t4.
+export interface RegisteredApplierDescriptor {
+  readonly id: string;
+  readonly domain: OpDomain;
+  readonly argsSchema?: unknown;
+  readonly title?: string;
+}
 
-/** document-domain appliers: produce inverse → undo + ledger. */
-export const documentAppliers: ApplierMap = new Map();
+export interface ApplierRegistrySnapshot {
+  readonly revision: number;
+  readonly entries: readonly RegisteredApplierDescriptor[];
+}
 
-/** session-domain appliers: no inverse → ledger only. Filled at store-module
- *  eval time (selection/gizmo-mode/frame-request/rename-request/scene-persistence)
- *  and, for play/stop, at edit-runtime boot via registerSessionApplier (D-11). */
-export const sessionAppliers: SessionApplierMap = new Map();
+function publishApplierRevision(): void {
+  _applierRevision += 1;
+  for (const listener of [..._applierListeners]) listener(_applierRevision);
+}
 
-/** transient-domain appliers: no inverse, no ledger, no undo (emit only). */
-export const transientAppliers: SessionApplierMap = new Map();
+function activeEntry(kind: string): ApplierTableEntry | undefined {
+  return _applierTable.get(kind)?.at(-1);
+}
 
 // ── Unified registration API (plan-strategy §2 D-1, requirements S11 / AC-24) ─
 
@@ -148,7 +143,9 @@ export const transientAppliers: SessionApplierMap = new Map();
  *
  * Re-registering an already-registered kind in a different domain throws
  * OpRegistrationError with code 'OP_ID_CONFLICT'. Re-registering the same
- * domain+kind is a no-op (idempotent registration).
+ * domain+kind installs a scoped replacement whose disposer restores the
+ * previous entry. That makes tests and host lifecycles reversible without
+ * exposing the backing table as a second mutation surface.
  *
  * @param domain  'document' | 'session' | 'transient'
  * @param kind    op kind string
@@ -156,41 +153,54 @@ export const transientAppliers: SessionApplierMap = new Map();
  * @param meta    optional self-description for catalog / listOps
  */
 export function registerApplier(
+  domain: 'document',
+  kind: string,
+  applier: ApplierFn,
+  meta?: SessionApplierMeta,
+): () => void;
+export function registerApplier(
+  domain: 'session' | 'transient',
+  kind: string,
+  applier: SessionApplier,
+  meta?: SessionApplierMeta,
+): () => void;
+export function registerApplier(
   domain: OpDomain,
   kind: string,
   applier: ApplierFn | SessionApplier,
   meta?: SessionApplierMeta,
-): void {
-  const existing = _applierTable.get(kind);
+): () => void;
+export function registerApplier(
+  domain: OpDomain,
+  kind: string,
+  applier: ApplierFn | SessionApplier,
+  meta?: SessionApplierMeta,
+): () => void {
+  const entries = _applierTable.get(kind) ?? [];
+  const existing = entries.at(-1);
   if (existing !== undefined && existing.domain !== domain) {
     throw new OpRegistrationError(
       'OP_ID_CONFLICT',
       `op "${kind}" already registered (domain: ${existing.domain})`,
     );
   }
-  // Write to unified table (SSOT)
-  _applierTable.set(kind, { domain, applier: applier as ApplierTableEntry['applier'], meta });
-  // Sync to backward-compatible Maps
-  if (domain === 'document') {
-    documentAppliers.set(kind, applier as ApplierFn);
-  } else if (domain === 'session') {
-    sessionAppliers.set(kind, applier as SessionApplier);
-  } else {
-    transientAppliers.set(kind, applier as SessionApplier);
-  }
-}
-
-/** Remove an applier from the unified table (and all legacy Maps).
- *  Used by unregister callback from registerSessionApplier.
- *  Idempotent — no-op if the kind is not registered or a different applier
- *  now occupies the slot. */
-function _unregisterApplier(kind: string, expectedApplier: ApplierFn | SessionApplier): void {
-  const entry = _applierTable.get(kind);
-  if (!entry || entry.applier !== expectedApplier) return; // already replaced, no-op
-  _applierTable.delete(kind);
-  documentAppliers.delete(kind);
-  sessionAppliers.delete(kind);
-  transientAppliers.delete(kind);
+  const next: ApplierTableEntry = { domain, applier, ...(meta === undefined ? {} : { meta }) };
+  entries.push(next);
+  _applierTable.set(kind, entries);
+  publishApplierRevision();
+  let live = true;
+  return () => {
+    if (!live) return;
+    live = false;
+    const currentEntries = _applierTable.get(kind);
+    if (currentEntries === undefined) return;
+    const at = currentEntries.lastIndexOf(next);
+    if (at < 0) return;
+    const wasActive = at === currentEntries.length - 1;
+    currentEntries.splice(at, 1);
+    if (currentEntries.length === 0) _applierTable.delete(kind);
+    if (wasActive) publishApplierRevision();
+  };
 }
 
 // ── Seed document appliers (plan-strategy §2 D-1: 9 existing applyCommand cases) ──
@@ -208,10 +218,10 @@ registerApplier('document', 'hierarchyGesture', applyHierarchyGesture as unknown
 registerApplier('document', 'setComponent', applySetComponent as unknown as ApplierFn);
 registerApplier('document', 'setSceneOverride', applySetSceneOverride as unknown as ApplierFn);
 registerApplier('document', 'removeSceneOverride', applyRemoveSceneOverride as unknown as ApplierFn);
-	registerApplier('document', 'addComponent', applyAddComponent as unknown as ApplierFn);
-	registerApplier('document', 'removeComponent', applyRemoveComponent as unknown as ApplierFn);
-	registerApplier('document', 'setVisibility', applySetVisibility as unknown as ApplierFn);
-	registerApplier('document', 'instantiateSceneAsset', applyInstantiateSceneAsset as unknown as ApplierFn);
+registerApplier('document', 'addComponent', applyAddComponent as unknown as ApplierFn);
+registerApplier('document', 'removeComponent', applyRemoveComponent as unknown as ApplierFn);
+registerApplier('document', 'setVisibility', applySetVisibility as unknown as ApplierFn);
+registerApplier('document', 'instantiateSceneAsset', applyInstantiateSceneAsset as unknown as ApplierFn);
 registerApplier('document', 'duplicateEntity', applyDuplicateEntity as unknown as ApplierFn);
 registerApplier('document', 'applyVisualQualityPreset', applyVisualQualityPreset as unknown as ApplierFn);
 
@@ -227,21 +237,40 @@ registerApplier('document', 'transaction', applyTransaction as unknown as Applie
 
 // ── Domain lookup ─────────────────────────────────────────────────────────────
 
-/** Return the domain of an op kind, reading from the SSOT unified table.
- *  Falls back to legacy Maps for entries registered before registerApplier
- *  migration (store modules that write sessionAppliers/transientAppliers
- *  directly during module eval). */
+/** Return the domain of an op kind from the single registration table. */
 export function domainOf(kind: string): OpDomain | null {
-  const entry = _applierTable.get(kind);
-  if (entry) return entry.domain;
-  // Fallback: entries set via legacy Maps directly (store module eval time)
-  // before they are migrated to registerApplier. This keeps backward compat
-  // during the transition window of t1 (the store modules are migrated in
-  // their respective tasks).
-  if (documentAppliers.has(kind)) return 'document';
-  if (sessionAppliers.has(kind)) return 'session';
-  if (transientAppliers.has(kind)) return 'transient';
-  return null;
+  return activeEntry(kind)?.domain ?? null;
+}
+
+export function applierFor(kind: string, domain: 'document'): ApplierFn | undefined;
+export function applierFor(kind: string, domain: 'session' | 'transient'): SessionApplier | undefined;
+export function applierFor(
+  kind: string,
+  domain: OpDomain,
+): ApplierFn | SessionApplier | undefined {
+  const entry = activeEntry(kind);
+  return entry?.domain === domain ? entry.applier : undefined;
+}
+
+export function applierRegistrySnapshot(): ApplierRegistrySnapshot {
+  return Object.freeze({
+    revision: _applierRevision,
+    entries: Object.freeze([..._applierTable].flatMap(([id, registrations]) => {
+      const entry = registrations.at(-1);
+      if (entry === undefined) return [];
+      return [Object.freeze({
+        id,
+        domain: entry.domain,
+        ...(entry.meta?.argsSchema === undefined ? {} : { argsSchema: structuredClone(entry.meta.argsSchema) }),
+        ...(entry.meta?.title === undefined ? {} : { title: entry.meta.title }),
+      })];
+    })),
+  });
+}
+
+export function subscribeApplierRegistry(listener: (revision: number) => void): () => void {
+  _applierListeners.add(listener);
+  return () => _applierListeners.delete(listener);
 }
 
 // ── D-11 downstream registration seam ─────────────────────────────────────────
@@ -254,9 +283,9 @@ export function domainOf(kind: string): OpDomain | null {
 // dispatch({kind:'play'}) in headless core returns UNKNOWN_OP (the seam reflects
 // the CURRENT real capability set — no silent swallow).
 //
-// The domain is decided structurally (D-1): registering into sessionAppliers IS
-// what makes the kind a session op — same judgement as the builtin session
-// appliers, no field to mislabel.
+// The domain is decided structurally (D-1): the unified registry entry makes the
+// kind a session op — same judgement as the builtin session appliers, with no
+// parallel label to drift.
 //
 // M1 t1: demoted to thin wrapper over registerApplier('session', …). Preserves
 // OP_ID_CONFLICT conflict detection semantics + unregister function return value +
@@ -309,14 +338,7 @@ export function registerSessionApplier(
     );
   }
   // Delegates to unified entry — domain='session' is structural (D-1)
-  registerApplier('session', kind, applier, meta);
-  let live = true;
-  return () => {
-    if (!live) return; // idempotent
-    live = false;
-    // Remove from both unified table and legacy Maps
-    _unregisterApplier(kind, applier);
-  };
+  return registerApplier('session', kind, applier, meta);
 }
 
 /** Register a read-only/transient downstream capability with symmetric cleanup. */
@@ -332,11 +354,5 @@ export function registerTransientApplier(
       `op "${kind}" already registered (domain: ${existing})`,
     );
   }
-  registerApplier('transient', kind, applier, meta);
-  let live = true;
-  return () => {
-    if (!live) return;
-    live = false;
-    _unregisterApplier(kind, applier);
-  };
+  return registerApplier('transient', kind, applier, meta);
 }

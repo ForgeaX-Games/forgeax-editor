@@ -5,8 +5,8 @@ import { createGatewayCapabilityAdapter } from '../product/gateway-executor';
 test('gateway capability adapter derives one non-display set without browser dependencies', () => {
   const adapter = createGatewayCapabilityAdapter({
     listOps: () => [
-      { id: 'save', domain: 'document', argsSchema: null, source: 'builtin', title: 'Save' },
-      { id: 'play', domain: 'session', argsSchema: null, source: 'builtin', title: 'Play' },
+      { id: 'save', domain: 'document', argsSchema: null, source: 'builtin', title: 'Save', availability: { available: true } },
+      { id: 'play', domain: 'session', argsSchema: null, source: 'builtin', title: 'Play', availability: { available: true } },
     ],
     dispatch: () => ({ ok: true }),
   });
@@ -21,7 +21,7 @@ test('gateway capability adapter derives one non-display set without browser dep
 test('gateway capability adapter reports missing execution explicitly', () => {
   const adapter = createGatewayCapabilityAdapter({
     listOps: () => [
-      { id: 'save', domain: 'document', argsSchema: null, source: 'builtin', title: 'Save' },
+      { id: 'save', domain: 'document', argsSchema: null, source: 'builtin', title: 'Save', availability: { available: true } },
     ],
   });
 

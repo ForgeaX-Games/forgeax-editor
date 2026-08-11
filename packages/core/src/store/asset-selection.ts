@@ -17,7 +17,7 @@
 //   research F-2: useSyncExternalStore getter+hook kept in one file.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import { panelBridge } from '../io/panel-bridge';
 // Single-active-selection-domain: selecting an asset clears any entity selection
 // so Delete / blank-click resolve to one target. Direct clear (guarded on
@@ -89,12 +89,12 @@ function applySetAssetSelection(op: EditorOp): { ok: true } {
   notifyIdentityConsumers();
   return { ok: true };
 }
-sessionAppliers.set('setAssetSelection', applySetAssetSelection);
+registerApplier('session', 'setAssetSelection', applySetAssetSelection);
 
 // Sugar alias: legacy single-asset form. Forwards to the multi base op (AC-B2).
 // Registered so old callers dispatching { kind: 'setAssetSelectionOne', asset }
 // keep working; the catalog marks this `sugar: true`.
-sessionAppliers.set('setAssetSelectionOne', (op) => {
+registerApplier('session', 'setAssetSelectionOne', (op) => {
   const o = op as unknown as { asset: SelectedAsset | null };
   return applySetAssetSelection({
     kind: 'setAssetSelection',

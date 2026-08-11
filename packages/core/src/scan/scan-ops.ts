@@ -9,22 +9,22 @@
 //   todo: 2026-07-09 startup-asset-scan-auto-import G4
 //   north-star §6/§8: session domain, LEDGER ONLY, AI parity
 
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 
-sessionAppliers.set('assetCatalogRefreshed', () => {
+registerApplier('session', 'assetCatalogRefreshed', () => {
   // Post-scan: refresh the asset catalog in the browser.
   broadcastAssetsChanged();
   return { ok: true };
 });
 
-sessionAppliers.set('assetReimported', () => {
+registerApplier('session', 'assetReimported', () => {
   // Single-file reimport: mark catalog as changed so the browser re-fetches.
   broadcastAssetsChanged('pack-changed');
   return { ok: true };
 });
 
-sessionAppliers.set('assetOrphanDetected', () => {
+registerApplier('session', 'assetOrphanDetected', () => {
   // Orphan detected: broadcast so UI can show warnings.
   broadcastAssetsChanged();
   return { ok: true };
@@ -32,13 +32,13 @@ sessionAppliers.set('assetOrphanDetected', () => {
 
 // assetValidationFailed applier: diagnostics are written to the ledger for
 // consumers that explicitly invoke this editor operation.
-sessionAppliers.set('assetValidationFailed', () => {
+registerApplier('session', 'assetValidationFailed', () => {
   // Diagnostics are in the op payload — consumer layers (Info Log, AI) read
   // the ledger entry. No core→interface import needed.
   return { ok: true };
 });
 
-sessionAppliers.set('requestReimport', (op) => {
+registerApplier('session', 'requestReimport', (op) => {
   const { paths } = op as { paths: string[] };
   if (!Array.isArray(paths) || paths.length === 0) {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: 'paths required' } };

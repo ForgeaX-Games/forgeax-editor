@@ -31,7 +31,7 @@ import { cookGltfMeta } from '../assets/gltf-cook';
 import { cookFbxMeta } from '../assets/fbx-cook';
 import { generateAssetGuid } from './pack-ops';
 import { awaitPostAssetWriteCatalogSync } from './authored-asset-write';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
 import type { EditorOp } from '../types';
@@ -507,7 +507,7 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
 // is whether the executor may mint identity (import) or must reuse the existing
 // source metadata (reimport).
 function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', mode: 'import' | 'reimport'): void {
-  sessionAppliers.set(operationId, (op, ctx) => {
+  registerApplier('session', operationId, (op, ctx) => {
     const { destPath, sourceName, base64, companionSources, skipUpload, requestId } = op as {
       destPath: string;
       sourceName?: string;

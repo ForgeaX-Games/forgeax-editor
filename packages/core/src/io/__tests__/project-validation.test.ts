@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { EditGateway } from '../gateway';
-import { sessionAppliers } from '../appliers';
 import '../project-validation-ops';
 import {
   normalizeProjectValidationResult,
@@ -14,11 +13,6 @@ const stats = { bytes: 12, entities: 2, packs: 1, sidecars: 0 };
 function blocking(file: string, code = 'missing-reference') {
   return { file, code, message: `broken ${file}`, detail: { ref: 'missing-guid' } };
 }
-
-afterEach(() => {
-  const existing = sessionAppliers.get('validateGameProject');
-  if (existing === undefined) sessionAppliers.delete('validateGameProject');
-});
 
 describe('project validation contract', () => {
   it('normalizes producer rows into bounded, stable file locations', () => {

@@ -31,7 +31,8 @@ describe('core cohesion characterization', () => {
   });
 
   test('keeps the catalog/listOps surface owned by the existing registration source', () => {
-    expect(PUBLIC_GATEWAY_SOURCE).toContain("export type { ArgsSchema, OpDescriptor } from '../io/catalog';");
+    expect(PUBLIC_GATEWAY_SOURCE).toContain('OpDescriptor,');
+    expect(PUBLIC_GATEWAY_SOURCE).toContain('GatewayOpDescriptor,');
     expect(INDEX_SOURCE).not.toContain('const EDITOR_PRODUCT_CATALOG');
     expect(INDEX_SOURCE).not.toContain('const PRODUCT_LIST_OPS');
   });

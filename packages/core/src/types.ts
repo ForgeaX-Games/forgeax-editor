@@ -475,6 +475,13 @@ export interface CommandError extends CommandErrorContext {
     // instead of leaking a raw promise rejection to the caller.
     | 'rhi-debug-unavailable'
     | 'rhi-capture-failed'
+    // Engine-owned VFX Runtime Host control lease failures. Preserve these
+    // codes through Gateway dispatch so callers can reacquire after a Runtime
+    // generation change instead of parsing an INVALID_ARGS hint.
+    | 'vfx-host-control-world-detached'
+    | 'vfx-host-control-stale-generation'
+    | 'vfx-host-control-runtime-unavailable'
+    | 'vfx-host-control-player-unavailable'
     // Asset-editor page navigation is a host-installed seam (the app-shell page
     // extension). A host without it must refuse openAssetEditor structurally,
     // never by leaking the seam's rejection as an unhandled promise.

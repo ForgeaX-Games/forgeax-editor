@@ -123,7 +123,6 @@ export {
 // Hosts must consume the Gateway-backed product adapter through this facade;
 // the editor-core implementation remains behind the package boundary.
 export {
-  createEditorProductFromGateway,
   createGatewayCapabilityAdapter,
 } from '@forgeax/editor-core';
 export {

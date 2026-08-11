@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../VfxPreviewViewport.tsx', import.meta.url), 'utf8');
+const sessionAppliers = readFileSync(new URL('../viewport-session-appliers.ts', import.meta.url), 'utf8');
 
 describe('VFX asset preview foundation', () => {
   it('boots one bounded preview World through the engine host and write gate', () => {
@@ -16,8 +17,14 @@ describe('VFX asset preview foundation', () => {
 
   it('consumes cooked runtime assets without importing the build-time compiler', () => {
     expect(source).toContain('isVfxGpuEffectAsset');
-    expect(source).toContain('VFX_GPU_RUNTIME_RESOURCE_KEY');
+    expect(source).toContain('vfxHost.acquireControl(app.world)');
+    expect(source).toContain('previewErrorHint(error)');
+    expect(source).not.toContain('VFX_GPU_RUNTIME_RESOURCE_KEY');
+    expect(source).not.toContain('VfxGpuRuntime');
     expect(source).not.toContain('@forgeax/engine-vfx-compiler');
+    expect(sessionAppliers).toContain('deps.replayParticleEffect(entity)');
+    expect(sessionAppliers).not.toContain('VFX_GPU_RUNTIME_RESOURCE_KEY');
+    expect(sessionAppliers).not.toContain('VfxGpuRuntime');
   });
 
   it('copies renderer dependencies and exposes keyed runtime inspection', () => {

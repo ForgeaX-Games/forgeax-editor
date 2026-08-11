@@ -146,7 +146,7 @@ export default defineConfig({
       // engine vite dev server on :15173 — serves play-runtime preview at
       // /preview/?game=<slug> (fullscreen play path). OOS-4: play-runtime is
       // untouched by M2. Port 15173 is the play-runtime vite.config.ts default.
-      command: `bunx vite --port ${e2eEnginePort} --strictPort`,
+      command: `npx vite --port ${e2eEnginePort} --strictPort`,
       cwd: './packages/play-runtime',
       env: {
         ...process.env,
@@ -207,7 +207,7 @@ export default defineConfig({
       // Disposable Play is now a real child realm. The fresh-template host
       // therefore needs a game-scoped Play producer too; sharing the sample
       // producer would correctly fail the runtime binding identity check.
-      command: `bunx vite --port ${e2eTemplateEnginePort} --strictPort`,
+      command: `npx vite --port ${e2eTemplateEnginePort} --strictPort`,
       cwd: './packages/play-runtime',
       env: {
         ...process.env,

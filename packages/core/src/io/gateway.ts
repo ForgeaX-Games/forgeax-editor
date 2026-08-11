@@ -10,9 +10,22 @@ import {
 } from '@forgeax/editor-product';
 import type { FieldShapeKind, World } from '@forgeax/engine-ecs';
 import { clearSelection, getSelection, getSelectionList } from '../store/selection';
-import { documentAppliers, sessionAppliers, transientAppliers, domainOf } from './appliers';
+import {
+  applierFor,
+  applierRegistrySnapshot,
+  domainOf,
+  registerApplier,
+  subscribeApplierRegistry,
+} from './appliers';
 import type { ApplierFn, SessionApplier, SessionApplierCtx } from './appliers';
-import type { CatalogReconcileProvider, OpDescriptor, PlanFn, ArgsSchema } from './catalog';
+import type {
+  CatalogReconcileProvider,
+  GatewayOpDescriptor,
+  GatewayOpSnapshot,
+  OpDescriptor,
+  PlanFn,
+  ArgsSchema,
+} from './catalog';
 import { listOps as catalogListOps, registerBuiltinOp, registerDefinedOp, hasOp, getOp } from './catalog';
 import type { QuerySnapshotFn } from './query-snapshot';
 import { validate as validateArgs } from './args-schema';
@@ -1166,7 +1179,7 @@ export class EditGateway {
    *  the active span (AC-09). */
   private _execDocumentApplier(cmd: EditorOp, alias: DocAliasMap = new Map()): ReturnType<ApplierFn> {
     const kind = cmd.kind;
-    const applier = documentAppliers.get(kind);
+    const applier = applierFor(kind, 'document');
     if (!applier) {
       return { ok: false, error: { code: 'UNKNOWN_OP' as const, hint: `applier not found for "${kind}"` } };
     }
@@ -1486,7 +1499,7 @@ export class EditGateway {
     // per-frame facade write). Existing session appliers keep their (op) signature
     // and simply ignore the extra arg (backward compatible — SessionApplier's ctx
     // param is optional). Op stays the first arg (unchanged from M1/M2).
-    const applier = (domain === 'session' ? sessionAppliers : transientAppliers).get(kind);
+    const applier = applierFor(kind, domain);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
     const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame' || kind === 'validateGameProject'
@@ -2208,9 +2221,48 @@ export class EditGateway {
   // compile and fail. Implemented in green phase: m4-w5 (listOps),
   // m4-w7 (defineOp), m4-w8 (querySnapshot).
 
+  /** Operation contracts joined with the live unified-applier availability fact. */
+  operationCapabilitySnapshot(): GatewayOpSnapshot {
+    const registry = applierRegistrySnapshot();
+    const registered = new Map(registry.entries.map((entry) => [entry.id, entry]));
+    const ops: GatewayOpDescriptor[] = catalogListOps().map((descriptor) => {
+      const entry = registered.get(descriptor.id);
+      registered.delete(descriptor.id);
+      const available = entry?.domain === descriptor.domain;
+      return {
+        ...descriptor,
+        availability: available
+          ? { available: true }
+          : {
+              available: false,
+              code: 'applier-unavailable',
+              reason: entry === undefined
+                ? `no ${descriptor.domain} applier is registered for "${descriptor.id}"`
+                : `registered ${entry.domain} applier conflicts with the ${descriptor.domain} contract`,
+              resolution: 'Connect the Runtime owner that registers this operation.',
+            },
+      };
+    });
+    for (const entry of registered.values()) {
+      ops.push({
+        id: entry.id,
+        domain: entry.domain,
+        argsSchema: (entry.argsSchema ?? null) as ArgsSchema | null,
+        source: 'registered',
+        ...(entry.title === undefined ? {} : { title: entry.title }),
+        availability: { available: true },
+      });
+    }
+    return Object.freeze({ revision: registry.revision, ops: Object.freeze(ops) });
+  }
+
   /** Operation catalog — AI self-introspection + command palette SSOT. */
-  listOps(): readonly OpDescriptor[] {
-    return catalogListOps();
+  listOps(): readonly GatewayOpDescriptor[] {
+    return this.operationCapabilitySnapshot().ops;
+  }
+
+  subscribeOperationCapabilities(listener: (snapshot: GatewayOpSnapshot) => void): () => void {
+    return subscribeApplierRegistry(() => listener(this.operationCapabilitySnapshot()));
   }
 
   /** Register a builtin op at catalog build time. */
@@ -2686,7 +2738,18 @@ export class EditGateway {
     if (hasOp(id)) {
       return { ok: false, error: { code: 'OP_ID_CONFLICT', hint: `op "${id}" already exists in catalog` } };
     }
+    const registeredDomain = domainOf(id);
+    if (registeredDomain !== null) {
+      return {
+        ok: false,
+        error: {
+          code: 'OP_ID_CONFLICT',
+          hint: `op "${id}" already has a live ${registeredDomain} applier`,
+        },
+      };
+    }
 
+    let definedApplier: ApplierFn | SessionApplier;
     if (domain === 'document') {
       // EXISTING document-domain path: transaction wrapper → undo+ledger.
       // The executor invokes this applier with a DocApplierCtx as the first arg
@@ -2696,7 +2759,7 @@ export class EditGateway {
       // through it is behavior-identical AND keeps the facade leaf recording
       // (applyCommand's facade writes onto the span _execDocumentApplier pushed).
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      documentAppliers.set(id, (_ctx: unknown, cmd: EditorOp) => {
+      definedApplier = (_ctx: unknown, cmd: EditorOp) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = cmd as { kind: string } & Record<string, unknown>;
         // activeWorld (Derive) so plan reads the active world consistently with
@@ -2731,7 +2794,7 @@ export class EditGateway {
           commands: planCommands,
         };
         return applyCommand(this.doc, txOp);
-      });
+      };
     } else {
       // ── Session domain (M4 t28, plan-strategy §2 D-7) ──
       // Register a session applier that, on dispatch, runs the plan and
@@ -2739,7 +2802,7 @@ export class EditGateway {
       // Ledger layout: each sub-op gets its own flat entry (D-7: no composite).
       // Partial failure: first fail stops, PLAN_STEP_FAILED, already-emitted
       // ops stay in ledger (AC-18: append-only, never rollback).
-      sessionAppliers.set(id, ((op: EditorOp, _ctx?: SessionApplierCtx) => {
+      definedApplier = (op: EditorOp, _ctx?: SessionApplierCtx): ReturnType<SessionApplier> => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { kind: _kind, ...args } = op as { kind: string } & Record<string, unknown>;
         // activeWorld (Derive): session ops CAN run during play, so a defined
@@ -2777,7 +2840,7 @@ export class EditGateway {
             };
           }
 
-          const applier = (subDomain === 'session' ? sessionAppliers : transientAppliers).get(subOp.kind);
+          const applier = applierFor(subOp.kind, subDomain);
           if (!applier) {
             return {
               ok: false,
@@ -2813,7 +2876,7 @@ export class EditGateway {
         }
 
         return { ok: true };
-      }));
+      };
     }
 
     // Register in catalog — source='defined', visible in listOps immediately
@@ -2823,6 +2886,7 @@ export class EditGateway {
       argsSchema: argsSchema as ArgsSchema | null,
       title: id,
     });
+    registerApplier(domain, id, definedApplier, { argsSchema, title: id });
 
     return { ok: true };
   }

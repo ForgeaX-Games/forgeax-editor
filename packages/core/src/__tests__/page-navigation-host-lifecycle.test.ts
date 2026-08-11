@@ -12,7 +12,7 @@ import {
   type EditorPageNavigation,
 } from '../store/page-navigation';
 import type { SelectedAsset } from '../store/asset-selection';
-import { sessionAppliers } from '../io/appliers';
+import { applierFor } from '../io/appliers';
 import type { EditorOp } from '../types';
 
 function asset(guid: string): SelectedAsset {
@@ -30,7 +30,7 @@ function host(id: string, opened: string[]): EditorPageNavigation {
 function openAssetEditor(target: SelectedAsset):
   | { ok: true; completion?: Promise<unknown> }
   | { ok: false; error: { code: string; hint: string } } {
-  const applier = sessionAppliers.get('openAssetEditor');
+  const applier = applierFor('openAssetEditor', 'session');
   if (!applier) throw new Error('openAssetEditor applier is not registered');
   return applier({ kind: 'openAssetEditor', asset: target } as unknown as EditorOp);
 }

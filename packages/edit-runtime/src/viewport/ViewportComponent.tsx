@@ -329,6 +329,9 @@ export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
   teardownFns.length = 0;
   // Drop the global handle so nothing keeps the dead app/world/renderer alive.
   try { delete (window as unknown as Record<string, unknown>).__forgeax_editor; } catch { /* non-config */ }
+  if (window.parent !== window) {
+    try { delete (window.parent as unknown as Record<string, unknown>).__forgeax_editor; } catch { /* cross-origin */ }
+  }
   bootStarted = false;
 }
 
@@ -813,6 +816,11 @@ async function bootViewport(
       ? { rawScope: { world, renderer, assets: renderer.assets } }
       : undefined);
     (globalThis as Record<string, unknown>).__forgeaxEval = channel;
+    // Propagate to parent frame when running inside a same-origin carrier iframe
+    // so that Playwright page.evaluate() in the main frame can access it directly.
+    if (window.parent !== window) {
+      try { (window.parent as unknown as Record<string, unknown>).__forgeaxEval = channel; } catch { /* cross-origin */ }
+    }
 
     // ── live gateway bridge (DEV-only) ────────────────────────────────────
     // Development-only companion to __forgeaxEval: instead of a headless playwright instance
@@ -1143,7 +1151,7 @@ async function bootViewport(
   // ── D-11 (plan-strategy §2): register the REAL play/stop session appliers ────
   // play·stop are session-domain ops whose state machine lives here in edit-runtime
   // (DAG downstream — core must not import it). Registering them into core's
-  // sessionAppliers table (injection direction edit-runtime→core, same shape as the
+  // unified applier registry (injection direction edit-runtime→core, same shape as the
   // ApiClient seam) is exactly what makes them SESSION-domain ops (D-1: domain =
   // registration site). They route through actionsRef.current so an op-driven
   // play/stop is byte-for-byte the same action the ▶/■ button fires (AC-02 human=AI
@@ -1162,6 +1170,12 @@ async function bootViewport(
     },
     grantGameControl,
     releaseGameControl: revokeGameControl,
+    replayParticleEffect: (entity) => {
+      const control = vfxBridge.host.acquireControl(gateway.activeWorld);
+      if (!control.ok) return { ok: false, error: control.error };
+      const replayed = control.value.replay({ player: entity as EntityHandle });
+      return replayed.ok ? { ok: true } : { ok: false, error: replayed.error };
+    },
     captureFrame: (frames) => {
       const capture = (globalThis as typeof globalThis & {
         __forgeax?: { captureFrame?: (count: number) => Promise<unknown> };
@@ -1203,7 +1217,7 @@ async function bootViewport(
   applyActiveCamera();
 
   // Expose the viewport quadrant SSOT for out-of-frame scripting (was :503).
-  (window as unknown as Record<string, unknown>).__forgeax_editor = {
+  const editorGlobal = {
     app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
     playSimulation: (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human') => actionsRef.current.playSimulation(policy, origin),
     stopSimulation: () => actionsRef.current.stopSimulation(),
@@ -1223,6 +1237,12 @@ async function bootViewport(
     // e2e) can witness the separate editorWorld (camera + gizmo) + query bindings.
     worldManager,
   };
+  (window as unknown as Record<string, unknown>).__forgeax_editor = editorGlobal;
+  // Propagate to parent frame when running inside a same-origin carrier iframe
+  // so that Playwright page.evaluate() in the main frame can access it directly.
+  if (window.parent !== window) {
+    try { (window.parent as unknown as Record<string, unknown>).__forgeax_editor = editorGlobal; } catch { /* cross-origin */ }
+  }
 
   // Generated-visual presenters obtain their host inputs through this explicit
   // registration, never by querying #app or the DEV-only debug object above.
@@ -1275,6 +1295,7 @@ async function bootViewport(
       }),
       readExecutionReport: executionDiagnostics.report,
     });
+    registerTeardown(service.dispose);
     registerTeardown(installViewportRuntimeConnectionHost({
       target: window as unknown as ViewportRuntimeMessageTarget,
       expectedSource: runtimeOwner as unknown as ViewportRuntimeMessageSource,
@@ -1316,6 +1337,7 @@ async function bootViewport(
     registerTeardown(() => {
       unbindLocalClient();
       localClient.dispose();
+      service.dispose();
     });
   }
   // W1-L1H producer: a managed Studio page is the editor viewport carrier.

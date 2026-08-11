@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 
 import { EditGateway } from '../io/gateway';
-import { sessionAppliers, type SessionApplier } from '../io/appliers';
+import { registerApplier, type SessionApplier } from '../io/appliers';
 import { OperationRunRegistry } from '../io/operation-runs';
 import { createEditSession } from '../session/document';
 
@@ -28,8 +28,7 @@ test('save dispatch is request-correlated and terminal-only', async () => {
     completions.push(effect);
     return { ok: true, completion: effect.promise };
   };
-  const previousApplier = sessionAppliers.get('saveDocToDisk');
-  sessionAppliers.set('saveDocToDisk', fakeApplier);
+  const restoreApplier = registerApplier('session', 'saveDocToDisk', fakeApplier);
 
   try {
     const gateway = new EditGateway(createEditSession());
@@ -82,15 +81,13 @@ test('save dispatch is request-correlated and terminal-only', async () => {
     expect(retryResult).toMatchObject({ ok: true, value: { requestId: 'save-3', status: 'failed', error: { code: 'operation-failed' } } });
     expect(gateway.ledger).toHaveLength(1);
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('saveDocToDisk');
-    else sessionAppliers.set('saveDocToDisk', previousApplier);
+    restoreApplier();
   }
 });
 
 test('createSceneFile dispatch is request-correlated and publishes only its terminal success', async () => {
   const completion = deferred<unknown>();
-  const previousApplier = sessionAppliers.get('createSceneFile');
-  sessionAppliers.set('createSceneFile', () => ({ ok: true, completion: completion.promise }));
+  const restoreApplier = registerApplier('session', 'createSceneFile', () => ({ ok: true, completion: completion.promise }));
 
   try {
     const gateway = new EditGateway(createEditSession());
@@ -135,14 +132,12 @@ test('createSceneFile dispatch is request-correlated and publishes only its term
     });
     expect(gateway.ledger).toHaveLength(1);
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('createSceneFile');
-    else sessionAppliers.set('createSceneFile', previousApplier);
+    restoreApplier();
   }
 });
 
 test('human save without a requestId cannot bypass the Gateway OperationRun path', () => {
-  const previousApplier = sessionAppliers.get('saveDocToDisk');
-  sessionAppliers.set('saveDocToDisk', () => ({ ok: true }));
+  const restoreApplier = registerApplier('session', 'saveDocToDisk', () => ({ ok: true }));
   try {
     const gateway = new EditGateway(createEditSession());
     const rejected = gateway.dispatch({ kind: 'saveDocToDisk' }, 'human');
@@ -154,15 +149,13 @@ test('human save without a requestId cannot bypass the Gateway OperationRun path
     expect(gateway.ledger).toHaveLength(0);
     expect(gateway.operationRuns.listRuns()).toHaveLength(0);
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('saveDocToDisk');
-    else sessionAppliers.set('saveDocToDisk', previousApplier);
+    restoreApplier();
   }
 });
 
 test('scene switch dispatch is request-correlated and retryable', async () => {
   const completions: Array<Deferred<unknown>> = [];
-  const previousApplier = sessionAppliers.get('switchSceneFile');
-  sessionAppliers.set('switchSceneFile', () => {
+  const restoreApplier = registerApplier('session', 'switchSceneFile', () => {
     const effect = deferred<unknown>();
     completions.push(effect);
     return { ok: true, completion: effect.promise };
@@ -183,15 +176,13 @@ test('scene switch dispatch is request-correlated and retryable', async () => {
     await gateway.waitOperationRun('switch-run-2');
     expect(gateway.ledger).toHaveLength(1);
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('switchSceneFile');
-    else sessionAppliers.set('switchSceneFile', previousApplier);
+    restoreApplier();
   }
 });
 
 test('human and AI request-correlated saves share the same run facts and terminal notifications', async () => {
   const completions: Array<Deferred<unknown>> = [];
-  const previousApplier = sessionAppliers.get('saveDocToDisk');
-  sessionAppliers.set('saveDocToDisk', () => {
+  const restoreApplier = registerApplier('session', 'saveDocToDisk', () => {
     const effect = deferred<unknown>();
     completions.push(effect);
     return { ok: true, completion: effect.promise };
@@ -223,14 +214,12 @@ test('human and AI request-correlated saves share the same run facts and termina
     expect(gateway.getOperationRunResult('human-save-1')).toMatchObject({ ok: true, value: { actor: { kind: 'human' }, status: 'succeeded' } });
     expect(gateway.getOperationRunResult('ai-save-1')).toMatchObject({ ok: true, value: { actor: { kind: 'ai' }, status: 'succeeded' } });
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('saveDocToDisk');
-    else sessionAppliers.set('saveDocToDisk', previousApplier);
+    restoreApplier();
   }
 });
 
 test('Gateway exposes one versioned snapshot for retained operation runs', async () => {
-  const previousApplier = sessionAppliers.get('saveDocToDisk');
-  sessionAppliers.set('saveDocToDisk', () => ({
+  const restoreApplier = registerApplier('session', 'saveDocToDisk', () => ({
     ok: true,
     completion: Promise.resolve({ ok: true, result: { revision: 1 } }),
   }));
@@ -253,8 +242,7 @@ test('Gateway exposes one versioned snapshot for retained operation runs', async
     expect(gateway.operationRunSnapshot()).toEqual(snapshot);
     expect(gateway.operationRunSnapshot()).toBe(snapshot);
   } finally {
-    if (previousApplier === undefined) sessionAppliers.delete('saveDocToDisk');
-    else sessionAppliers.set('saveDocToDisk', previousApplier);
+    restoreApplier();
   }
 });
 

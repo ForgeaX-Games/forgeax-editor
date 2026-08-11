@@ -307,7 +307,9 @@ describe('viewport runtime transport', () => {
       listOps: () => [{
         id: 'setSelection', domain: 'session', title: 'Set Selection',
         argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true } }, required: ['id'] },
+        source: 'builtin', availability: { available: true },
       }],
+      subscribeOperationCapabilities: () => () => {},
       dispatch: (operation: unknown) => { dispatched.push(operation); return { ok: true }; },
       buildQueryFn: () => () => ({ ok: true, rows: [] }),
       retryOperationRun: () => ({ ok: false, error: { code: 'unused', hint: 'unused' } }),
@@ -332,5 +334,42 @@ describe('viewport runtime transport', () => {
     expect(response.error).toBeUndefined();
     expect(response.result).toMatchObject({ status: 'succeeded', scope });
     expect(dispatched).toEqual([{ kind: 'setSelection', id: 7 }]);
+    service.dispose();
+  });
+
+  test('releases hierarchy and live capability subscriptions exactly once', () => {
+    let hierarchyDisposals = 0;
+    let capabilityDisposals = 0;
+    const graph = {
+      stats: () => ({ status: 'bound', worldGeneration: 1 }),
+      mount: () => ({
+        getSnapshot: () => ({ structureEpoch: 1, rows: [] }),
+        subscribe: () => () => {},
+        unsubscribe: () => { hierarchyDisposals += 1; },
+      }),
+    } as any;
+    const gateway = {
+      listOps: () => [],
+      subscribeOperationCapabilities: () => () => { capabilityDisposals += 1; },
+      dispatch: () => ({ ok: true }),
+      buildQueryFn: () => () => ({ ok: true, rows: [] }),
+      retryOperationRun: () => ({ ok: false, error: { code: 'unused', hint: 'unused' } }),
+      getOperationRunResult: () => ({ ok: false, error: { code: 'unused', hint: 'unused' } }),
+      waitOperationRun: async () => ({ ok: false, error: { code: 'unused', hint: 'unused' } }),
+      subscribeOperationRun: () => () => {},
+      cancelOperationRun: () => ({ ok: false, error: { code: 'unused', hint: 'unused' } }),
+      assetCatalog: () => [],
+      operationRunSnapshot: () => ({ revision: 0, runs: [] }),
+      diagnostics: { snapshot: () => ({ revision: 0, entries: [] }) },
+      activeWorld: null,
+      doc: { registry: undefined },
+    } as any;
+    const service = createViewportRuntimeTransportService({ runtime, graph, gateway });
+
+    service.dispose();
+    service.dispose();
+
+    expect(hierarchyDisposals).toBe(1);
+    expect(capabilityDisposals).toBe(1);
   });
 });

@@ -34,6 +34,7 @@ function source(operationRuns?: GatewayOperationRunPort) {
       argsSchema: { type: 'object' as const },
       source: 'builtin' as const,
       title: 'Save to Disk',
+      availability: { available: true as const },
     }],
     dispatch: () => ({ ok: true, result: { operationRun: current } }),
     ...(operationRuns === undefined ? {} : { operationRuns }),

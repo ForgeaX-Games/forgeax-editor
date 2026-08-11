@@ -41,7 +41,7 @@ import path from 'node:path';
 import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
-import { registerApplier, sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 import { EngineFacade } from '../io/engine-facade';
 import { activeSpan, type EngineInterfaceName, type SideEffectHint } from '../io/trace';
@@ -219,11 +219,10 @@ describe('AC-07 — mapping table is the single SSOT, fill traceable (w5, RED)',
 describe('boundary — dedup + graceful defaults (w5, RED)', () => {
   it('same interface called twice in one span → one deduped hint (D-8); sideEffects shorter than engineCalls', () => {
     const gw = new EditGateway(createSession());
-    sessionAppliers.delete('dupLeaf302');
     // Document applier gets the ApplierCtx (merged session) as its first arg, so
     // ctx.engine is the EngineFacade. Call spawn twice → engineCalls records two
     // 'world.spawn' entries, but sideEffects must dedup to a single hint.
-    registerApplier('document', 'dupLeaf302', function (ctx: unknown, _cmd: EditorOp) {
+    const restoreApplier = registerApplier('document', 'dupLeaf302', function (ctx: unknown, _cmd: EditorOp) {
       const c = ctx as { engine: EngineFacade };
       c.engine.spawn();
       c.engine.spawn();
@@ -243,7 +242,7 @@ describe('boundary — dedup + graceful defaults (w5, RED)', () => {
     // Boundary: with dedup, sideEffects is strictly shorter than engineCalls here.
     expect(last!.attributes.sideEffects.length).toBeLessThan(last!.attributes.engineCalls.length);
 
-    sessionAppliers.delete('dupLeaf302');
+    restoreApplier();
   });
 
   it('facade write outside any active span is a no-op (no throw, span stack stays empty)', () => {

@@ -8,7 +8,7 @@
 // SSOT (plan-strategy D-4, research Finding #9).
 
 import { type PackFile } from '../scene/scene-pack';
-import { sessionAppliers, registerApplier, type ApplierFn } from '../io/appliers';
+import { registerApplier, type ApplierFn } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath, resolveGamePathOnce } from '../util/path-resolver';
 import { clampMaterialPackPath } from '../util/material-pack-path';
@@ -284,7 +284,7 @@ export async function renameSourceFileOnDisk(fromPath: string, toPath: string): 
 }
 
 // ── Session applier: createDirectory ─────────────────────────────────────────
-// Registered into sessionAppliers (D-1) so gateway.dispatch routes it as a
+// Registered into the unified applier registry (D-1) so gateway.dispatch routes it as a
 // session op (ledger only, no undo). Human UI and AI are equal callers.
 //
 // BASENAME VALIDATION (2026-07-23 assets-folder-name-validation): the applier
@@ -293,7 +293,7 @@ export async function renameSourceFileOnDisk(fromPath: string, toPath: string): 
 // of the 4 UI entry points, AI dispatch, transaction sub-op). See
 // session/asset-basename.ts for the shared rule set (same function used by the
 // prompt dialog for UX highlighting).
-sessionAppliers.set('createDirectory', (op) => {
+registerApplier('session', 'createDirectory', (op) => {
   const { parentPath, name } = op as { parentPath: string; name: string };
   const check = validateAssetBasename(name);
   if (!check.ok) {
@@ -314,7 +314,7 @@ sessionAppliers.set('createDirectory', (op) => {
   return { ok: true };
 });
 
-sessionAppliers.set('deleteDirectory', (op) => {
+registerApplier('session', 'deleteDirectory', (op) => {
   const { path } = op as { path: string };
   // Path-level jailbreak defence only — `deleteDirectory` intentionally accepts
   // ANY existing on-disk path (including one that carries a bad basename from
@@ -333,7 +333,7 @@ sessionAppliers.set('deleteDirectory', (op) => {
   return { ok: true };
 });
 
-sessionAppliers.set('renameDirectory', (op) => {
+registerApplier('session', 'renameDirectory', (op) => {
   const { path, newName } = op as { path: string; newName: string };
   // `path` is an existing on-disk directory — same jailbreak logic as
   // deleteDirectory. `newName` is authored input and must pass full basename
@@ -356,7 +356,7 @@ sessionAppliers.set('renameDirectory', (op) => {
   return { ok: true };
 });
 
-sessionAppliers.set('renameSourceFile', (op) => {
+registerApplier('session', 'renameSourceFile', (op) => {
   const { path, newName } = op as { path: string; newName: string };
   const jail = checkPathNotJailbreak(path);
   if (!jail.ok) {
@@ -376,7 +376,7 @@ sessionAppliers.set('renameSourceFile', (op) => {
   return { ok: true };
 });
 
-sessionAppliers.set('revealInFileManager', (op) => {
+registerApplier('session', 'revealInFileManager', (op) => {
   const { path } = op as { path: string };
   void fetch('/api/files/reveal', {
     method: 'POST',

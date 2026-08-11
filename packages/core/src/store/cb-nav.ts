@@ -11,7 +11,7 @@
 //   requirements §R4/R10: module-private CBNavEntry; dual-package independence.
 import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 
 // plan-strategy §2 D-4: module-private — not exported. CB package retains its
 // own definition (content-browser/src/types.ts). No shared core export to avoid
@@ -81,9 +81,9 @@ function applyCBGoForward(_op: EditorOp): { ok: true } {
   return { ok: true };
 }
 
-sessionAppliers.set('setCBPath', applySetCBPath);
-sessionAppliers.set('cbGoBack', applyCBGoBack);
-sessionAppliers.set('cbGoForward', applyCBGoForward);
+registerApplier('session', 'setCBPath', applySetCBPath);
+registerApplier('session', 'cbGoBack', applyCBGoBack);
+registerApplier('session', 'cbGoForward', applyCBGoForward);
 
 // ── Read interface (requirements §R5) ────────────────────────────────────────
 // Only read-only exports — no set*/toggle* functions (requirements §C4).

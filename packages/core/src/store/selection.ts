@@ -35,7 +35,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 import type { HandlePair } from './handle-pair';
-import { sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import type { SessionApplierCtx } from '../io/appliers';
 import { restoreAnimationPreviewsOutside } from '../session/animation-preview';
 // Single-active-selection-domain: selecting an entity clears the asset/path
@@ -204,9 +204,9 @@ function applySetSelectionMany(op: EditorOp, applierCtx?: SessionApplierCtx): { 
   emitSelection();
   return { ok: true };
 }
-sessionAppliers.set('setSelection', applySetSelection);
-sessionAppliers.set('toggleSelection', applyToggleSelection);
-sessionAppliers.set('setSelectionMany', applySetSelectionMany);
+registerApplier('session', 'setSelection', applySetSelection);
+registerApplier('session', 'toggleSelection', applyToggleSelection);
+registerApplier('session', 'setSelectionMany', applySetSelectionMany);
 
 // M3 t22 (trace-ioc): the write-side sugar setters were dispatch-only zombie
 // exports — deleted; callers dispatch through the one gateway door directly.

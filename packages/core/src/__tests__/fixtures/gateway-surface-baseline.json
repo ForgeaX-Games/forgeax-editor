@@ -173,7 +173,7 @@
   },
   {
     "name": "listOps",
-    "signature": "() => readonly OpDescriptor[]"
+    "signature": "() => readonly GatewayOpDescriptor[]"
   },
   {
     "name": "lockForScan",
@@ -194,6 +194,10 @@
   {
     "name": "origins",
     "signature": "CommandOrigin[]"
+  },
+  {
+    "name": "operationCapabilitySnapshot",
+    "signature": "() => GatewayOpSnapshot"
   },
   {
     "name": "operationRunSnapshot",
@@ -294,6 +298,10 @@
   {
     "name": "sourceFileDeleteStatus",
     "signature": "(requestId: string) => SourceFileDeleteStatus | null"
+  },
+  {
+    "name": "subscribeOperationCapabilities",
+    "signature": "(listener: (snapshot: GatewayOpSnapshot) => void) => () => void"
   },
   {
     "name": "subscribeOperationRun",

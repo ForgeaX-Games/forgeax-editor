@@ -104,6 +104,26 @@ export interface OpDescriptor {
   readonly recoveryActions?: readonly string[];
 }
 
+export type GatewayOpAvailability =
+  | { readonly available: true }
+  | {
+    readonly available: false;
+    readonly code: 'applier-unavailable';
+    readonly reason: string;
+    readonly resolution?: string;
+  };
+
+/** Gateway-owned live projection: static contract plus current executor fact. */
+export interface GatewayOpDescriptor extends Omit<OpDescriptor, 'source'> {
+  readonly source: OpDescriptor['source'] | 'registered';
+  readonly availability: GatewayOpAvailability;
+}
+
+export interface GatewayOpSnapshot {
+  readonly revision: number;
+  readonly ops: readonly GatewayOpDescriptor[];
+}
+
 export interface OperationRunDescriptor {
   /** Statuses visible before the canonical effect has published a terminal fact. */
   readonly acceptedStatuses: readonly ('accepted' | 'running')[];

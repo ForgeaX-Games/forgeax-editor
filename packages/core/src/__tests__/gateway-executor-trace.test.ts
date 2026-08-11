@@ -26,7 +26,7 @@ import { Transform } from '@forgeax/engine-scene';
 import { Skylight, SkyboxBackground, MeshFilter } from '@forgeax/engine-render';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
-import { registerApplier, sessionAppliers } from '../io/appliers';
+import { registerApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 import type { ApplyResult, EditorOp, EditSession } from '../types';
 
@@ -63,7 +63,6 @@ describe('t12a — executor ApplierCtx dispatch (RED before t9, GREEN after t9)'
   beforeEach(() => {
     gw = new EditGateway(createSession());
     capturedFirstArg = null;
-    sessionAppliers.delete('verifyCtxShape302');
     // Register a document-domain applier via registerApplier to capture its
     // first argument. In M1 baseline, the document applier receives
     // (session: EditSession, cmd: EditorOp) — TWO args but no ctx object.
@@ -284,9 +283,7 @@ describe('t12c — AC-01 negative tsc + leaf interface names (GREEN)', () => {
     // Register a session applier that calls ctx.engine directly.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let capturedCtx: any = null;
-    const { registerApplier: ra, sessionAppliers: sa } = require('../io/appliers') as typeof import('../io/appliers');
-    sa.delete('leafTest302');
-    ra('session', 'leafTest302', function (op: any) {
+    const restoreApplier = registerApplier('session', 'leafTest302', function (op: any) {
       // Session appliers in M2 receive (op) only. The ctx is available
       // indirectly through the gateway's buildCtx, but the session applier
       // type signature hasn't been updated yet. This test verifies
@@ -300,6 +297,7 @@ describe('t12c — AC-01 negative tsc + leaf interface names (GREEN)', () => {
     expect(last).not.toBeNull();
     expect(last!.name).toBe('leafTest302');
     expect(last!.attributes.engineCalls).toBeDefined();
+    restoreApplier();
   });
 
   it('ctx.dispatchSub dispatches sub-op into nested span via transaction', () => {
@@ -488,8 +486,7 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
     // path for AI/eval). It expects an ApplierCtx as its SECOND argument — the
     // executor must hand it one (t20d). Before t20d, session appliers receive
     // (op) only, so `ctx` is undefined and the camera is never written.
-    sessionAppliers.delete('cameraOrbit');
-    registerApplier('session', 'cameraOrbit', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+    const restoreApplier = registerApplier('session', 'cameraOrbit', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
       const o = op as unknown as { target: number[]; pos: number[] };
       // Simplest faithful move: write the gesture-end camera position.
       ctx?.engine.set(camera, Transform, { pos: [o.pos[0], o.pos[1], o.pos[2]] });
@@ -521,7 +518,7 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
     expect(t.value!.pos[1]).toBe(6);
     expect(t.value!.pos[2]).toBe(7);
 
-    sessionAppliers.delete('cameraOrbit');
+    restoreApplier();
   });
 });
 
@@ -556,8 +553,7 @@ describe('feat-20260716 UE5 nav — cameraFly / cameraTeleport / cameraLookAt se
   it('cameraFly: ledger +1, undo unchanged, camera pos written via ctx.engine', () => {
     const gw = new EditGateway(createCamSession());
     const camera = spawnCamera(gw);
-    sessionAppliers.delete('cameraFly');
-    registerApplier('session', 'cameraFly', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+    const restoreApplier = registerApplier('session', 'cameraFly', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
       const o = op as unknown as { pos: number[]; yaw: number; pitch: number };
       ctx?.engine.set(camera, Transform, { pos: [o.pos[0], o.pos[1], o.pos[2]] });
       return { ok: true as const };
@@ -579,14 +575,13 @@ describe('feat-20260716 UE5 nav — cameraFly / cameraTeleport / cameraLookAt se
     expect(t.value!.pos[1]).toBe(5);
     expect(t.value!.pos[2]).toBe(-3);
 
-    sessionAppliers.delete('cameraFly');
+    restoreApplier();
   });
 
   it('cameraTeleport: ledger +1, undo unchanged, AI dispatch moves camera exactly to pos', () => {
     const gw = new EditGateway(createCamSession());
     const camera = spawnCamera(gw);
-    sessionAppliers.delete('cameraTeleport');
-    registerApplier('session', 'cameraTeleport', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+    const restoreApplier = registerApplier('session', 'cameraTeleport', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
       const o = op as unknown as { pos: number[]; yaw?: number; pitch?: number };
       ctx?.engine.set(camera, Transform, { pos: [o.pos[0], o.pos[1], o.pos[2]] });
       return { ok: true as const };
@@ -608,19 +603,18 @@ describe('feat-20260716 UE5 nav — cameraFly / cameraTeleport / cameraLookAt se
     expect(t.value!.pos[1]).toBe(50);
     expect(t.value!.pos[2]).toBe(200);
 
-    sessionAppliers.delete('cameraTeleport');
+    restoreApplier();
   });
 
   it('cameraLookAt: derives yaw/pitch from (pos→lookAt) vector; camera positioned at pos', () => {
     const gw = new EditGateway(createCamSession());
     const camera = spawnCamera(gw);
-    sessionAppliers.delete('cameraLookAt');
     // Minimal applier that mirrors the real edit-runtime derivation:
     //   yaw = atan2(-dx, -dz);  pitch = atan2(dy, hypot(dx,dz))
     // yaw/pitch captured in test-local closure vars (Transform component
     // rejects unknown fields, so we assert on the derived scalars directly).
     let derivedYaw = NaN, derivedPitch = NaN;
-    registerApplier('session', 'cameraLookAt', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
+    const restoreApplier = registerApplier('session', 'cameraLookAt', ((op: EditorOp, ctx?: { engine: { set(e: number, c: unknown, d: Record<string, unknown>): unknown } }) => {
       const o = op as unknown as { pos: number[]; lookAt: number[] };
       const dx = o.lookAt[0]! - o.pos[0]!;
       const dy = o.lookAt[1]! - o.pos[1]!;
@@ -655,7 +649,7 @@ describe('feat-20260716 UE5 nav — cameraFly / cameraTeleport / cameraLookAt se
     expect(derivedYaw).toBeCloseTo(0, 5);
     expect(derivedPitch).toBeCloseTo(-Math.PI / 4, 5);
 
-    sessionAppliers.delete('cameraLookAt');
+    restoreApplier();
   });
 
   it('listOps() reports cameraOrbit/Fly/Teleport/LookAt as session ops', () => {
