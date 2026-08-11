@@ -322,6 +322,7 @@ export function createEditorPageExtension(
       activities: [{
         id: activityId('editor'),
         title: 'Editor',
+        titleI18n: { zh: '编辑器', en: 'Editor', ja: 'エディター' },
         category: 'builtin',
         sourceLayer: 'builtin',
         order: 0,

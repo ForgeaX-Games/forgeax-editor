@@ -38,6 +38,7 @@
       "types": "./src/viewport/VfxPreviewViewport.tsx",
       "import": "./src/viewport/VfxPreviewViewport.tsx"
     },
+    "./theme.css": "./src/theme.css",
     "./viewport/quadrant": {
       "types": "./src/viewport/viewport-quadrant.ts",
       "import": "./src/viewport/viewport-quadrant.ts"

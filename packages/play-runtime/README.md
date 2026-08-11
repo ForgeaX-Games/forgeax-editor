@@ -14,6 +14,31 @@
 | VAG_CONSOLE 桥接 | 劫持 console、展示 `Error.detail`，并转发 Vite HMR build error |
 | 预览控制 | 通过 `VAG_PREVIEW_PAUSE` / `VAG_PREVIEW_PLAY` / `VAG_PREVIEW_RELOAD` postMessage 控制 |
 | VFX runtime | 通过 `@forgeax/engine-vfx-render` public API 创建一个 `VfxRuntimeHost`，绑定独立 Play World 与 renderer assets |
+| Thick Worker execution | 游戏显式声明 `forge.json.executionEntry` 后，World、Renderer、AssetRegistry、audio、physics、VFX、game plugins 与帧循环由 Engine 在同一个 Host/Worker realm 内装配；未声明的游戏继续诚实报告 `main-serial` |
+
+## Thick execution 入口
+
+`executionEntry` 是显式 opt-in，不是浏览器 capability 猜测。模块默认导出 Engine
+`ExecutionBootstrapEntry`；可选的具名 `host` 只运行 DOM/UI，二者通过一个
+`MessagePort` 交换游戏自定义消息。`World`、Renderer、Registry、函数闭包和 DOM
+节点不跨 realm。
+
+```ts
+import type { ExecutionBootstrapEntry } from '@forgeax/engine-app';
+
+const execution: ExecutionBootstrapEntry = async () => ({
+  run: async ({ world, assets }) => {
+    // Realm-safe gameplay only. The Editor wrapper owns common audio/VFX/physics/plugins.
+  },
+});
+
+export default execution;
+```
+
+`tier: auto` 的结果必须从 `app.execution.report()` 读取：Worker WebGPU 可用时为
+`engine-worker` 或 `shared`；能力不足时只允许 Engine 诚实回退到
+`main-serial`。`games/sample` 是仓库内首个真实 adopter，同一份 `runSample`
+逻辑同时被 legacy Host bootstrap 与 thick entry 调用，因此没有测试专用的第二套玩法。
 
 ## 导入示例
 
@@ -29,7 +54,7 @@ import type { GameContext } from '@forgeax/editor-play-runtime';
 
 ## VFX 运行时边界
 
-独立 Play 在 `createApp` 前创建 `createPlayVfxRuntime`，把同一个 `host.feature` 传入 `createApp`；拿到引擎创建的 fresh World 和 renderer assets 后，再调用 host 的 `attachWorld`。VFX runtime 只负责 host 装配和 camera 只读适配，不实现粒子模拟、asset cooking 或 VAG transport。
+独立 Play 在所选执行 realm 内创建 `createPlayVfxRuntime`，把同一个 `host.feature` 传入 `createApp`；拿到引擎创建的 fresh World 和 renderer assets 后，再调用 host 的 `attachWorld`。VFX runtime 只负责 host 装配和 camera 只读适配，不实现粒子模拟、asset cooking 或 VAG transport。
 
 ```mermaid
 flowchart TD

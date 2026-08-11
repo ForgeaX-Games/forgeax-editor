@@ -86,6 +86,7 @@ const ProvidesWorkbenchSchema = z.object({
   id: z.string().min(1),
   lens: z.string().optional(),
   icon: z.string().optional(),
+  category: z.enum(['3D', '2D', 'general']).optional(),
   position: z.number().optional(),
   panelSize: z.enum(['sm', 'md', 'lg']).optional(),
   // Dock tab chrome hint for a single-tab group. 'hideTitle' collapses the tab
@@ -531,7 +532,7 @@ export function normalizeManifest(manifest: AnyExtensionManifest): ExtensionMani
         title: manifest.displayName,
         icon: workbench.icon ?? manifest.icon,
         order: workbench.position,
-        category: 'workbench',
+        category: workbench.category ?? 'general',
         pageType: { extension: 'self', id: localId },
       }];
     }

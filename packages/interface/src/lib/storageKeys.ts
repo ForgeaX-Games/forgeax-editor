@@ -75,9 +75,15 @@ export const STORAGE_KEYS = {
   publishOnboarded: 'forgeax.publish.onboarded',
 
   // ── activity rail ──
-  /** ordered plugin slugs pinned to the ActivityRail middle section.
-   *  Shape: string[]. Missing key → seed from product-spec defaults. */
-  activityRailPinned: 'forgeax.activityRail.pinned.v1',
+  /** [v3] qualified activity IDs pinned to the ActivityRail.
+   *  Shape: string[]. Display order keeps the historical curated entries first,
+   *  then follows ActivityRegistry order for newly pinned extensions;
+   *  missing key → the historical 12-plugin product seed is derived. */
+  activityRailPinned: 'forgeax.activityRail.pinned.v3',
+  /** [ABANDONED, v2] briefly seeded every registered activity; intentionally not migrated. */
+  activityRailPinnedLegacyV2: 'forgeax.activityRail.pinned.v2',
+  /** [LEGACY, v1] plugin slugs (or early qualified IDs); read-only migration source. */
+  activityRailPinnedLegacyV1: 'forgeax.activityRail.pinned.v1',
 } as const;
 
 /** Build a per-workspace dockview layout key. Legacy — kept for the v7→v8

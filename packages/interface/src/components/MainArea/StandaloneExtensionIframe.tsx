@@ -22,6 +22,7 @@ import { useShellStore } from '../../store';
 import { openExtensionPage } from '../../core/page-navigation';
 import { getSessionClient } from '../../store-parts/session-client';
 import { ExtensionIframeHost } from '../ExtensionHost/ExtensionIframeHost';
+import { usePanelRenderers } from '../DockShell/panelRenderers';
 
 /** Split-surface pane (Doc 06 WORKBENCH-THREE-PANE-V2). The plugin's
  *  index.html reads `?pane=` and tags `<body data-pane=...>`; CSS hides the
@@ -114,6 +115,7 @@ function doNavigate(targetPluginId: string, payload?: Record<string, unknown>): 
 
 export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadNonce = 0 }: Props): ReactElement {
   const { t } = useTranslation();
+  const { editor } = usePanelRenderers();
   // STABLE cache key. Was `${version}-${Date.now()}` which defeated keep-alive:
   // any iframe remount (re-parent / reconcile) recomputed Date.now() → new URL →
   // a full cold reload that tore down the WebGPU ctx + WS + scroll on every
@@ -190,6 +192,7 @@ export function StandaloneExtensionIframe({ plugin, pane, active = true, reloadN
       active={active}
       onNavigate={handleNavigate}
       onChatPost={handleChatPost}
+      onEditorAssetImport={editor?.importAssetSource}
       onToolCall={handleToolCall}
       loadErrorText={(error) => t('standaloneExtension.iframeLoadFailed', { error })}
     />

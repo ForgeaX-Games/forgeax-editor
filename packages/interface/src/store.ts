@@ -42,6 +42,7 @@ export {
   type HistoryRecord,
   type CleanPackageResult,
   type ActiveGameSelection,
+  type RuntimeCatalogRoot,
   type RuntimeAssetBinding,
   type RuntimeAssetDiagnostic,
   type RuntimeScopeState,

@@ -40,6 +40,13 @@ const SCENE_GUID = '2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071';
 
 type Ctx = { world: World; assets?: import('@forgeax/engine-assets-runtime').AssetRegistry };
 
+export interface SampleRuntimeOptions {
+  readonly assets?: import('@forgeax/engine-assets-runtime').AssetRegistry;
+  readonly aspect?: number;
+  readonly defaultSceneRoot?: EntityHandle;
+  readonly defaultScene?: SceneAsset;
+}
+
 interface PackNode { localId: number; components: Record<string, Record<string, unknown>> }
 
 const SAMPLE_PLAYER_ENTITY_KEY = 'sample-player-entity';
@@ -106,11 +113,23 @@ async function loadScene(
 }
 
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
-  const canvas = document.querySelector<HTMLCanvasElement>('#app')!;
+  const canvas = document.querySelector<HTMLCanvasElement>('#app');
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-  canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
-  const aspect = canvas.width / canvas.height || 1;
+  if (canvas !== null) {
+    canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+  }
+  await runSample(world, {
+    assets: ctx?.assets,
+    aspect: canvas === null ? 16 / 9 : canvas.width / canvas.height || 1,
+    defaultSceneRoot: ctx?.defaultSceneRoot,
+    defaultScene: ctx?.defaultScene,
+  });
+}
+
+/** Realm-safe sample body shared by the legacy Host entry and thick execution entry. */
+export async function runSample(world: World, options: SampleRuntimeOptions = {}) {
+  const aspect = options.aspect ?? 16 / 9;
 
   // ── load the authored scene (the SAME native asset ✎ Edit writes) ────────────
   let loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null = null;
@@ -122,8 +141,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // our copy), duplicating the sun (render-system-multi-light) and, once a camera
   // is added, the camera. Recover { mapping, nodes } from the SceneInstance on the
   // host root (localId->Entity) + the author-side entity list (carries Name).
-  const hostRoot = ctx?.defaultSceneRoot;
-  if (hostRoot !== undefined && ctx?.defaultScene !== undefined) {
+  const hostRoot = options.defaultSceneRoot;
+  if (hostRoot !== undefined && options.defaultScene !== undefined) {
     const sceneInst = world.get(hostRoot, SceneInstance);
     if (!sceneInst.ok) {
       console.error('[game] SceneInstance lookup on host root failed:', sceneInst.error);
@@ -136,7 +155,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const e = mappingArr[localId];
         if (e !== undefined && e !== 0xffffffff && e !== 0) mapping.set(localId, e as EntityHandle);
       }
-      loaded = { mapping, nodes: ctx.defaultScene.entities as unknown as PackNode[] };
+      loaded = { mapping, nodes: options.defaultScene.entities as unknown as PackNode[] };
     }
   }
 
@@ -144,7 +163,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // no defaultScene) — load it ourselves the canonical loadByGuid -> instantiate path.
   if (!loaded) {
     try {
-      loaded = await loadScene({ world, assets: ctx?.assets });
+      loaded = await loadScene({ world, assets: options.assets });
     } catch (err) {
       console.warn('[game] scene asset unavailable:', err);
     }

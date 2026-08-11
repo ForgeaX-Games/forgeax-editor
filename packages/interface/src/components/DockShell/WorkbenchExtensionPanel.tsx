@@ -56,9 +56,11 @@ function LegacyStandalonePanel({
 function WorkbenchHostPanel({
   extensionId,
   pane,
+  onEditorAssetImport,
 }: {
   extensionId: string;
   pane?: SurfacePane;
+  onEditorAssetImport?: import('./panelRenderers').EditorAssetImportSourceHandler;
 }) {
   const { t } = useTranslation();
   const activeGameSlug = useShellStore((state) => state.activeGameSlug);
@@ -83,6 +85,7 @@ function WorkbenchHostPanel({
           descriptor={runtime.descriptor}
           gameId={activeGameSlug}
           pane={pane}
+          onEditorAssetImport={onEditorAssetImport}
         />
       </div>
     );
@@ -104,7 +107,7 @@ function WorkbenchHostPanel({
 export function WorkbenchExtensionPanel({ extensionId, pane }: Props) {
   const { t, i18n } = useTranslation();
   const manifest = useExtensionManifest(extensionId);
-  const { workbenchPanels } = usePanelRenderers();
+  const { workbenchPanels, editor } = usePanelRenderers();
 
   const InlinePanel = workbenchPanels?.[extensionId];
   if (InlinePanel) {
@@ -132,6 +135,7 @@ export function WorkbenchExtensionPanel({ extensionId, pane }: Props) {
       <WorkbenchHostPanel
         extensionId={extensionId}
         pane={pane}
+        onEditorAssetImport={editor?.importAssetSource}
       />
     );
   }

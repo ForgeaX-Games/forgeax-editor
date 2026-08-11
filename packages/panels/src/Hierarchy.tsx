@@ -48,6 +48,7 @@ import {
   type HierarchyStructureProjection,
   hasHierarchyViewFilter,
   revealHierarchyEntity,
+  resolveHierarchyRuntimeAccess,
   subscribeHierarchyPanelState,
   toggleHierarchyCollapsed,
   type HierarchyColumns,
@@ -68,6 +69,13 @@ type CompNameIndex = ReadonlyMap<EntityHandle, readonly string[]>;
 const EMPTY_COMP_INDEX: CompNameIndex = new Map();
 const EMPTY_NAMES: readonly string[] = [];
 const EMPTY_IDS: readonly EntityHandle[] = [];
+const HIERARCHY_PANEL_STYLE = {
+  display: 'flex',
+  flexDirection: 'column',
+  height: '100%',
+  minHeight: 0,
+  overflow: 'hidden',
+} as const;
 
 export interface HierarchyCommandActions {
   readonly canMutateFocusedTarget: boolean;
@@ -539,7 +547,6 @@ function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined 
         else if (envelope.status === 'empty') setProjection({
           structure: { structureEpoch: envelope.revision, rows: [] },
           selectionIds: [],
-          mode: 'edit',
         });
         else setProjection(undefined);
       } catch {
@@ -563,6 +570,7 @@ function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined 
 function useHierarchyProjection(): {
   readonly structure: HierarchyStructureProjection | undefined;
   readonly remote: HierarchyRuntimeProjection | undefined;
+  readonly hasLocalRuntimeGraph: boolean;
 } {
   const remoteProjection = useRemoteHierarchyProjection();
   const graph = getActiveRuntimeUiGraph();
@@ -582,8 +590,8 @@ function useHierarchyProjection(): {
   // connected: the carrier projection wins, and the local graph is only the
   // in-process fallback used when no remote projection exists.
   return remoteProjection !== undefined
-    ? { structure: remoteProjection.structure, remote: remoteProjection }
-    : { structure: localProjection, remote: undefined };
+    ? { structure: remoteProjection.structure, remote: remoteProjection, hasLocalRuntimeGraph: graph !== null }
+    : { structure: localProjection, remote: undefined, hasLocalRuntimeGraph: graph !== null };
 }
 
 function projectionRow(projection: HierarchyStructureProjection | undefined, id: EntityHandle): HierarchyRowVM | undefined {
@@ -1036,7 +1044,11 @@ export function HierarchyPanel() {
   // as well; otherwise the first `graph === null` snapshot is never replaced
   // and the hierarchy remains an empty folder until another unrelated render.
   useDocVersion();
-  const { structure: projection, remote: remoteProjectionState } = useHierarchyProjection();
+  const {
+    structure: projection,
+    remote: remoteProjectionState,
+    hasLocalRuntimeGraph,
+  } = useHierarchyProjection();
   const remoteContext = useMemo<RemoteHierarchyContextValue | null>(() => {
     if (remoteProjectionState === undefined) return null;
     const selectionIds = new Set(remoteProjectionState.selectionIds);
@@ -1079,8 +1091,11 @@ export function HierarchyPanel() {
   }, [activeSceneId]);
 
   const activeWorld = gateway.activeWorld;
-  const remoteProjection = remoteContext !== null;
-  const readOnly = remoteProjectionState?.mode === 'play' || (!remoteProjection && gateway.mode === 'play');
+  const { usesRemoteProjection: remoteProjection, readOnly } = resolveHierarchyRuntimeAccess({
+    hasLocalRuntimeGraph,
+    hasRemoteProjection: remoteContext !== null,
+    gatewayMode: gateway.mode,
+  });
   const worldReady = activeWorld != null || projection !== undefined;
   const hierarchyBodyRef = useRef<HTMLDivElement>(null);
   const hierarchyRootRef = useRef<HTMLDivElement>(null);
@@ -1276,7 +1291,7 @@ export function HierarchyPanel() {
   // Cross-game switch gap: show a quiet placeholder until createApp reinjects doc.world.
   if (!worldReady) {
     return (
-      <div className="panel outliner-panel" data-testid="panel-hierarchy" data-world-gap="1" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="panel outliner-panel" data-testid="panel-hierarchy" data-world-gap="1" style={HIERARCHY_PANEL_STYLE}>
         <div className="muted" data-testid="hier-world-gap" style={{ padding: '12px 10px' }}>
           {t('editor.hierarchy.switchingGame')}
         </div>
@@ -1290,10 +1305,26 @@ export function HierarchyPanel() {
       ref={hierarchyRootRef}
       className="panel outliner-panel"
       data-testid="panel-hierarchy"
-      style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+      style={HIERARCHY_PANEL_STYLE}
+      // Step 1 (keyboard-router convergence): wire Delete / Backspace on the panel
+      // itself so the keystroke deletes the current entity selection through the
+      // one gateway door. JSX onKeyDown is scoped to this panel (G-1 level 2),
+      // so it stays even after Step 2 moves the global router in — it never races
+      // with the document-level listener. Typing targets (rename input / filter)
+      // are excluded so Backspace edits text instead of deleting nodes.
       tabIndex={selectedEntities().length > 0 ? -1 : 0}
       onFocus={(event) => {
         if (event.target === event.currentTarget) focusedHierarchyEntity = null;
+      }}
+      onKeyDown={(e) => {
+        if (readOnly) return;
+        if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+        const tgt = e.target as HTMLElement;
+        if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable) return;
+        const cur = selectedEntities();
+        if (cur.length === 0) return;
+        e.preventDefault();
+        void hierarchyGesture('delete', cur);
       }}
     >
       <div className="ol-colhead" data-testid="hier-colhead">

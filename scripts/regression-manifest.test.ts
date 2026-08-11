@@ -31,6 +31,7 @@ test('every check has stable routing and fixture selection can narrow the manife
   expect(selectRegressionChecks('full', 'R0').map((check) => check.id)).toEqual([
     'b2-self-boot',
     'typecheck',
+    'r0-hierarchy-ui-editability',
     'r0-sample-vfx-skill',
     'r0-engine-dogfood-diagnostics',
     'submodule-pin',
@@ -64,6 +65,7 @@ test('local-fast is a strict contract profile subset and required contexts keep 
     'smoke-play',
   ]);
   expect(REGRESSION_CHECKS.filter((check) => check.id.startsWith('r0-')).map((check) => check.id)).toEqual([
+    'r0-hierarchy-ui-editability',
     'r0-sample-vfx-skill',
     'r0-engine-dogfood-diagnostics',
   ]);

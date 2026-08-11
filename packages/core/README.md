@@ -40,6 +40,14 @@ increasing revision through `operationCapabilitySnapshot()` and
 the projection. Consumers must rediscover after a revision change instead of caching
 boot-time operation availability.
 
+Described downstream appliers may also declare `operationRun` metadata. When
+such an executor returns a Promise, the canonical Gateway derives the
+`requestId` from the live descriptor, creates the one authoritative
+`OperationRun`, and does not report success until the downstream completion is
+terminal. This is the generic seam used by replaceable preview executors; it is
+not a VFX-specific allowlist and downstream hosts must not create a second run
+journal.
+
 <details>
 <summary>Errors, recovery, and boundaries</summary>
 

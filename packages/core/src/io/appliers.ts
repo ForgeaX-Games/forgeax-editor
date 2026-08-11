@@ -22,6 +22,7 @@ import type { CommandError, EditorOp } from '../types';
 import type { CommandOrigin } from './gateway-history';
 import type { ApplyResult } from '../types';
 import type { RunProgress } from '@forgeax/editor-product';
+import type { OperationRunDescriptor } from './catalog';
 import {
   applyCommand,
   applySpawnEntity,
@@ -118,6 +119,7 @@ export interface RegisteredApplierDescriptor {
   readonly domain: OpDomain;
   readonly argsSchema?: unknown;
   readonly title?: string;
+  readonly operationRun?: OperationRunDescriptor;
 }
 
 export interface ApplierRegistrySnapshot {
@@ -263,6 +265,9 @@ export function applierRegistrySnapshot(): ApplierRegistrySnapshot {
         domain: entry.domain,
         ...(entry.meta?.argsSchema === undefined ? {} : { argsSchema: structuredClone(entry.meta.argsSchema) }),
         ...(entry.meta?.title === undefined ? {} : { title: entry.meta.title }),
+        ...(entry.meta?.operationRun === undefined
+          ? {}
+          : { operationRun: structuredClone(entry.meta.operationRun) }),
       })];
     })),
   });
@@ -298,6 +303,10 @@ export interface SessionApplierMeta {
   argsSchema?: unknown;
   /** Human-readable label for the command palette (M4). */
   title?: string;
+  /** Gateway-owned async lifecycle contract. A downstream applier that returns
+   * a completion Promise declares this once so dispatch can create the same
+   * request-correlated OperationRun used by builtin async operations. */
+  operationRun?: OperationRunDescriptor;
 }
 
 /** Error thrown by registerSessionApplier on a duplicate kind. Carries the

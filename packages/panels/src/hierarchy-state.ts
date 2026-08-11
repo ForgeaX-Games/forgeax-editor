@@ -55,7 +55,27 @@ export interface HierarchyStructureProjection {
 export interface HierarchyRuntimeProjection {
   readonly structure: HierarchyStructureProjection;
   readonly selectionIds: readonly EntityHandle[];
-  readonly mode: 'edit' | 'play';
+}
+
+export interface HierarchyRuntimeAccess {
+  readonly usesRemoteProjection: boolean;
+  readonly readOnly: boolean;
+}
+
+export function resolveHierarchyRuntimeAccess(input: {
+  /** Whether this panel is in the host that owns the live RuntimeUiGraph. */
+  readonly hasLocalRuntimeGraph: boolean;
+  readonly hasRemoteProjection: boolean;
+  readonly gatewayMode: 'edit' | 'play';
+}): HierarchyRuntimeAccess {
+  // A shell can retain a bootstrap/dummy Gateway World even after the
+  // replaceable Runtime carrier is ready. World presence therefore cannot
+  // decide authority; the local RuntimeUiGraph is the host-owned signal.
+  const usesRemoteProjection = !input.hasLocalRuntimeGraph && input.hasRemoteProjection;
+  return {
+    usesRemoteProjection,
+    readOnly: input.gatewayMode === 'play' || usesRemoteProjection,
+  };
 }
 
 export interface HierarchyStructureSelector {

@@ -22,6 +22,7 @@ test('contract discovery is read-only and exposes selectable homes and recovery 
   expect(payload.checks.map((check: { checkId: string }) => check.checkId)).toEqual([
     'b2-self-boot',
     'typecheck',
+    'r0-hierarchy-ui-editability',
     'r0-sample-vfx-skill',
     'r0-engine-dogfood-diagnostics',
     'submodule-pin',
@@ -30,12 +31,14 @@ test('contract discovery is read-only and exposes selectable homes and recovery 
   expect(payload.profiles['local-fast']).toEqual([
     'b2-self-boot',
     'typecheck',
+    'r0-hierarchy-ui-editability',
     'r0-sample-vfx-skill',
     'r0-engine-dogfood-diagnostics',
   ]);
   expect(payload.profiles['local-full']).toEqual([
     'b2-self-boot',
     'typecheck',
+    'r0-hierarchy-ui-editability',
     'r0-sample-vfx-skill',
     'r0-engine-dogfood-diagnostics',
     'submodule-pin',

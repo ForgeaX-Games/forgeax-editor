@@ -36,12 +36,22 @@ import {
 import type { InspectorRuntimeProjection } from '@forgeax/editor-panels/inspector-runtime-projection';
 import type { ExecutionReport } from '@forgeax/engine-app';
 import type { DiagnosticsSnapshot } from '@forgeax/editor-core';
+import {
+  createPreviewExecutorClient,
+  isPreviewExecutorLeaseIdentity,
+  samePreviewExecutorLease,
+  type PreviewExecutorClient,
+  type PreviewExecutorLeaseIdentity,
+} from './preview-executor-lease';
 
 export const VIEWPORT_RUNTIME_CONNECT = 'FORGEAX_VIEWPORT_RUNTIME_CONNECT' as const;
 export const VIEWPORT_RUNTIME_CONNECTED = 'FORGEAX_VIEWPORT_RUNTIME_CONNECTED' as const;
 export const VIEWPORT_RUNTIME_READY = 'FORGEAX_VIEWPORT_RUNTIME_READY' as const;
 export const VIEWPORT_RUNTIME_PROJECTION_INVALIDATED = 'FORGEAX_VIEWPORT_RUNTIME_PROJECTION_INVALIDATED' as const;
 export const VIEWPORT_RUNTIME_OPEN_ASSET = 'FORGEAX_VIEWPORT_RUNTIME_OPEN_ASSET' as const;
+export const VIEWPORT_PREVIEW_EXECUTOR_CONNECT = 'FORGEAX_VIEWPORT_PREVIEW_EXECUTOR_CONNECT' as const;
+export const VIEWPORT_PREVIEW_EXECUTOR_CONNECTED = 'FORGEAX_VIEWPORT_PREVIEW_EXECUTOR_CONNECTED' as const;
+export const VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT = 'FORGEAX_VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT' as const;
 
 export interface ViewportRuntimeConnectMessage {
   readonly type: typeof VIEWPORT_RUNTIME_CONNECT;
@@ -63,7 +73,7 @@ export interface ViewportRuntimeReadyMessage {
 export interface ViewportRuntimeProjectionInvalidatedMessage {
   readonly type: typeof VIEWPORT_RUNTIME_PROJECTION_INVALIDATED;
   readonly runtime: ViewportRuntimeIdentity;
-  readonly projection: 'operations';
+  readonly projection: 'operations' | 'capabilities';
   readonly revision: number;
 }
 
@@ -77,6 +87,27 @@ export interface ViewportRuntimeOpenAssetMessage {
     readonly payload: Record<string, unknown>;
     readonly packPath: string;
   };
+}
+
+export interface ViewportPreviewExecutorConnectMessage {
+  readonly type: typeof VIEWPORT_PREVIEW_EXECUTOR_CONNECT;
+  readonly challenge: string;
+  readonly runtime: ViewportRuntimeIdentity;
+  readonly lease: PreviewExecutorLeaseIdentity;
+}
+
+export interface ViewportPreviewExecutorConnectedMessage {
+  readonly type: typeof VIEWPORT_PREVIEW_EXECUTOR_CONNECTED;
+  readonly challenge: string;
+  readonly runtime: ViewportRuntimeIdentity;
+  readonly lease: PreviewExecutorLeaseIdentity;
+}
+
+export interface ViewportPreviewExecutorDisconnectMessage {
+  readonly type: typeof VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT;
+  readonly challenge: string;
+  readonly runtime: ViewportRuntimeIdentity;
+  readonly lease: PreviewExecutorLeaseIdentity;
 }
 
 export interface ViewportRuntimeMessageSource {
@@ -101,6 +132,12 @@ export interface ViewportRuntimeConnectionHostOptions {
   readonly expectedOrigin: string;
   readonly runtime: ViewportRuntimeIdentity;
   readonly service: TransportService;
+  /** Bind a reverse Shell preview executor into Runtime-owned capabilities.
+   * The generic authenticated carrier knows no VFX/material/mesh schemas. */
+  readonly onPreviewExecutorLeaseConnect?: (
+    lease: PreviewExecutorLeaseIdentity,
+    client: PreviewExecutorClient,
+  ) => () => void;
   readonly onReject?: (reason: string, received: unknown) => void;
 }
 
@@ -204,9 +241,42 @@ export function isViewportRuntimeProjectionInvalidatedMessage(
   return isRecord(value)
     && value.type === VIEWPORT_RUNTIME_PROJECTION_INVALIDATED
     && isViewportRuntimeIdentity(value.runtime)
-    && value.projection === 'operations'
+    && (value.projection === 'operations' || value.projection === 'capabilities')
     && Number.isSafeInteger(value.revision)
     && (value.revision as number) >= 0;
+}
+
+export function isViewportPreviewExecutorConnectMessage(
+  value: unknown,
+): value is ViewportPreviewExecutorConnectMessage {
+  return isRecord(value)
+    && value.type === VIEWPORT_PREVIEW_EXECUTOR_CONNECT
+    && typeof value.challenge === 'string'
+    && value.challenge.length > 0
+    && isViewportRuntimeIdentity(value.runtime)
+    && isPreviewExecutorLeaseIdentity(value.lease);
+}
+
+export function isViewportPreviewExecutorConnectedMessage(
+  value: unknown,
+): value is ViewportPreviewExecutorConnectedMessage {
+  return isRecord(value)
+    && value.type === VIEWPORT_PREVIEW_EXECUTOR_CONNECTED
+    && typeof value.challenge === 'string'
+    && value.challenge.length > 0
+    && isViewportRuntimeIdentity(value.runtime)
+    && isPreviewExecutorLeaseIdentity(value.lease);
+}
+
+export function isViewportPreviewExecutorDisconnectMessage(
+  value: unknown,
+): value is ViewportPreviewExecutorDisconnectMessage {
+  return isRecord(value)
+    && value.type === VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT
+    && typeof value.challenge === 'string'
+    && value.challenge.length > 0
+    && isViewportRuntimeIdentity(value.runtime)
+    && isPreviewExecutorLeaseIdentity(value.lease);
 }
 
 /**
@@ -218,15 +288,91 @@ export function installViewportRuntimeConnectionHost(
   options: ViewportRuntimeConnectionHostOptions,
 ): () => void {
   let active: ReturnType<typeof createMessagePortCarrier> | null = null;
+  let activeChallenge: string | null = null;
+  let activePreview: {
+    readonly lease: PreviewExecutorLeaseIdentity;
+    readonly client: PreviewExecutorClient;
+    readonly disposeBinding: () => void;
+  } | null = null;
   const acceptedChallenges = new Set<string>();
+  const acceptedPreviewLeaseIds = new Set<string>();
   const reject = (reason: string, value: unknown) => options.onReject?.(reason, value);
+  const disconnectPreview = (): void => {
+    const preview = activePreview;
+    activePreview = null;
+    if (preview === null) return;
+    try {
+      preview.disposeBinding();
+    } finally {
+      preview.client.dispose();
+    }
+  };
+  const sameRuntime = (received: ViewportRuntimeIdentity): boolean => (
+    received.runtimeId === options.runtime.runtimeId
+    && received.runtimeGeneration === options.runtime.runtimeGeneration
+    && received.carrierId === options.runtime.carrierId
+    && received.carrierKind === options.runtime.carrierKind
+  );
   const onMessage = (event: RuntimeMessageEvent): void => {
     // This window can also own nested Play carriers that publish VAG_* health
     // heartbeats. They are not attempts to connect to the Shell transport and
     // must not become an untrusted-source warning on every frame.
-    if (!isRecord(event.data) || event.data.type !== VIEWPORT_RUNTIME_CONNECT) return;
+    if (!isRecord(event.data) || (
+      event.data.type !== VIEWPORT_RUNTIME_CONNECT
+      && event.data.type !== VIEWPORT_PREVIEW_EXECUTOR_CONNECT
+      && event.data.type !== VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT
+    )) return;
     if (event.origin !== options.expectedOrigin || event.source !== options.expectedSource) {
       reject('viewport-runtime-untrusted-source', event.data);
+      return;
+    }
+    if (isViewportPreviewExecutorDisconnectMessage(event.data)) {
+      if (!sameRuntime(event.data.runtime) || event.data.challenge !== activeChallenge) {
+        reject('viewport-preview-executor-generation-mismatch', event.data);
+        return;
+      }
+      if (activePreview !== null && samePreviewExecutorLease(activePreview.lease, event.data.lease)) {
+        disconnectPreview();
+      }
+      return;
+    }
+    if (isViewportPreviewExecutorConnectMessage(event.data)) {
+      if (!sameRuntime(event.data.runtime) || event.data.challenge !== activeChallenge) {
+        reject('viewport-preview-executor-generation-mismatch', event.data);
+        return;
+      }
+      if (acceptedPreviewLeaseIds.has(event.data.lease.leaseId)) {
+        reject('viewport-preview-executor-lease-replayed', event.data);
+        return;
+      }
+      const port = event.ports[0];
+      if (port === undefined) {
+        reject('viewport-preview-executor-port-missing', event.data);
+        return;
+      }
+      if (options.onPreviewExecutorLeaseConnect === undefined) {
+        port.close?.();
+        reject('viewport-preview-executor-unsupported', event.data);
+        return;
+      }
+      disconnectPreview();
+      const client = createPreviewExecutorClient(port, event.data.lease);
+      let disposeBinding: () => void;
+      try {
+        disposeBinding = options.onPreviewExecutorLeaseConnect(event.data.lease, client);
+      } catch (cause) {
+        client.dispose();
+        reject('viewport-preview-executor-bind-failed', cause);
+        return;
+      }
+      acceptedPreviewLeaseIds.add(event.data.lease.leaseId);
+      activePreview = { lease: event.data.lease, client, disposeBinding };
+      event.source.postMessage({
+        type: VIEWPORT_PREVIEW_EXECUTOR_CONNECTED,
+        challenge: event.data.challenge,
+        runtime: options.runtime,
+        lease: event.data.lease,
+      } satisfies ViewportPreviewExecutorConnectedMessage, event.origin);
       return;
     }
     if (!isViewportRuntimeConnectMessage(event.data)) {
@@ -234,11 +380,7 @@ export function installViewportRuntimeConnectionHost(
       return;
     }
     const message = event.data;
-    if (message.runtime.runtimeId !== options.runtime.runtimeId
-      || message.runtime.runtimeGeneration !== options.runtime.runtimeGeneration
-      || message.runtime.carrierId !== options.runtime.carrierId
-      || message.runtime.carrierKind !== options.runtime.carrierKind
-    ) {
+    if (!sameRuntime(message.runtime)) {
       reject('viewport-runtime-generation-mismatch', message);
       return;
     }
@@ -253,8 +395,11 @@ export function installViewportRuntimeConnectionHost(
     }
 
     acceptedChallenges.add(message.challenge);
+    disconnectPreview();
+    acceptedPreviewLeaseIds.clear();
     active?.dispose();
     active = createMessagePortCarrier(port, options.service);
+    activeChallenge = message.challenge;
     event.source.postMessage({
       type: VIEWPORT_RUNTIME_CONNECTED,
       challenge: message.challenge,
@@ -269,8 +414,10 @@ export function installViewportRuntimeConnectionHost(
   } satisfies ViewportRuntimeReadyMessage, options.expectedOrigin);
   return () => {
     options.target.removeEventListener('message', onMessage);
+    disconnectPreview();
     active?.dispose();
     active = null;
+    activeChallenge = null;
   };
 }
 
@@ -515,7 +662,7 @@ export function createViewportRuntimeTransportService(options: {
       const structure = hierarchy.getSnapshot();
       return structure === undefined
         ? undefined
-        : { structure, selectionIds: [...getSelectionList()], mode: options.gateway.mode };
+        : { structure, selectionIds: [...getSelectionList()] };
     },
     readInspector: () => {
       const selectionIds = [...getSelectionList()];

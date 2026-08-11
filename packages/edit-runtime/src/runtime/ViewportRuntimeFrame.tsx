@@ -18,12 +18,25 @@ import {
 } from '@forgeax/editor-panels/operation-projection';
 import {
   VIEWPORT_RUNTIME_CONNECT,
+  VIEWPORT_PREVIEW_EXECUTOR_CONNECT,
+  VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT,
+  isViewportPreviewExecutorConnectedMessage,
   isViewportRuntimeConnectedMessage,
   isViewportRuntimeProjectionInvalidatedMessage,
   isViewportRuntimeOpenAssetMessage,
   isViewportRuntimeReadyMessage,
   type ViewportRuntimeConnectMessage,
+  type ViewportPreviewExecutorConnectMessage,
+  type ViewportPreviewExecutorDisconnectMessage,
 } from './viewport-runtime-transport';
+import {
+  createPreviewExecutorCarrier,
+  getShellPreviewExecutorLeaseSnapshot,
+  markShellPreviewExecutorLeaseConnected,
+  samePreviewExecutorLease,
+  subscribeShellPreviewExecutorLease,
+  type PreviewExecutorLeaseIdentity,
+} from './preview-executor-lease';
 
 export type ViewportRuntimeFrameStatus = 'starting' | 'connecting' | 'ready' | 'faulted';
 
@@ -33,6 +46,7 @@ export interface ViewportRuntimeFrameProps {
   readonly title?: string;
   readonly className?: string;
   readonly onClient?: (client: MessagePortTransportClient | null) => void;
+  readonly onCapabilitiesChanged?: () => void;
   readonly onStatusChange?: (status: ViewportRuntimeFrameStatus) => void;
 }
 
@@ -64,6 +78,7 @@ export function ViewportRuntimeFrame({
   title = 'ForgeaX Viewport Runtime',
   className,
   onClient,
+  onCapabilitiesChanged,
   onStatusChange,
 }: ViewportRuntimeFrameProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -72,6 +87,9 @@ export function ViewportRuntimeFrame({
   const uninstallOperationProjectionRef = useRef<(() => void) | null>(null);
   const refreshOperationProjectionRef = useRef<(() => void) | null>(null);
   const pendingChallengeRef = useRef<string | null>(null);
+  const connectedChallengeRef = useRef<string | null>(null);
+  const previewCarrierRef = useRef<{ dispose(): void } | null>(null);
+  const previewLeaseRef = useRef<PreviewExecutorLeaseIdentity | null>(null);
   const [status, setStatus] = useState<ViewportRuntimeFrameStatus>('starting');
   const hostOrigin = globalThis.location?.origin ?? 'http://localhost';
   const runtimeUrl = useMemo(
@@ -83,7 +101,55 @@ export function ViewportRuntimeFrame({
   useEffect(() => onStatusChange?.(status), [onStatusChange, status]);
 
   useEffect(() => {
+    let syncingPreviewExecutor = false;
+    const postPreviewDisconnect = () => {
+      const contentWindow = frameRef.current?.contentWindow;
+      const challenge = connectedChallengeRef.current;
+      const lease = previewLeaseRef.current;
+      if (contentWindow !== null && contentWindow !== undefined && challenge !== null && lease !== null) {
+        contentWindow.postMessage({
+          type: VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT,
+          challenge,
+          runtime,
+          lease,
+        } satisfies ViewportPreviewExecutorDisconnectMessage, runtimeOrigin);
+      }
+      previewCarrierRef.current?.dispose();
+      previewCarrierRef.current = null;
+      previewLeaseRef.current = null;
+    };
+    const syncPreviewExecutor = () => {
+      if (syncingPreviewExecutor) return;
+      syncingPreviewExecutor = true;
+      try {
+        const contentWindow = frameRef.current?.contentWindow;
+        const challenge = connectedChallengeRef.current;
+        const lease = getShellPreviewExecutorLeaseSnapshot().lease;
+        if (contentWindow === null || contentWindow === undefined || challenge === null || lease === null) {
+          if (previewLeaseRef.current !== null) {
+            postPreviewDisconnect();
+            markShellPreviewExecutorLeaseConnected(null);
+          }
+          return;
+        }
+        if (previewLeaseRef.current !== null
+          && samePreviewExecutorLease(previewLeaseRef.current, lease.identity)) return;
+        postPreviewDisconnect();
+        const channel = new MessageChannel();
+        previewCarrierRef.current = createPreviewExecutorCarrier(channel.port1, lease);
+        previewLeaseRef.current = lease.identity;
+        contentWindow.postMessage({
+          type: VIEWPORT_PREVIEW_EXECUTOR_CONNECT,
+          challenge,
+          runtime,
+          lease: lease.identity,
+        } satisfies ViewportPreviewExecutorConnectMessage, runtimeOrigin, [channel.port2]);
+      } finally {
+        syncingPreviewExecutor = false;
+      }
+    };
     const disconnect = () => {
+      postPreviewDisconnect();
       refreshOperationProjectionRef.current = null;
       uninstallOperationProjectionRef.current?.();
       uninstallOperationProjectionRef.current = null;
@@ -92,6 +158,8 @@ export function ViewportRuntimeFrame({
       clientRef.current?.dispose();
       clientRef.current = null;
       pendingChallengeRef.current = null;
+      connectedChallengeRef.current = null;
+      markShellPreviewExecutorLeaseConnected(null);
       onClient?.(null);
     };
     const onMessage = (event: MessageEvent<unknown>) => {
@@ -100,7 +168,22 @@ export function ViewportRuntimeFrame({
       if (event.source !== contentWindow || event.origin !== runtimeOrigin) return;
 
       if (isViewportRuntimeProjectionInvalidatedMessage(event.data)) {
-        if (sameRuntime(runtime, event.data.runtime)) refreshOperationProjectionRef.current?.();
+        if (sameRuntime(runtime, event.data.runtime)) {
+          if (event.data.projection === 'operations') refreshOperationProjectionRef.current?.();
+          else onCapabilitiesChanged?.();
+        }
+        return;
+      }
+
+      if (isViewportPreviewExecutorConnectedMessage(event.data)) {
+        if (event.data.challenge !== connectedChallengeRef.current
+          || !sameRuntime(runtime, event.data.runtime)
+          || previewLeaseRef.current === null
+          || !samePreviewExecutorLease(previewLeaseRef.current, event.data.lease)) {
+          postPreviewDisconnect();
+          return;
+        }
+        markShellPreviewExecutorLeaseConnected(event.data.lease);
         return;
       }
 
@@ -139,6 +222,7 @@ export function ViewportRuntimeFrame({
           return;
         }
         pendingChallengeRef.current = null;
+        connectedChallengeRef.current = event.data.challenge;
         const client = clientRef.current;
         if (client === null) {
           setStatus('faulted');
@@ -179,15 +263,18 @@ export function ViewportRuntimeFrame({
         refreshOperations();
         setStatus('ready');
         onClient?.(client);
+        syncPreviewExecutor();
       }
     };
 
     window.addEventListener('message', onMessage);
+    const unsubscribePreviewExecutor = subscribeShellPreviewExecutorLease(syncPreviewExecutor);
     return () => {
       window.removeEventListener('message', onMessage);
+      unsubscribePreviewExecutor();
       disconnect();
     };
-  }, [onClient, runtime, runtimeOrigin]);
+  }, [onCapabilitiesChanged, onClient, runtime, runtimeOrigin]);
 
   return (
     <iframe

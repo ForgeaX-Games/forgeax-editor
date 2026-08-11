@@ -105,6 +105,9 @@ import {
   type ViewportRuntimeMessageSource,
   type ViewportRuntimeMessageTarget,
 } from '../runtime/viewport-runtime-transport';
+import { installBroadcastViewportRuntimeHost } from '../runtime/viewport-runtime-broadcast';
+import { installInProcessPreviewExecutorLeaseHost } from '../runtime/preview-executor-lease';
+import { bindVfxPreviewExecutorLease } from './vfx-preview-operations';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 import { captureGameplayViewport } from './gameplay-capture';
@@ -1268,7 +1271,32 @@ async function bootViewport(
   // A top-level local viewport has no owning window and installs no listener.
   const runtimeOwner = window.opener ?? (window.parent === window ? null : window.parent);
   const runtimeUiGraph = getActiveRuntimeUiGraph();
-  if (runtimeOwner !== null && runtimeUiGraph !== null) {
+  if (
+    runtimeUiGraph !== null
+    && (runtimeIdentity.carrierKind === 'browser-page'
+      || runtimeIdentity.carrierKind === 'tauri-webview')
+  ) {
+    // Top-level popup/Tauri carriers do not share a durable WindowProxy shape.
+    // Both therefore use the same generation-fenced structured channel; iframe
+    // carriers retain the lower-overhead transferred MessagePort path below.
+    const service = createViewportRuntimeTransportService({
+      runtime: runtimeIdentity,
+      graph: runtimeUiGraph,
+      gateway,
+      readViewportStatus: () => ({
+        quadrant: getViewportQuadrant(),
+        playPhase: gateway.playPhase,
+        lastPlayError: gateway.lastPlayError,
+        canUndo: gateway.canUndo(),
+        canRedo: gateway.canRedo(),
+      }),
+      readExecutionReport: executionDiagnostics.report,
+    });
+    registerTeardown(installBroadcastViewportRuntimeHost({
+      runtime: runtimeIdentity,
+      service,
+    }));
+  } else if (runtimeOwner !== null && runtimeUiGraph !== null) {
     const runtimeHostOrigin = readViewportRuntimeHostOrigin(window.location.search, window.location.origin);
     registerTeardown(configureEditorPageNavigation({
       openAsset: async (asset) => {
@@ -1302,6 +1330,7 @@ async function bootViewport(
       expectedOrigin: runtimeHostOrigin,
       runtime: runtimeIdentity,
       service,
+      onPreviewExecutorLeaseConnect: bindVfxPreviewExecutorLease,
       onReject: (reason) => console.warn(`[editor] ${reason}`),
     }));
     registerTeardown(gateway.subscribeOperationRuns(() => {
@@ -1310,6 +1339,14 @@ async function bootViewport(
         runtime: runtimeIdentity,
         projection: 'operations',
         revision: gateway.operationRunSnapshot().revision,
+      }, runtimeHostOrigin);
+    }));
+    registerTeardown(gateway.subscribeOperationCapabilities((snapshot) => {
+      runtimeOwner.postMessage({
+        type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+        runtime: runtimeIdentity,
+        projection: 'capabilities',
+        revision: snapshot.revision,
       }, runtimeHostOrigin);
     }));
   } else if (runtimeOwner === null && runtimeUiGraph !== null) {
@@ -1334,7 +1371,11 @@ async function bootViewport(
     });
     const localClient: MessagePortTransportClient = createInProcessViewportRuntimeClient(service);
     const unbindLocalClient = bindViewportRuntimeClient(runtimeIdentity, localClient);
+    const uninstallPreviewExecutorLease = installInProcessPreviewExecutorLeaseHost(
+      bindVfxPreviewExecutorLease,
+    );
     registerTeardown(() => {
+      uninstallPreviewExecutorLease();
       unbindLocalClient();
       localClient.dispose();
       service.dispose();

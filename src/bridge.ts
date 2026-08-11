@@ -8,6 +8,7 @@ export {
   setContextMenuRenderer,
   panelBridge,
   hasPendingDiskSave,
+  bindViewportRuntimeClient,
   createEvalChannel,
 } from '@forgeax/editor-core';
 

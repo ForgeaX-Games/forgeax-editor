@@ -75,6 +75,24 @@ export interface EditorContextMenuItem {
   children?: EditorContextMenuItem[];
 }
 
+/**
+ * Host-owned source import request for workbench-generated assets.
+ *
+ * This is deliberately an Editor host seam, not a plugin tool contract. The
+ * host decides how the bytes enter the Editor product; workbench runtimes only
+ * provide the project-relative destination and source bytes.
+ */
+export interface EditorAssetImportSourceRequest {
+  readonly base64: string;
+  readonly destPath: string;
+  readonly sourceName: string;
+  readonly requestId: string;
+}
+
+export type EditorAssetImportSourceHandler = (
+  request: EditorAssetImportSourceRequest,
+) => unknown | Promise<unknown>;
+
 export interface CreateExtensionPortOptions {
   extensionId: string;
   transport: ExtensionTransport;
@@ -195,6 +213,8 @@ export interface PanelRenderers {
    * structural contract; studio/standalone inject the editor-core implementation
    * so the interface foundation never imports editor-core. */
   editor?: {
+    /** Import bytes through the mounted Editor product's Gateway. */
+    importAssetSource?: EditorAssetImportSourceHandler;
     setContextMenuRenderer?: (renderer: (menu: {
       x: number;
       y: number;

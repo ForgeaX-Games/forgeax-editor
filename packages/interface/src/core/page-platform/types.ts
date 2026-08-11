@@ -115,9 +115,20 @@ export interface PagePlatformContribution {
   readonly resourceEditors?: readonly ResourceEditorRegistration[];
 }
 
+export interface ActivityLocalizedText {
+  readonly zh?: string;
+  readonly en?: string;
+  readonly ja?: string;
+}
+
 export interface ActivityRegistration {
   readonly id: QualifiedActivityId;
   readonly title: string;
+  /** Unresolved manifest text retained so shell chrome reacts to locale changes. */
+  readonly titleI18n?: ActivityLocalizedText;
+  /** Runtime-only localized extension description; not part of manifest contracts. */
+  readonly description?: string;
+  readonly descriptionI18n?: ActivityLocalizedText;
   readonly icon?: string;
   readonly category?: string;
   readonly order?: number;

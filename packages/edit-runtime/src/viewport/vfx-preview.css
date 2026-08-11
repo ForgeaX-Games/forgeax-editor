@@ -3,6 +3,7 @@
 .vfx-preview-toolbar button { padding: 3px 10px; color: #dbe5f5; background: #1d2633; border: 1px solid #3b485a; border-radius: 3px; }
 .vfx-preview-toolbar button:hover:not(:disabled) { background: #2a3b52; }
 .vfx-preview-toolbar button:disabled { opacity: .45; }
+.vfx-preview-toolbar > button.active { color: #eaf3ff; background: #24466d; border-color: #5384bd; }
 .vfx-preview-phase { display: flex; align-items: center; gap: 5px; min-width: 180px; }
 .vfx-preview-phase input { min-width: 90px; accent-color: #6aa9ff; }
 .vfx-preview-phase output { min-width: 30px; color: #dbe5f5; font-variant-numeric: tabular-nums; text-align: right; }

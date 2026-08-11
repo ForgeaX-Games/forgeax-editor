@@ -1502,10 +1502,10 @@ export class EditGateway {
     const applier = applierFor(kind, domain);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
-    const requestId = kind === 'saveDocToDisk' || kind === 'deleteSourceFile' || kind === 'importAsset' || kind === 'reimportAsset' || kind === 'addSceneAssetToScene' || kind === 'previewImportedScene' || kind === 'promoteImportedScene' || kind === 'bindAssetRef' || kind === 'switchSceneFile' || kind === 'createSceneFile' || kind === 'setDefaultScene' || kind === 'deleteScene' || kind === 'captureFrame' || kind === 'validateGameProject'
-      || kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport'
-      ? (cmd as { readonly requestId?: unknown }).requestId
-      : undefined;
+    const operationRunContract = this.listOps().find((descriptor) => descriptor.id === kind)?.operationRun;
+    const requestId = operationRunContract === undefined
+      ? undefined
+      : (cmd as { readonly requestId?: unknown }).requestId;
     const isRequestCorrelatedSave = kind === 'saveDocToDisk' && typeof requestId === 'string';
     const isRequestCorrelatedDelete = kind === 'deleteSourceFile' && typeof requestId === 'string';
     const isRequestCorrelatedImport = (kind === 'importAsset' || kind === 'reimportAsset') && typeof requestId === 'string';
@@ -1722,6 +1722,25 @@ export class EditGateway {
         operationId: kind,
         requestId: requestId as string,
         cancellable: kind !== 'previewAssetSourceMutation' && kind !== 'asset.preflight',
+        retryable: true,
+        ...(typeof retryOfRequestId === 'string' ? { retryOfRequestId } : {}),
+      });
+      if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+      if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
+      acceptedRun = { ok: true, value: accepted.run };
+    } else if (operationRunContract !== undefined && typeof requestId === 'string') {
+      // Dynamic Runtime-owned operations use the same cataloged lifecycle as
+      // builtins. Their applier completion is bound below; this branch avoids a
+      // second Shell journal and prevents async preview work from appearing
+      // terminal at dispatch acceptance.
+      const retryOfRequestId = (cmd as { readonly retryOfRequestId?: unknown }).retryOfRequestId;
+      const accepted = acceptOperationRun({
+        registry: this.operationRuns,
+        command: cmd,
+        origin,
+        operationId: kind,
+        requestId,
+        cancellable: operationRunContract.cancellable,
         retryable: true,
         ...(typeof retryOfRequestId === 'string' ? { retryOfRequestId } : {}),
       });
@@ -2250,6 +2269,7 @@ export class EditGateway {
         argsSchema: (entry.argsSchema ?? null) as ArgsSchema | null,
         source: 'registered',
         ...(entry.title === undefined ? {} : { title: entry.title }),
+        ...(entry.operationRun === undefined ? {} : { operationRun: entry.operationRun }),
         availability: { available: true },
       });
     }

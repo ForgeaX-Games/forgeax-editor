@@ -1,15 +1,33 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
-import { Box, MoreHorizontal, Pin, icons as LucideIcons, type LucideIcon } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from 'react';
+import { MoreHorizontal, Pin, Search } from 'lucide-react';
 import type { QualifiedActivityId } from '@forgeax/types';
 import { useHost } from '../../core/app-shell';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
+import { lucideIconOrBox } from '../../lib/lucide-icon';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useTranslation } from '@/i18n';
+import {
+  activityRailCategory,
+  defaultPinnedActivityIds,
+  groupDiscoverableActivities,
+  localizeActivityRailEntries,
+  migrateLegacyPinnedActivityIds,
+  pinnedActivities,
+} from './activity-rail-model';
 import './ActivityRail.css';
 
-function readPinned(): string[] | null {
+function readStoredIds(key: string): string[] | null {
   try {
-    const value = localStorage.getItem(STORAGE_KEYS.activityRailPinned);
+    const value = localStorage.getItem(key);
     if (value === null) return null;
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : null;
@@ -20,29 +38,8 @@ function writePinned(ids: readonly string[]): void {
   try { localStorage.setItem(STORAGE_KEYS.activityRailPinned, JSON.stringify(ids)); } catch { /* quota */ }
 }
 
-/** kebab / snake / spaced → lucide registry PascalCase key ("folder-tree" → "FolderTree"). */
-function toPascal(name: string): string {
-  return name.replace(/(^|[-_ ])(\w)/g, (_match, _sep, ch: string) => ch.toUpperCase());
-}
-
-/**
- * Resolve an activity's `icon` string to something renderable. Three branches:
- *   1. a lucide glyph name ("bot" / "folder-tree" / "LayoutTemplate") → the icon
- *   2. any other non-empty string (emoji "🖼️" / arbitrary char) → render as text
- *   3. absent / unknown → neutral Box fallback
- * Extensions in the wild mix emoji and lucide names, so we can't assume either.
- */
-type ResolvedIcon = { kind: 'lucide'; Icon: LucideIcon } | { kind: 'text'; char: string };
-function resolveActivityIcon(icon?: string): ResolvedIcon {
-  if (icon) {
-    const Lucide = LucideIcons[toPascal(icon) as keyof typeof LucideIcons] as LucideIcon | undefined;
-    if (Lucide) return { kind: 'lucide', Icon: Lucide };
-    return { kind: 'text', char: icon };
-  }
-  return { kind: 'lucide', Icon: Box };
-}
-
 export function ActivityRail() {
+  const { t, i18n } = useTranslation();
   const host = useHost();
   const catalog = useSyncExternalStore(
     host.activities.subscribe,
@@ -50,50 +47,138 @@ export function ActivityRail() {
     host.activities.getSnapshot,
   );
   const pages = useSyncExternalStore(host.pages.subscribe, host.pages.getSnapshot, host.pages.getSnapshot);
-  const [savedPinned, setSavedPinned] = useState<string[] | null>(() => readPinned());
+  const [savedPinned, setSavedPinned] = useState<string[] | null>(
+    () => readStoredIds(STORAGE_KEYS.activityRailPinned),
+  );
   const [moreOpen, setMoreOpen] = useState(false);
-  const allIds = useMemo(() => catalog.activities.map((activity) => activity.id), [catalog]);
-  const pinnedIds = savedPinned ?? allIds;
-  const pinned = catalog.activities.filter((activity) => pinnedIds.includes(activity.id));
-  const unpinned = catalog.activities.filter((activity) => !pinnedIds.includes(activity.id));
+  const [moreQuery, setMoreQuery] = useState('');
+  const [rovingId, setRovingId] = useState<string>();
+  const moreSearchRef = useRef<HTMLInputElement | null>(null);
+  const firstMoreActionRef = useRef<HTMLButtonElement | null>(null);
+  const pinnedRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const migrationComplete = useRef(savedPinned !== null);
+  const activities = useMemo(
+    () => localizeActivityRailEntries(catalog.activities, i18n.language),
+    [catalog.activities, i18n.language],
+  );
+  const defaultPinnedIds = useMemo(
+    () => defaultPinnedActivityIds(activities),
+    [activities],
+  );
+  const pinnedIds = savedPinned ?? defaultPinnedIds;
+  const pinned = useMemo(
+    () => pinnedActivities(activities, pinnedIds),
+    [activities, pinnedIds],
+  );
+  const builtinPinned = useMemo(
+    () => pinned.filter((activity) => activity.sourceLayer === 'builtin'),
+    [pinned],
+  );
+  const pluginPinned = useMemo(
+    () => pinned.filter((activity) => activity.sourceLayer !== 'builtin'),
+    [pinned],
+  );
+  const groups = useMemo(
+    () => groupDiscoverableActivities(activities, moreQuery),
+    [activities, moreQuery],
+  );
   const activeTypeId = pages.instances.find((page) => page.encodedKey === pages.activeKey)?.typeId;
+  const activeActivityId = activities.find((activity) => activity.pageTypeId === activeTypeId)?.id;
+  const activePinned = pinned.some((activity) => activity.id === activeActivityId);
+  const moreActive = moreOpen || Boolean(activeActivityId && !activePinned);
 
-  const togglePin = (id: string): void => {
-    const next = pinnedIds.includes(id) ? pinnedIds.filter((candidate) => candidate !== id) : [...pinnedIds, id];
+  useEffect(() => {
+    if (migrationComplete.current || activities.length === 0) return;
+    const legacyIds = readStoredIds(STORAGE_KEYS.activityRailPinnedLegacyV1);
+    if (legacyIds === null) {
+      migrationComplete.current = true;
+      return;
+    }
+    if (!activities.some((activity) => activity.sourceLayer !== 'builtin')) return;
+    const next = migrateLegacyPinnedActivityIds(legacyIds, activities);
+    migrationComplete.current = true;
     setSavedPinned(next);
     writePinned(next);
+  }, [activities]);
+
+  useEffect(() => {
+    if (pinned.length === 0) {
+      setRovingId(undefined);
+      return;
+    }
+    if (rovingId && pinned.some((activity) => activity.id === rovingId)) return;
+    setRovingId(
+      pinned.find((activity) => activity.id === activeActivityId)?.id
+      ?? pinned[0]?.id,
+    );
+  }, [activeActivityId, pinned, rovingId]);
+
+  const togglePin = useCallback((id: string): void => {
+    setSavedPinned((current) => {
+      const resolved = current ?? defaultPinnedIds;
+      const next = resolved.includes(id)
+        ? resolved.filter((candidate) => candidate !== id)
+        : [...resolved, id];
+      writePinned(next);
+      return next;
+    });
+  }, [defaultPinnedIds]);
+
+  const onPinnedKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ): void => {
+    const count = pinned.length;
+    if (count === 0) return;
+    let target: number;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') target = (index + 1) % count;
+    else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') target = (index - 1 + count) % count;
+    else if (event.key === 'Home') target = 0;
+    else if (event.key === 'End') target = count - 1;
+    else return;
+    event.preventDefault();
+    const activity = pinned[target];
+    if (!activity) return;
+    setRovingId(activity.id);
+    pinnedRefs.current[target]?.focus();
   };
 
-  const button = (activity: (typeof catalog.activities)[number], pinnedItem: boolean) => {
+  const pinnedButton = (
+    activity: (typeof activities)[number],
+    index: number,
+  ) => {
     const active = activity.pageTypeId === activeTypeId;
-    const icon = resolveActivityIcon(activity.icon);
+    const Icon = lucideIconOrBox(activity.icon);
+    const category = activityRailCategory(activity);
     return (
       <Tooltip key={activity.id}>
         <TooltipTrigger asChild>
           <button
+            ref={(element) => { pinnedRefs.current[index] = element; }}
             type="button"
             className={`activity-rail-item${active ? ' active' : ''}`}
             aria-label={activity.title}
             aria-current={active ? 'page' : undefined}
+            tabIndex={activity.id === rovingId ? 0 : -1}
             data-activity-id={activity.id}
+            onFocus={() => setRovingId(activity.id)}
+            onKeyDown={(event) => onPinnedKeyDown(event, index)}
             onClick={() => void host.activities.launch(activity.id as QualifiedActivityId)}
           >
             <span className="activity-rail-item-ic" aria-hidden>
-              {icon.kind === 'lucide'
-                ? <icon.Icon size={22} strokeWidth={1.7} />
-                : <span className="activity-rail-item-emoji">{icon.char}</span>}
+              <Icon size={22} strokeWidth={1.7} />
             </span>
             <span className="activity-rail-item-lb">{activity.title}</span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" sideOffset={10} className="activity-rail-plugin-tip">
           <div className="activity-rail-plugin-tip-title">{activity.title}</div>
-          <div className="activity-rail-plugin-tip-category">{activity.category ?? 'general'}</div>
-          {!pinnedItem && (
-            <button type="button" onClick={() => togglePin(activity.id)}>
-              <Pin size={12} /> Pin
-            </button>
-          )}
+          <div className="activity-rail-plugin-tip-category">
+            {t(`sidebar.categories.${category}`)}
+          </div>
+          {activity.description ? (
+            <div className="activity-rail-plugin-tip-description">{activity.description}</div>
+          ) : null}
         </TooltipContent>
       </Tooltip>
     );
@@ -101,26 +186,139 @@ export function ActivityRail() {
 
   return (
     <TooltipProvider delayDuration={260} skipDelayDuration={80}>
-      <nav className="activity-rail thin-scrollbar" aria-label="Page activities" data-fx-slot="ActivityRail">
-        <div className="activity-rail-group" data-category="pinned">
-          {pinned.map((activity) => button(activity, true))}
+      <nav
+        className="activity-rail thin-scrollbar"
+        aria-label={t('sidebar.workbenchExtensionsHint')}
+        data-fx-slot="ActivityRail"
+      >
+        <div
+          className="activity-rail-group"
+          data-category="builtin"
+          role="toolbar"
+          aria-orientation="vertical"
+          aria-label={t('sidebar.workbenchExtensionsHint')}
+        >
+          {builtinPinned.map((activity) => pinnedButton(activity, pinned.indexOf(activity)))}
         </div>
-        {unpinned.length > 0 && (
-          <div className="activity-rail-group activity-rail-group--more">
-            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-              <PopoverTrigger asChild>
-                <button type="button" className="activity-rail-item" aria-label="More pages">
-                  <span className="activity-rail-item-ic"><MoreHorizontal size={22} /></span>
-                  <span className="activity-rail-item-lb">More</span>
-                </button>
-              </PopoverTrigger>
-              <PopoverContent side="right" align="end" sideOffset={10} className="activity-rail-more">
-                <div className="activity-rail-more-hd">More pages</div>
-                <div className="activity-rail-more-body">{unpinned.map((activity) => button(activity, false))}</div>
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
+        <div
+          className="activity-rail-group"
+          data-category="pinned"
+          role="toolbar"
+          aria-orientation="vertical"
+          aria-label={t('sidebar.workbenchExtensionsHint')}
+        >
+          {pluginPinned.map((activity) => pinnedButton(activity, pinned.indexOf(activity)))}
+        </div>
+        <div className="activity-rail-group activity-rail-group--more">
+          <Popover
+            open={moreOpen}
+            onOpenChange={(open) => {
+              setMoreOpen(open);
+              if (!open) setMoreQuery('');
+            }}
+          >
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={`activity-rail-item${moreActive ? ' active' : ''}`}
+                title={t('sidebar.morePluginsHint')}
+                aria-label={t('sidebar.morePluginsHint')}
+                aria-haspopup="dialog"
+                aria-expanded={moreOpen}
+                data-rail-action="more-plugins"
+              >
+                <span className="activity-rail-item-ic" aria-hidden>
+                  <MoreHorizontal size={22} strokeWidth={1.7} />
+                </span>
+                <span className="activity-rail-item-lb">{t('sidebar.morePlugins')}</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="right"
+              align="end"
+              sideOffset={10}
+              className="activity-rail-more"
+              onOpenAutoFocus={(event) => {
+                event.preventDefault();
+                moreSearchRef.current?.focus();
+              }}
+            >
+              <div className="activity-rail-more-hd">{t('sidebar.morePlugins')}</div>
+              <div className="activity-rail-more-search">
+                <Search size={14} strokeWidth={1.8} aria-hidden />
+                <input
+                  ref={moreSearchRef}
+                  type="search"
+                  className="activity-rail-more-search-input"
+                  value={moreQuery}
+                  onChange={(event) => setMoreQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ArrowDown') {
+                      event.preventDefault();
+                      firstMoreActionRef.current?.focus();
+                    }
+                  }}
+                  placeholder={t('sidebar.searchPlugins')}
+                  aria-label={t('sidebar.searchPlugins')}
+                />
+              </div>
+              <div className="activity-rail-more-body thin-scrollbar">
+                {groups.length === 0 ? (
+                  <div className="activity-rail-more-empty">{t('sidebar.noMatchingPlugins')}</div>
+                ) : groups.map((group, groupIndex) => (
+                  <section className="activity-rail-more-sec" key={group.category}>
+                    <div className="activity-rail-more-sec-hd">
+                      {t(`sidebar.categories.${group.category}`)}
+                    </div>
+                    {group.items.map((activity, itemIndex) => {
+                      const isPinned = pinnedIds.includes(activity.id);
+                      const active = activity.pageTypeId === activeTypeId;
+                      const Icon = lucideIconOrBox(activity.icon);
+                      return (
+                        <div
+                          key={activity.id}
+                          className={`activity-rail-more-row${active ? ' active' : ''}${isPinned ? ' pinned' : ''}`}
+                        >
+                          <button
+                            ref={groupIndex === 0 && itemIndex === 0 ? firstMoreActionRef : undefined}
+                            type="button"
+                            className="activity-rail-more-open"
+                            onClick={async () => {
+                              await host.activities.launch(activity.id as QualifiedActivityId);
+                              setMoreOpen(false);
+                            }}
+                            title={activity.description || activity.title}
+                            aria-current={active ? 'page' : undefined}
+                          >
+                            <span className="activity-rail-more-ic" aria-hidden>
+                              <Icon size={16} strokeWidth={1.7} />
+                            </span>
+                            <span className="activity-rail-more-meta">
+                              <span className="activity-rail-more-name">{activity.title}</span>
+                              {activity.description ? (
+                                <span className="activity-rail-more-desc">{activity.description}</span>
+                              ) : null}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`activity-rail-more-pin${isPinned ? ' on' : ''}`}
+                            onClick={() => togglePin(activity.id)}
+                            title={isPinned ? t('sidebar.unpinPlugin') : t('sidebar.pinPlugin')}
+                            aria-label={`${isPinned ? t('sidebar.unpinPlugin') : t('sidebar.pinPlugin')}: ${activity.title}`}
+                            aria-pressed={isPinned}
+                          >
+                            <Pin size={14} strokeWidth={isPinned ? 2.2 : 1.6} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </section>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
       </nav>
     </TooltipProvider>
   );

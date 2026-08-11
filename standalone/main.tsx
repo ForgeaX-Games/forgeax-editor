@@ -26,6 +26,7 @@ import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
 // The viewport carrier is isolated; preview-only surfaces and business panels
 // remain lightweight in-process components in the shell.
 import { ViewportRuntimeFrame } from '@forgeax/editor-edit-runtime/runtime-frame';
+import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
 import { MaterialPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/material-preview';
 import { MeshPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/mesh-preview';
 import { VfxPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/vfx-preview';
@@ -50,6 +51,12 @@ import {
   forwardViewportRuntimeTransportRequest,
 } from '@forgeax/editor-core';
 import {
+  createBroadcastViewportRuntimeClient,
+  subscribeBroadcastViewportRuntimeReady,
+  type MessagePortTransportClient,
+  type ViewportRuntimeIdentity,
+} from '@forgeax/editor/viewport-runtime';
+import {
   createBrowserPanelPopupController,
   installPanelPopupClient,
   readPanelPopupIdentity,
@@ -58,6 +65,7 @@ import {
 } from '@forgeax/editor-product';
 import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContributionsExtension, createEditorPageExtension } from '@forgeax/editor/bridge';
 import '@forgeax/interface/styles/global.css';
+import '@forgeax/editor-edit-runtime/theme.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
 import {
@@ -72,6 +80,13 @@ import { DeleteGuardDialog } from './DeleteGuardDialog';
 // global keydown listener while routing the remaining Ctrl+D/G/viewport actions
 // through the one gateway door.
 import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
+import { decodeSurfaceFromLocation } from '@forgeax/interface/lib/platform';
+import { DetachedSurface } from '@forgeax/interface/components/DetachedSurface';
+import { PanelRenderersProvider } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { bootstrapAppHost } from '@forgeax/interface/appHostBootstrap';
+import { HostProvider } from '@forgeax/interface/core/app-shell';
+import { BrandProvider } from '@forgeax/interface/brand';
+import { ErrorBoundary } from '@forgeax/interface/components/ErrorBoundary';
 import { dispatchAction, registerAction } from '@forgeax/interface/lib/action-registry';
 // keyboard-router deps builder is now shared (edit-runtime SSOT) so studio + this
 // standalone host produce the SAME dep object — no divergence (the old inline copy
@@ -106,6 +121,7 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
 // null when the stack was started without `cli.mjs run --game <dir>` — in that
 // case no game is served and the editor opens on an empty scene.
 declare const __FORGEAX_GAME_SLUG__: string | null;
+declare const __FORGEAX_RUNTIME_BINDING__: import('@forgeax/engine-types').RuntimeAssetBinding | null;
 
 // The standalone build is one game slot per host. A New Game submission
 // materializes into that slot, then reloads the document so the compile-time
@@ -203,6 +219,9 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
   EDITOR_PANELS.map((id, i) => [id, {
     title: EDITOR_PANEL_TITLES[id] ?? id,
     order: 100 + i,
+    ...(id === 'hierarchy'
+      ? { header: { visible: true, showTitle: false } }
+      : {}),
     render: () => <EditorPanelBody id={id} />,
   }]),
 );
@@ -230,6 +249,7 @@ const panelPopupController = createBrowserPanelPopupController({
 });
 
 function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
+  const detachedRuntime = new URLSearchParams(window.location.search).has('runtimeId');
   const disposeActionsRef = useRef<(() => void) | null>(null);
   const connectionRef = useRef<object | null>(null);
   const onClient = useCallback((client: unknown | null) => {
@@ -248,14 +268,71 @@ function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
       })
       .catch((error) => console.warn('[viewport-runtime] capability projection unavailable', error));
   }, []);
+  const onCapabilitiesChanged = useCallback(() => {
+    if (connectionRef.current !== null) onClient(connectionRef.current);
+  }, [onClient]);
   useEffect(() => () => {
     connectionRef.current = null;
     disposeActionsRef.current?.();
     disposeActionsRef.current = null;
   }, []);
+  if (detachedRuntime) {
+    return (
+      <ViewportComponent
+        gameSlug={__FORGEAX_GAME_SLUG__}
+        gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
+        runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
+      />
+    );
+  }
   return (
-    <ViewportRuntimeFrame src="/editor/" runtime={STANDALONE_VIEWPORT_RUNTIME} onClient={onClient} />
+    <ViewportRuntimeFrame
+      src="/editor/"
+      runtime={STANDALONE_VIEWPORT_RUNTIME}
+      onClient={onClient}
+      onCapabilitiesChanged={onCapabilitiesChanged}
+    />
   );
+}
+
+/** Keep the shell attached while the sole Runtime lives in a popup/Tauri page. */
+function StandaloneViewportRuntimeWindowBridge(): ReactNode {
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('runtimeId') && params.has('runtimeGeneration')) return;
+    let client: MessagePortTransportClient | null = null;
+    let unbind: (() => void) | null = null;
+    let disposeActions: (() => void) | null = null;
+    let currentKey: string | null = null;
+    const disconnect = (): void => {
+      disposeActions?.();
+      disposeActions = null;
+      unbind?.();
+      unbind = null;
+      client?.dispose();
+      client = null;
+      currentKey = null;
+    };
+    const connect = (runtime: ViewportRuntimeIdentity): void => {
+      if (runtime.carrierKind !== 'browser-page' && runtime.carrierKind !== 'tauri-webview') return;
+      const key = `${runtime.runtimeId}:${runtime.runtimeGeneration}:${runtime.carrierId}`;
+      if (key === currentKey) return;
+      disconnect();
+      client = createBroadcastViewportRuntimeClient({ runtime });
+      unbind = bindViewportRuntimeClient(runtime, client);
+      currentKey = key;
+      void projectViewportRuntimeOps(registerAction).then((dispose) => {
+        if (currentKey === key) disposeActions = dispose;
+        else dispose();
+      });
+    };
+    const unsubscribe = subscribeBroadcastViewportRuntimeReady(connect);
+    return () => {
+      unsubscribe();
+      disconnect();
+    };
+  }, []);
+  return null;
 }
 
 /** Fields no interface factory covers: the workbench layout seed and the
@@ -395,7 +472,7 @@ function boot(): void {
     document.body.appendChild(overlayEl);
     createRoot(overlayEl).render(
       <StrictMode>
-        <EditorOverlayProvider>{null}</EditorOverlayProvider>
+        <EditorOverlayProvider><StandaloneViewportRuntimeWindowBridge /></EditorOverlayProvider>
       </StrictMode>,
     );
   } catch (err) {
@@ -431,5 +508,30 @@ function bootPanelHost(): void {
   );
 }
 
+function bootDetachedSurface(): void {
+  const surface = decodeSurfaceFromLocation();
+  if (surface === null) return;
+  registerKeyboardRouterDeps(makeKeyboardRouterDeps());
+  const appRoot = document.getElementById('app') ?? document.body;
+  void bootstrapAppHost(STANDALONE_OVERRIDES).then(({ host }) => {
+    createRoot(appRoot).render(
+      <StrictMode>
+        <ErrorBoundary scope="detached-surface">
+          <BrandProvider>
+            <HostProvider value={host}>
+              <PanelRenderersProvider value={host.panels}>
+                <EditorOverlayProvider>
+                  <DetachedSurface surface={surface} />
+                </EditorOverlayProvider>
+              </PanelRenderersProvider>
+            </HostProvider>
+          </BrandProvider>
+        </ErrorBoundary>
+      </StrictMode>,
+    );
+  });
+}
+
 if (isPanelHostPage) bootPanelHost();
+else if (decodeSurfaceFromLocation() !== null) bootDetachedSurface();
 else boot();

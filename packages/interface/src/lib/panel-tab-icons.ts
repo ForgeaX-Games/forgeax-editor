@@ -1,7 +1,7 @@
 /**
  * Unified Lucide mapping for dockview panel tabs — the SSOT for "what icon does
- * this dock panel show". Mirrors the `iconForPage` / `iconForWorkbenchModule`
- * pattern: one pure, react-free resolver keyed by the bare panel id, so the dock
+ * this dock panel show". Mirrors the `iconForPage` pattern: one pure, react-free
+ * resolver keyed by the bare panel id, so the dock
  * tab, the layout menu, and the in-panel header never drift on icon semantics.
  * Follow `DESIGN-SYSTEM.md` §icon rules — no ad-hoc per-file lucide imports in
  * consumers, no emoji.

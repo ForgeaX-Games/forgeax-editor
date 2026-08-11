@@ -1,5 +1,5 @@
 import { useTranslation } from '@/i18n';
-import { iconForWorkbenchModule } from '../../lib/workbench-module-icons';
+import { lucideIconOrBox } from '../../lib/lucide-icon';
 import type { BusEntry } from './sidebar-types';
 
 type Props = {
@@ -28,11 +28,12 @@ export function WorkbenchModuleStrip({ entries, activeTabId, onSelect }: Props) 
     <div className="wb-module-strip" role="listbox" aria-label={t('workbenchModuleStrip.ariaLabel')}>
       {entries.map((e) => {
         const active = e.id === activeTabId;
-        const Icon = iconForWorkbenchModule({
-          workbenchId: e.id,
-          label: e.label,
-          extensionId: e.manifest.id,
-        });
+        const Icon = lucideIconOrBox(
+          e.manifest.contributes?.activities?.[0]?.icon
+            ?? e.manifest.contributes?.pages?.[0]?.icon
+            ?? e.manifest.workbench?.icon
+            ?? e.manifest.icon,
+        );
         return (
           <button
             key={e.id}

@@ -38,13 +38,34 @@ describe('VFX asset preview foundation', () => {
   it('keeps bounded preview chrome behind the mini-world write gate and shared App frame authority', () => {
     expect(source).toContain('setPlaying(next: boolean)');
     expect(source).toContain('setEnabledEmitterIds(nextEnabledEmitterIds');
+    expect(source).toContain('deriveVfxPreviewBounds(effect.program.emitters)');
+    expect(source).toContain('previewViewport.frameBounds(previewBounds)');
+    expect(source).toContain('previewRuntime.enabledEmitterIdSet.has(emitter.id)');
+    expect(source).toContain("name: 'vfx-preview-authored-bounds'");
+    expect(source).toContain('drawVfxPreviewBounds(');
+    expect(source).toContain('vfx-preview-debug-draw-unavailable');
     expect(source).toContain('seekPhaseTick(targetPhaseTick');
     expect(source).toContain('currentApp.stepFrame(fixedDelta)');
-    expect(source).toContain('facade.set(player, ParticleEffectPlayer');
+    expect(source).toContain('currentApp.pause().unwrap()');
+    expect(source).toContain('currentApp.resume().unwrap()');
     expect(source).not.toContain('gateway.dispatch');
     expect(source).not.toContain('registerVfxPreviewController');
     expect(source).not.toContain('autoReplayIntervalMs');
     expect(source).not.toContain('currentApp.world.update(');
     expect(source).not.toContain('currentApp.renderer.draw(');
+  });
+
+  it('routes toolbar and AI through the same Runtime-owned transient operations', () => {
+    expect(source).toContain('dispatchViewportRuntimeOperation(operationId');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.play');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.pause');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.reset');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.seek');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.setEmitterMask');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.frameBounds');
+    expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.setBoundsVisible');
+    expect(source).not.toContain('runtimeRef.current?.setPlaying');
+    expect(source).not.toContain('runtimeRef.current?.replay');
+    expect(source).not.toContain('runtime.seekPhaseTick(phaseTick)');
   });
 });

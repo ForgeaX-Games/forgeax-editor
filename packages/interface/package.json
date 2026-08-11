@@ -54,7 +54,7 @@
     "./lib/sse": "./src/lib/sse.ts",
     "./lib/trace": "./src/lib/trace.ts",
     "./lib/use-bus-snapshot": "./src/lib/use-bus-snapshot.ts",
-    "./lib/workbench-module-icons": "./src/lib/workbench-module-icons.ts",
+    "./lib/lucide-icon": "./src/lib/lucide-icon.ts",
     "./store": "./src/store.ts",
     "./styles/global.css": "./src/styles/global.css",
     "./*": "./src/*.ts",

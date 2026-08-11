@@ -32,7 +32,7 @@ test('required contexts remain the migration-era names', () => {
 });
 
 test('mainline R0 checks are complete local-only contract entries', () => {
-  const checkIds = ['r0-sample-vfx-skill', 'r0-engine-dogfood-diagnostics'];
+  const checkIds = ['r0-hierarchy-ui-editability', 'r0-sample-vfx-skill', 'r0-engine-dogfood-diagnostics'];
   for (const checkId of checkIds) {
     const check = REGRESSION_CHECKS.find((candidate) => candidate.id === checkId);
     expect(check).toBeDefined();

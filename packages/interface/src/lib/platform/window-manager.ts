@@ -19,6 +19,7 @@ import { isTauri, loadWebviewWindowApi } from './runtime';
 import {
   type SurfaceDescriptor,
   encodeSurfaceWindowQuery,
+  surfaceWindowUrl,
   surfaceWindowLabel,
 } from './surface';
 
@@ -85,7 +86,7 @@ function createTauriWindowManager(): WindowManager {
 
       const hasPos = typeof opts?.x === 'number' && typeof opts?.y === 'number';
       const win = new mod.WebviewWindow(label, {
-        url: `index.html?${encodeSurfaceWindowQuery(d, 'tauri-webview')}`,
+        url: surfaceWindowUrl(d, 'tauri-webview'),
         title: opts?.title ?? d.id,
         width: opts?.width ?? 960,
         height: opts?.height ?? 720,
@@ -125,7 +126,10 @@ function createTauriWindowManager(): WindowManager {
       const existing = await mod.WebviewWindow.getByLabel(surfaceWindowLabel(d));
       if (existing) {
         try {
-          await existing.destroy();
+          // Use the ordinary close lifecycle: desktop capabilities grant
+          // `core:window:allow-close`, and the resulting destroyed event is
+          // the single signal that restores the docked surface lease.
+          await existing.close();
         } catch {
           /* already gone */
         }

@@ -1,7 +1,7 @@
 /**
  * Unified Lucide mapping for open document tabs — the SSOT for "what icon does
- * this page show". Mirrors the `iconForWorkbenchModule` pattern: one pure,
- * react-free resolver so the tab strip and overflow menu never drift on icon
+ * this page show". Uses one pure, react-free resolver so the tab strip and
+ * overflow menu never drift on icon
  * semantics. Follow `DESIGN-SYSTEM.md` §icon rules — no ad-hoc
  * per-file lucide imports, no emoji.
  */

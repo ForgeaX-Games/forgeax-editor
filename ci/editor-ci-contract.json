@@ -31,6 +31,20 @@
       "failureClasses": ["admission", "environment", "source", "external-transport"]
     },
     {
+      "checkId": "r0-hierarchy-ui-editability",
+      "owner": "editor-ci",
+      "command": "bun -F @forgeax/editor-panels test src/__tests__/hierarchy-runtime-access.test.ts",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
       "checkId": "r0-sample-vfx-skill",
       "owner": "editor-ci",
       "command": "bun scripts/lint-sample-vfx-skill.mjs",
@@ -75,7 +89,7 @@
     {
       "checkId": "smoke-play",
       "owner": "editor-ci",
-      "command": "bun run test:e2e -- e2e/smoke-boot-play.spec.ts",
+      "command": "bun run test:e2e -- e2e/smoke-boot-play.spec.ts e2e/hierarchy-ui-layout.spec.ts",
       "executionHome": {
         "local-fast": false,
         "local-full": true,
@@ -88,8 +102,8 @@
     }
   ],
   "profiles": {
-    "local-fast": ["b2-self-boot", "typecheck", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
-    "local-full": ["b2-self-boot", "typecheck", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"],
+    "local-fast": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
+    "local-full": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"],
     "PR": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
     "main": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
     "nightly/scheduled": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],

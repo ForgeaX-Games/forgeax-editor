@@ -34,3 +34,55 @@ test('Gateway joins static contracts with live applier availability', () => {
   unsubscribe();
   expect(observed).toHaveLength(2);
 });
+
+test('a described downstream completion stays running until its Gateway OperationRun is terminal', async () => {
+  const gateway = new EditGateway(createEditSession());
+  let finish!: (value: { readonly ok: true; readonly result: unknown }) => void;
+  const completion = new Promise<{ readonly ok: true; readonly result: unknown }>((resolve) => {
+    finish = resolve;
+  });
+  const unregister = registerTransientApplier(
+    'test.runtimeAsyncPreview',
+    () => ({ ok: true, completion }),
+    {
+      title: 'Async Runtime Preview',
+      argsSchema: {
+        type: 'object',
+        properties: { requestId: { type: 'string' } },
+        required: ['requestId'],
+      },
+      operationRun: {
+        acceptedStatuses: ['accepted', 'running'],
+        terminalStatuses: ['succeeded', 'failed'],
+        read: {
+          get: 'getOperationRun',
+          wait: 'waitOperationRun',
+          subscribe: 'subscribeOperationRun',
+        },
+        retry: { requiresNewRequestId: true },
+        retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+        cancellable: false,
+      },
+    },
+  );
+  try {
+    expect(gateway.listOps().find((entry) => entry.id === 'test.runtimeAsyncPreview'))
+      .toMatchObject({ operationRun: { cancellable: false } });
+    const accepted = gateway.dispatch({
+      kind: 'test.runtimeAsyncPreview',
+      requestId: 'preview-async-1',
+    } as never, 'ai');
+    expect(accepted).toMatchObject({
+      ok: true,
+      result: { operationRun: { requestId: 'preview-async-1', status: 'running' } },
+    });
+
+    finish({ ok: true, result: { phaseTick: 120 } });
+    await expect(gateway.waitOperationRun('preview-async-1')).resolves.toMatchObject({
+      ok: true,
+      value: { status: 'succeeded', result: { phaseTick: 120 } },
+    });
+  } finally {
+    unregister();
+  }
+});

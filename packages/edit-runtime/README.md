@@ -68,10 +68,19 @@ sequenceDiagram
 ## Viewport Runtime transport
 
 当同一个 `ViewportComponent` 入口运行在 iframe、browser page 或 Tauri
-WebView 中时，它仍然是 Gateway、EditWorld 与 Registry 的唯一 owner。Runtime
-在完成启动并绑定 `RuntimeUiGraph` 后向 owner page 发布
-`FORGEAX_VIEWPORT_RUNTIME_READY`；owner 校验 source/origin 后以一次性 challenge
-转移 `MessagePort`。端口承载现有 `editor-transport/v1`，不创建第二套操作表。
+WebView 中时，它仍然是 Gateway、EditWorld 与 Registry 的唯一 owner。所有 carrier
+都承载现有 `editor-transport/v1`，不创建第二套操作表：
+
+| Carrier | 物理形态 | Transport | 切换约束 |
+|:--|:--|:--|:--|
+| `iframe` | docked shell iframe | source/origin + challenge 校验后转移 `MessagePort` | 默认路径 |
+| `browser-page` | `window.open` popup | 同源、generation-fenced `BroadcastChannel` | 旧 Runtime 先 flush/stop，再启动 popup |
+| `tauri-webview` | Tauri v2 `WebviewWindow` | 同一条 generation-fenced `BroadcastChannel` | 旧 Runtime 先 flush/stop，再启动 WebView |
+
+Broadcast carrier 只改变传输介质：请求仍交给同一个
+`createViewportRuntimeTransportService`，不会复制 Gateway、projection、operation
+manifest 或 World。窗口关闭/回坞会启动更新 generation 的新 carrier；旧 generation
+的 response 不能覆盖当前 panel cache。
 
 Panel 读取使用按需 projection envelope。每个 envelope 携带
 `runtimeId`、`runtimeGeneration` 和单 generation 内递增的 revision，并明确区分：
@@ -92,6 +101,40 @@ catalog entries whose executor is not mounted remain discoverable but explicitly
 revision and disappear on disposal. The transport service owns that subscription
 together with its hierarchy selector and releases both when the carrier generation
 is torn down, so a reconnected panel cannot retain stale executable capabilities.
+
+### Replaceable preview executor lease
+
+Preview canvases remain co-located with Shell panels, but their commands are
+canonical Runtime operations. After the forward carrier handshake succeeds, the
+Shell transfers a second `MessagePort` authenticated by the same source, origin,
+Runtime identity, generation and one-shot challenge. That reverse port carries one
+generic, replaceable executor lease keyed by `kind + assetGuid + generation`; it
+does not carry a second capability catalog or raw World/controller reference.
+
+The VFX workbench binds seven transient operations while its lease is live:
+`vfx.preview.play`, `pause`, `reset`, `seek`, `setEmitterMask`, `frameBounds` and
+`setBoundsVisible`. Human toolbar
+handlers and AI callers both use `dispatchViewportRuntimeOperation`. The Runtime
+Gateway owns discovery and the single request-correlated `OperationRun`; the Shell
+executor owns only its bounded mini-world. Disconnect, asset replacement or
+generation change atomically removes all seven appliers and rejects in-flight work
+with a structured stale/disconnected failure. Capability invalidation causes the
+existing Shell projection to rediscover instead of retaining a boot-time manifest.
+
+Preview pause freezes the mini-world `App` scheduler rather than setting the
+authored `ParticleEffectPlayer.playing` field to false. The player and prepared GPU
+state therefore remain renderable while phase and pixels stay fixed; Play resumes
+the same scheduler. Deterministic seek pauses the App, replays through the
+generation-fenced `VfxRuntimeHost` control lease, advances exact fixed steps and
+leaves the resulting frame frozen.
+
+Framing and overlays consume the cooked program's Engine-authored emitter bounds.
+The default frame uses one tight system sphere; after emitter isolation, `Frame`
+fits the enabled set. To keep debug lines from hiding the effect, Engine
+`DebugDraw` renders only the system AABB during multi-emitter review and only the
+selected emitter's exact sphere or AABB during isolation. The overlay does not
+create a renderer, canvas or editor-owned VFX bounds schema. A backend without
+`DebugDraw` rejects the operation with `vfx-preview-debug-draw-unavailable`.
 
 > [!WARNING]
 > Stop 的顺序是固定契约：先 `detachBeforeStop`，再清理 Play 投影、停止 Play app、释放 assembly。禁止在 Play app 停止后才让 VFX host 读取或 detach 已失效的 Play World。

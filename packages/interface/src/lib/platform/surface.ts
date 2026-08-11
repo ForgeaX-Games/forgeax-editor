@@ -65,6 +65,25 @@ export function encodeSurfaceWindowQuery(
   return params.toString();
 }
 
+/** Build the carrier URL from the page that owns the Runtime lease.
+ *
+ * Tauri treats a relative `index.html?...` URL as a bundled app asset even when
+ * the main WebView was navigated to a remote sidecar. Keeping the current
+ * origin and pathname makes the detached WebView load the same frontend and
+ * preserves same-origin Runtime transport.
+ */
+export function surfaceWindowUrl(
+  d: SurfaceDescriptor,
+  carrierKind: DetachedViewportCarrierKind,
+  currentHref: string = typeof window !== 'undefined' ? window.location.href : 'http://localhost/',
+  generation: number = Date.now(),
+): string {
+  const url = new URL(currentHref);
+  url.search = encodeSurfaceWindowQuery(d, carrierKind, generation, url.origin);
+  url.hash = '';
+  return url.href;
+}
+
 /** Decode the current location's surface descriptor, or null if this is the
  *  normal full-shell entry (no `?surface=`). */
 export function decodeSurfaceFromLocation(

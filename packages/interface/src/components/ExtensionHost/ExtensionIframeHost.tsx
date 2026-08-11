@@ -5,7 +5,12 @@ import type { ContentBrowserRevealTarget } from '../../core/app-shell/types';
 import { requestComposerInsert } from '../../lib/composer-bridge';
 import { removeExtensionSurfaces, upsertSurface } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
-import { usePanelRenderers, type ExtensionPort } from '../DockShell/panelRenderers';
+import {
+  usePanelRenderers,
+  type EditorAssetImportSourceHandler,
+  type ExtensionPort,
+} from '../DockShell/panelRenderers';
+import { attachWorkbenchEditorAssetImportBridge } from '../DockShell/workbench-editor-bridge';
 
 // The Content Browser lives in the global footer under this id (see
 // DockShell/builtinWorkbenches GLOBAL_FOOTER_EXTRA_IDS).
@@ -18,6 +23,7 @@ export interface ExtensionIframeHostProps {
   active?: boolean;
   onNavigate?: (targetPluginId: string, payload?: Record<string, unknown>) => void;
   onChatPost?: (event: { text: string; attachments?: unknown[] }) => void;
+  onEditorAssetImport?: EditorAssetImportSourceHandler;
   onToolCall?: (call: { toolId: string; args?: unknown }) => Promise<
     | { ok: true; result?: unknown }
     | { ok: false; error: string; code?: string }
@@ -54,6 +60,7 @@ export function ExtensionIframeHost({
   active = true,
   onNavigate,
   onChatPost,
+  onEditorAssetImport,
   onToolCall,
   loadErrorText,
 }: ExtensionIframeHostProps): ReactElement {
@@ -122,6 +129,12 @@ export function ExtensionIframeHost({
       }
     };
     window.addEventListener('message', onRawMessage);
+    const detachEditorAssetImportBridge = attachWorkbenchEditorAssetImportBridge({
+      ownerWindow: window,
+      frameWindow: () => iframe.contentWindow,
+      importAssetSource: onEditorAssetImport,
+      isTrustedEvent: (event) => isTrustedMessageOrigin(event.origin),
+    });
 
     const onLoad = () => {
       const win = iframe.contentWindow;
@@ -171,11 +184,12 @@ export function ExtensionIframeHost({
     return () => {
       iframe.removeEventListener('load', onLoad);
       window.removeEventListener('message', onRawMessage);
+      detachEditorAssetImportBridge();
       port?.close();
       portRef.current = null;
       removeExtensionSurfaces(extensionId);
     };
-  }, [extensionId, src, pane, createExtensionPort, createWindowTransport, onNavigate, onChatPost, onToolCall, host]);
+  }, [extensionId, src, pane, createExtensionPort, createWindowTransport, onNavigate, onChatPost, onToolCall, onEditorAssetImport, host]);
 
   useEffect(() => {
     activeRef.current = active;

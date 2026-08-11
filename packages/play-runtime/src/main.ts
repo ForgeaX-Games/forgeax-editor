@@ -5,6 +5,8 @@ import {
   installGamePluginProducers,
   loadGame,
   loadGamePluginModules,
+  type App,
+  type ExecutionApp,
   type GamePluginLoad,
   type BootstrapEntry,
 } from '@forgeax/engine-app';
@@ -44,6 +46,11 @@ import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
 import { createPlayProductRuntimeAdapter } from './product-runtime-adapter';
 import { createPlayVfxRuntime } from './vfx-runtime';
+import { startPlayExecution, type StartedPlayExecution } from './execution-host';
+import {
+  createPlayExecutionDiagnosticsStore,
+  isPlayExecutionRealmMessage,
+} from './execution-contract';
 import { supportsVfxRenderFeature } from './vfx-render-capability';
 import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
 import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
@@ -274,12 +281,26 @@ if (gpResult?.ok) {
   }
 }
 
-// The independent Play host owns one VfxRuntimeHost. Its camera source is
-// late-bound because createApp yields the fresh World only after construction.
-// The same public host feature is supplied to createApp and the same world plus
-// renderer AssetRegistry are attached after the app has been created.
-let runtimeWorld: World | undefined;
-const vfxRuntime = createPlayVfxRuntime({ world: () => runtimeWorld });
+async function loadGamePluginManifestModules(
+  id: string,
+): Promise<Array<{ clientPath: string; url: string }>> {
+  if (id === '_template' || __FORGEAX_STATIC_BUILD__) return [];
+  try {
+    const response = await fetch(`${forgeBase}/game-plugins/${id}.json`, { cache: 'no-store' });
+    if (!response.ok) return [];
+    const body = (await response.json()) as { modules?: unknown };
+    if (!Array.isArray(body.modules)) return [];
+    return body.modules.filter(
+      (module): module is { clientPath: string; url: string } =>
+        typeof module === 'object' &&
+        module !== null &&
+        typeof (module as { clientPath?: unknown }).clientPath === 'string' &&
+        typeof (module as { url?: unknown }).url === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
 
 // ── Pointer-capture bridge (M5 w22 / D-6) ──────────────────────────────────
 // WKWebView denies the web Pointer Lock API for embedded content, so the engine
@@ -299,6 +320,71 @@ const post = (capture: boolean): void => {
     /* parent gone / cross-origin */
   }
 };
+
+// Worker execution is an explicit game contract, not an optimistic claim made
+// from browser capability alone. Existing games keep the complete legacy Host
+// bootstrap below and therefore continue to report main-serial. A game that
+// names executionEntry supplies realm-safe logic: the Engine owns its World,
+// Renderer, AssetRegistry, plugins, and frame loop in one selected realm while
+// this page remains only the DOM/UI carrier.
+const executionEntry = !__FORGEAX_STATIC_BUILD__ && gpResult?.ok
+  && typeof gpResult.value.executionEntry === 'string'
+  && gpResult.value.executionEntry.trim().length > 0
+  ? gpResult.value.executionEntry.replace(/^\.?\//, '')
+  : null;
+let playApp: App | ExecutionApp | undefined;
+let playWorld: World | undefined;
+let executionHost: StartedPlayExecution | undefined;
+const playExecutionDiagnostics = createPlayExecutionDiagnosticsStore();
+
+if (executionEntry !== null) {
+  const executionUrl = `${gameUrlBase(forgeBase, gameId)}/${executionEntry}?t=${Date.now()}`;
+  try {
+    executionHost = await startPlayExecution({
+      canvas,
+      gameId,
+      gameEntryUrl: executionUrl,
+      ...(physics === undefined ? {} : { physics }),
+      ...(runtimeBinding === undefined ? {} : { runtimeBinding }),
+      gamePluginModules: await loadGamePluginManifestModules(gameId),
+      lockProvider: {
+        requestLock: () => post(true),
+        exitLock: () => post(false),
+      },
+      uiParent: document.body,
+    });
+    playApp = executionHost.app;
+    carrierExecutionReport = playApp.execution.report();
+    executionHost.hostPort.addEventListener('message', (event: MessageEvent<unknown>): void => {
+      if (!isPlayExecutionRealmMessage(event.data)) return;
+      carrierExecutionReport = playApp?.execution.report() ?? carrierExecutionReport;
+      if (event.data.kind === 'realm-ready') {
+        carrierRendererGeneration = event.data.rendererGeneration;
+        carrierRendererId = `renderer-${event.data.rendererIdentity}-generation-${event.data.rendererGeneration}`;
+        hideLoadingOverlay();
+        return;
+      }
+      if (playExecutionDiagnostics.accept(event.data)) return;
+      if (event.data.kind !== 'heartbeat') return;
+      carrierSentinel = event.data.sentinel;
+      hideLoadingOverlay();
+      try {
+        sendVagMessage(window.parent, VagFpsStatsSchema, { fps: event.data.fps });
+        sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(
+          carrierFailure ? 'unavailable' : 'ready',
+        ));
+      } catch { /* parent might be cross-origin */ }
+    });
+    executionHost.hostPort.start();
+    window.addEventListener('pagehide', () => executionHost?.disposeHost(), { once: true });
+  } catch (error) {
+    hideLoadingOverlay();
+    paintDiagnosticMessage(canvas, error);
+    throw error;
+  }
+} else {
+let runtimeWorld: World | undefined;
+const vfxRuntime = createPlayVfxRuntime({ world: () => runtimeWorld });
 
 // ── createApp (replaces manual createRenderer + World + component registration) ──
 // engine #311 reshaped createApp: shaderManifestUrl moved off the 2nd-arg
@@ -334,6 +420,8 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
+playApp = app.value;
+playWorld = world;
 if (supportsVfxRenderFeature(renderer.device.caps)) {
   try {
     const installed = await renderer.installRenderFeature(vfxRuntime.host.feature);
@@ -670,10 +758,21 @@ if (gamePluginLoad.plugins.some((plugin) => plugin.producer !== undefined)) {
     console.log(`[engine] gameplay producers admitted: ${producerResult.value.descriptors.map((descriptor) => `${descriptor.id}@${descriptor.version}`).join(', ')}`);
   }
 }
+}
+
+if (playApp === undefined) {
+  throw new Error('[engine] Play app bootstrap did not produce an app');
+}
+(window as unknown as {
+  __forgeaxExecutionReport?: () => ReturnType<import('@forgeax/engine-app').ExecutionControl['report']>;
+}).__forgeaxExecutionReport = () => playApp.execution.report();
+(window as unknown as {
+  __forgeaxExecutionDiagnostics?: () => ReturnType<typeof playExecutionDiagnostics.snapshot>;
+}).__forgeaxExecutionDiagnostics = () => playExecutionDiagnostics.snapshot();
 
 // ── Start the frame loop ──
-app.value.start();
-carrierExecutionReport = app.value.execution.report();
+playApp.start();
+carrierExecutionReport = playApp.execution.report();
 
 try {
   await carrierScopeReady;
@@ -687,7 +786,7 @@ try {
 // left a dead canvas with no recovery. Send once (device-lost is terminal — the
 // engine runs its cleanup funnel).
 let deviceLostSent = false;
-app.value.onError((err) => {
+playApp.onError((err) => {
   // App.onError is the engine's structured runtime/render failure channel.
   // Keep it visible to browser smoke and to users inspecting the console;
   // transporting it to the host alone would make a failed renderer look like
@@ -734,11 +833,13 @@ let frames = 0;
 let fpsAccum = 0;
 let lastFps = 0;
 let lastHeartbeat = 0;
-world.addSystem(Update, {
+if (playWorld !== undefined) {
+const heartbeatWorld = playWorld;
+heartbeatWorld.addSystem(Update, {
   name: 'play-runtime-fps-heartbeat',
   queries: [],
   fn: () => {
-    const dt = world.getResource(Time).delta;
+    const dt = heartbeatWorld.getResource(Time).delta;
     // First frame rendered (scene was instantiated during the awaited entry() above,
     // so frame 1 already shows it) → fade out the loading overlay.
     hideLoadingOverlay();
@@ -762,6 +863,7 @@ world.addSystem(Update, {
     }
   },
 }).unwrap();
+}
 
 // ── Console bridge (VAG_CONSOLE postMessage) ──
 // Render errors / AppError / RhiError / EcsError verbosely so the bridged
@@ -954,8 +1056,8 @@ createPlayProductRuntimeAdapter({
   target: window,
   allowedOrigins: allowedParentOrigins(),
   controls: {
-    pause: () => { void app.value.pause(); },
-    play: () => { void app.value.resume(); },
+    pause: () => { void playApp.pause(); },
+    play: () => { void playApp.resume(); },
     reload: () => location.reload(),
   },
 });

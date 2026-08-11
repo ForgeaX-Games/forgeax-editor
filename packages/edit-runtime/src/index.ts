@@ -33,6 +33,12 @@ export {
 } from './runtime/viewport-runtime-transport';
 export { ViewportRuntimeFrame, buildViewportRuntimeUrl } from './runtime/ViewportRuntimeFrame';
 export type { ViewportRuntimeFrameProps, ViewportRuntimeFrameStatus } from './runtime/ViewportRuntimeFrame';
+export {
+  VIEWPORT_RUNTIME_BROADCAST_CHANNEL,
+  createBroadcastViewportRuntimeClient,
+  installBroadcastViewportRuntimeHost,
+  subscribeBroadcastViewportRuntimeReady,
+} from './runtime/viewport-runtime-broadcast';
 export type {
   ViewportRuntimeConnectMessage,
   ViewportRuntimeConnectedMessage,

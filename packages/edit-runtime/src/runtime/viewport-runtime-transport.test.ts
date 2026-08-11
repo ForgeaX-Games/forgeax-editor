@@ -10,6 +10,9 @@ import {
   VIEWPORT_RUNTIME_CONNECT,
   VIEWPORT_RUNTIME_CONNECTED,
   VIEWPORT_RUNTIME_READY,
+  VIEWPORT_PREVIEW_EXECUTOR_CONNECT,
+  VIEWPORT_PREVIEW_EXECUTOR_CONNECTED,
+  VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT,
   createInProcessViewportRuntimeClient,
   createViewportProjectionQuery,
   createViewportRuntimeTransportService,
@@ -17,6 +20,7 @@ import {
   readViewportRuntimeIdentity,
   readViewportRuntimeHostOrigin,
 } from './viewport-runtime-transport';
+import { createPreviewExecutorLeaseIdentity } from './preview-executor-lease';
 import type { HierarchyRuntimeProjection, HierarchyStructureProjection } from '@forgeax/editor-panels';
 import { createExecutionReport, unavailableExecutionCapabilities } from '@forgeax/engine-app';
 
@@ -115,6 +119,59 @@ describe('viewport runtime transport', () => {
     expect(port.closed).toBe(true);
   });
 
+  test('authorizes a separate reverse preview port only inside the active forward challenge', () => {
+    const target = new FakeTarget();
+    const acknowledgements: unknown[] = [];
+    const source = { postMessage: (message: unknown) => acknowledgements.push(message) };
+    const rejected: string[] = [];
+    const bindings: string[] = [];
+    const service = { handle: async () => { throw new Error('unused'); } } as unknown as TransportService;
+    const dispose = installViewportRuntimeConnectionHost({
+      target,
+      expectedSource: source,
+      expectedOrigin: 'https://editor.test',
+      runtime,
+      service,
+      onPreviewExecutorLeaseConnect: (lease) => {
+        bindings.push(`bind:${lease.leaseId}`);
+        return () => bindings.push(`unbind:${lease.leaseId}`);
+      },
+      onReject: (reason) => rejected.push(reason),
+    });
+    const challenge = 'challenge-preview';
+    target.emit({
+      data: { type: VIEWPORT_RUNTIME_CONNECT, challenge, runtime },
+      origin: 'https://editor.test', source, ports: [fakePort()],
+    });
+    const lease = createPreviewExecutorLeaseIdentity('vfx-preview/v1', 'vfx-a', () => 'lease-preview');
+    const previewPort = fakePort();
+    target.emit({
+      data: { type: VIEWPORT_PREVIEW_EXECUTOR_CONNECT, challenge: 'wrong', runtime, lease },
+      origin: 'https://editor.test', source, ports: [previewPort],
+    });
+    target.emit({
+      data: { type: VIEWPORT_PREVIEW_EXECUTOR_CONNECT, challenge, runtime, lease },
+      origin: 'https://editor.test', source, ports: [previewPort],
+    });
+
+    expect(bindings).toEqual(['bind:lease-preview']);
+    expect(acknowledgements).toContainEqual({
+      type: VIEWPORT_PREVIEW_EXECUTOR_CONNECTED,
+      challenge,
+      runtime,
+      lease,
+    });
+    expect(rejected).toEqual(['viewport-preview-executor-generation-mismatch']);
+
+    target.emit({
+      data: { type: VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT, challenge, runtime, lease },
+      origin: 'https://editor.test', source, ports: [],
+    });
+    expect(bindings).toEqual(['bind:lease-preview', 'unbind:lease-preview']);
+    expect(previewPort.closed).toBe(true);
+    dispose();
+  });
+
   test('derives one fenced identity from the carrier URL', () => {
     expect(readViewportRuntimeIdentity(
       '?runtimeId=runtime-b&runtimeGeneration=7&carrierId=popup-b&carrierKind=browser-page',
@@ -171,7 +228,6 @@ describe('viewport runtime transport', () => {
     const panelProjection = {
       structure: hierarchy,
       selectionIds: [hierarchy.rows[0]!.id],
-      mode: 'edit',
     } satisfies HierarchyRuntimeProjection;
     const query = createViewportProjectionQuery({ runtime, graph, gateway, readHierarchy: () => panelProjection });
     const result = query({ kind: 'hierarchy.structure' });

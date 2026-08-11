@@ -42,6 +42,26 @@
       }
     },
     {
+      "id": "r0-hierarchy-ui-editability",
+      "name": "r0-hierarchy-ui-editability",
+      "command": "bun",
+      "args": ["-F", "@forgeax/editor-panels", "test", "src/__tests__/hierarchy-runtime-access.test.ts"],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": ["fast", "full"],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      }
+    },
+    {
       "id": "r0-sample-vfx-skill",
       "name": "r0-sample-vfx-skill",
       "command": "bun",
@@ -115,7 +135,7 @@
       "id": "smoke-play",
       "name": "smoke-play",
       "command": "bun",
-      "args": ["run", "test:e2e", "--", "e2e/smoke-boot-play.spec.ts"],
+      "args": ["run", "test:e2e", "--", "e2e/smoke-boot-play.spec.ts", "e2e/hierarchy-ui-layout.spec.ts"],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
@@ -133,8 +153,8 @@
     }
   ],
   "profiles": {
-    "fast": ["b2-self-boot", "typecheck", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
-    "full": ["b2-self-boot", "typecheck", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"]
+    "fast": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
+    "full": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"]
   },
   "requiredContexts": [
     {"context": "b2-self-boot", "checkId": "b2-self-boot"},

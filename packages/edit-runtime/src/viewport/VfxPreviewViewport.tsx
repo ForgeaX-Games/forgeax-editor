@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { createApp, type App } from '@forgeax/engine-app';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { FixedTime, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { FixedTime, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import {
   isVfxGpuEffectAsset,
   ParticleEffectPlayer,
@@ -26,11 +26,29 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Transform } from '@forgeax/engine-scene';
 import {
   createEngineFacade,
+  dispatchViewportRuntimeOperation,
   useActiveEditorAsset,
 } from '@forgeax/editor-core';
 import { loadDocumentAssetPayload } from '@forgeax/editor-panels';
 import { createParticleCameraSource } from './vfx-runtime-bridge';
 import { createViewport, type Viewport } from './viewport';
+import {
+  deriveVfxPreviewBounds,
+  drawVfxPreviewBounds,
+  type VfxPreviewBounds,
+} from './vfx-preview-bounds';
+import {
+  createPreviewExecutorLeaseIdentity,
+  getShellPreviewExecutorLeaseSnapshot,
+  registerShellPreviewExecutorLease,
+  subscribeShellPreviewExecutorLease,
+  type PreviewExecutorLeaseIdentity,
+  type PreviewExecutorResult,
+} from '../runtime/preview-executor-lease';
+import {
+  VFX_PREVIEW_LEASE_KIND,
+  VFX_PREVIEW_OPERATION_IDS,
+} from './vfx-preview-operations';
 import './vfx-preview.css';
 
 const PREVIEW_BUNDLER_OPTIONS = {
@@ -86,9 +104,16 @@ export function VfxPreviewViewport(): ReactElement {
     player: EntityHandle;
     playing: boolean;
     emitterIds: readonly string[];
+    enabledEmitterIds: readonly string[];
+    enabledEmitterIdSet: ReadonlySet<string>;
+    boundsVisible: boolean;
+    previewBounds?: VfxPreviewBounds;
+    lease: PreviewExecutorLeaseIdentity;
     setPlaying(next: boolean): void;
     replay(): void;
     setEnabledEmitterIds(next: readonly string[]): void;
+    frameBounds(): void;
+    setBoundsVisible(next: boolean): void;
     seekPhaseTick(target: number): Promise<void>;
   } | null>(null);
   const [status, setStatus] = useState<'booting' | 'ready' | 'error'>('booting');
@@ -96,9 +121,15 @@ export function VfxPreviewViewport(): ReactElement {
   const [inspect, setInspect] = useState<VfxRuntimeHostInspectSnapshot>();
   const [errorHint, setErrorHint] = useState<string>();
   const [enabledEmitterIds, setEnabledEmitterIds] = useState<readonly string[]>([]);
+  const [boundsVisible, setBoundsVisible] = useState(false);
   const [phaseDraft, setPhaseDraft] = useState(0);
   const [maxPhaseTick, setMaxPhaseTick] = useState(300);
   const [seeking, setSeeking] = useState(false);
+  const leaseSnapshot = useSyncExternalStore(
+    subscribeShellPreviewExecutorLease,
+    getShellPreviewExecutorLeaseSnapshot,
+    getShellPreviewExecutorLeaseSnapshot,
+  );
 
   useEffect(() => {
     if (asset?.kind !== 'particle-effect') return;
@@ -112,8 +143,10 @@ export function VfxPreviewViewport(): ReactElement {
     let inspectTimer: ReturnType<typeof setInterval> | null = null;
     let previewWorld: World | undefined;
     let cameraEntity: EntityHandle | undefined;
-    let appPausedForSeek = false;
+    let appPaused = false;
     let seekInFlight = false;
+    let unregisterPreviewExecutor = () => {};
+    const lease = createPreviewExecutorLeaseIdentity(VFX_PREVIEW_LEASE_KIND, asset.guid);
     const vfxHost = createVfxRuntimeHost({
       camera: createParticleCameraSource({
         world: () => previewWorld,
@@ -187,6 +220,24 @@ export function VfxPreviewViewport(): ReactElement {
         { component: ParticleEffectPlayer, data: { effect: effectHandle, playing: true, seed: 1337, timeScale: 1 } },
       ).unwrap();
       const emitterIds = Object.freeze(effect.program.emitters.map((emitter) => emitter.id));
+      const previewBounds = deriveVfxPreviewBounds(effect.program.emitters);
+      const previewViewport = createViewport({
+        canvas,
+        engine: facade,
+        editorEngine: facade,
+        camera,
+        initialOrbit: previewBounds === undefined
+          ? { target: [0, 0.8, 0], dist: 6, yaw: 0.55, pitch: -0.24 }
+          : {
+              target: [...previewBounds.center],
+              dist: Math.max(0.1, previewBounds.radius * 3.2),
+              yaw: 0.55,
+              pitch: -0.24,
+            },
+        interaction: 'orbit-only',
+      });
+      viewport = previewViewport;
+      if (previewBounds !== undefined) previewViewport.frameBounds(previewBounds);
       const currentApp = app;
       const previewRuntime = {
         app: currentApp,
@@ -196,14 +247,43 @@ export function VfxPreviewViewport(): ReactElement {
         player,
         playing: true,
         emitterIds,
+        enabledEmitterIds: emitterIds,
+        enabledEmitterIdSet: new Set(emitterIds),
+        boundsVisible: false,
+        ...(previewBounds === undefined ? {} : { previewBounds }),
+        lease,
         setPlaying(next: boolean) {
-          facade.set(player, ParticleEffectPlayer, { playing: next }).unwrap();
+          if (next && appPaused) {
+            currentApp.resume().unwrap();
+            appPaused = false;
+          } else if (!next && !appPaused) {
+            currentApp.pause().unwrap();
+            appPaused = true;
+          }
           previewRuntime.playing = next;
           setPlaying(next);
         },
         replay() {
-          const result = control.value.replay({ player });
-          if (!result.ok) throw result.error;
+          const resumeAfterReplay = previewRuntime.playing && !appPaused;
+          if (!appPaused) {
+            currentApp.pause().unwrap();
+            appPaused = true;
+          }
+          try {
+            const result = control.value.replay({ player });
+            if (!result.ok) throw result.error;
+            currentApp.stepFrame(currentApp.world.getResource(FixedTime).delta).unwrap();
+          } catch (error) {
+            if (resumeAfterReplay) {
+              currentApp.resume().unwrap();
+              appPaused = false;
+            }
+            throw error;
+          }
+          if (resumeAfterReplay) {
+            currentApp.resume().unwrap();
+            appPaused = false;
+          }
           setPhaseDraft(0);
         },
         setEnabledEmitterIds(nextEnabledEmitterIds: readonly string[]) {
@@ -216,16 +296,33 @@ export function VfxPreviewViewport(): ReactElement {
             });
             if (!result.ok) throw result.error;
           }
-          setEnabledEmitterIds(Object.freeze([...nextEnabledEmitterIds]));
+          previewRuntime.enabledEmitterIds = Object.freeze([...nextEnabledEmitterIds]);
+          previewRuntime.enabledEmitterIdSet = new Set(previewRuntime.enabledEmitterIds);
+          setEnabledEmitterIds(previewRuntime.enabledEmitterIds);
+          if (appPaused) currentApp.stepFrame(0).unwrap();
+        },
+        frameBounds() {
+          const enabledBounds = deriveVfxPreviewBounds(effect.program.emitters.filter(
+            (emitter) => previewRuntime.enabledEmitterIdSet.has(emitter.id),
+          ));
+          const frame = enabledBounds ?? previewBounds;
+          if (frame === undefined) throw new Error('the VFX effect has no authored preview bounds');
+          previewViewport.frameBounds(frame);
+          if (appPaused) currentApp.stepFrame(0).unwrap();
+        },
+        setBoundsVisible(next: boolean) {
+          previewRuntime.boundsVisible = next;
+          setBoundsVisible(next);
+          if (appPaused) currentApp.stepFrame(0).unwrap();
         },
         async seekPhaseTick(targetPhaseTick: number) {
           if (seekInFlight) throw new Error('a VFX preview seek is already running');
           seekInFlight = true;
           setSeeking(true);
+          const restorePlaybackOnFailure = previewRuntime.playing;
           try {
             currentApp.pause().unwrap();
-            appPausedForSeek = true;
-            facade.set(player, ParticleEffectPlayer, { playing: true }).unwrap();
+            appPaused = true;
             const replayed = control.value.replay({ player });
             if (!replayed.ok) throw replayed.error;
             const fixedDelta = currentApp.world.getResource(FixedTime).delta;
@@ -239,31 +336,138 @@ export function VfxPreviewViewport(): ReactElement {
                 await new Promise<void>((resolve) => setTimeout(resolve, 0));
               }
             }
-            facade.set(player, ParticleEffectPlayer, { playing: false }).unwrap();
             previewRuntime.playing = false;
             setPlaying(false);
             setInspect(vfxHost.inspect(currentApp.world));
             setPhaseDraft(targetPhaseTick);
+          } catch (error) {
+            if (restorePlaybackOnFailure && appPaused) {
+              currentApp.resume().unwrap();
+              appPaused = false;
+            }
+            throw error;
           } finally {
             seekInFlight = false;
             setSeeking(false);
-            if (!cancelled && appPausedForSeek) {
-              currentApp.resume().unwrap();
-              appPausedForSeek = false;
-            }
           }
         },
       };
+      currentApp.world.addSystem(Update, {
+        name: 'vfx-preview-authored-bounds',
+        queries: [],
+        fn: () => {
+          if (!previewRuntime.boundsVisible) return;
+          drawVfxPreviewBounds(
+            currentApp.debugDraw,
+            effect.program.emitters,
+            previewRuntime.enabledEmitterIdSet,
+            previewBounds,
+          );
+        },
+      }).unwrap();
       runtimeRef.current = previewRuntime;
-
-      viewport = createViewport({
-        canvas,
-        engine: facade,
-        editorEngine: facade,
-        camera,
-        initialOrbit: { target: [0, 0.8, 0], dist: 6, yaw: 0.55, pitch: -0.24 },
-        interaction: 'orbit-only',
+      unregisterPreviewExecutor = registerShellPreviewExecutorLease({
+        identity: lease,
+        async execute(command): Promise<PreviewExecutorResult> {
+          if (cancelled || runtimeRef.current !== previewRuntime) {
+            return {
+              ok: false,
+              error: {
+                code: 'preview-executor-stale-generation',
+                owner: 'host',
+                category: 'state',
+                hint: 'The VFX preview generation changed before the command executed.',
+                retryable: true,
+                recoveryActions: ['editor.discover'],
+              },
+            };
+          }
+          if (command === null || typeof command !== 'object') {
+            return {
+              ok: false,
+              error: {
+                code: 'preview-executor-invalid-command',
+                owner: 'host',
+                category: 'validation',
+                hint: 'The VFX preview command must be an object.',
+                retryable: false,
+                recoveryActions: ['editor.discover'],
+              },
+            };
+          }
+          const input = command as {
+            readonly kind?: unknown;
+            readonly phaseTick?: unknown;
+            readonly emitterIds?: unknown;
+            readonly visible?: unknown;
+          };
+          if (input.kind === 'setBoundsVisible'
+            && input.visible === true
+            && currentApp.debugDraw === undefined) {
+            return {
+              ok: false,
+              error: {
+                code: 'vfx-preview-debug-draw-unavailable',
+                owner: 'host',
+                category: 'capability',
+                hint: 'The active preview backend does not provide Engine DebugDraw.',
+                retryable: false,
+                recoveryActions: ['editor.discover'],
+              },
+            };
+          }
+          if (input.kind === 'play') previewRuntime.setPlaying(true);
+          else if (input.kind === 'pause') previewRuntime.setPlaying(false);
+          else if (input.kind === 'reset') previewRuntime.replay();
+          else if (input.kind === 'seek'
+            && typeof input.phaseTick === 'number'
+            && Number.isInteger(input.phaseTick)
+            && input.phaseTick >= 0
+            && input.phaseTick <= 3_600) {
+            await previewRuntime.seekPhaseTick(input.phaseTick);
+          } else if (input.kind === 'setEmitterMask'
+            && Array.isArray(input.emitterIds)
+            && input.emitterIds.every((emitterId) => (
+              typeof emitterId === 'string' && emitterIds.includes(emitterId)
+          ))) {
+            previewRuntime.setEnabledEmitterIds([...new Set(input.emitterIds)]);
+          } else if (input.kind === 'frameBounds') {
+            previewRuntime.frameBounds();
+          } else if (input.kind === 'setBoundsVisible' && typeof input.visible === 'boolean') {
+            previewRuntime.setBoundsVisible(input.visible);
+          } else {
+            return {
+              ok: false,
+              error: {
+                code: 'preview-executor-invalid-command',
+                owner: 'host',
+                category: 'validation',
+                hint: `Unsupported VFX preview command: ${String(input.kind)}`,
+                retryable: false,
+                recoveryActions: ['editor.discover'],
+              },
+            };
+          }
+          const snapshot = vfxHost.inspect(currentApp.world);
+          const phaseTick = Math.max(
+            0,
+            ...(snapshot?.players[0]?.emitters.map((emitter) => emitter.phaseTick ?? 0) ?? [0]),
+          );
+          return {
+            ok: true,
+            value: {
+              assetGuid: lease.assetGuid,
+              previewGeneration: lease.generation,
+              playing: previewRuntime.playing,
+              phaseTick,
+              enabledEmitterIds: [...previewRuntime.enabledEmitterIds],
+              boundsVisible: previewRuntime.boundsVisible,
+              inspect: snapshot,
+            },
+          };
+        },
       });
+
       const syncSize = () => {
         const rect = container.getBoundingClientRect();
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -306,46 +510,54 @@ export function VfxPreviewViewport(): ReactElement {
 
     return () => {
       cancelled = true;
+      unregisterPreviewExecutor();
       if (inspectTimer !== null) clearInterval(inspectTimer);
       resizeObserver?.disconnect();
       try { viewport?.dispose(); } catch { /* disposed */ }
       if (app) vfxHost.detachWorld({ world: app.world });
-      if (app && appPausedForSeek) {
+      if (app && appPaused) {
         try { app.resume(); } catch { /* stopping */ }
-        appPausedForSeek = false;
+        appPaused = false;
       }
       try { app?.stop(); } catch { /* stopped */ }
       runtimeRef.current = null;
       setInspect(undefined);
       setEnabledEmitterIds([]);
+      setBoundsVisible(false);
       if (canvas.parentElement === container) container.removeChild(canvas);
     };
   }, [asset?.guid]);
 
-  const setPlayState = (next: boolean) => {
-    try {
-      runtimeRef.current?.setPlaying(next);
-      setErrorHint(undefined);
-    } catch (error) {
-      setErrorHint(previewErrorHint(error));
-    }
+  const dispatchPreview = async (operationId: string, input: Record<string, unknown> = {}) => {
+    const runtime = runtimeRef.current;
+    if (runtime === null) throw new Error('VFX preview runtime is unavailable');
+    const response = await dispatchViewportRuntimeOperation(operationId, {
+      assetGuid: runtime.lease.assetGuid,
+      previewGeneration: runtime.lease.generation,
+      requestId: `vfx-preview-${crypto.randomUUID()}`,
+      ...input,
+    }, { id: 'vfx-preview-toolbar', kind: 'human' });
+    if (response.error !== undefined) throw new Error(response.error.hint ?? response.error.code);
   };
-  const reset = () => {
-    try {
-      runtimeRef.current?.replay();
-      setErrorHint(undefined);
-    } catch (error) {
-      setErrorHint(previewErrorHint(error));
-    }
+  const runPreview = (operationId: string, input: Record<string, unknown> = {}) => {
+    void dispatchPreview(operationId, input).then(
+      () => setErrorHint(undefined),
+      (error) => setErrorHint(previewErrorHint(error)),
+    );
   };
-  const setEmitterMask = (next: readonly string[]) => {
-    try {
-      runtimeRef.current?.setEnabledEmitterIds(next);
-      setErrorHint(undefined);
-    } catch (error) {
-      setErrorHint(previewErrorHint(error));
-    }
-  };
+  const setPlayState = (next: boolean) => runPreview(
+    next ? VFX_PREVIEW_OPERATION_IDS.play : VFX_PREVIEW_OPERATION_IDS.pause,
+  );
+  const reset = () => runPreview(VFX_PREVIEW_OPERATION_IDS.reset);
+  const frameBounds = () => runPreview(VFX_PREVIEW_OPERATION_IDS.frameBounds);
+  const changeBoundsVisibility = (visible: boolean) => runPreview(
+    VFX_PREVIEW_OPERATION_IDS.setBoundsVisible,
+    { visible },
+  );
+  const setEmitterMask = (next: readonly string[]) => runPreview(
+    VFX_PREVIEW_OPERATION_IDS.setEmitterMask,
+    { emitterIds: [...next] },
+  );
   const toggleEmitter = (emitterId: string) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
@@ -358,20 +570,27 @@ export function VfxPreviewViewport(): ReactElement {
     else setEmitterMask([...enabled, emitterId]);
   };
   const seek = (phaseTick: number) => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    void runtime.seekPhaseTick(phaseTick).then(
-      () => setErrorHint(undefined),
-      (error) => setErrorHint(previewErrorHint(error)),
-    );
+    runPreview(VFX_PREVIEW_OPERATION_IDS.seek, { phaseTick });
   };
+
+  const leaseConnected = runtimeRef.current !== null
+    && leaseSnapshot.connected
+    && leaseSnapshot.lease?.identity.leaseId === runtimeRef.current.lease.leaseId;
 
   return <div className="vfx-preview" data-testid="vfx-preview-viewport">
     <div className="vfx-preview-toolbar">
-      <button type="button" disabled={status !== 'ready' || seeking} onClick={() => setPlayState(!playing)}>
+      <button type="button" disabled={status !== 'ready' || seeking || !leaseConnected} onClick={() => setPlayState(!playing)}>
         {playing ? 'Pause' : 'Play'}
       </button>
-      <button type="button" disabled={status !== 'ready' || seeking} onClick={reset}>Reset</button>
+      <button type="button" disabled={status !== 'ready' || seeking || !leaseConnected} onClick={reset}>Reset</button>
+      <button type="button" disabled={status !== 'ready' || seeking || !leaseConnected} onClick={frameBounds}>Frame</button>
+      <button
+        type="button"
+        className={boundsVisible ? 'active' : ''}
+        aria-pressed={boundsVisible}
+        disabled={status !== 'ready' || seeking || !leaseConnected}
+        onClick={() => changeBoundsVisibility(!boundsVisible)}
+      >Bounds</button>
       <label className="vfx-preview-phase">
         <span>Phase</span>
         <input
@@ -380,7 +599,7 @@ export function VfxPreviewViewport(): ReactElement {
           max={maxPhaseTick}
           step={1}
           value={Math.min(maxPhaseTick, phaseDraft)}
-          disabled={status !== 'ready' || seeking}
+          disabled={status !== 'ready' || seeking || !leaseConnected}
           onChange={(event) => setPhaseDraft(Number(event.currentTarget.value))}
           onPointerUp={(event) => seek(Number(event.currentTarget.value))}
           onKeyUp={(event) => seek(Number(event.currentTarget.value))}
@@ -390,14 +609,14 @@ export function VfxPreviewViewport(): ReactElement {
       <div className="vfx-preview-emitter-mask" aria-label="Preview emitter mask">
         <button
           type="button"
-          disabled={status !== 'ready' || seeking}
+          disabled={status !== 'ready' || seeking || !leaseConnected}
           onClick={() => setEmitterMask(runtimeRef.current?.emitterIds ?? [])}
         >All</button>
         {runtimeRef.current?.emitterIds.map((emitterId) => <button
           type="button"
           key={emitterId}
           className={enabledEmitterIds.includes(emitterId) ? 'active' : ''}
-          disabled={status !== 'ready' || seeking}
+          disabled={status !== 'ready' || seeking || !leaseConnected}
           onClick={() => toggleEmitter(emitterId)}
           title="Click to isolate; click the isolated emitter again to show all"
         >{emitterId}</button>)}

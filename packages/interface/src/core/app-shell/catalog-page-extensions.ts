@@ -76,6 +76,11 @@ export async function loadCatalogPageExtensions(
     const activities: ActivityRegistration[] = (contributes.activities ?? []).map((activity) => ({
       id: qualifyContributionId(item.id, 'activity', activity.id) as ActivityRegistration['id'],
       title: title(activity.title),
+      titleI18n: typeof activity.title === 'string' ? undefined : activity.title,
+      description: item.description ? title(item.description) : undefined,
+      descriptionI18n: item.description && typeof item.description !== 'string'
+        ? item.description
+        : undefined,
       icon: activity.icon,
       category: activity.category,
       order: activity.order,

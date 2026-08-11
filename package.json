@@ -58,6 +58,7 @@
     "./ui/confirm": "./packages/ui/src/lib/confirm.ts",
     "./ui/prompt": "./packages/ui/src/lib/prompt.ts",
     "./viewport": "./packages/edit-runtime/src/viewport/ViewportComponent.tsx",
+    "./viewport-runtime": "./packages/edit-runtime/src/runtime/viewport-runtime-broadcast.ts",
     "./visual-source": "./packages/edit-runtime/src/viewport/visual-source.ts",
     "./package.json": "./package.json"
   },

@@ -67,6 +67,11 @@ export interface RuntimeAssetDiagnostic {
   hint?: string;
 }
 
+export interface RuntimeCatalogRoot {
+  readonly root: string;
+  readonly catalogPrefix: string;
+}
+
 export interface RuntimeAssetBinding {
   schemaVersion: 'runtime-asset-binding-v1';
   gameId: string;
@@ -76,6 +81,7 @@ export interface RuntimeAssetBinding {
   catalogUrl: string;
   importUrlBase: string;
   packageUrlBase: string;
+  catalogRoots?: readonly RuntimeCatalogRoot[];
   authority?: 'authoritative' | 'degraded';
   diagnostics?: readonly RuntimeAssetDiagnostic[];
 }

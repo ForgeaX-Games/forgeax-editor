@@ -47,7 +47,7 @@ describe('manifest v2', () => {
       kind: 'workbench',
       displayName: 'Example',
       entry: { frontend: './src/index.tsx' },
-      provides: { workbench: { id: 'example', position: 9 } },
+      provides: { workbench: { id: 'example', position: 9, category: '2D' } },
     };
     const normalized = normalizeManifest(legacy);
     expect(normalized.categories).toEqual(['workbench']);
@@ -62,7 +62,11 @@ describe('manifest v2', () => {
       },
     });
     expect(normalized.contributes.panelTypes?.[0]).toMatchObject({ id: 'example.content', runtime: 'inline' });
-    expect(normalized.contributes.activities?.[0]).toMatchObject({ id: 'example.launcher', order: 9 });
+    expect(normalized.contributes.activities?.[0]).toMatchObject({
+      id: 'example.launcher',
+      order: 9,
+      category: '2D',
+    });
     expect(parseAnyManifest(normalized).ok).toBe(true);
   });
 
