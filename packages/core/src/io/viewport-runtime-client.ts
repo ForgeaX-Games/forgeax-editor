@@ -11,12 +11,14 @@ import {
   type ViewportProjectionEnvelope,
   type ViewportRuntimeIdentity,
 } from '@forgeax/editor-product';
+import type { RuntimeCatalogRoot } from '@forgeax/engine-types';
 
 export type ViewportRuntimeClientStatus = 'disconnected' | 'ready';
 
 export interface ViewportRuntimeClientSnapshot {
   readonly status: ViewportRuntimeClientStatus;
   readonly runtime: ViewportRuntimeIdentity | null;
+  readonly catalogRoots: readonly RuntimeCatalogRoot[] | null;
 }
 
 export interface ViewportRuntimeSelectionSnapshot {
@@ -38,8 +40,12 @@ const EMPTY_SELECTION: ViewportRuntimeSelectionSnapshot = Object.freeze({
   lastDomain: null,
 });
 
-let active: { readonly runtime: ViewportRuntimeIdentity; readonly client: MessagePortTransportClient } | null = null;
-let snapshot: ViewportRuntimeClientSnapshot = Object.freeze({ status: 'disconnected', runtime: null });
+let active: {
+  readonly runtime: ViewportRuntimeIdentity;
+  readonly client: MessagePortTransportClient;
+  readonly catalogRoots: readonly RuntimeCatalogRoot[] | null;
+} | null = null;
+let snapshot: ViewportRuntimeClientSnapshot = Object.freeze({ status: 'disconnected', runtime: null, catalogRoots: null });
 let selectionSnapshot = EMPTY_SELECTION;
 let requestSequence = 0;
 const listeners = new Set<() => void>();
@@ -91,16 +97,20 @@ export function subscribeViewportRuntimeClient(listener: () => void): () => void
 export function bindViewportRuntimeClient(
   runtime: ViewportRuntimeIdentity,
   client: MessagePortTransportClient,
+  catalogRoots?: readonly RuntimeCatalogRoot[],
 ): () => void {
-  const binding = { runtime, client };
+  const roots = catalogRoots === undefined
+    ? null
+    : Object.freeze(catalogRoots.map((root) => Object.freeze({ ...root })));
+  const binding = { runtime, client, catalogRoots: roots };
   active = binding;
-  snapshot = Object.freeze({ status: 'ready', runtime });
+  snapshot = Object.freeze({ status: 'ready', runtime, catalogRoots: roots });
   selectionSnapshot = EMPTY_SELECTION;
   publish();
   return () => {
     if (active !== binding) return;
     active = null;
-    snapshot = Object.freeze({ status: 'disconnected', runtime: null });
+    snapshot = Object.freeze({ status: 'disconnected', runtime: null, catalogRoots: null });
     selectionSnapshot = EMPTY_SELECTION;
     publish();
   };

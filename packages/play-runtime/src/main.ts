@@ -38,7 +38,7 @@ import {
   FORGE_JSON,
 } from '@forgeax/engine-project';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { SceneAsset, AssetError, RuntimeAssetBinding } from '@forgeax/engine-types';
+import { isRuntimeCatalogRoots, type SceneAsset, type AssetError, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
 import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
@@ -139,6 +139,7 @@ async function loadRuntimeBinding(): Promise<RuntimeAssetBinding | undefined> {
           && typeof candidate.catalogUrl === 'string'
           && typeof candidate.importUrlBase === 'string'
           && typeof candidate.packageUrlBase === 'string'
+          && (candidate.catalogRoots === undefined || isRuntimeCatalogRoots(candidate.catalogRoots))
         ) {
           return candidate as RuntimeAssetBinding;
         }

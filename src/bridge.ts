@@ -4,12 +4,14 @@
 // facade (`@forgeax/editor/*`) instead of reaching into editor-core.
 export {
   gateway,
+  assetIO,
   installInterfaceBridge,
   setContextMenuRenderer,
   panelBridge,
   hasPendingDiskSave,
   bindViewportRuntimeClient,
   createEvalChannel,
+  resolveGamePath,
 } from '@forgeax/editor-core';
 
 import type { AppExtension } from '@forgeax/interface/core/app-shell/types';

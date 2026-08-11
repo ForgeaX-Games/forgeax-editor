@@ -48,14 +48,14 @@
     "README.md"
   ],
   "scripts": {
-    "test": "bun test",
+    "test": "bun test --timeout=15000",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit"
   },
   "forgeaxCi": {
     "ownership": "Editor-owned",
     "quality": {
-      "test": "bun test",
+      "test": "bun test --timeout=15000",
       "coverage": {"lines": 71.54, "functions": 73.17}
     }
   },

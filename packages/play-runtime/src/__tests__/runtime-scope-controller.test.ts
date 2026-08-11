@@ -84,6 +84,7 @@ describe('runtime scope controller', () => {
         base: '/preview/',
         secret: 'test-secret',
         resolveRoots: (dir) => [join(dir, 'assets')],
+        resolveCatalogRoots: () => [{ root: 'assets', catalogPrefix: 'host-games/fps/assets' }],
       }).configureServer({
         middlewares: {
           use(handler) {
@@ -127,6 +128,7 @@ describe('runtime scope controller', () => {
         generation: 2,
         status: 'ready',
         catalogUrl: '/preview/__pack/scopes/fps-scope/2/catalog.json',
+        catalogRoots: [{ root: 'assets', catalogPrefix: 'host-games/fps/assets' }],
       });
 
       const stale = response();
@@ -157,6 +159,7 @@ describe('runtime scope controller', () => {
       pack,
       base: '/preview',
       resolveRoots: () => [],
+      resolveCatalogRoots: () => [],
     }).configureServer({
       middlewares: {
         use(handler) {

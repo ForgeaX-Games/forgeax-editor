@@ -18,7 +18,7 @@ import { resolve, join } from 'node:path';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { resolveGameAssetRoots, readDeclaredRoots, SHARED_ROOT_PREFIX, expandPackRootsExcludingShaderSources } from '../asset-roots';
+import { resolveGameAssetRoots, resolveGameCatalogRoots, readDeclaredRoots, SHARED_ROOT_PREFIX, expandPackRootsExcludingShaderSources } from '../asset-roots';
 
 let tmpRoot: string;
 let gameDir: string;
@@ -64,6 +64,17 @@ describe('resolveGameAssetRoots — @shared alias classification', () => {
 
     expect(shared?.sub).toBe('characters');
     expect(shared?.abs).toBe(resolve(sharedBase, 'characters'));
+  });
+
+  it('projects the same package declarations into the catalog root contract', () => {
+    writeRoots(['assets', '@shared/characters']);
+    expect(resolveGameCatalogRoots(gameDir, {
+      sharedBase,
+      catalogPrefixFor: (root) => `farm/${root.shared ? root.sub : 'game-assets'}`,
+    })).toEqual([
+      { root: 'assets', catalogPrefix: 'farm/game-assets' },
+      { root: '@shared/characters', catalogPrefix: 'farm/characters' },
+    ]);
   });
 
   it('drops a @shared/<sub> whose dir does not exist (existsSync filter)', () => {

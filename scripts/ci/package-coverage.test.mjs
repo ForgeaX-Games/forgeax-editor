@@ -55,6 +55,7 @@ test('package coverage producer serializes tests before collecting LCOV', () => 
   assert.equal(result.ok, true);
   assert.deepEqual(result.args, [
     'src',
+    '--timeout=15000',
     '--max-concurrency=1',
     '--coverage',
     '--coverage-reporter=lcov',
@@ -62,6 +63,13 @@ test('package coverage producer serializes tests before collecting LCOV', () => 
     '/tmp/package-evidence',
     '--pass-with-no-tests',
   ]);
+});
+
+test('package coverage producer preserves an explicit package timeout', () => {
+  const result = packageCoverageProducerArgs('bun test --timeout=9000 src', '/tmp/package-evidence');
+  assert.equal(result.ok, true);
+  assert.equal(result.args.filter((arg) => arg.startsWith('--timeout')).length, 1);
+  assert.equal(result.args[0], '--timeout=9000');
 });
 
 test('package coverage excludes gitlink records while preserving Editor-owned sibling coverage', () => {

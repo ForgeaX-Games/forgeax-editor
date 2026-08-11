@@ -156,6 +156,10 @@ export interface TransportServiceOptions {
   readonly operationRuns?: SaveOperationRunPort;
   readonly security?: TransportSecurityPolicy;
   readonly dispatch?: (operationId: string, input: unknown, request: TransportAuthorizationRequest, signal?: AbortSignal) => unknown | Promise<unknown>;
+  /** Host-owned source upload + import bridge. The callback delegates to the
+   * Editor's assetIO gate and the existing importAsset Gateway operation; the
+   * transport only provides the typed, cross-process front door. */
+  readonly assetImportSource?: (input: unknown, request: TransportAuthorizationRequest, signal?: AbortSignal) => unknown | Promise<unknown>;
   /** Host-owned operation-scope script evaluator. It must not inject raw engine scope. */
   readonly evaluate?: (code: string, request: TransportAuthorizationRequest, signal?: AbortSignal) => unknown | Promise<unknown>;
   readonly query?: (input: unknown) => unknown | Promise<unknown>;
@@ -364,7 +368,7 @@ export function createTransportService(options: TransportServiceOptions = {}): T
       capabilityManifest: product?.capabilityManifest ?? null,
       availability: product?.availability ?? productUnavailable(),
       methods: Object.freeze([
-        'discover', 'transport.describe', 'query', ...(options.evaluate === undefined ? [] : ['script.execute']), ...(options.gameplay === undefined ? [] : ['gameplay']), 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
+        'discover', 'transport.describe', 'query', ...(options.evaluate === undefined ? [] : ['script.execute']), ...(options.gameplay === undefined ? [] : ['gameplay']), ...(options.assetImportSource === undefined ? [] : ['asset.importSource']), 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
         'run.list', 'run.listEvents', 'run.retry', 'run.cancel', 'run.reconcile',
         'workflow.start', 'workflow.get', 'workflow.recover', 'workflow.retry', 'workflow.listRecipes',
         'save', 'reopen',
@@ -599,6 +603,38 @@ export function createTransportService(options: TransportServiceOptions = {}): T
         }));
       }
       if (request.method === 'discover' || request.method === 'transport.describe') return terminalResponse(request, discovery());
+      if (request.method === 'asset.importSource') {
+        if (options.assetImportSource === undefined) {
+          return errorResponse(request, securityError('not-supported', 'No Editor source-import bridge is connected.', { recoveryActions: ['editor.discover'] }));
+        }
+        if (!isRecord(request.params)) return invalidAssetInput(request, request.method, '{ input: { destPath: string, sourceName: string, base64: string, requestId: string }, actor, sessionId, permission: "execute" }');
+        const params = record(request.params);
+        const input = Object.prototype.hasOwnProperty.call(params, 'input') ? params.input : undefined;
+        if (!isRecord(input)
+          || !isString(input.destPath)
+          || input.destPath.trim() === ''
+          || !isString(input.sourceName)
+          || input.sourceName.trim() === ''
+          || !isString(input.base64)
+          || input.base64.trim() === ''
+          || !isString(input.requestId)
+          || input.requestId.trim() === '') {
+          return invalidAssetInput(request, request.method, '{ input: { destPath: string, sourceName: string, base64: string, requestId: string }, actor, sessionId, permission: "execute" }');
+        }
+        const auth = requestAuth(request, params);
+        const authorized = authorizeTransportRequest(auth, security);
+        if (!authorized.ok) return errorResponse(request, authorized.error);
+        try {
+          const result = await options.assetImportSource(input, auth, new AbortController().signal);
+          return terminalResponse(request, result);
+        } catch (cause) {
+          return errorResponse(request, securityError(
+            'operation-failed',
+            cause instanceof Error ? cause.message : 'Editor source import failed.',
+            { retryable: true, recoveryActions: ['request.retry', 'editor.discover'] },
+          ));
+        }
+      }
       if (request.method === 'asset.snapshot') {
         const workspace = options.assetWorkspace;
         if (workspace === undefined) return errorResponse(request, securityError('executor-unavailable', 'No AssetWorkspace is connected.', { recoveryActions: ['editor.discover'] }));

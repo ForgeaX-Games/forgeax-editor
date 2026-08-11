@@ -1370,7 +1370,11 @@ async function bootViewport(
       readExecutionReport: executionDiagnostics.report,
     });
     const localClient: MessagePortTransportClient = createInProcessViewportRuntimeClient(service);
-    const unbindLocalClient = bindViewportRuntimeClient(runtimeIdentity, localClient);
+    const unbindLocalClient = bindViewportRuntimeClient(
+      runtimeIdentity,
+      localClient,
+      gameSession.runtimeBinding?.catalogRoots,
+    );
     const uninstallPreviewExecutorLease = installInProcessPreviewExecutorLeaseHost(
       bindVfxPreviewExecutorLease,
     );

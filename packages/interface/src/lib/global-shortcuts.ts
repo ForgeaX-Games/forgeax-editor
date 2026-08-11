@@ -64,6 +64,16 @@ export function isTypingTarget(e: KeyboardEvent): boolean {
   return false;
 }
 
+/** Preview canvases own their edit-domain keyboard input locally. */
+export function isKeyboardOwnedSurface(e: KeyboardEvent): boolean {
+  const t = e.target;
+  return t instanceof Element && t.closest('[data-fx-keyboard-surface]') !== null;
+}
+
+export function shouldSkipGlobalShortcut(e: KeyboardEvent, shortcut: Pick<ShortcutDef, 'group'>): boolean {
+  return shortcut.group === 'edit' && isKeyboardOwnedSurface(e);
+}
+
 // IME-composing check — Chinese input methods send a stream of keydowns
 // while composing; key === "Process" or keyCode === 229 signals "the user
 // is in IME, don't intercept anything."
@@ -546,6 +556,9 @@ export function useGlobalShortcuts(keybindings?: ContextualKeybindingsApi): void
       if (contextual?.status === 'handled' || contextual?.status === 'claimed-disabled') return;
       // 2. Find first matching legacy shortcut.
       for (const s of shortcuts) {
+        // A focused preview owns camera/fly keys locally. Keep non-edit global
+        // shortcuts available, but never route preview input to the main editor.
+        if (shouldSkipGlobalShortcut(e, s)) continue;
         // 2a. Typing target → skip before match() (match may call safeKeyLower).
         if (isTypingTarget(e) && !s.allowInInput) continue;
         // 2b. Surface gate — edit-group keys only act while the scene editor is

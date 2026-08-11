@@ -7,6 +7,10 @@ import { packageCensusFromRoot } from './package-census.mjs';
 import { classifyOwnership, validatePackageQuality } from './package-census-ownership.mjs';
 
 export const PACKAGE_COVERAGE_SCHEMA_VERSION = 'forgeax-package-coverage/v1';
+// Coverage instrumentation and serialized producers are intentionally slower
+// than a normal package test. Keep this budget explicit instead of inheriting
+// Bun's machine-sensitive 5s default.
+export const PACKAGE_TEST_TIMEOUT_MS = 15_000;
 
 function coverageError(code, expected, observed, hint) {
   return { code, expected, observed, hint };
@@ -135,10 +139,12 @@ function commandForTest(testCommand) {
 export function packageCoverageProducerArgs(testCommand, packageEvidence) {
   const command = commandForTest(testCommand);
   if (!command.ok) return command;
+  const hasExplicitTimeout = command.args.some((arg) => arg === '--timeout' || arg.startsWith('--timeout='));
   return {
     ok: true,
     args: [
       ...command.args,
+      ...(hasExplicitTimeout ? [] : [`--timeout=${PACKAGE_TEST_TIMEOUT_MS}`]),
       // Coverage is a quality baseline, so the producer must be deterministic.
       // Bun's default fan-out can observe different module initialization paths
       // when test files share process-global registries.

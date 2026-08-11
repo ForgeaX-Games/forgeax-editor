@@ -7,7 +7,7 @@ import { publish } from '@forgeax/interface/lib/bus';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, requestAddAssetsToChat, resolveGamePath, showContextMenu, waitViewportRuntimeOperationRun,
+import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, getViewportRuntimeClientSnapshot, requestAddAssetsToChat, resolveGamePath, showContextMenu, subscribeViewportRuntimeClient, waitViewportRuntimeOperationRun,
   ResizeHandle, useLocalSize, useSceneReadModel, validateAssetBasename } from '@forgeax/editor-core';
 import type { OperationRun } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
@@ -102,10 +102,24 @@ declare const __FORGEAX_CATALOG_ASSET_ROOTS__: readonly CatalogAssetRoot[];
 declare const __FORGEAX_GAME_SLUG__: string | null;
 declare const __FORGEAX_GAME_DIR_ABS__: string | null;
 
-const catalogAssetRoots: readonly CatalogAssetRoot[] =
+const compileCatalogAssetRoots: readonly CatalogAssetRoot[] =
   typeof __FORGEAX_CATALOG_ASSET_ROOTS__ === 'undefined'
     ? []
     : __FORGEAX_CATALOG_ASSET_ROOTS__;
+
+/**
+ * Studio has no fixed game at bundle time. The active Play binding therefore
+ * supplies the declared-root -> catalog-prefix projection at runtime; the
+ * compile-time value remains the standalone host fallback.
+ */
+function useCatalogAssetRoots(): readonly CatalogAssetRoot[] {
+  const runtimeCatalogRoots = useSyncExternalStore(
+    subscribeViewportRuntimeClient,
+    () => getViewportRuntimeClientSnapshot().catalogRoots,
+    () => null,
+  );
+  return runtimeCatalogRoots ?? compileCatalogAssetRoots;
+}
 
 function ContentBrowserActionBar({
   executeCommand,
@@ -233,6 +247,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const gameSlug = sceneModel.gameId === null && typeof __FORGEAX_GAME_SLUG__ === 'string'
     ? __FORGEAX_GAME_SLUG__
     : (sceneModel.gameId ?? 'default');
+  const catalogAssetRoots = useCatalogAssetRoots();
   const projectName = useProjectName(gameSlug);
   const projectPickerPath = useMemo(() => {
     if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {

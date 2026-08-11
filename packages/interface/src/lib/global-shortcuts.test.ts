@@ -17,6 +17,8 @@ import {
   registerKeyboardRouterDeps,
   isComposing,
   isTypingTarget,
+  isKeyboardOwnedSurface,
+  shouldSkipGlobalShortcut,
   isEditorSurfaceActive,
   type KeyboardRouterDeps,
 } from './global-shortcuts';
@@ -376,5 +378,17 @@ describe('keyboard router — IME / typing-target guards (AC-A5)', () => {
   it('isTypingTarget false for plain div and non-Element target (window)', () => {
     expect(isTypingTarget({ target: document.createElement('div') } as KeyboardEvent)).toBe(false);
     expect(isTypingTarget({ target: window } as unknown as KeyboardEvent)).toBe(false);
+  });
+
+  it('preview canvas owns edit keys without swallowing non-edit global shortcuts', () => {
+    const canvas = document.createElement('canvas');
+    canvas.dataset.fxKeyboardSurface = 'viewport-preview';
+    const child = document.createElement('span');
+    canvas.appendChild(child);
+    const event = { target: child } as unknown as KeyboardEvent;
+
+    expect(isKeyboardOwnedSurface(event)).toBe(true);
+    expect(shouldSkipGlobalShortcut(event, { group: 'edit' })).toBe(true);
+    expect(shouldSkipGlobalShortcut(event, { group: 'general' })).toBe(false);
   });
 });

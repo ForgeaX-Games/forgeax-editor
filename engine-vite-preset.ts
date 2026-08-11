@@ -31,7 +31,11 @@ import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 // Vite's config bundle externalizes package subpaths, leaving Node to load core's
 // source-only TypeScript export. Reach the same core helper relatively so Vite
 // folds it into the config bundle before Node evaluates that bundle.
-import { expandPackRootsExcludingShaderSources, resolveGameAssetRoots } from './packages/core/src/asset-roots';
+import {
+  expandPackRootsExcludingShaderSources,
+  resolveGameAssetRoots,
+  resolveGameCatalogRoots,
+} from './packages/core/src/asset-roots';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
@@ -42,7 +46,7 @@ import {
   type ParticleCodeModuleSet,
 } from '@forgeax/engine-vfx-compiler';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
-import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import type { RuntimeAssetBinding, RuntimeCatalogRoot } from '@forgeax/engine-types';
 
 /** One deployment policy for every browser host that may select Engine shared execution. */
 export const ENGINE_EXECUTION_ISOLATION_HEADERS = Object.freeze({
@@ -290,34 +294,7 @@ const ENGINE_ASSETS_BASE = resolve(EDIT_RUNTIME_DIR, '..', 'engine', 'forgeax-en
  * host-resolved roots from {@link resolveGameAssetRoots} into an explicit runtime
  * contract shared by Vite's pack scanner and the browser bundle.
  */
-export interface CatalogAssetRoot {
-  readonly root: string;
-  readonly catalogPrefix: string;
-}
-
-function catalogPrefix(abs: string): string {
-  return relative(process.cwd(), abs).replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-// A game's pack roots — LOCAL and `@shared/<sub>` external roots alike — are
-// resolved from package.json#forgeax.assets.roots via the editor-core SSOT
-// helper. The declaration-to-catalog projection travels alongside the pack
-// roots, so Content Browser code need not duplicate the @shared disk mapping.
-//
-// Implicit `template-game-default`: the demo-seed default template's scene
-// references the shared sky.hdr equirect GUID (81eec382) but its own assets/
-// has no sky.hdr. Rather than edit the ENGINE submodule's template package.json
-// to declare `@shared/template-game-default` (which would leak the editor's
-// convention into the engine), inject it only for the runtime catalog. It is
-// deliberately absent from the user-facing roots payload because it is not a
-// game-declared Content Browser scope.
-function gameCatalogRoots(gameDirAbs: string): CatalogAssetRoot[] {
-  const declared = resolveGameAssetRoots(gameDirAbs, { sharedBase: SHARED_BASE });
-  return declared.map((resolved) => ({
-    root: resolved.shared ? `@shared/${resolved.sub}` : relative(gameDirAbs, resolved.abs).replace(/\\/g, '/'),
-    catalogPrefix: catalogPrefix(resolved.abs),
-  }));
-}
+export type CatalogAssetRoot = RuntimeCatalogRoot;
 
 function isGameDefaultTemplate(gameDirAbs: string): boolean {
   try {
@@ -757,7 +734,9 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
   const wsPkgs = forgeaxWorkspacePackages();
   const nonRootBase = base !== '/' && base !== '';
   const selfHostPack = opts.pack !== undefined || gameDirAbs !== null;
-  const catalogRoots = gameDirAbs ? gameCatalogRoots(gameDirAbs) : [];
+  const catalogRoots = gameDirAbs
+    ? resolveGameCatalogRoots(gameDirAbs, { sharedBase: SHARED_BASE })
+    : [];
   const packRoots = opts.pack?.roots ?? (gameDirAbs ? gamePackRoots(gameDirAbs) : []);
   const packRefresh = opts.pack?.refresh ?? (() => {});
   const cleanPackMetas = opts.pack?.cleanOrphanMetas ?? gameDirAbs !== null;

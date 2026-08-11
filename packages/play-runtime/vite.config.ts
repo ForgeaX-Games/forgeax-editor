@@ -10,7 +10,7 @@ import {
 } from '../../engine-vite-preset';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
-import { resolveGameAssetRoots, type ResolvedRoot } from '../core/src/asset-roots';
+import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots';
 import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy';
 import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller';
 import { setupSingleGameRootFarm } from './src/active-game-mount';
@@ -443,6 +443,10 @@ const initialScopeCommand: RuntimeScopeCommand | undefined = (
 // snapshot.
 const resolveActivePackRoots = (): string[] =>
   singleGamePackRoots(activeGameDir, activeGameId);
+const resolveActiveCatalogRoots = (gameDir: string, gameId: string) => resolveGameCatalogRoots(gameDir, {
+  sharedBase: SHARED_BASE,
+  catalogPrefixFor: (root) => relative(here, farmGamePath(root, gameDir, gameId)).replace(/\\/g, '/'),
+});
 const enginePreset = engineVitePreset({
   base: '/preview/',
   gameDirAbs: INITIAL_GAME_DIR || null,
@@ -476,6 +480,7 @@ const runtimeScopeController = createRuntimeScopeController({
     activeGameId = gameId;
   },
   resolveRoots: (gameDir, gameId) => singleGamePackRoots(gameDir, gameId),
+  resolveCatalogRoots: resolveActiveCatalogRoots,
 });
 export default defineConfig({
   root: viteRoot,

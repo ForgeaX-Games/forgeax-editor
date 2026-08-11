@@ -35,7 +35,8 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
+import type { RuntimeCatalogRoot } from '@forgeax/engine-types';
 
 /** The alias prefix that addresses the shared `forgeax-editor-assets/` submodule. */
 export const SHARED_ROOT_PREFIX = '@shared/';
@@ -120,6 +121,27 @@ export function resolveGameAssetRoots(
     }
   }
   return out;
+}
+
+/**
+ * Resolve the same declared roots into the catalog coordinate space used by
+ * the Pack producer. Hosts may override the prefix projection when their
+ * filesystem farm changes the browser-visible path, but they cannot change
+ * which roots are declared or resolved here.
+ */
+export function resolveGameCatalogRoots(
+  gameDirAbs: string,
+  options: {
+    readonly sharedBase: string;
+    readonly catalogPrefixFor?: (root: ResolvedRoot) => string;
+  },
+): RuntimeCatalogRoot[] {
+  const declared = resolveGameAssetRoots(gameDirAbs, { sharedBase: options.sharedBase });
+  return declared.map((root) => ({
+    root: root.shared ? `${SHARED_ROOT_PREFIX}${root.sub}` : relative(gameDirAbs, root.abs).replace(/\\/g, '/'),
+    catalogPrefix: options.catalogPrefixFor?.(root)
+      ?? relative(process.cwd(), root.abs).replace(/\\/g, '/').replace(/^\.\//, ''),
+  }));
 }
 
 // ── shader-source pack-boundary expansion ───────────────────────────────────

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import type { RuntimeAssetBinding, RuntimeCatalogRoot } from '@forgeax/engine-types';
 import { runtimeScopePath } from '@forgeax/engine-types';
 import type { ForgeaXPackPlugin } from '@forgeax/engine-vite-plugin-pack';
 
@@ -18,6 +18,7 @@ export interface RuntimeScopeControllerOptions {
   readonly initial?: RuntimeScopeCommand;
   readonly prepareGameMount?: (gameDir: string, gameId: string) => void | Promise<void>;
   readonly resolveRoots: (gameDir: string, gameId: string) => readonly string[];
+  readonly resolveCatalogRoots: (gameDir: string, gameId: string) => readonly RuntimeCatalogRoot[];
 }
 
 interface ViteServerLike {
@@ -47,6 +48,7 @@ function basePath(base: string, path: string): string {
 function makeBinding(
   command: RuntimeScopeCommand,
   base: string,
+  catalogRoots: readonly RuntimeCatalogRoot[],
 ): RuntimeAssetBinding {
   const identity = { scopeId: command.scopeId, generation: command.generation };
   return {
@@ -58,6 +60,7 @@ function makeBinding(
     catalogUrl: basePath(base, runtimeScopePath(identity, 'catalog.json')),
     importUrlBase: basePath(base, runtimeScopePath(identity, 'import')),
     packageUrlBase: basePath(base, runtimeScopePath(identity, 'asset')),
+    catalogRoots: catalogRoots.map((root) => ({ ...root })),
   };
 }
 
@@ -128,7 +131,8 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
       }
       await options.prepareGameMount?.(command.gameDir, command.gameId);
       const roots = options.resolveRoots(command.gameDir, command.gameId);
-      const binding = await options.pack.rebind(makeBinding(command, options.base), roots);
+      const catalogRoots = options.resolveCatalogRoots(command.gameDir, command.gameId);
+      const binding = await options.pack.rebind(makeBinding(command, options.base, catalogRoots), roots);
       lastGeneration = command.generation;
       return binding;
     });

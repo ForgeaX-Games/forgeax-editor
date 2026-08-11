@@ -6,10 +6,9 @@
 // but external roots must always match the injected projection (no UI-side disk
 // layout convention for @shared).
 
-export interface CatalogAssetRoot {
-  readonly root: string;
-  readonly catalogPrefix: string;
-}
+import type { RuntimeCatalogRoot } from '@forgeax/engine-types';
+
+export type CatalogAssetRoot = RuntimeCatalogRoot;
 
 /** Map a catalog path into the browser's declared-root coordinate space. */
 export function catalogPathToRoot(

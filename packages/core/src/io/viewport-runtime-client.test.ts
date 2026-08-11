@@ -42,7 +42,18 @@ describe('viewport runtime client cache', () => {
     disposeOne();
     expect(getViewportRuntimeClientSnapshot()).toMatchObject({ status: 'ready', runtime: { runtimeGeneration: 2 } });
     disposeTwo();
-    expect(getViewportRuntimeClientSnapshot()).toEqual({ status: 'disconnected', runtime: null });
+    expect(getViewportRuntimeClientSnapshot()).toEqual({ status: 'disconnected', runtime: null, catalogRoots: null });
+  });
+
+  test('publishes the active runtime catalog-root projection with its generation', () => {
+    const catalogRoots = [{ root: 'assets', catalogPrefix: 'host-games/fps/assets' }] as const;
+    const dispose = bindViewportRuntimeClient(runtime(3), client(() => ({})), catalogRoots);
+    expect(getViewportRuntimeClientSnapshot()).toMatchObject({
+      status: 'ready',
+      runtime: { runtimeGeneration: 3 },
+      catalogRoots,
+    });
+    dispose();
   });
 
   test('queries typed envelopes and fences a stale producer response', async () => {

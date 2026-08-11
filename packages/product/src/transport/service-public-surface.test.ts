@@ -60,6 +60,33 @@ test('gameplay is advertised and delegated only when the live carrier supplies i
   expect(unavailable).toMatchObject({ error: { code: 'not-supported' } });
 });
 
+test('asset.importSource delegates the typed source bytes without creating a second importer', async () => {
+  const calls: unknown[] = [];
+  const service = createTransportService({
+    assetImportSource: async (input, request) => {
+      calls.push({ input, actor: request.actor, sessionId: request.sessionId });
+      return { ok: true, requestId: (input as { requestId: string }).requestId, operationRun: { status: 'succeeded' } };
+    },
+    security: createTransportSecurityPolicy({
+      version: TRANSPORT_PROTOCOL_VERSION,
+      scopes: ['default'],
+      permissions: { 'asset.importSource': 'execute' },
+    }),
+  });
+  const discovered = await service.handle(request('discover-import', 'discover', {}));
+  expect(discovered.result).toMatchObject({ methods: expect.arrayContaining(['asset.importSource']) });
+  const response = await service.handle(request('import-source', 'asset.importSource', {
+    input: { destPath: 'assets/3d/robot.glb', sourceName: 'robot.glb', base64: 'Z2xURg==', requestId: 'import-1' },
+    ...auth,
+  }));
+  expect(response).toMatchObject({ result: { ok: true, requestId: 'import-1' } });
+  expect(calls).toEqual([{
+    input: { destPath: 'assets/3d/robot.glb', sourceName: 'robot.glb', base64: 'Z2xURg==', requestId: 'import-1' },
+    actor: auth.actor,
+    sessionId: auth.sessionId,
+  }]);
+});
+
 test('Gateway scripts are advertised and executed as typed operation-scope runs', async () => {
   const calls: string[] = [];
   const service = createTransportService({
