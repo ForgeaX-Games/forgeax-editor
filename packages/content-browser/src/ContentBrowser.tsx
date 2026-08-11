@@ -273,6 +273,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
   const [selectedItem, setSelectedItem] = useState<CBViewItem | null>(null);
   const [previewItem, setPreviewItem] = useState<CBViewItem | null>(null);
+  // Focus targets are event-time facts, not render state. Keep them in refs so
+  // F2/Delete pressed immediately after focus cannot race a React effect and
+  // execute against the previously focused card/tree row.
+  const focusedSourceTreeItemRef = useRef<CBViewItem | null>(null);
+  const focusedGridItemRef = useRef<CBViewItem | null>(null);
+  const focusSourceTreeItem = useCallback((item: CBViewItem | null) => {
+    focusedSourceTreeItemRef.current = item;
+  }, []);
+  const focusGridItem = useCallback((item: CBViewItem) => {
+    focusedGridItemRef.current = item;
+  }, []);
+  const getFocusedSourceTreeItem = useCallback(() => focusedSourceTreeItemRef.current, []);
+  const getFocusedGridItem = useCallback(() => focusedGridItemRef.current, []);
   const [sourceMutationAsset, setSourceMutationAsset] = useState<CBAsset | null>(null);
   useEffect(() => {
     if (sourceMutationAsset?.sourceKey === undefined) return;
@@ -885,66 +898,71 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     favorites.toggleFavorite(favoriteRef(item));
   }, [favorites.toggleFavorite]);
 
+  const renameItem = useCallback((item: CBViewItem) => {
+    if (item.type === 'asset') {
+      crudCallbacks.onRename?.(item);
+      return;
+    }
+    void (async () => {
+      const newName = await contentBrowserPrompt({
+        title: t('editor.contentBrowser.contextMenu.rename'),
+        label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
+        defaultValue: item.name,
+        confirmText: t('editor.contentBrowser.dialogs.ok'),
+        cancelText: t('editor.contentBrowser.dialogs.cancel'),
+      });
+      if (!newName || newName === item.name) return;
+      const slash = item.path.lastIndexOf('/');
+      const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
+      pendingReselectRef.current = { oldPath: item.path, newPath, newName };
+      if (item.type === 'folder') {
+        const cur = navPathRef.current;
+        if (cur === item.path || cur.startsWith(`${item.path}/`)) {
+          nav.navigate(`${newPath}${cur.slice(item.path.length)}`);
+        }
+        void dispatchActiveEditorOperation({ kind: 'renameDirectory', path: item.path, newName }, 'human');
+      } else {
+        void dispatchActiveEditorOperation({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
+      }
+    })();
+  }, [crudCallbacks, nav, t]);
+
+  const deleteItem = useCallback((item: CBViewItem) => {
+    if (item.type === 'folder') {
+      setPathDeleteTarget({ path: item.path, name: item.name, kind: 'dir' });
+      return;
+    }
+    if (item.type === 'file') {
+      const sceneAsset = item.family === 'scene' ? item.assets.find(asset => asset.kind === 'scene') : undefined;
+      if (sceneAsset) requestDelete([sceneAsset]);
+      else setPathDeleteTarget({ path: item.path, name: item.name, kind: 'file' });
+      return;
+    }
+    const selected = multiSelect.selection.items.filter((candidate): candidate is CBAsset => candidate.type === 'asset');
+    const targets = selected.length > 1 && selected.some(candidate => candidate.guid === item.guid)
+      ? selected
+      : [item];
+    requestDelete(targets);
+  }, [multiSelect.selection.items, requestDelete]);
+
   const commonItemMenu = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') {
       const fullPath = resolveGamePath(item.path);
       return [
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
-        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
-          void (async () => {
-            const newName = await contentBrowserPrompt({
-              title: t('editor.contentBrowser.contextMenu.rename'),
-              label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
-              defaultValue: item.name,
-              confirmText: t('editor.contentBrowser.dialogs.ok'),
-              cancelText: t('editor.contentBrowser.dialogs.cancel'),
-            });
-            if (newName && newName !== item.name) {
-              const slash = item.path.lastIndexOf('/');
-              const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
-              pendingReselectRef.current = { oldPath: item.path, newPath, newName };
-              // If we're browsing inside the renamed folder (or a descendant),
-              // carry the current nav path onto the new prefix so the breadcrumb
-              // and grid don't strand on the now-dead old path.
-              const cur = navPathRef.current;
-              if (cur === item.path || cur.startsWith(`${item.path}/`)) {
-                nav.navigate(`${newPath}${cur.slice(item.path.length)}`);
-              }
-              void dispatchActiveEditorOperation({ kind: 'renameDirectory', path: item.path, newName }, 'human');
-            }
-          })();
-        } },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
           void dispatchActiveEditorOperation({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
         } },
-        { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          setPathDeleteTarget({ path: item.path, name: item.name, kind: 'dir' });
-        } },
+        { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => deleteItem(item) },
       ];
     }
     if (item.type === 'file') {
-      const sceneAsset = item.family === 'scene' ? item.assets.find(asset => asset.kind === 'scene') : undefined;
       return [
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
-        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
-          void (async () => {
-            const newName = await contentBrowserPrompt({
-              title: t('editor.contentBrowser.contextMenu.rename'),
-              label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
-              defaultValue: item.name,
-              confirmText: t('editor.contentBrowser.dialogs.ok'),
-              cancelText: t('editor.contentBrowser.dialogs.cancel'),
-            });
-            if (newName && newName !== item.name) {
-              const slash = item.path.lastIndexOf('/');
-              const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
-              pendingReselectRef.current = { oldPath: item.path, newPath, newName };
-              void dispatchActiveEditorOperation({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
-            }
-          })();
-        } },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(item.diskPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
@@ -960,10 +978,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
             },
           }).catch(() => {});
         } },
-        { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-          if (sceneAsset) requestDelete([sceneAsset]);
-          else setPathDeleteTarget({ path: item.path, name: item.name, kind: 'file' });
-        } },
+        { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => deleteItem(item) },
       ];
     }
     const favRef = favoriteRef(item);
@@ -1006,7 +1021,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     return [
       ...importedActions,
       { label: favorites.isFavorite(favRef) ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favRef) },
-      { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => crudCallbacks.onRename?.(item) },
+      { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
       { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
       { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(relPath) },
       { label: t('editor.contentBrowser.contextMenu.addToChat'), icon: 'spark', forge: true, onClick: () => requestAddAssetsToChat([{
@@ -1017,15 +1032,9 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         path: item.packPath,
         payload: item.payload,
       }]) },
-      { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
-        const selected = multiSelect.selection.items.filter((i): i is CBAsset => i.type === 'asset');
-        const targets = selected.length > 1 && selected.some(s => s.guid === item.guid)
-          ? selected
-          : [item];
-        requestDelete(targets);
-      } },
+      { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => deleteItem(item) },
     ];
-  }, [crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, multiSelect.selection, relByAssetGuid, reload, requestDelete, t]);
+  }, [deleteItem, favorites, fetchDiskDirs, gameSlug, host.commands, relByAssetGuid, reload, renameItem, t]);
 
   const importSelectedFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -1225,6 +1234,11 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     clearKindFilters,
     setFavoritesOnly,
     setThumbnailSize,
+    getFocusedSourceTreeItem,
+    getFocusedGridItem,
+    renameItem,
+    deleteItem,
+    selectAllGridItems: multiSelect.selectAll,
   });
 
   const handleContextMenu = useCallback((e: React.MouseEvent, item: CBViewItem) => {
@@ -1392,6 +1406,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
             selectedPath={selectedSourcePath}
             setSelectedItem={setSelectedItem}
             setPreviewItem={setPreviewItem}
+            onFocusItem={focusSourceTreeItem}
             nav={nav}
             openFolderContextMenu={openFolderContextMenu}
             openFileContextMenu={openFileContextMenu}
@@ -1434,6 +1449,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
                     onSelect={selectItem}
                     onDoubleClick={handleActivate}
                     onContextMenu={handleContextMenu}
+                    onFocusItem={focusGridItem}
                     isItemFavorite={isItemFavorite}
                     onToggleFavorite={toggleItemFavorite}
                   />

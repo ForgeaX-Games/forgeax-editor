@@ -12,13 +12,13 @@
  * single <DetachedSurface>. Cross-window business state stays consistent for
  * free because every window talks to the same backend (/api, /ws).
  *
- * Browser form: `canDetach()` is false and every method is a safe no-op, so the
- * web app is unaffected.
+ * Browser form: `window.open` is the physical carrier; Tauri uses a native
+ * `WebviewWindow`. Both load the same surface URL contract.
  */
 import { isTauri, loadWebviewWindowApi } from './runtime';
 import {
   type SurfaceDescriptor,
-  encodeSurfaceQuery,
+  encodeSurfaceWindowQuery,
   surfaceWindowLabel,
 } from './surface';
 
@@ -59,7 +59,7 @@ function notifyClosed(d: SurfaceDescriptor) {
 let _manager: WindowManager | null = null;
 
 export function getWindowManager(): WindowManager {
-  if (!_manager) _manager = isTauri() ? createTauriWindowManager() : createNoopWindowManager();
+  if (!_manager) _manager = isTauri() ? createTauriWindowManager() : createBrowserWindowManager();
   return _manager;
 }
 
@@ -85,7 +85,7 @@ function createTauriWindowManager(): WindowManager {
 
       const hasPos = typeof opts?.x === 'number' && typeof opts?.y === 'number';
       const win = new mod.WebviewWindow(label, {
-        url: `index.html?${encodeSurfaceQuery(d)}`,
+        url: `index.html?${encodeSurfaceWindowQuery(d, 'tauri-webview')}`,
         title: opts?.title ?? d.id,
         width: opts?.width ?? 960,
         height: opts?.height ?? 720,
@@ -145,18 +145,56 @@ function createTauriWindowManager(): WindowManager {
   };
 }
 
-function createNoopWindowManager(): WindowManager {
+function createBrowserWindowManager(): WindowManager {
+  const windows = new Map<string, Window>();
+  const closePolls = new Map<string, ReturnType<typeof setInterval>>();
+  const forget = (d: SurfaceDescriptor): void => {
+    const key = surfaceWindowLabel(d);
+    const poll = closePolls.get(key);
+    if (poll !== undefined) clearInterval(poll);
+    closePolls.delete(key);
+    windows.delete(key);
+  };
   return {
-    canDetach: () => false,
-    async openSurfaceWindow() {
-      return false;
+    canDetach: () => typeof window !== 'undefined' && typeof window.open === 'function',
+    async openSurfaceWindow(d, opts) {
+      const label = surfaceWindowLabel(d);
+      const existing = windows.get(label);
+      if (existing !== undefined && !existing.closed) {
+        existing.focus();
+        return true;
+      }
+      const width = opts?.width ?? 960;
+      const height = opts?.height ?? 720;
+      const left = opts?.x ?? Math.max(0, Math.round((window.screen.width - width) / 2));
+      const top = opts?.y ?? Math.max(0, Math.round((window.screen.height - height) / 2));
+      const popup = window.open(
+        `index.html?${encodeSurfaceWindowQuery(d, 'browser-page')}`,
+        label,
+        `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes`,
+      );
+      if (popup === null) return false;
+      windows.set(label, popup);
+      const poll = setInterval(() => {
+        if (!popup.closed) return;
+        forget(d);
+        notifyClosed(d);
+      }, 250);
+      closePolls.set(label, poll);
+      return true;
     },
-    async closeSurfaceWindow() {},
-    async isSurfaceWindowOpen() {
-      return false;
+    async closeSurfaceWindow(d) {
+      const popup = windows.get(surfaceWindowLabel(d));
+      if (popup !== undefined && !popup.closed) popup.close();
+      forget(d);
     },
-    onSurfaceWindowClosed() {
-      return () => {};
+    async isSurfaceWindowOpen(d) {
+      const popup = windows.get(surfaceWindowLabel(d));
+      return popup !== undefined && !popup.closed;
+    },
+    onSurfaceWindowClosed(cb) {
+      closeListeners.add(cb);
+      return () => closeListeners.delete(cb);
     },
   };
 }

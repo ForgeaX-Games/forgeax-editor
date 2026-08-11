@@ -18,6 +18,7 @@ import { prompt as promptDialog } from '@forgeax/editor-ui';
 import { PREVIEW_COMPONENTS } from './asset-inspector';
 import InputMapEditor from './asset-inspector/InputMapEditor';
 import { getMaterialInstancePreview } from './mi-preview-slot';
+import { getMeshPreview } from './mesh-preview-slot';
 import './inspector.css';
 import './mi-preview.css';
 
@@ -209,6 +210,23 @@ export function MaterialPreviewPanel(): ReactElement {
       ) : (
         <div className="field muted">
           Material preview viewport is not registered by the host.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Mesh 3D preview panel — runtime-owned independent canvas/world (STD-01). */
+export function MeshPreviewPanel(): ReactElement {
+  const asset = useDocumentAsset();
+  const Preview = getMeshPreview();
+  return (
+    <div className="panel" data-testid="panel-mesh-preview" data-subject-id={asset?.guid}>
+      {asset?.kind !== 'mesh' ? <EmptyAssetPage /> : Preview ? (
+        <Preview />
+      ) : (
+        <div className="field muted">
+          Mesh preview viewport is not registered by the host.
         </div>
       )}
     </div>

@@ -258,7 +258,27 @@ describe('viewport runtime transport', () => {
     });
   });
 
-  test('projects one Runtime-owned asset payload by stable guid', () => {
+  test('projects one Runtime AssetRegistry payload without copying the registry into the shell', async () => {
+    const graph = { stats: () => ({ status: 'bound' }) } as any;
+    const gateway = { buildQueryFn: () => () => ({ ok: true, rows: [] }) } as any;
+    const payload = { kind: 'mesh', vertices: new Float32Array([0, 0, 0]) };
+    const query = createViewportProjectionQuery({
+      runtime,
+      graph,
+      gateway,
+      readAssetPayload: async (guid) => guid === 'mesh-a' ? payload : undefined,
+    });
+
+    await expect(query({ kind: 'assets.payload', guid: 'mesh-a' })).resolves.toMatchObject({
+      status: 'ready',
+      value: { guid: 'mesh-a', payload },
+    });
+    await expect(query({ kind: 'assets.payload', guid: 'missing' })).resolves.toMatchObject({
+      status: 'empty',
+    });
+  });
+
+  test('projects one Runtime-owned asset payload by stable guid', async () => {
     const graph = { stats: () => ({ status: 'bound' }) } as any;
     const gateway = { buildQueryFn: () => () => ({ ok: true, rows: [] }) } as any;
     const payload = { guid: 'vfx-a', program: { emitters: [] } };
@@ -266,13 +286,15 @@ describe('viewport runtime transport', () => {
       runtime,
       graph,
       gateway,
-      readAssetPayload: (guid) => guid === 'vfx-a' ? payload : undefined,
+      readAssetPayload: async (guid) => guid === 'vfx-a' ? payload : undefined,
     });
-    expect(query({ kind: 'assets.payload', guid: 'vfx-a' })).toMatchObject({
+    await expect(query({ kind: 'assets.payload', guid: 'vfx-a' })).resolves.toMatchObject({
       status: 'ready',
       value: { guid: 'vfx-a', payload },
     });
-    expect(query({ kind: 'assets.payload', guid: 'missing' })).toMatchObject({ status: 'empty' });
+    await expect(query({ kind: 'assets.payload', guid: 'missing' })).resolves.toMatchObject({
+      status: 'empty',
+    });
   });
 
   test('accepts panel writes in the fenced viewport journal scope', async () => {

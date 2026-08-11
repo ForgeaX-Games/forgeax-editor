@@ -7,6 +7,8 @@ type SetAppState = (
 ) => void;
 type GetAppState = () => AppState;
 
+export const VIEWPORT_CARRIER_WILL_DETACH = 'forgeax:viewport-carrier-will-detach' as const;
+
 export function createShellState(
   set: SetAppState,
   get: GetAppState,
@@ -41,12 +43,15 @@ export function createShellState(
 > {
   return {
     floatingSurfaces: {},
-    detachSurface: async (d: SurfaceDescriptor, opts?: { title?: string }) => {
+    detachSurface: async (d: SurfaceDescriptor, opts?: { title?: string; x?: number; y?: number; width?: number; height?: number }) => {
       const wm = getWindowManager();
       if (!wm.canDetach()) return;
       const key = surfaceKey(d);
+      if (d.kind === 'panel' && d.id === 'viewport') {
+        window.dispatchEvent(new CustomEvent(VIEWPORT_CARRIER_WILL_DETACH));
+      }
       set((s) => ({ floatingSurfaces: { ...s.floatingSurfaces, [key]: true } }));
-      const ok = await wm.openSurfaceWindow(d, { title: opts?.title });
+      const ok = await wm.openSurfaceWindow(d, opts);
       if (!ok) {
         set((s) => {
           const next = { ...s.floatingSurfaces };

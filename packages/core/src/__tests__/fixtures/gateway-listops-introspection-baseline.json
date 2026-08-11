@@ -30,7 +30,7 @@
       "properties": {
         "sceneGuid": {
           "type": "string",
-          "description": "A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:\"scene\"). For a just-imported GLB/FBX, the whole-file scene sub-asset \u2014 this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer \u2014 which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited \u2014 see the gateway skill \"Animate a skinned asset\" note)."
+          "description": "A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:\"scene\"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer — which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited — see the gateway skill \"Animate a skinned asset\" note)."
         },
         "name": {
           "type": "string",
@@ -508,7 +508,7 @@
         },
         "yaw": {
           "type": "number",
-          "description": "Yaw (radians) \u2014 engine convention: qCam = yaw\u00b7Y \u00d7 pitch\u00b7X, fwd = qCam\u00b7[0,0,-1]."
+          "description": "Yaw (radians) — engine convention: qCam = yaw·Y × pitch·X, fwd = qCam·[0,0,-1]."
         },
         "pitch": {
           "type": "number",
@@ -567,7 +567,7 @@
         },
         "pitch": {
           "type": "number",
-          "description": "Pitch (radians) around camera right; clamped to ~[-1.5, 1.5] (near \u00b186\u00b0)."
+          "description": "Pitch (radians) around camera right; clamped to ~[-1.5, 1.5] (near ±86°)."
         },
         "dist": {
           "type": "number",
@@ -878,7 +878,7 @@
       "properties": {
         "guid": {
           "type": "string",
-          "description": "Caller-minted asset GUID (crypto.randomUUID() \u2014 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles)."
+          "description": "Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles)."
         },
         "name": {
           "type": "string",
@@ -901,7 +901,7 @@
         },
         "baseColorTexture": {
           "type": "string",
-          "description": "Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) \u2014 a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format)."
+          "description": "Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format)."
         },
         "alphaCutoff": {
           "type": "number",
@@ -1050,7 +1050,7 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "Game-relative directory path to delete recursively (e.g. \"assets/textures\"). Must not contain \"..\" segments, NUL bytes, or \"\\\" separators. The basename is intentionally NOT validated \u2014 this is the escape hatch for cleaning up folders that predate name validation."
+          "description": "Game-relative directory path to delete recursively (e.g. \"assets/textures\"). Must not contain \"..\" segments, NUL bytes, or \"\\\" separators. The basename is intentionally NOT validated — this is the escape hatch for cleaning up folders that predate name validation."
         }
       },
       "required": [
@@ -2903,7 +2903,7 @@
           "properties": {
             "mouseSensitivity": {
               "type": "number",
-              "description": "Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05\u20135)."
+              "description": "Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05–5)."
             },
             "invertY": {
               "type": "boolean",
@@ -2919,11 +2919,11 @@
             },
             "wheelSpeedScalar": {
               "type": "number",
-              "description": "Wheel-speed steps per notch while flying (0.1\u20134)."
+              "description": "Wheel-speed steps per notch while flying (0.1–4)."
             },
             "flyBoostMultiplier": {
               "type": "number",
-              "description": "Temporary Shift-held flight multiplier (1\u20138)."
+              "description": "Temporary Shift-held flight multiplier (1–8)."
             },
             "flySpeed": {
               "type": "number",
@@ -2988,7 +2988,7 @@
         "parent": {
           "type": "number",
           "nullable": true,
-          "description": "parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder \u2014 see `_id` below."
+          "description": "parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder — see `_id` below."
         },
         "components": {
           "type": "object"
@@ -3102,11 +3102,11 @@
       "properties": {
         "label": {
           "type": "string",
-          "description": "single undo/ledger label for the whole batch (e.g. \"bulk-spawn x500\"); the transaction is atomic \u2014 all sub-ops apply or none, and it collapses to ONE undo entry."
+          "description": "single undo/ledger label for the whole batch (e.g. \"bulk-spawn x500\"); the transaction is atomic — all sub-ops apply or none, and it collapses to ONE undo entry."
         },
         "commands": {
           "type": "array",
-          "description": "array of EditorOp payloads applied in order as ONE synchronous batch \u2014 a single emit \u2192 a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (\u2026) await gateway.dispatch(spawnEntity)` loop, which is O(N\u00b2) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). FORWARD-REFERENCES (spawn a root then parent children under it in the same batch): give the root `spawnEntity` a NEGATIVE `_id` (e.g. -1), then set each child spawn's `parent` to that same negative value \u2014 the alias map resolves it to the root's real handle at apply time. This works for any handle field (`parent`, `entity`), not just parent. Do NOT use `parent: 0` as a batch index \u2014 0 is a real handle and fails `INVALID_PARENT`. The whole batch's created roots are returned as `dispatch(...).result.created[]` (created[0] = the first spawn)."
+          "description": "array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). FORWARD-REFERENCES (spawn a root then parent children under it in the same batch): give the root `spawnEntity` a NEGATIVE `_id` (e.g. -1), then set each child spawn's `parent` to that same negative value — the alias map resolves it to the root's real handle at apply time. This works for any handle field (`parent`, `entity`), not just parent. Do NOT use `parent: 0` as a batch index — 0 is a real handle and fails `INVALID_PARENT`. The whole batch's created roots are returned as `dispatch(...).result.created[]` (created[0] = the first spawn)."
         }
       },
       "required": [
@@ -3137,7 +3137,7 @@
         },
         "textureGuids": {
           "type": "object",
-          "description": "Texture params as GUID strings; applier encodes to pack refs[] indices. null clears the texture. Example: {\"baseColorTexture\":\"a1b2\u2026\"}"
+          "description": "Texture params as GUID strings; applier encodes to pack refs[] indices. null clears the texture. Example: {\"baseColorTexture\":\"a1b2…\"}"
         }
       },
       "required": [

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { createApp, type App } from '@forgeax/engine-app';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { FixedTime, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import {
   isVfxGpuEffectAsset,
   ParticleEffectPlayer,
@@ -64,31 +64,34 @@ function inspectLabel(snapshot: VfxRuntimeHostInspectSnapshot | undefined): stri
   const player = snapshot?.players[0];
   if (!player) return 'Waiting for first fixed tick';
   const spawnedThisTick = player.emitters.reduce((sum, emitter) => sum + emitter.spawnCount, 0);
-  const tick = Math.max(-1, ...player.emitters.map((emitter) => emitter.tick ?? -1));
-  return `tick ${tick} · emitted this tick ${spawnedThisTick} · generation ${player.values.generation}`;
-}
-
-function autoReplayIntervalMs(effect: VfxGpuEffectAsset): number | undefined {
-  const durations = effect.program.emitters
-    .map((emitter) => emitter.schedule.loopDuration)
-    .filter((duration): duration is number => typeof duration === 'number' && duration > 0);
-  return durations.length === 0 ? undefined : Math.max(...durations) * 1000;
+  const phaseTick = Math.max(-1, ...player.emitters.map((emitter) => emitter.phaseTick ?? -1));
+  return `phase ${phaseTick} · emitted ${spawnedThisTick} · generation ${player.values.generation}`;
 }
 
 export function VfxPreviewViewport(): ReactElement {
   const asset = useActiveEditorAsset();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<{
+    app: App;
     facade: ReturnType<typeof createEngineFacade>;
     host: VfxRuntimeHost;
     world: World;
     player: EntityHandle;
     playing: boolean;
+    emitterIds: readonly string[];
+    setPlaying(next: boolean): void;
+    replay(): void;
+    setEnabledEmitterIds(next: readonly string[]): void;
+    seekPhaseTick(target: number): Promise<void>;
   } | null>(null);
   const [status, setStatus] = useState<'booting' | 'ready' | 'error'>('booting');
   const [playing, setPlaying] = useState(true);
   const [inspect, setInspect] = useState<VfxRuntimeHostInspectSnapshot>();
   const [errorHint, setErrorHint] = useState<string>();
+  const [enabledEmitterIds, setEnabledEmitterIds] = useState<readonly string[]>([]);
+  const [phaseDraft, setPhaseDraft] = useState(0);
+  const [maxPhaseTick, setMaxPhaseTick] = useState(300);
+  const [seeking, setSeeking] = useState(false);
 
   useEffect(() => {
     if (asset?.kind !== 'particle-effect') return;
@@ -100,9 +103,10 @@ export function VfxPreviewViewport(): ReactElement {
     let viewport: Viewport | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let inspectTimer: ReturnType<typeof setInterval> | null = null;
-    let replayTimer: ReturnType<typeof setInterval> | null = null;
     let previewWorld: World | undefined;
     let cameraEntity: EntityHandle | undefined;
+    let appPausedForSeek = false;
+    let seekInFlight = false;
     const vfxHost = createVfxRuntimeHost({
       camera: createParticleCameraSource({
         world: () => previewWorld,
@@ -173,7 +177,69 @@ export function VfxPreviewViewport(): ReactElement {
         { component: Transform, data: { pos: [0, 0, 0] } },
         { component: ParticleEffectPlayer, data: { effect: effectHandle, playing: true, seed: 1337, timeScale: 1 } },
       ).unwrap();
-      const previewRuntime = { facade, host: vfxHost, world: app.world, player, playing: true };
+      const emitterIds = Object.freeze(effect.program.emitters.map((emitter) => emitter.id));
+      const currentApp = app;
+      const previewRuntime = {
+        app: currentApp,
+        facade,
+        host: vfxHost,
+        world: currentApp.world,
+        player,
+        playing: true,
+        emitterIds,
+        setPlaying(next: boolean) {
+          facade.set(player, ParticleEffectPlayer, { playing: next }).unwrap();
+          previewRuntime.playing = next;
+          setPlaying(next);
+        },
+        replay() {
+          currentApp.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY).replay(player);
+          setPhaseDraft(0);
+        },
+        setEnabledEmitterIds(nextEnabledEmitterIds: readonly string[]) {
+          const enabled = new Set(nextEnabledEmitterIds);
+          const gpuRuntime = currentApp.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+          for (const emitterId of emitterIds) {
+            gpuRuntime.setEmitterSessionEnabled(player, emitterId, enabled.has(emitterId));
+          }
+          setEnabledEmitterIds(Object.freeze([...nextEnabledEmitterIds]));
+        },
+        async seekPhaseTick(targetPhaseTick: number) {
+          if (seekInFlight) throw new Error('a VFX preview seek is already running');
+          seekInFlight = true;
+          setSeeking(true);
+          const gpuRuntime = currentApp.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY);
+          try {
+            currentApp.pause().unwrap();
+            appPausedForSeek = true;
+            facade.set(player, ParticleEffectPlayer, { playing: true }).unwrap();
+            gpuRuntime.replay(player);
+            const fixedDelta = currentApp.world.getResource(FixedTime).delta;
+            const steps = targetPhaseTick + 1;
+            for (let step = 0; step < steps; step += 1) {
+              if (cancelled || runtimeRef.current !== previewRuntime) {
+                throw new Error('the VFX preview generation changed during seek');
+              }
+              currentApp.stepFrame(fixedDelta).unwrap();
+              if ((step + 1) % 30 === 0 && step + 1 < steps) {
+                await new Promise<void>((resolve) => setTimeout(resolve, 0));
+              }
+            }
+            facade.set(player, ParticleEffectPlayer, { playing: false }).unwrap();
+            previewRuntime.playing = false;
+            setPlaying(false);
+            setInspect(vfxHost.inspect(currentApp.world));
+            setPhaseDraft(targetPhaseTick);
+          } finally {
+            seekInFlight = false;
+            setSeeking(false);
+            if (!cancelled && appPausedForSeek) {
+              currentApp.resume().unwrap();
+              appPausedForSeek = false;
+            }
+          }
+        },
+      };
       runtimeRef.current = previewRuntime;
 
       viewport = createViewport({
@@ -181,7 +247,7 @@ export function VfxPreviewViewport(): ReactElement {
         engine: facade,
         editorEngine: facade,
         camera,
-        initialOrbit: { target: [0, 1, 0], dist: 5, yaw: 0.55, pitch: -0.28 },
+        initialOrbit: { target: [0, 0.8, 0], dist: 6, yaw: 0.55, pitch: -0.24 },
         interaction: 'orbit-only',
       });
       const syncSize = () => {
@@ -199,17 +265,23 @@ export function VfxPreviewViewport(): ReactElement {
       resizeObserver = new ResizeObserver(syncSize);
       resizeObserver.observe(container);
       app.start();
+      setEnabledEmitterIds(emitterIds);
+      const loopSeconds = Math.max(
+        5,
+        ...effect.program.emitters.map((emitter) => emitter.schedule.loopDuration ?? 0),
+      );
+      setMaxPhaseTick(Math.min(3_600, Math.max(1, Math.ceil(loopSeconds * 60))));
       inspectTimer = setInterval(() => {
-        if (!cancelled) setInspect(vfxHost.inspect(app!.world));
+        if (!cancelled && !seekInFlight) {
+          const snapshot = vfxHost.inspect(app!.world);
+          setInspect(snapshot);
+          const phaseTick = Math.max(
+            0,
+            ...(snapshot?.players[0]?.emitters.map((emitter) => emitter.phaseTick ?? 0) ?? [0]),
+          );
+          setPhaseDraft(phaseTick);
+        }
       }, 120);
-      const replayEvery = autoReplayIntervalMs(effect);
-      if (replayEvery !== undefined) {
-        replayTimer = setInterval(() => {
-          if (runtimeRef.current === previewRuntime && previewRuntime.playing) {
-            previewRuntime.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY).replay(player);
-          }
-        }, replayEvery);
-      }
       setPlaying(true);
       setStatus('ready');
     })().catch((error) => {
@@ -221,37 +293,102 @@ export function VfxPreviewViewport(): ReactElement {
     return () => {
       cancelled = true;
       if (inspectTimer !== null) clearInterval(inspectTimer);
-      if (replayTimer !== null) clearInterval(replayTimer);
       resizeObserver?.disconnect();
       try { viewport?.dispose(); } catch { /* disposed */ }
       if (app) vfxHost.detachWorld({ world: app.world });
+      if (app && appPausedForSeek) {
+        try { app.resume(); } catch { /* stopping */ }
+        appPausedForSeek = false;
+      }
       try { app?.stop(); } catch { /* stopped */ }
       runtimeRef.current = null;
       setInspect(undefined);
+      setEnabledEmitterIds([]);
       if (canvas.parentElement === container) container.removeChild(canvas);
     };
   }, [asset?.guid]);
 
   const setPlayState = (next: boolean) => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    runtime.facade.set(runtime.player, ParticleEffectPlayer, { playing: next });
-    runtime.playing = next;
-    setPlaying(next);
+    try {
+      runtimeRef.current?.setPlaying(next);
+      setErrorHint(undefined);
+    } catch (error) {
+      setErrorHint(error instanceof Error ? error.message : String(error));
+    }
   };
   const reset = () => {
+    try {
+      runtimeRef.current?.replay();
+      setErrorHint(undefined);
+    } catch (error) {
+      setErrorHint(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const setEmitterMask = (next: readonly string[]) => {
+    try {
+      runtimeRef.current?.setEnabledEmitterIds(next);
+      setErrorHint(undefined);
+    } catch (error) {
+      setErrorHint(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const toggleEmitter = (emitterId: string) => {
     const runtime = runtimeRef.current;
-    if (!runtime || !runtime.world.hasResource(VFX_GPU_RUNTIME_RESOURCE_KEY)) return;
-    runtime.world.getResource<VfxGpuRuntime>(VFX_GPU_RUNTIME_RESOURCE_KEY).replay(runtime.player);
+    if (!runtime) return;
+    const enabled = new Set(enabledEmitterIds);
+    if (enabled.has(emitterId) && enabled.size === 1) {
+      setEmitterMask(runtime.emitterIds);
+      return;
+    }
+    if (enabled.has(emitterId)) setEmitterMask([emitterId]);
+    else setEmitterMask([...enabled, emitterId]);
+  };
+  const seek = (phaseTick: number) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    void runtime.seekPhaseTick(phaseTick).then(
+      () => setErrorHint(undefined),
+      (error) => setErrorHint(error instanceof Error ? error.message : String(error)),
+    );
   };
 
   return <div className="vfx-preview" data-testid="vfx-preview-viewport">
     <div className="vfx-preview-toolbar">
-      <button type="button" disabled={status !== 'ready'} onClick={() => setPlayState(!playing)}>
+      <button type="button" disabled={status !== 'ready' || seeking} onClick={() => setPlayState(!playing)}>
         {playing ? 'Pause' : 'Play'}
       </button>
-      <button type="button" disabled={status !== 'ready'} onClick={reset}>Reset</button>
-      <span>{inspectLabel(inspect)}</span>
+      <button type="button" disabled={status !== 'ready' || seeking} onClick={reset}>Reset</button>
+      <label className="vfx-preview-phase">
+        <span>Phase</span>
+        <input
+          type="range"
+          min={0}
+          max={maxPhaseTick}
+          step={1}
+          value={Math.min(maxPhaseTick, phaseDraft)}
+          disabled={status !== 'ready' || seeking}
+          onChange={(event) => setPhaseDraft(Number(event.currentTarget.value))}
+          onPointerUp={(event) => seek(Number(event.currentTarget.value))}
+          onKeyUp={(event) => seek(Number(event.currentTarget.value))}
+        />
+        <output>{phaseDraft}</output>
+      </label>
+      <div className="vfx-preview-emitter-mask" aria-label="Preview emitter mask">
+        <button
+          type="button"
+          disabled={status !== 'ready' || seeking}
+          onClick={() => setEmitterMask(runtimeRef.current?.emitterIds ?? [])}
+        >All</button>
+        {runtimeRef.current?.emitterIds.map((emitterId) => <button
+          type="button"
+          key={emitterId}
+          className={enabledEmitterIds.includes(emitterId) ? 'active' : ''}
+          disabled={status !== 'ready' || seeking}
+          onClick={() => toggleEmitter(emitterId)}
+          title="Click to isolate; click the isolated emitter again to show all"
+        >{emitterId}</button>)}
+      </div>
+      <span className="vfx-preview-inspect">{seeking ? `Seeking phase ${phaseDraft}…` : inspectLabel(inspect)}</span>
     </div>
     <div className="vfx-preview-host" ref={hostRef}>
       {status === 'booting' && <div className="vfx-preview-status">Booting isolated VFX runtime…</div>}

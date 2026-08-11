@@ -75,7 +75,7 @@ const VFX_PAGE = pageId('vfx');
 // layout: the panel opens on demand (gear / Window menu), never on boot.
 const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'checkpoints', 'events', 'ep:assets', 'ep:history', 'ep:capabilities', 'ep:settings'];
 const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview', 'ep:settings'];
-const MESH_PANELS = [...ASSET_PANELS, 'ep:mesh-slots'];
+const MESH_PANELS = ['ep:mesh-preview', ...ASSET_PANELS, 'ep:mesh-slots'];
 const MATERIAL_PANELS = ['ep:mat-preview', ...ASSET_PANELS];
 const MATERIAL_INSTANCE_PANELS = ['ep:mi-preview', 'ep:mi-properties', 'ep:settings'];
 const INPUT_MAP_PANELS = ['ep:input-map-properties', 'ep:settings'];
@@ -295,7 +295,7 @@ export function createEditorPageExtension(
       pages: [
         page(LEVEL_PAGE, 'Level', 'singleton', DEFAULT_EDITOR_DOCK_LAYOUT, LEVEL_PANELS, levelController),
         page(ASSET_PAGE, 'Asset', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
-        page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS, fileController),
+        page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS, fileController, 2),
         page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT, MATERIAL_PANELS, fileController, 2),
         {
           ...page(

@@ -25,44 +25,11 @@ function collectViews(node: unknown): string[] {
   return [];
 }
 
-function findLeaf(node: unknown, view: string): { size?: number } | undefined {
-  if (!node || typeof node !== 'object') return undefined;
-  const item = node as { type?: string; data?: unknown; size?: number };
-  if (item.type === 'leaf') {
-    const data = item.data as { views?: unknown } | undefined;
-    return Array.isArray(data?.views) && data.views.includes(view) ? item : undefined;
-  }
-  if (item.type === 'branch' && Array.isArray(item.data)) {
-    for (const child of item.data) {
-      const found = findLeaf(child, view);
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
-function leafViews(node: unknown, view: string): string[] | undefined {
-  if (!node || typeof node !== 'object') return undefined;
-  const item = node as { type?: string; data?: unknown };
-  if (item.type === 'leaf') {
-    const data = item.data as { views?: unknown } | undefined;
-    const views = Array.isArray(data?.views) ? data.views.filter((entry): entry is string => typeof entry === 'string') : [];
-    return views.includes(view) ? views : undefined;
-  }
-  if (item.type === 'branch' && Array.isArray(item.data)) {
-    for (const child of item.data) {
-      const found = leafViews(child, view);
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
 describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
-  test('contains exactly the default visible dock panels', () => {
+  test('contains exactly the default main-grid dock panels', () => {
     const views = collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root).sort();
 
-    expect(views).toEqual(['chat', 'ep:assets', 'ep:capabilities', 'ep:hierarchy', 'ep:history', 'ep:inspector', 'viewport']);
+    expect(views).toEqual(['chat', 'ep:hierarchy', 'ep:inspector', 'viewport']);
   });
 
   test('has a matching dockview panel descriptor for every view', () => {
@@ -71,17 +38,18 @@ describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
     }
   });
 
-  test('gives the Content Browser enough height for its asset grid', () => {
-    const assets = findLeaf(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root, 'ep:assets');
-    expect(assets?.size).toBeGreaterThanOrEqual(280);
+  test('gives the footer Content Browser enough height for its asset grid', () => {
+    const footer = DEFAULT_EDITOR_DOCK_LAYOUT.edgeGroups?.bottom;
+    expect(footer?.group.views).toContain('ep:assets');
+    expect(footer?.size).toBeGreaterThanOrEqual(280);
   });
 
-  test('groups History and Capabilities with Content Browser', () => {
-    expect(leafViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root, 'ep:assets')).toEqual([
-      'ep:assets',
-      'ep:history',
-      'ep:capabilities',
-    ]);
+  test('keeps global footer panels out of the main grid', () => {
+    const footerViews = DEFAULT_EDITOR_DOCK_LAYOUT.edgeGroups?.bottom.group.views;
+    expect(footerViews).toEqual(['ep:assets', 'info', 'checkpoints', 'events']);
+    expect(collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root)).not.toContain('ep:assets');
+    expect(collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root)).not.toContain('ep:history');
+    expect(collectViews(DEFAULT_EDITOR_DOCK_LAYOUT.grid.root)).not.toContain('ep:capabilities');
   });
 });
 
@@ -99,11 +67,14 @@ describe('DEFAULT_ASSET_EDITOR_DOCK_LAYOUT', () => {
     expect(collectViews(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
       'ep:asset-overview',
       'ep:asset-properties',
+      'ep:mesh-preview',
       'ep:mesh-slots',
     ]);
+    expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mesh-preview']).toBeDefined();
     expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeDefined();
     expect(DEFAULT_ASSET_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
     expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
+    expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mat-preview']).toBeUndefined();
   });
 });
 

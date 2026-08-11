@@ -193,8 +193,8 @@ export const DEFAULT_VFX_EDITOR_DOCK_LAYOUT: SerializedDockview = {
   activeGroup: 'g-vfx-preview',
 };
 
-/** Mesh document family. It shares the asset overview/property vocabulary but
- * owns an additional material-slot panel that no other page can restore. */
+/** Mesh document family: independent 3D preview on the left, read-only
+ * properties/overview/material slots stacked on the right. */
 export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
   grid: {
     height: 812,
@@ -206,20 +206,29 @@ export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
       data: [
         {
           type: 'leaf',
-          size: 820,
+          size: 680,
           data: {
-            views: ['ep:asset-properties'],
-            activeView: 'ep:asset-properties',
-            id: 'g-mesh-properties',
+            views: ['ep:mesh-preview'],
+            activeView: 'ep:mesh-preview',
+            id: 'g-mesh-preview',
           },
         },
         {
           type: 'branch',
-          size: 380,
+          size: 520,
           data: [
             {
               type: 'leaf',
-              size: 300,
+              size: 380,
+              data: {
+                views: ['ep:asset-properties'],
+                activeView: 'ep:asset-properties',
+                id: 'g-mesh-properties',
+              },
+            },
+            {
+              type: 'leaf',
+              size: 220,
               data: {
                 views: ['ep:asset-overview'],
                 activeView: 'ep:asset-overview',
@@ -228,7 +237,7 @@ export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
             },
             {
               type: 'leaf',
-              size: 512,
+              size: 212,
               data: {
                 views: ['ep:mesh-slots'],
                 activeView: 'ep:mesh-slots',
@@ -241,6 +250,11 @@ export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     },
   },
   panels: {
+    'ep:mesh-preview': {
+      id: 'ep:mesh-preview',
+      contentComponent: 'ep:mesh-preview',
+      title: 'Preview',
+    },
     'ep:asset-properties': {
       id: 'ep:asset-properties',
       contentComponent: 'ep:asset-properties',

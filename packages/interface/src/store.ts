@@ -312,7 +312,7 @@ export interface AppState {
   // Browser form: detach is a no-op (WindowManager.canDetach() === false), so
   // this map stays empty and behavior is unchanged.
   floatingSurfaces: Record<string, true>;
-  detachSurface: (d: import('./lib/platform').SurfaceDescriptor, opts?: { title?: string }) => Promise<void>;
+  detachSurface: (d: import('./lib/platform').SurfaceDescriptor, opts?: { title?: string; x?: number; y?: number; width?: number; height?: number }) => Promise<void>;
   redockSurface: (d: import('./lib/platform').SurfaceDescriptor) => Promise<void>;
   /** Plugin IDs currently open as top-level DockShell panels (so Sidebar knows
    *  to hide their keep-alive iframes to avoid double-rendering). */

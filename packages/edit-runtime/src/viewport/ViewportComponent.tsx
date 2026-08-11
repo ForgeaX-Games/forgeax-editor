@@ -139,6 +139,7 @@ import { validatePerspectiveFov } from './render-diagnostics';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
 import { registerViewportSessionAppliers } from './viewport-session-appliers';
 import { createEditVfxRuntimeBridge, createParticleCameraSource } from './vfx-runtime-bridge';
+import { supportsVfxRenderFeature } from './vfx-render-capability';
 import { createAnimationDiagnosticsProvider } from './animation-diagnostics-provider';
 import { createEngineExecutionDiagnostics } from './execution-diagnostics-provider';
 import '../theme.css';
@@ -159,6 +160,20 @@ const teardownFns: Array<() => void> = [];
 let currentResetOptions: ResetEditRealmOptions = {};
 function registerTeardown(fn: () => void): void {
   teardownFns.push(fn);
+}
+
+async function loadRuntimeAssetPayload(renderer: Renderer, guid: string): Promise<unknown> {
+  const live = gateway.lookupAsset(guid);
+  if (live !== undefined) return live;
+  try {
+    const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+    const parsed = AssetGuid.parse(guid);
+    if (!parsed.ok || parsed.value === undefined) return undefined;
+    const result = await renderer.assets.loadByGuid(parsed.value);
+    return result.ok ? result.value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type ManagedCarrierHealth = {
@@ -563,7 +578,6 @@ async function bootViewport(
     ? undefined
     : createDevImportTransport(gameSession.runtimeBinding);
   const createAppResult = await createApp(canvas, {
-    features: [vfxBridge.host.feature],
     input: canvasInput.editor,
     pointerLockAllowed: () => false,
     drawSource: worldManager.createDrawSource(),
@@ -583,7 +597,6 @@ async function bootViewport(
       console.warn('[editor] createApp failed (no GPU), retrying with null RHI:', app.error);
       const rhiNull = await import('@forgeax/engine-rhi-null');
       app = await createApp(canvas, {
-        features: [vfxBridge.host.feature],
         input: canvasInput.editor,
         pointerLockAllowed: () => false,
         drawSource: worldManager.createDrawSource(),
@@ -603,6 +616,21 @@ async function bootViewport(
   }
   const editorApp = app.value;
   const { world, renderer } = editorApp;
+  let vfxRenderFeatureEnabled = false;
+  if (supportsVfxRenderFeature(renderer.device.caps)) {
+    try {
+      const installed = await renderer.installRenderFeature(vfxBridge.host.feature);
+      if (installed.ok) {
+        vfxRenderFeatureEnabled = true;
+      } else {
+        console.warn('[editor] VFX render feature disabled:', installed.error);
+      }
+    } catch (error) {
+      console.warn('[editor] VFX render feature installation failed:', error);
+    }
+  } else {
+    console.warn('[editor] VFX render feature disabled: active RHI lacks compute or indirect-drawing capability');
+  }
   const executionDiagnostics = createEngineExecutionDiagnostics(editorApp.execution);
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(executionDiagnostics.provider));
   vfxRenderer = renderer;
@@ -980,6 +1008,7 @@ async function bootViewport(
       ),
       physics: editPhysics,
       vfxRuntimeHost: vfxBridge.host,
+      vfxRenderFeatureEnabled,
       onVfxDiagnosticsChanged: vfxBridge.notifyDiagnosticsChanged,
       ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
       ...(gameSession.slug ? {
@@ -1236,6 +1265,7 @@ async function bootViewport(
       runtime: runtimeIdentity,
       graph: runtimeUiGraph,
       gateway,
+      readAssetPayload: (guid) => loadRuntimeAssetPayload(renderer, guid),
       readViewportStatus: () => ({
         quadrant: getViewportQuadrant(),
         playPhase: gateway.playPhase,
@@ -1271,6 +1301,7 @@ async function bootViewport(
       runtime: runtimeIdentity,
       graph: runtimeUiGraph,
       gateway,
+      readAssetPayload: (guid) => loadRuntimeAssetPayload(renderer, guid),
       readViewportStatus: () => ({
         quadrant: getViewportQuadrant(),
         playPhase: gateway.playPhase,

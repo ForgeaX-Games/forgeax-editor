@@ -16,26 +16,31 @@ import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/pa
 // removed in interface#112. panels-editor is interface's built-in factory for
 // the ep:* dock panels + surfaces; the custom extension below carries the
 // leftover fields (workbench layout seed + editor bridge hooks).
-import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
-import { isPageDirty } from '@forgeax/interface/core/page-platform';
+import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
 import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
 import { configureWorkbenchClient, useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
-import { prompt as promptDialog } from '@forgeax/editor-ui';
 // The viewport carrier is isolated; preview-only surfaces and business panels
 // remain lightweight in-process components in the shell.
 import { ViewportRuntimeFrame } from '@forgeax/editor-edit-runtime/runtime-frame';
 import { MaterialPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/material-preview';
+import { MeshPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/mesh-preview';
 import { VfxPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/vfx-preview';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
-import { EDITOR_PANEL_COMPONENTS, registerMaterialInstancePreview, registerVfxPreview } from '@forgeax/editor/panels';
+import {
+  EDITOR_PANEL_COMPONENTS,
+  registerMaterialInstancePreview,
+  registerMeshPreview,
+  registerVfxPreview,
+} from '@forgeax/editor/panels';
 registerMaterialInstancePreview(MaterialPreviewViewport);
+registerMeshPreview(MeshPreviewViewport);
 registerVfxPreview(VfxPreviewViewport);
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
@@ -55,22 +60,16 @@ import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContri
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
-// Keyboard asset deletes use the Content Browser's reference/resource-aware
-// preflight dialog. Path deletes retain the standalone path confirmation.
 import {
-  computeDeleteOpenResources,
   DeleteGuardDialogHost,
-  getDeleteGuardWorkspace,
-  requestDeleteGuard,
 } from '@forgeax/editor-content-browser/delete-guard-entry';
-import { requestDeleteGuard as requestPathDeleteGuard } from './delete-guard-bus';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 
 // keyboard-router convergence M4: the interface submodule's global-shortcuts
 // router is editor-agnostic (lint:agnostic forbids importing @forgeax/editor),
 // so we inject the editor-side callbacks it needs here — once, before React
 // mounts (useGlobalShortcuts reads them at effect time). This keeps a SINGLE
-// global keydown listener (G-1 / AC-A1) while routing Delete/F2/Ctrl+D/Ctrl+A/G
+// global keydown listener while routing the remaining Ctrl+D/G/viewport actions
 // through the one gateway door.
 import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
 import { dispatchAction, registerAction } from '@forgeax/interface/lib/action-registry';
@@ -84,48 +83,10 @@ import { isPanelVisible } from '@forgeax/interface/components/DockShell/DockRegi
 import { installSettingsPanelRedirect, SETTINGS_PANEL_ID } from './settings-redirect';
 import { createStandaloneGameClient } from './game-service-client';
 
-// lastSelectionDomain is a SINGLE-source Derive of "who was selected last"
-// (AC-C1 / T5-1): entity and asset forward-selects each advance it; clear() does
-// NOT (C2-1). The router reads it (via this dep) to decide which domain
-// Delete/F2/Ctrl+D/Ctrl+A act on, and the panel header rings read it (via the
-// useLastSelectionDomain hook) to show the current Delete jurisdiction. The
-// Derive itself lives in editor-core (store/last-selection-domain) so router and
-// UI share one source — no second divergent state (G-3).
-let standaloneAppHost: AppHost | null = null;
-
-// Standalone's router deps = the shared SSOT builder + this host's
-// reference/resource-aware asset-delete preflight.
+// Contextual F2/Delete/Mod+A have moved to focused widget scopes. This bridge
+// remains only for shortcuts that have not yet migrated.
 function makeKeyboardRouterDeps(): KeyboardRouterDeps {
-  const deps = buildKeyboardRouterDeps({
-    confirmDeleteAssets: (assets) => {
-      const pages = standaloneAppHost?.pages.getSnapshot().instances ?? [];
-      const workspace = getDeleteGuardWorkspace();
-      return requestDeleteGuard({
-        assets,
-        ...(workspace === null ? {} : { workspace }),
-        openResources: computeDeleteOpenResources(
-          assets.map((asset) => asset.guid),
-          pages,
-          isPageDirty,
-        ),
-      });
-    },
-    // Folder/file delete confirm for the keyboard-router path. The editor-ui
-    // `confirmDialog` (ConfirmProvider in the isolated #editor-overlay-root React
-    // root) queues the AlertDialog but never paints/receives interaction in this
-    // host, so the promise hangs forever and the delete stalls. Route through the
-    // same in-house DeleteGuardDialog the asset path uses — one consistent, reliable
-    // confirm UI. `path` is a single dir path or a ', '-joined file list.
-    confirmDeleteFolder: (path) =>
-      requestPathDeleteGuard({ paths: path.split(', ').filter(Boolean) }),
-    promptRenameAsset: (currentName) => promptDialog({
-      title: 'Rename Asset',
-      label: 'New name',
-      defaultValue: currentName,
-      confirmText: 'Rename',
-      cancelText: 'Cancel',
-    }),
-  }) as KeyboardRouterDeps;
+  const deps = buildKeyboardRouterDeps() as KeyboardRouterDeps;
   return {
     ...deps,
     // The shell owns the one global shortcut listener, while the iframe Runtime
@@ -231,6 +192,7 @@ const EDITOR_PANEL_TITLES: Record<string, string> = {
   history: 'History', capabilities: 'Capabilities',
   launcher: 'Launcher', 'asset-overview': 'Asset Overview',
   'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
+  'mesh-preview': 'Preview',
   'mat-preview': 'Preview', 'mi-preview': 'Preview', 'mi-properties': 'Properties',
   'vfx-system': 'System Outline', 'vfx-preview': 'Preview', 'vfx-timeline': 'Timeline',
   'vfx-details': 'Details', 'vfx-diagnostics': 'Diagnostics',
@@ -306,7 +268,6 @@ const standaloneEditorIntegrationExtension: AppExtension = {
   id: 'standalone.editor-integration', version: '1.0.0',
   requires: ['panels'],
   setup(ctx) {
-    standaloneAppHost = ctx.host;
     const disposePanels = ctx.contributePanels({
       builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
       editor: {
@@ -323,7 +284,6 @@ const standaloneEditorIntegrationExtension: AppExtension = {
       () => isPanelVisible(SETTINGS_PANEL_ID),
     );
     return () => {
-      if (standaloneAppHost === ctx.host) standaloneAppHost = null;
       disposeRedirect();
       disposePanels();
     };

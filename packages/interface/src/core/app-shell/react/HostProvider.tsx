@@ -34,3 +34,13 @@ export function useContextKey<T>(key: string): T | undefined {
   }, [host, key]);
   return value;
 }
+
+export function useKeybindingScope(ref: React.RefObject<Element | null>, scopeId: string): void {
+  const host = useHost();
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const cleanup = host.keybindings.registerScope(element, scopeId);
+    return () => { void cleanup(); };
+  }, [host, ref, scopeId]);
+}

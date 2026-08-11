@@ -35,4 +35,5 @@ describe('HostProvider', () => {
     await act(async () => { host.contextKeys.set('m', 'scene'); });
     expect(seen).toBe('scene');
   });
+
 });

@@ -3,6 +3,7 @@ import * as React from 'react';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { createAppHost, HostProvider } from '@forgeax/interface/core/app-shell';
 import { CBSourceTree } from './CBSourceTree';
 import type { SourceTreeNode } from './content-browser-format';
 
@@ -42,21 +43,25 @@ const sourceTree: SourceTreeNode[] = [
 function Harness({ children }: { children?: ReactNode }) {
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
+  const [host] = React.useState(() => createAppHost().host);
   return (
-    <CBSourceTree
-      projectName="Demo"
-      favoritesOnly={favoritesOnly}
-      setFavoritesOnly={setFavoritesOnly}
-      sourceTree={sourceTree}
-      collapsedSourceFolders={collapsed}
-      setCollapsedSourceFolders={setCollapsed}
-      selectedPath={null}
-      setSelectedItem={() => {}}
-      setPreviewItem={() => {}}
-      nav={{ currentPath: '', navigate: () => {} }}
-      openFolderContextMenu={() => {}}
-      openFileContextMenu={() => {}}
-    />
+    <HostProvider value={host}>
+      <CBSourceTree
+        projectName="Demo"
+        favoritesOnly={favoritesOnly}
+        setFavoritesOnly={setFavoritesOnly}
+        sourceTree={sourceTree}
+        collapsedSourceFolders={collapsed}
+        setCollapsedSourceFolders={setCollapsed}
+        selectedPath={null}
+        setSelectedItem={() => {}}
+        setPreviewItem={() => {}}
+        onFocusItem={() => {}}
+        nav={{ currentPath: '', navigate: () => {} }}
+        openFolderContextMenu={() => {}}
+        openFileContextMenu={() => {}}
+      />
+    </HostProvider>
   );
 }
 

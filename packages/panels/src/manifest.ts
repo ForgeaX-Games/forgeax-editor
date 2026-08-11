@@ -23,6 +23,7 @@ import {
   MaterialInstancePreviewPanel,
   MaterialInstancePropertiesPanel,
   MaterialPreviewPanel,
+  MeshPreviewPanel,
   MeshSlotsPanel,
   InputMapPropertiesPanel,
 } from './AssetEditors';
@@ -39,6 +40,10 @@ export {
   registerMaterialInstancePreview,
   getMaterialInstancePreview,
 } from './mi-preview-slot';
+export {
+  registerMeshPreview,
+  getMeshPreview,
+} from './mesh-preview-slot';
 export { registerVfxPreview, getVfxPreview } from './vfx-preview-slot';
 
 // D5 (plan-strategy §2): renamed PANEL_COMPONENTS -> EDITOR_PANEL_COMPONENTS to
@@ -65,6 +70,7 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   'mi-preview': MaterialInstancePreviewPanel,
   'mi-properties': MaterialInstancePropertiesPanel,
   'mat-preview': MaterialPreviewPanel,
+  'mesh-preview': MeshPreviewPanel,
   'input-map-properties': InputMapPropertiesPanel,
   'vfx-system': VfxSystemPanel,
   'vfx-preview': VfxPreviewPanel,

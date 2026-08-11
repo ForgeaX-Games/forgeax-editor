@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
+import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
@@ -67,6 +68,61 @@ type CompNameIndex = ReadonlyMap<EntityHandle, readonly string[]>;
 const EMPTY_COMP_INDEX: CompNameIndex = new Map();
 const EMPTY_NAMES: readonly string[] = [];
 const EMPTY_IDS: readonly EntityHandle[] = [];
+
+export interface HierarchyCommandActions {
+  readonly canMutateFocusedTarget: boolean;
+  readonly canRenameFocusedTarget: boolean;
+  readonly renameFocused: () => void;
+  readonly deleteFocused: () => void;
+  readonly selectAll: () => void;
+}
+
+export interface HierarchyCommandActionDeps {
+  readonly readOnly: boolean;
+  readonly getFocusedEntity: () => EntityHandle | null;
+  readonly getSelectedEntities: () => EntityHandle[];
+  readonly renameEntity: (entity: EntityHandle) => void;
+  readonly deleteEntities: (entities: readonly EntityHandle[]) => void;
+  readonly selectAll: () => void;
+}
+
+export function createHierarchyCommandActions(
+  deps: HierarchyCommandActionDeps,
+): HierarchyCommandActions {
+  const focusedEntities = (): EntityHandle[] => {
+    const selection = deps.getSelectedEntities();
+    const focused = deps.getFocusedEntity();
+    if (focused === null) return selection;
+    return selection.includes(focused) ? selection : [focused];
+  };
+  return {
+    get canMutateFocusedTarget() {
+      return !deps.readOnly && focusedEntities().length > 0;
+    },
+    get canRenameFocusedTarget() {
+      return !deps.readOnly
+        && (deps.getFocusedEntity() !== null || deps.getSelectedEntities().length > 0);
+    },
+    renameFocused() {
+      if (deps.readOnly) return;
+      const target = deps.getFocusedEntity() ?? deps.getSelectedEntities().at(-1) ?? null;
+      if (target !== null) deps.renameEntity(target);
+    },
+    deleteFocused() {
+      if (deps.readOnly) return;
+      const targets = focusedEntities();
+      if (targets.length > 0) deps.deleteEntities(targets);
+    },
+    selectAll: deps.selectAll,
+  };
+}
+
+let focusedHierarchyEntity: EntityHandle | null = null;
+let hierarchyCommandActions: HierarchyCommandActions | null = null;
+
+export function getHierarchyCommandActions(): HierarchyCommandActions | null {
+  return hierarchyCommandActions;
+}
 
 type HierarchyOperation = Parameters<typeof gateway.dispatch>[0];
 interface RemoteHierarchyContextValue {
@@ -617,10 +673,13 @@ const Row = memo(function Row({
         ref={rowRef}
         className={`tn k-${typeToken.toLowerCase()}${isSelected ? ' sel' : ''}${nodeHidden ? ' dim' : nodeAncestorHidden ? ' pdim' : ''}${dropPos === 'inside' ? ' drop' : ''}${dropPos === 'before' ? ' drop-before' : ''}${dropPos === 'after' ? ' drop-after' : ''}${isHovered ? ' hov' : ''}`}
         data-testid={`hier-row-${id}`}
+        tabIndex={isSelected ? 0 : -1}
         title={`${nodeName} · #${id}${!nodeHidden && nodeAncestorHidden ? ` · ${t('editor.hierarchy.hiddenByAncestor')}` : ''}`}
+        onFocus={() => { focusedHierarchyEntity = id; }}
         onMouseEnter={() => dispatchHierarchyOperation({ kind: 'setHoverEntity', id })}
         onMouseLeave={() => dispatchHierarchyOperation({ kind: 'setHoverEntity', id: null })}
         onClick={(e) => {
+          e.currentTarget.focus();
           if (e.shiftKey) {
             handleShiftClick(id, getHierarchyPanelSnapshot().collapsed, remote);
           } else if (e.metaKey || e.ctrlKey) {
@@ -1024,6 +1083,8 @@ export function HierarchyPanel() {
   const readOnly = remoteProjectionState?.mode === 'play' || (!remoteProjection && gateway.mode === 'play');
   const worldReady = activeWorld != null || projection !== undefined;
   const hierarchyBodyRef = useRef<HTMLDivElement>(null);
+  const hierarchyRootRef = useRef<HTMLDivElement>(null);
+  useKeybindingScope(hierarchyRootRef, 'editor.hierarchy');
   const worldEntityIds = remoteProjection
     ? projection?.rows.map((row) => row.id) ?? EMPTY_IDS
     : activeWorld ? worldEntityHandles(activeWorld) : EMPTY_IDS;
@@ -1193,6 +1254,24 @@ export function HierarchyPanel() {
     () => filtering && worldReady ? stableDisplayOrder(getHierarchyVisibleMatches()) : [],
     [filtering, view.filters, view.searchQuery, worldReady, activeWorld],
   );
+  useEffect(() => {
+    hierarchyCommandActions = createHierarchyCommandActions({
+      readOnly,
+      getFocusedEntity: () => focusedHierarchyEntity,
+      getSelectedEntities: selectedEntities,
+      renameEntity: (entity) => {
+        void dispatchActiveEditorOperation({ kind: 'requestRename', entity });
+      },
+      deleteEntities: (entities) => {
+        void hierarchyGesture('delete', entities);
+      },
+      selectAll,
+    });
+    return () => {
+      hierarchyCommandActions = null;
+      focusedHierarchyEntity = null;
+    };
+  });
 
   // Cross-game switch gap: show a quiet placeholder until createApp reinjects doc.world.
   if (!worldReady) {
@@ -1208,25 +1287,13 @@ export function HierarchyPanel() {
   return (
     <RemoteHierarchyContext.Provider value={remoteContext}>
     <div
+      ref={hierarchyRootRef}
       className="panel outliner-panel"
       data-testid="panel-hierarchy"
       style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-      // Step 1 (keyboard-router convergence): wire Delete / Backspace on the panel
-      // itself so the keystroke deletes the current entity selection through the
-      // one gateway door. JSX onKeyDown is scoped to this panel (G-1 level 2),
-      // so it stays even after Step 2 moves the global router in — it never races
-      // with the document-level listener. Typing targets (rename input / filter)
-      // are excluded so Backspace edits text instead of deleting nodes.
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (readOnly) return;
-        if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-        const tgt = e.target as HTMLElement;
-        if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable) return;
-        const cur = selectedEntities();
-        if (cur.length === 0) return;
-        e.preventDefault();
-        void hierarchyGesture('delete', cur);
+      tabIndex={selectedEntities().length > 0 ? -1 : 0}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) focusedHierarchyEntity = null;
       }}
     >
       <div className="ol-colhead" data-testid="hier-colhead">

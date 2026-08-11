@@ -26,8 +26,9 @@ describe('Editor Page contribution', () => {
     ]);
     const level = pages.find((page) => page.id.endsWith('/level'));
     expect(level?.panels.map((panel) => panel.id)).toContain('ep:capabilities');
-    expect(pages.find((page) => page.id.endsWith('/mesh'))?.panels.map((panel) => panel.id))
-      .toContain('ep:mesh-slots');
+    const meshPanels = pages.find((page) => page.id.endsWith('/mesh'))?.panels.map((panel) => panel.id) ?? [];
+    expect(meshPanels).toContain('ep:mesh-preview');
+    expect(meshPanels).toContain('ep:mesh-slots');
     expect(pages.find((page) => page.id.endsWith('/material'))?.panels.map((panel) => panel.id))
       .not.toContain('ep:mesh-slots');
     // The Material page owns its 3D preview panel (UE-style material editor);
@@ -218,9 +219,10 @@ describe('Editor Page contribution', () => {
     const pages = extension.contributes?.pages ?? [];
     const material = pages.find((page) => page.id.endsWith('/material'));
     expect(material?.layoutVersion).toBe(2);
-    for (const suffix of ['/level', '/asset', '/mesh', '/material-instance', '/input-map', '/vfx']) {
+    for (const suffix of ['/level', '/asset', '/material-instance', '/input-map', '/vfx']) {
       const page = pages.find((candidate) => candidate.id.endsWith(suffix));
       expect(page?.layoutVersion ?? 1, suffix).toBe(1);
     }
+    expect(pages.find((candidate) => candidate.id.endsWith('/mesh'))?.layoutVersion).toBe(2);
   });
 });

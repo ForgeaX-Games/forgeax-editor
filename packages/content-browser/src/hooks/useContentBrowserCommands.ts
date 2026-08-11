@@ -15,6 +15,7 @@ import type { FilterAPI } from './useFilter';
 import type { SortAPI } from './useSort';
 import type { NavHistoryAPI } from './useNavHistory';
 import { requestSaveAll } from '../save-all-bus';
+import type { CBViewItem } from '../types';
 
 export interface CBCommandsDeps {
   host: AppHost;
@@ -33,6 +34,92 @@ export interface CBCommandsDeps {
   clearKindFilters: () => void;
   setFavoritesOnly: Dispatch<SetStateAction<boolean>>;
   setThumbnailSize: Dispatch<SetStateAction<number>>;
+  getFocusedSourceTreeItem: () => CBViewItem | null;
+  getFocusedGridItem: () => CBViewItem | null;
+  renameItem: (item: CBViewItem) => void;
+  deleteItem: (item: CBViewItem) => void;
+  selectAllGridItems: () => void;
+}
+
+export interface ContentBrowserScopedCommandActions {
+  readonly getSourceTreeItem: () => CBViewItem | null;
+  readonly getGridItem: () => CBViewItem | null;
+  readonly renameItem: (item: CBViewItem) => void;
+  readonly deleteItem: (item: CBViewItem) => void;
+  readonly selectAllGridItems: () => void;
+}
+
+export function registerContentBrowserScopedCommands(
+  host: AppHost,
+  actions: ContentBrowserScopedCommandActions,
+): Array<() => void> {
+  const deleteKeys = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
+    ? ['Delete', 'Backspace']
+    : ['Delete'];
+  return [
+    host.keybindings.register({ keys: 'F2', commandId: 'contentBrowser.sourceTree.rename', scope: 'editor.contentBrowser.sourceTree' }),
+    host.keybindings.register({ keys: deleteKeys, commandId: 'contentBrowser.sourceTree.delete', scope: 'editor.contentBrowser.sourceTree' }),
+    host.keybindings.register({ keys: 'Mod+A', commandId: 'contentBrowser.sourceTree.selectAll', scope: 'editor.contentBrowser.sourceTree' }),
+    host.keybindings.register({ keys: 'F2', commandId: 'contentBrowser.grid.rename', scope: 'editor.contentBrowser.grid' }),
+    host.keybindings.register({ keys: deleteKeys, commandId: 'contentBrowser.grid.delete', scope: 'editor.contentBrowser.grid' }),
+    host.keybindings.register({ keys: 'Mod+A', commandId: 'contentBrowser.grid.selectAll', scope: 'editor.contentBrowser.grid' }),
+    host.commands.register({
+      id: 'contentBrowser.sourceTree.rename',
+      title: 'Content Browser Source Tree: Rename focused item',
+      when: () => actions.getSourceTreeItem() !== null,
+      execute: () => {
+        const item = actions.getSourceTreeItem();
+        if (item) actions.renameItem(item);
+        return { status: 'completed' as const };
+      },
+    }),
+    host.commands.register({
+      id: 'contentBrowser.sourceTree.delete',
+      title: 'Content Browser Source Tree: Delete focused item',
+      when: () => actions.getSourceTreeItem() !== null,
+      execute: () => {
+        const item = actions.getSourceTreeItem();
+        if (item) actions.deleteItem(item);
+        return { status: 'completed' as const };
+      },
+    }),
+    host.commands.register({
+      id: 'contentBrowser.sourceTree.selectAll',
+      title: 'Content Browser Source Tree: Select all',
+      // Source-tree selection is a single navigation path. Claim Mod+A as
+      // disabled so it cannot leak into the grid or Hierarchy.
+      when: () => false,
+      execute: () => ({ status: 'completed' as const }),
+    }),
+    host.commands.register({
+      id: 'contentBrowser.grid.rename',
+      title: 'Content Browser Grid: Rename focused item',
+      when: () => actions.getGridItem() !== null,
+      execute: () => {
+        const item = actions.getGridItem();
+        if (item) actions.renameItem(item);
+        return { status: 'completed' as const };
+      },
+    }),
+    host.commands.register({
+      id: 'contentBrowser.grid.delete',
+      title: 'Content Browser Grid: Delete focused item',
+      when: () => actions.getGridItem() !== null,
+      execute: () => {
+        const item = actions.getGridItem();
+        if (item) actions.deleteItem(item);
+        return { status: 'completed' as const };
+      },
+    }),
+    host.commands.register({
+      id: 'contentBrowser.grid.selectAll',
+      title: 'Content Browser Grid: Select all visible items',
+      execute: () => {
+        actions.selectAllGridItems();
+        return { status: 'completed' as const };
+      },
+    }),
+  ];
 }
 
 export function useContentBrowserCommands(deps: CBCommandsDeps): void {
@@ -40,6 +127,7 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
     host, t, loading, viewMode, filter, sort, nav, favoritesOnly, thumbnailSize,
     reload, createFolderInCurrentPath, createAssetInCurrentPath, handleImport,
     clearKindFilters, setFavoritesOnly, setThumbnailSize,
+    getFocusedSourceTreeItem, getFocusedGridItem, renameItem, deleteItem, selectAllGridItems,
   } = deps;
 
   useEffect(() => {
@@ -93,6 +181,13 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
 
   useEffect(() => {
     const cleanups = [
+      ...registerContentBrowserScopedCommands(host, {
+        getSourceTreeItem: getFocusedSourceTreeItem,
+        getGridItem: getFocusedGridItem,
+        renameItem,
+        deleteItem,
+        selectAllGridItems,
+      }),
       host.commands.register({
         id: 'contentBrowser.refresh',
         title: t('editor.assets.reloadTitle'),
@@ -199,5 +294,5 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
       }),
     ];
     return () => { for (const cleanup of cleanups.slice().reverse()) cleanup(); };
-  }, [clearKindFilters, createAssetInCurrentPath, createFolderInCurrentPath, filter, handleImport, host, reload, sort, thumbnailSize, t, setFavoritesOnly, setThumbnailSize]);
+  }, [clearKindFilters, createAssetInCurrentPath, createFolderInCurrentPath, deleteItem, filter, getFocusedGridItem, getFocusedSourceTreeItem, handleImport, host, reload, renameItem, selectAllGridItems, sort, thumbnailSize, t, setFavoritesOnly, setThumbnailSize]);
 }

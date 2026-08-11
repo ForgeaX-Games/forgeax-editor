@@ -30,6 +30,10 @@
       "types": "./src/viewport/MaterialPreviewViewport.tsx",
       "import": "./src/viewport/MaterialPreviewViewport.tsx"
     },
+    "./viewport/mesh-preview": {
+      "types": "./src/viewport/MeshPreviewViewport.tsx",
+      "import": "./src/viewport/MeshPreviewViewport.tsx"
+    },
     "./viewport/vfx-preview": {
       "types": "./src/viewport/VfxPreviewViewport.tsx",
       "import": "./src/viewport/VfxPreviewViewport.tsx"

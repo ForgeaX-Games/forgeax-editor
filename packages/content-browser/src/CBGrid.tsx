@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import type { CBViewItem } from './types';
 import type { CBViewMode2 } from './view-mode';
 import type { MultiSelectAPI } from './hooks';
@@ -15,6 +17,7 @@ interface Props {
   onSelect?: (item: CBViewItem) => void;
   onDoubleClick?: (item: CBViewItem) => void;
   onContextMenu?: (e: React.MouseEvent, item: CBViewItem) => void;
+  onFocusItem?: (item: CBViewItem) => void;
   /** Whether the item is in the favorites list — lights the card's ⭐. */
   isItemFavorite?: (item: CBViewItem) => boolean;
   /** Toggle the item's favorite state (drives both the card ⭐ and the
@@ -28,7 +31,9 @@ const NOOP_ITEM = (_item: CBViewItem) => {};
 const NOOP_CTX = (_e: React.MouseEvent, _item: CBViewItem) => {};
 const NOOP_PATH = (_path: string) => {};
 
-export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, isItemFavorite, onToggleFavorite }: Props) {
+export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, onFocusItem, isItemFavorite, onToggleFavorite }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useKeybindingScope(rootRef, 'editor.contentBrowser.grid');
   // Pull the two stable members off the multiSelect API. `isSelected` is read
   // here (during render) to derive each card's `selected` value; `handleClick`
   // is a stable identity (latest-ref inside useMultiSelect) forwarded to leaves.
@@ -50,12 +55,19 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
   const activateCb = onDoubleClick ?? NOOP_ITEM;
   const contextCb = onContextMenu ?? NOOP_CTX;
   const favoriteCb = onToggleFavorite ?? NOOP_ITEM;
+  const focusCb = onFocusItem ?? NOOP_ITEM;
   const expandCb = onTogglePackExpansion ?? NOOP_PATH;
+  const selectedTabStop = multiSelect.selection.items[0];
+  const tabStopKey = selectedTabStop
+    ? (selectedTabStop.type === 'asset' ? selectedTabStop.guid : selectedTabStop.path)
+    : items[0]?.type === 'asset' ? items[0].guid : items[0]?.path;
 
   return (
-    <div className="cb-grid-view cb-fe-grid" onClick={handleBlankClick}>
+    <div ref={rootRef} className="cb-grid-view cb-fe-grid" onClick={handleBlankClick}>
       {items.map((item, index) => {
         const selected = isSelected(item);
+        const itemKey = item.type === 'asset' ? item.guid : item.path;
+        const tabIndex = itemKey === tabStopKey ? 0 : -1;
         const favorite = isItemFavorite?.(item) ?? false;
         if (item.type === 'folder') {
           return (
@@ -64,6 +76,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
               folder={item}
               index={index}
               selected={selected}
+              tabIndex={tabIndex}
               thumbnailSize={thumbnailSize}
               favorite={favorite}
               onSelect={selectCb}
@@ -71,6 +84,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
               onContextMenu={contextCb}
               onToggleFavorite={favoriteCb}
               onClickIndex={handleClick}
+              onFocusItem={focusCb}
             />
           );
         }
@@ -82,6 +96,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
               file={item}
               index={index}
               selected={selected}
+              tabIndex={tabIndex}
               expanded={isAssetMode ? undefined : expandedPacks?.has(item.path)}
               expandable={!isAssetMode && hasExpandableAssets}
               favorite={favorite}
@@ -91,6 +106,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
               onToggleFavorite={favoriteCb}
               onToggleExpand={expandCb}
               onClickIndex={handleClick}
+              onFocusItem={focusCb}
             />
           );
         }
@@ -100,6 +116,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
             asset={item}
             index={index}
             selected={selected}
+            tabIndex={tabIndex}
             thumbnailSize={thumbnailSize}
             favorite={favorite}
             onSelect={selectCb}
@@ -107,6 +124,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
             onContextMenu={contextCb}
             onToggleFavorite={favoriteCb}
             onClickIndex={handleClick}
+            onFocusItem={focusCb}
           />
         );
       })}

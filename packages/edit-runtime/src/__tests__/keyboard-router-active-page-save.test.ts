@@ -13,22 +13,14 @@ describe('buildKeyboardRouterDeps — active page save (M4/B3)', () => {
       handled += 1;
       return true;
     });
-    const deps = buildKeyboardRouterDeps({
-      confirmDeleteAssets: async () => true,
-      confirmDeleteFolder: async () => true,
-      promptRenameAsset: async () => null,
-    });
+    const deps = buildKeyboardRouterDeps();
     deps.save();
     expect(handled).toBe(1);
   });
 
   it('falls through when the handler returns false', () => {
     registerActivePageSaveHandler(() => false);
-    const deps = buildKeyboardRouterDeps({
-      confirmDeleteAssets: async () => true,
-      confirmDeleteFolder: async () => true,
-      promptRenameAsset: async () => null,
-    });
+    const deps = buildKeyboardRouterDeps();
     // Should not throw; scene save path still runs (may reject without a live doc).
     expect(() => deps.save()).not.toThrow();
   });

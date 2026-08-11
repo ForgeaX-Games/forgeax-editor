@@ -28,9 +28,16 @@ describe('VFX asset preview foundation', () => {
     expect(source).not.toContain('gateway.doc.registry');
   });
 
-  it('loops authored preview schedules without changing the cooked effect', () => {
-    expect(source).toContain('autoReplayIntervalMs');
-    expect(source).toContain('emitter.schedule.loopDuration');
-    expect(source).toContain('.replay(player)');
+  it('keeps bounded preview chrome behind the mini-world write gate and shared App frame authority', () => {
+    expect(source).toContain('setPlaying(next: boolean)');
+    expect(source).toContain('setEnabledEmitterIds(nextEnabledEmitterIds');
+    expect(source).toContain('seekPhaseTick(targetPhaseTick');
+    expect(source).toContain('currentApp.stepFrame(fixedDelta)');
+    expect(source).toContain('facade.set(player, ParticleEffectPlayer');
+    expect(source).not.toContain('gateway.dispatch');
+    expect(source).not.toContain('registerVfxPreviewController');
+    expect(source).not.toContain('autoReplayIntervalMs');
+    expect(source).not.toContain('currentApp.world.update(');
+    expect(source).not.toContain('currentApp.renderer.draw(');
   });
 });

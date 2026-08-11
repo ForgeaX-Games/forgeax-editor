@@ -31,6 +31,7 @@ import { t } from '@/i18n';
 import { useShellStore } from '../store';
 import { loadWorkbenchList, setActiveWorkbench, getWorkbenchListSnapshot } from './workbenches';
 import { toggleCommandPalette } from './command-palette-store';
+import type { ContextualKeybindingsApi } from '../core/contextual-keybindings';
 
 export interface ShortcutDef {
   /** 显示给用户的字符串,e.g. "Ctrl+Shift+F"。Mac 上 UI 会自动替换 Ctrl → ⌘/⌃。 */
@@ -86,12 +87,9 @@ function mod(e: KeyboardEvent): boolean {
 
 // Is the scene editor the surface the user is currently looking at?
 //
-// The `edit` group (Delete / F2 / Ctrl+D / Ctrl+A / viewport W-E-R-F …) is
-// injected globally at boot and dispatches against module-level editor
-// selection / viewport state — it has no notion of "which page am I on". So
-// pressing F2 on the Dashboard or Delete on the AI workbench still routed to a
-// stale scene selection. This coarse surface gate lets those keys ESCAPE (fall
-// through to the focused component / browser default) whenever the editor is
+// The remaining legacy `edit` group (Ctrl+D / viewport W-E-R-F …) is injected
+// globally at boot and still dispatches against module-level editor selection /
+// viewport state. This coarse surface gate lets those keys escape whenever the editor is
 // not the foreground surface. Two facts, both interface-local (no editor
 // import, no focus/DOM resolver — that larger redesign is ADR-0029 scope; this
 // is its Phase 0 short-term mitigation):
@@ -108,8 +106,8 @@ export function isEditorSurfaceActive(): boolean {
 
 // ── Editor keyboard-router deps (keyboard-router convergence, M4 T4-1..T4-3) ──
 // The interface package is editor-agnostic (lint:agnostic forbids importing
-// @forgeax/editor), so the edit-domain shortcuts (Delete / Backspace / F2 /
-// Ctrl+D / Ctrl+A / G / Shift+G) are injected by the host editor via
+// @forgeax/editor), so the remaining edit-domain shortcuts (Ctrl+D / H /
+// Ctrl+H / Shift+H / G / Shift+G / viewport input) are injected by the host editor via
 // registerKeyboardRouterDeps. Each dep is a thin callback the editor wires to
 // its own gateway / selection / viewport-quadrant — the router stays a pure
 // dispatcher and never touches editor state directly (G-1 / AC-A1: still ONE
@@ -125,19 +123,19 @@ export interface RouterSelectedAsset {
 export interface KeyboardRouterDeps {
   /** Dispatch an editor op through the one gateway door. */
   dispatch: (op: { kind: string; [k: string]: unknown }, origin?: string) => void;
-  /** Current entity-selection handles (for Delete / F2 / Ctrl+D routing). */
+  /** Current entity-selection handles (for Ctrl+D / H routing). */
   getEntitySelection: () => number[];
-  /** Current asset-selection list (for Delete / F2 / Ctrl+D routing). */
+  /** Current asset-selection list (for Ctrl+D routing). */
   getAssetSelection: () => RouterSelectedAsset[];
-  /** Derive of "who was selected last" — drives triple-domain key routing (AC-C1). */
+  /** Derive of "who was selected last" — retained for not-yet-migrated Ctrl+D. */
   getLastSelectionDomain: () => 'entity' | 'asset' | 'folder' | null;
-  /** True under ▶ Play (entity-domain Delete must early-return, AC-A5b). */
+  /** True under ▶ Play. */
   isPlayMode: () => boolean;
   /** Current viewport display axis (for G / Shift+G Game View toggle, AC-Cb4). */
   getDisplay: () => 'scene' | 'game';
   /** Current input owner. */
   getInputTarget: () => 'editor' | 'game';
-  /** Entity: delete the given handles (cascade, one undo step). */
+  /** Legacy command-registry support; no longer bound to global Delete. */
   deleteEntities: (ids: number[]) => void;
   /** Entity: duplicate the given handles. */
   duplicateEntities: (ids: number[]) => void;
@@ -147,26 +145,10 @@ export interface KeyboardRouterDeps {
   showAllHidden: () => void;
   /** Entity: hide everything not selected (Shift+H — isolate selection). */
   hideUnselected: () => void;
-  /** Entity: open rename for the given handle. */
-  renameEntity: (id: number) => void;
-  /** Entity: select all entities. */
+  /** Legacy command-registry support; no longer bound to global Mod+A. */
   selectAllEntities: () => void;
-  /** Asset: delete the given assets (UI-layer guard dialog if needed, AC-C2). */
-  deleteAssets: (assets: RouterSelectedAsset[]) => void;
   /** Asset: duplicate the given asset (guid, packPath). */
   duplicateAsset: (guid: string, packPath: string) => void;
-  /** Asset: rename the given asset (guid, packPath). */
-  renameAsset: (guid: string, packPath: string) => void;
-  /** Asset: select all assets in the active browser (CB-scoped, wired by CB). */
-  selectAllAssets: () => void;
-  /** Folder: get current folder selection paths (D3b, legacy). */
-  getFolderSelection?: () => { path: string }[];
-  /** Plan-E: get typed path selection (folders + files with their kind). */
-  getPathSelection?: () => { path: string; kind: 'dir' | 'file' }[];
-  /** Folder: delete the given folders (D3b, legacy). */
-  deleteFolders?: (folders: { path: string }[]) => void;
-  /** Plan-E: delete typed path items (dispatches correct op per kind). */
-  deletePathItems?: (items: { path: string; kind: 'dir' | 'file' }[]) => void;
   /** Editor history actions, injected so the interface stays editor-agnostic. */
   undo: () => void;
   redo: () => void;
@@ -196,51 +178,6 @@ export function getKeyboardRouterDeps(): KeyboardRouterDeps | null {
 // play-mode) are enforced by the host's onKey wrapper (isComposing / isTypingTarget)
 // plus the per-op play-mode checks below.
 function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
-  const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
-
-  // Plan-E Delete: delete ALL selected items (folders/files + assets) in one
-  // pass; entity is the fallback when nothing else is selected. This replaces
-  // the domain-exclusive routing that broke when unified multi-select polluted
-  // lastSelectionDomain. The domain is still consulted as a HINT for the
-  // entity-only fallback, but asset + folder/file selections are checked
-  // unconditionally so mixed-select Delete works.
-  const routeDelete = (): boolean => {
-    let acted = false;
-
-    // 1. Delete selected folder/file paths (typed: dir → deleteDirectory, file → deleteSourceFile).
-    const pathItems = deps.getPathSelection?.();
-    if (pathItems && pathItems.length > 0) {
-      deps.deletePathItems?.(pathItems);
-      acted = true;
-    } else {
-      // Legacy fallback: getFolderSelection (untyped paths, treated as dirs).
-      const folders = deps.getFolderSelection?.();
-      if (folders && folders.length > 0) { deps.deleteFolders?.(folders); acted = true; }
-    }
-
-    // 2. Delete selected assets (engine pack entries → destroyAsset).
-    const assets = deps.getAssetSelection();
-    if (assets.length > 0) { deps.deleteAssets(assets); acted = true; }
-
-    // 3. Entity fallback: only when no asset/folder/file was selected.
-    if (!acted) {
-      if (deps.isPlayMode()) return false;
-      const ids = deps.getEntitySelection();
-      if (ids.length > 0) { deps.deleteEntities(ids); return true; }
-    }
-    return acted;
-  };
-  const routeF2 = (): boolean => {
-    const domain = deps.getLastSelectionDomain() ?? 'entity';
-    if (domain === 'asset') {
-      const a = deps.getAssetSelection()[0];
-      if (a) { deps.renameAsset(a.guid, a.packPath); return true; }
-      return false;
-    }
-    const id = deps.getEntitySelection()[0];
-    if (id != null) { deps.renameEntity(id); return true; }
-    return false;
-  };
   const routeCtrlD = (): boolean => {
     const domain = deps.getLastSelectionDomain() ?? 'entity';
     if (domain === 'asset') {
@@ -250,12 +187,6 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
     const ids = deps.getEntitySelection();
     if (ids.length > 0) { deps.duplicateEntities(ids); return true; }
     return false;
-  };
-  const routeCtrlA = (): boolean => {
-    const domain = deps.getLastSelectionDomain() ?? 'entity';
-    if (domain === 'asset') deps.selectAllAssets();
-    else deps.selectAllEntities();
-    return true;
   };
   // UE-parity editor hide (docs 2026-08-04-editor-hide-ue-parity-plan M2):
   // H hides the selection, Ctrl+H shows every hidden entity, Shift+H hides
@@ -300,34 +231,12 @@ function editShortcuts(deps: KeyboardRouterDeps): ShortcutDef[] {
 
   return [
     {
-      combo: isMac ? 'Backspace' : 'Delete',
-      group: 'edit',
-      label: 'Delete selection',
-      match: (e) => e.key === 'Delete' || (isMac && e.key === 'Backspace'),
-      run: routeDelete,
-    },
-    {
-      combo: 'F2',
-      group: 'edit',
-      label: 'Rename selection',
-      match: (e) => !mod(e) && !e.shiftKey && !e.altKey && e.key === 'F2',
-      run: routeF2,
-    },
-    {
       combo: 'Ctrl+D',
       group: 'edit',
       label: 'Duplicate selection',
       match: (e) => mod(e) && !e.shiftKey && !e.altKey
         && (e.code === 'KeyD' || safeKeyLower(e) === 'd'),
       run: routeCtrlD,
-    },
-    {
-      combo: 'Ctrl+A',
-      group: 'edit',
-      label: 'Select all (entity / asset)',
-      match: (e) => mod(e) && !e.shiftKey && !e.altKey
-        && (e.code === 'KeyA' || safeKeyLower(e) === 'a'),
-      run: routeCtrlA,
     },
     {
       combo: 'H',
@@ -603,8 +512,8 @@ export function buildShortcuts(): ShortcutDef[] {
       },
     },
   ];
-  // Inject the host editor's edit-domain shortcuts (Delete / F2 / Ctrl+D /
-  // Ctrl+A / Shift+G) when deps were registered at boot. Keeps this file editor-agnostic.
+  // Inject the host editor's remaining edit-domain shortcuts when deps were
+  // registered at boot. Focus-owned F2/Delete/Mod+A live in host.keybindings.
   if (routerDeps) shortcuts.push(...editShortcuts(routerDeps));
   shortcuts.push({
     combo: 'Ctrl+K',
@@ -624,17 +533,22 @@ export function buildShortcuts(): ShortcutDef[] {
  * Ctrl+Shift+1/2/3 (which Chrome maps to tab switching only WITHOUT Shift,
  * so we're safe, but we preventDefault anyway).
  */
-export function useGlobalShortcuts(): void {
+export function useGlobalShortcuts(keybindings?: ContextualKeybindingsApi): void {
   useEffect(() => {
     const shortcuts = buildShortcuts();
     const onKey = (e: KeyboardEvent) => {
       // 0. IME composing — bail. Never intercept Chinese pinyin chord.
       if (isComposing(e)) return;
-      // 1. Find first matching shortcut.
+      // 1. The contextual resolver gets first refusal inside the ONE capture
+      // listener. A handled or disabled-but-claimed binding must not fall into
+      // legacy application shortcuts; passthrough/unclaimed continues below.
+      const contextual = keybindings?.handle(e);
+      if (contextual?.status === 'handled' || contextual?.status === 'claimed-disabled') return;
+      // 2. Find first matching legacy shortcut.
       for (const s of shortcuts) {
-        // 1a. Typing target → skip before match() (match may call safeKeyLower).
+        // 2a. Typing target → skip before match() (match may call safeKeyLower).
         if (isTypingTarget(e) && !s.allowInInput) continue;
-        // 1b. Surface gate — edit-group keys only act while the scene editor is
+        // 2b. Surface gate — edit-group keys only act while the scene editor is
         // the foreground surface; otherwise let them escape (fall through to the
         // focused component / browser default). See isEditorSurfaceActive.
         if (s.group === 'edit' && !isEditorSurfaceActive()) continue;
@@ -649,7 +563,7 @@ export function useGlobalShortcuts(): void {
     };
     window.addEventListener('keydown', onKey, true); // capture-phase: beat ChatPanel handlers
     return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  }, [keybindings]);
 }
 
 // macOS pretty-printing for shortcut combos shown in Settings.

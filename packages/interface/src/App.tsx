@@ -46,8 +46,12 @@ export interface AppProps {
   overrides?: AppHostBootstrapOverrides;
 }
 
+function KeyboardRouter({ host }: { host: AppHostBootstrapResult['host'] }): null {
+  useGlobalShortcuts(host.keybindings);
+  return null;
+}
+
 export function App({ overrides }: AppProps = {}): React.ReactElement | null {
-  useGlobalShortcuts();
   const { t } = useTranslation();
   const fullscreen         = useShellStore((s) => s.fullscreen);
   const sidebarCollapsed   = useShellStore((s) => s.sidebarCollapsed);
@@ -109,6 +113,7 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
   if (shellHidden) {
     return (
       <HostProvider value={host}>
+        <KeyboardRouter host={host} />
         <PanelRenderersProvider value={renderers}>
           <div className="studio-shell studio-shell--preview-skin">
             <OnboardingController />
@@ -121,6 +126,7 @@ export function App({ overrides }: AppProps = {}): React.ReactElement | null {
 
   return (
     <HostProvider value={host}>
+      <KeyboardRouter host={host} />
       <PanelRenderersProvider value={renderers}>
         <div
           className="studio-shell studio-shell--preview-skin"

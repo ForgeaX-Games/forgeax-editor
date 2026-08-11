@@ -28,6 +28,8 @@ import { useActiveWorkbench } from '../../lib/useWorkbench';
 import { useHost } from '../../core/app-shell';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { FatalBanner } from '../StatusBar/FatalBanner';
+import { useShellStore } from '../../store';
+import { getWindowManager } from '../../lib/platform';
 import {
   getAnchor,
   subscribeAnchors,
@@ -65,7 +67,8 @@ export function SurfaceKeepAliveLayer(): ReactNode {
   const host = useHost();
   const { surfaces } = usePanelRenderers();
   const SceneEditor = surfaces?.SceneEditor;
-  const activeKind = kindForMode(mode);
+  const viewportFloating = useShellStore((state) => Boolean(state.floatingSurfaces['panel:viewport']));
+  const activeKind = viewportFloating ? null : kindForMode(mode);
 
   // Visited set only grows — a surface, once mounted, is never torn down. Seeded
   // with the boot mode's kind so the first surface mounts immediately; later kinds
@@ -239,7 +242,24 @@ export function SurfaceKeepAliveLayer(): ReactNode {
           {/* ALL_KINDS is ['edit'] today — the only kept-alive surface is the edit
               viewport. FatalBanner is fixed to 'edit' accordingly. */}
           <FatalBanner source="edit" />
-          {renderSurface(kind)}
+          {kind === 'edit' && viewportFloating ? null : renderSurface(kind)}
+          {kind === 'edit' && !viewportFloating && getWindowManager().canDetach() ? (
+            <button
+              type="button"
+              className="fx-viewport-popout"
+              data-testid="surface-popout-viewport"
+              title="Pop viewport out to a window"
+              aria-label="Pop viewport out to a window"
+              onClick={() => {
+                void useShellStore.getState().detachSurface(
+                  { kind: 'panel', id: 'viewport' },
+                  { title: 'Viewport', width: 1280, height: 800 },
+                );
+              }}
+            >
+              ⧉
+            </button>
+          ) : null}
         </div>
       ))}
     </div>

@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { getLocale, subscribeLocale } from '@/i18n';
+import { useHost } from '../../core/app-shell';
+import type { ContentBrowserRevealTarget } from '../../core/app-shell/types';
 import { requestComposerInsert } from '../../lib/composer-bridge';
 import { removeExtensionSurfaces, upsertSurface } from '../../lib/surface-store';
 import { isTrustedMessageOrigin } from '../../lib/trustedOrigins';
 import { usePanelRenderers, type ExtensionPort } from '../DockShell/panelRenderers';
+
+// The Content Browser lives in the global footer under this id (see
+// DockShell/builtinWorkbenches GLOBAL_FOOTER_EXTRA_IDS).
+const CONTENT_BROWSER_PANEL_ID = 'ep:assets';
 
 export interface ExtensionIframeHostProps {
   extensionId: string;
@@ -19,6 +25,28 @@ export interface ExtensionIframeHostProps {
   loadErrorText: (error: string) => string;
 }
 
+// Sanitize an untrusted iframe payload into the neutral reveal contract. A
+// target without an identity is dropped (the Content Browser would no-op).
+function revealTargetFromMessage(raw: unknown): ContentBrowserRevealTarget | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  const path = str(r.path);
+  const guid = str(r.guid);
+  if (!path && !guid) return null;
+  const packPath = str(r.packPath);
+  const assetKind = str(r.assetKind);
+  const name = str(r.name);
+  return {
+    ...(guid ? { guid } : {}),
+    ...(path ? { path, pathKind: r.pathKind === 'dir' ? 'dir' as const : 'file' as const } : {}),
+    ...(packPath ? { packPath } : {}),
+    ...(assetKind ? { assetKind } : {}),
+    ...(name ? { name } : {}),
+  };
+}
+
 export function ExtensionIframeHost({
   extensionId,
   src,
@@ -30,6 +58,7 @@ export function ExtensionIframeHost({
   loadErrorText,
 }: ExtensionIframeHostProps): ReactElement {
   const { hostSDK } = usePanelRenderers();
+  const host = useHost();
   const createExtensionPort = hostSDK?.createExtensionPort;
   const createWindowTransport = hostSDK?.createWindowTransport;
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -51,6 +80,7 @@ export function ExtensionIframeHost({
         targetPluginId?: string;
         payload?: Record<string, unknown>;
         text?: string;
+        target?: unknown;
       } | null;
       if (!d) return;
       if (d.type === 'FORGEAX_NAVIGATE' && d.targetPluginId) {
@@ -70,6 +100,24 @@ export function ExtensionIframeHost({
             lines: [text.length > 200 ? `${text.slice(0, 200)}…` : text],
           },
         });
+        return;
+      }
+      // Plugin → host "locate this file in the Content Browser". Mirrors the
+      // editor page tab's locate action: reveal the footer panel first (it may be
+      // a collapsed drawer), then hand the target to whichever Content Browser is
+      // mounted over the neutral bus. The double rAF gives a freshly-expanded
+      // drawer a frame to mount + subscribe before the target arrives.
+      if (d.type === 'FORGEAX_CONTENT_BROWSER_REVEAL') {
+        const target = revealTargetFromMessage(d.target);
+        if (!target) return;
+        void host.commands
+          .execute('app.panel.reveal', { id: CONTENT_BROWSER_PANEL_ID })
+          .catch(() => {})
+          .finally(() => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              host.bus.emit('content-browser:reveal', { target });
+            }));
+          });
         return;
       }
     };
@@ -127,7 +175,7 @@ export function ExtensionIframeHost({
       portRef.current = null;
       removeExtensionSurfaces(extensionId);
     };
-  }, [extensionId, src, pane, createExtensionPort, createWindowTransport, onNavigate, onChatPost, onToolCall]);
+  }, [extensionId, src, pane, createExtensionPort, createWindowTransport, onNavigate, onChatPost, onToolCall, host]);
 
   useEffect(() => {
     activeRef.current = active;

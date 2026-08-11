@@ -88,6 +88,7 @@ import {
 import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import { normalizeAnimationPlayerSceneAsset, type SceneAsset } from '@forgeax/editor-core';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
+import { supportsVfxRenderFeature } from './vfx-render-capability';
 
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
@@ -99,6 +100,12 @@ import { createFramePhaseProfiler } from './frame-phase-profiler';
 export interface ShieldableRenderer {
   dispose(): void;
   readonly assets: unknown;
+  readonly device?: {
+    readonly caps?: {
+      readonly compute?: boolean;
+      readonly indirectDrawing?: boolean;
+    };
+  };
   /** Older renderer builds expose no per-world GPU eviction seam. */
   readonly store: { destroyWorld?: (world: World) => void };
   [k: string]: unknown;
@@ -233,6 +240,8 @@ export interface AssemblePlayWorldDeps {
   }) => Promise<GamePluginInstallResult>;
   /** The one host created by Edit; attach it to this fresh Play world. */
   readonly vfxRuntimeHost?: VfxRuntimeHost;
+  /** Whether the shared renderer accepted the optional GPU particle feature. */
+  readonly vfxRenderFeatureEnabled?: boolean;
   /** Observe render phases through the current profiler owner. */
   readonly onRenderPhaseEnd?: (phase: string) => void;
 }
@@ -340,6 +349,13 @@ export async function assemblePlayWorld(
   let playAppForCleanup: PlayApp | undefined;
   let detachVfx: () => void = () => {};
   let detached = false;
+  // The host still attaches the VFX simulation/runtime on every RHI, but the
+  // GPU render feature is optional. Older injected test renderers have no caps,
+  // so preserve their existing feature path; real renderers always expose caps.
+  const vfxFeatureEnabled = deps.vfxRuntimeHost !== undefined
+    && deps.vfxRenderFeatureEnabled !== false
+    && (deps.renderer.device?.caps === undefined
+      || supportsVfxRenderFeature(deps.renderer.device.caps));
 
   const startupError = (code: string, error: unknown): { code: string; hint: string } => {
     const structured = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
@@ -458,7 +474,7 @@ export async function assemblePlayWorld(
       renderer: shielded as never,
       world: playWorld as never,
       plugins: plugins as never,
-      ...(deps.vfxRuntimeHost ? { features: [deps.vfxRuntimeHost.feature] } : {}),
+      ...(vfxFeatureEnabled ? { features: [deps.vfxRuntimeHost!.feature] } : {}),
       ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
       profiler: createFramePhaseProfiler({
         onPhaseEnd: ({ source, phase }) => {

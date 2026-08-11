@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { createFramePhaseProfiler } from '../frame-phase-profiler';
 import { createEditVfxRuntimeBridge } from '../vfx-runtime-bridge';
+import { supportsVfxRenderFeature } from '../vfx-render-capability';
 
 function makeHost() {
   const feature = { identity: 'forgeax.vfx-render.gpu-particles' };
@@ -32,6 +33,13 @@ function makeHost() {
 }
 
 describe('Edit VFX runtime bridge', () => {
+  it('gates GPU particle rendering on the active RHI capabilities', () => {
+    expect(supportsVfxRenderFeature({ compute: true, indirectDrawing: true })).toBe(true);
+    expect(supportsVfxRenderFeature({ compute: false, indirectDrawing: true })).toBe(false);
+    expect(supportsVfxRenderFeature({ compute: true, indirectDrawing: false })).toBe(false);
+    expect(supportsVfxRenderFeature(undefined)).toBe(false);
+  });
+
   it('keeps one host feature and one engine-owned diagnostics source across repeated mounts', async () => {
     const editWorld = new World();
     const assets = { identity: 'shared-edit-registry' };

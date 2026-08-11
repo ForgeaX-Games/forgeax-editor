@@ -2,7 +2,8 @@
 // disk files). Recursive row rendering extracted from ContentBrowser.tsx so
 // the component file focuses on state + wiring.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import { useTranslation, type TFunction } from '@forgeax/editor-core/i18n';
 import { dispatchActiveEditorOperation, gateway } from '@forgeax/editor-core';
 import { ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
@@ -53,6 +54,7 @@ export interface CBSourceTreeProps {
   selectedPath: string | null;
   setSelectedItem: (item: CBViewItem | null) => void;
   setPreviewItem: (item: CBViewItem | null) => void;
+  onFocusItem: (item: CBViewItem | null) => void;
   nav: Nav;
   openFolderContextMenu: (pos: ContextMenuPos, folder: CBFolder) => void;
   openFileContextMenu: (pos: ContextMenuPos, file: CBFile) => void;
@@ -69,12 +71,13 @@ function renderRows(
     selectedPath: string | null;
     setSelectedItem: (item: CBViewItem | null) => void;
     setPreviewItem: (item: CBViewItem | null) => void;
+    onFocusItem: (item: CBViewItem | null) => void;
     nav: Nav;
     openFolderContextMenu: CBSourceTreeProps['openFolderContextMenu'];
     openFileContextMenu: CBSourceTreeProps['openFileContextMenu'];
   },
 ): ReactNode {
-  const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, nav, openFolderContextMenu, openFileContextMenu } = ctx;
+  const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, onFocusItem, nav, openFolderContextMenu, openFileContextMenu } = ctx;
   return nodes.map((node) => {
     // Disclosure is opt-in: folders stay closed until a double-click explicitly opens them.
     // Leaf folders have no tree children, so they are selectable/navigation
@@ -141,6 +144,8 @@ function renderRows(
           className={`no-motion-lift cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}`}
           style={{ paddingLeft: `${depth * 14}px` }}
           title={node.path}
+          tabIndex={selected ? 0 : -1}
+          onFocus={() => onFocusItem(file ?? folder)}
           onClick={handleClick}
           onDoubleClick={handleDoubleClick}
           onContextMenu={handleRowContextMenu}
@@ -167,11 +172,14 @@ export function CBSourceTree({
   selectedPath,
   setSelectedItem,
   setPreviewItem,
+  onFocusItem,
   nav,
   openFolderContextMenu,
   openFileContextMenu,
 }: CBSourceTreeProps): ReactNode {
   const { t } = useTranslation();
+  const rootRef = useRef<HTMLDivElement>(null);
+  useKeybindingScope(rootRef, 'editor.contentBrowser.sourceTree');
   const [projectOpen, setProjectOpen] = useState(false);
   const projectExpandable = sourceTree.length > 0;
 
@@ -232,13 +240,15 @@ export function CBSourceTree({
   const projectInSelectionPath = isPathInSelectionChain(selectedPath, '');
 
   return (
-    <div className="cb-source-panel">
+    <div ref={rootRef} className="cb-source-panel">
       <div className="cb-source-tree">
         <div className="cb-source-rows">
           <button
             type="button"
             className={`no-motion-lift cb-source-zone-head${projectInSelectionPath ? ' is-path' : ''}${projectSelected ? ' is-sel' : ''}${projectExpandable && !projectOpen ? ' collapsed' : ''}`}
             title={projectName}
+            tabIndex={projectSelected ? 0 : -1}
+            onFocus={() => onFocusItem(null)}
             onClick={selectProjectRoot}
             onDoubleClick={handleProjectDoubleClick}
           >
@@ -255,6 +265,7 @@ export function CBSourceTree({
               selectedPath,
               setSelectedItem,
               setPreviewItem,
+              onFocusItem,
               nav,
               openFolderContextMenu,
               openFileContextMenu,
@@ -264,6 +275,8 @@ export function CBSourceTree({
             type="button"
             className={`no-motion-lift cb-source-row cb-source-favorites-row${favoritesOnly ? ' is-sel' : ''}`}
             title={t('editor.contentBrowser.sourceTree.favorites')}
+            tabIndex={favoritesOnly ? 0 : -1}
+            onFocus={() => onFocusItem(null)}
             onClick={selectFavorites}
           >
             <span className="cb-source-chev hidden"><ContentBrowserIcon name="chevron-down" /></span>

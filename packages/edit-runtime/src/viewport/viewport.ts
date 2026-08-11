@@ -87,6 +87,7 @@ import {
   type ViewportPreferences,
 } from '@forgeax/editor-core';
 import { createGizmoPool, type GizmoAnchor } from './viewport-gizmo';
+import { createSelectionStencilOutlinePool } from './selection-stencil-outline';
 import { createParamGizmo } from './viewport-param-gizmo';
 import { buildDragGroup, translatedMemberTarget, type DragGroupMember } from './viewport-drag-group';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
@@ -101,7 +102,7 @@ import { entExists, entComponents, resolveVisibility } from '@forgeax/editor-cor
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getGizmoSpace, getGizmoPivot, getSelection, getSelectionList, onGizmoModeChange, onGizmoSpaceChange, onGizmoPivotChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getGizmoSpace, getGizmoPivot, getSelection, getSelectionList, worldRenderableHandles, onGizmoModeChange, onGizmoSpaceChange, onGizmoPivotChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -158,6 +159,8 @@ export interface Viewport {
   refresh(): void;
   /** Re-aim the orbit camera to a default ~human-character framing (requirements §4.1). */
   resetCamera(): void;
+  /** Fit a transient preview subject without touching editor selection or SceneDoc. */
+  frameBounds(bounds: { center: readonly [number, number, number]; radius: number }): void;
 }
 
 // Boot-window input bridge (viewport-boot-input.ts): the React chrome (view
@@ -404,6 +407,14 @@ export function createViewport({
     isAuxVisible,
     getViewScale: gizmoViewScaleAt,
   });
+  const selectionOutline = createSelectionStencilOutlinePool({
+    sceneWorld: () => gateway.activeWorld,
+    editorEngine,
+    getSelectionList,
+    getRenderableHandles: worldRenderableHandles,
+    isAuxVisible,
+    isEditMode: () => true,
+  });
   const paramGizmo = createParamGizmo({
     editorEngine,
     spawnHandleCube: gizmoPool.spawnHandleCube,
@@ -417,7 +428,11 @@ export function createViewport({
     getViewScale: gizmoViewScaleAt,
     getAspect: aspect,
   });
-  const updateGizmo = (): void => { if (!orbitOnly) gizmoPool.update(); };
+  const updateGizmo = (): void => {
+    if (orbitOnly) return;
+    gizmoPool.update();
+    selectionOutline.update();
+  };
   const updateParamGizmo = (): void => { if (!orbitOnly) paramGizmo.update(); };
   const hitGizmo = (origin: Vec3, dir: Vec3): number | null => (orbitOnly ? null : gizmoPool.hit(origin, dir));
 
@@ -531,8 +546,10 @@ export function createViewport({
   let flyRAF = 0;
   let lastFlyTime = 0;
   /** Held-key snapshot (fly mode reads every rAF tick).
-   *  Populated by window keydown/keyup so keys pressed BEFORE RMB down still count. */
+   *  Populated by the focused canvas keydown plus window keyup, so keys pressed
+   *  BEFORE RMB down still count without adding another global shortcut router. */
   const keyState: Record<string, boolean> = Object.create(null);
+  const FLY_KEYS = new Set(['w', 'a', 's', 'd', 'q', 'e', 'shift']);
   function getFlyInput(): FlyInput {
     return {
       forward: !!keyState['w'],
@@ -1070,6 +1087,15 @@ export function createViewport({
     applyCamera();
   }
 
+  function frameBounds(bounds: { center: readonly [number, number, number]; radius: number }): void {
+    target = [bounds.center[0], bounds.center[1], bounds.center[2]];
+    dist = Math.max(0.1, bounds.radius * 3.2);
+    if (projection === 'orthographic') {
+      orthoHalfHeight = clampOrthoHalfHeight(Math.max(ORTHO_HALF_HEIGHT_MIN, bounds.radius * 1.25));
+    }
+    applyCamera();
+  }
+
   /** Frame the current selection: center the orbit target on it + fit distance. */
   function frameSelection(): void {
     const selected = Array.from(getSelectionList());
@@ -1131,14 +1157,25 @@ export function createViewport({
   // live in the single global-shortcuts router (interface submodule). This keeps
   // exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
   // through the one gateway door.
-  function handleViewportKeyDown(e: KeyboardEvent): void {
-    if (e.isComposing || e.keyCode === 229 || e.key === 'Process') return;
+  function normalizedViewportKey(e: KeyboardEvent): string | null {
+    if (e.isComposing || e.keyCode === 229 || e.key === 'Process') return null;
     const el = e.target as HTMLElement | null;
     const tag = el?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
-    if (typeof e.key !== 'string') return;
-    const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e' || k === 'shift') keyState[k] = true;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return null;
+    if (typeof e.key !== 'string') return null;
+    return e.key.toLowerCase();
+  }
+  function updateFlyKeyState(e: KeyboardEvent, pressed: boolean): string | null {
+    const k = normalizedViewportKey(e);
+    if (k !== null && FLY_KEYS.has(k)) keyState[k] = pressed;
+    return k;
+  }
+  function onFlyKeyDown(e: KeyboardEvent): void {
+    updateFlyKeyState(e, true);
+  }
+  function handleViewportKeyDown(e: KeyboardEvent): void {
+    const k = updateFlyKeyState(e, true);
+    if (k === null) return;
     if (k === 'escape' && isCameraMode(mode)) {
       e.preventDefault();
       cancelNavigation();
@@ -1185,15 +1222,7 @@ export function createViewport({
     }
   }
   function onKeyUp(e: KeyboardEvent): void {
-    if (e.isComposing || e.keyCode === 229 || e.key === 'Process') return;
-    const el = e.target as HTMLElement | null;
-    const tag = el?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
-    if (typeof e.key !== 'string') return;
-    const k = e.key.toLowerCase();
-    if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e' || k === 'shift') {
-      keyState[k] = false;
-    }
+    updateFlyKeyState(e, false);
   }
   // Guard against sticky keys when tab loses focus mid-flight (release all).
   function onBlur(): void {
@@ -1225,7 +1254,10 @@ export function createViewport({
   window.addEventListener('pointerup', onUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', onContext);
-  // T2b: keyup/blur release fly keys tracked by the injected keydown bridge.
+  // T2b: sample fly keys on the focused canvas; discrete editor commands remain
+  // owned by the injected global keyboard router.
+  if (!orbitOnly) canvas.addEventListener('keydown', onFlyKeyDown);
+  // keyup/blur release fly keys tracked by the canvas sampler / router.
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -1292,6 +1324,7 @@ export function createViewport({
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContext);
+      if (!orbitOnly) canvas.removeEventListener('keydown', onFlyKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -1310,8 +1343,10 @@ export function createViewport({
       unregCameraAppliers();
       gizmoPool.dispose();
       paramGizmo.dispose();
+      selectionOutline.dispose();
     },
     refresh: applyCamera,
     resetCamera,
+    frameBounds,
   };
 }

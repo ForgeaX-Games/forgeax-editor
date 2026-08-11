@@ -308,19 +308,36 @@ function projectionError(code: string, hint: string) {
   return { code, hint, retryable: true, recoveryActions: ['query', 'transport.reconnect'] } as const;
 }
 
-export function createViewportProjectionQuery(options: {
+type ViewportProjectionQueryOptions = {
   readonly runtime: ViewportRuntimeIdentity;
   readonly graph: RuntimeUiGraph;
   readonly gateway: Pick<EditGateway, 'buildQueryFn'>;
   readonly readHierarchy?: () => HierarchyRuntimeProjection | undefined;
   readonly readInspector?: () => InspectorRuntimeProjection;
   readonly readAssetCatalog?: () => readonly AssetBrowserRegistryEntry[];
-  readonly readAssetPayload?: (guid: string) => unknown;
+  readonly readAssetPayload?: (guid: string) => unknown | Promise<unknown>;
   readonly readOperationRuns?: () => { readonly revision: number; readonly runs: readonly OperationRun[] };
   readonly readViewportStatus?: () => unknown;
   readonly readDiagnostics?: () => DiagnosticsSnapshot;
   readonly readExecutionReport?: () => ExecutionReport;
-}): (input: unknown) => ViewportProjectionEnvelope<unknown> {
+};
+
+type SyncViewportProjectionQueryOptions = Omit<
+  ViewportProjectionQueryOptions,
+  'readAssetPayload'
+> & {
+  readonly readAssetPayload?: undefined;
+};
+
+export function createViewportProjectionQuery(
+  options: SyncViewportProjectionQueryOptions,
+): (input: unknown) => ViewportProjectionEnvelope<unknown>;
+export function createViewportProjectionQuery(
+  options: ViewportProjectionQueryOptions,
+): (input: unknown) => ViewportProjectionEnvelope<unknown> | Promise<ViewportProjectionEnvelope<unknown>>;
+export function createViewportProjectionQuery(
+  options: ViewportProjectionQueryOptions,
+): (input: unknown) => ViewportProjectionEnvelope<unknown> | Promise<ViewportProjectionEnvelope<unknown>> {
   let revision = 0;
   const runtimeUiOperations = createRuntimeUiOperations(options.graph, 'viewport-runtime');
   return (input) => {
@@ -411,10 +428,23 @@ export function createViewportProjectionQuery(options: {
         : { ...base, status: 'ready', value: { entries } };
     }
     if (query.kind === 'assets.payload') {
-      const payload = options.readAssetPayload?.(query.guid);
-      return payload === undefined
-        ? { ...base, status: 'empty' }
-        : { ...base, status: 'ready', value: { guid: query.guid, payload } };
+      if (options.readAssetPayload === undefined) return {
+        ...base,
+        status: 'unavailable',
+        error: projectionError(
+          'asset-payload-unavailable',
+          'The Runtime AssetRegistry payload reader is not bound.',
+        ),
+      };
+      const project = (payload: unknown): ViewportProjectionEnvelope<unknown> => (
+        payload === undefined
+          ? { ...base, status: 'empty' }
+          : { ...base, status: 'ready', value: { guid: query.guid, payload } }
+      );
+      const payload = options.readAssetPayload(query.guid);
+      return (payload instanceof Promise
+        ? payload.then(project)
+        : project(payload));
     }
     if (query.kind === 'operations.snapshot') {
       const snapshot = options.readOperationRuns?.() ?? { revision: 0, runs: [] };
@@ -436,6 +466,7 @@ export function createViewportRuntimeTransportService(options: {
   readonly runtime: ViewportRuntimeIdentity;
   readonly graph: RuntimeUiGraph;
   readonly gateway: EditGateway;
+  readonly readAssetPayload?: (guid: string) => unknown | Promise<unknown>;
   readonly readViewportStatus?: () => unknown;
   readonly readExecutionReport?: () => ExecutionReport;
 }): TransportService {

@@ -7,6 +7,7 @@ interface Props {
   file: CBFile;
   index: number;
   selected: boolean;
+  tabIndex: number;
   expanded?: boolean;
   expandable?: boolean;
   favorite?: boolean;
@@ -19,6 +20,7 @@ interface Props {
   onToggleFavorite: (item: CBFile) => void;
   onToggleExpand: (path: string) => void;
   onClickIndex: (index: number, e: MouseEvent) => void;
+  onFocusItem: (item: CBFile) => void;
 }
 
 interface FileDragDataTransfer {
@@ -43,6 +45,7 @@ function CBFileItemImpl({
   file,
   index,
   selected,
+  tabIndex,
   expanded,
   expandable = false,
   favorite,
@@ -52,6 +55,7 @@ function CBFileItemImpl({
   onToggleFavorite,
   onToggleExpand,
   onClickIndex,
+  onFocusItem,
 }: Props) {
   const { t } = useTranslation();
   const fav = favorite ?? file.isFavorite;
@@ -73,6 +77,8 @@ function CBFileItemImpl({
       className={`cb-grid-item cb-fe-card cb-file-card${selected ? ' sel' : ''}${expanded ? ' cb-pack-expanded' : ''}`}
       data-testid="cb-file-item"
       data-file-path={file.path}
+      tabIndex={tabIndex}
+      onFocus={() => onFocusItem(file)}
       draggable
       onDragStart={handleDragStart}
       onClick={handleClick}

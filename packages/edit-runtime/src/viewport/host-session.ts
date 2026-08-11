@@ -125,6 +125,8 @@ export interface HostSessionContext {
   readonly physics: PhysicsBackend | undefined;
   /** Shared engine-owned VFX host; Edit and each fresh Play world use this instance. */
   readonly vfxRuntimeHost: VfxRuntimeHost;
+  /** Whether the shared renderer accepted the optional GPU particle feature. */
+  readonly vfxRenderFeatureEnabled: boolean;
   /** Publish render-feature diagnostic transitions through the Gateway provider. */
   readonly onVfxDiagnosticsChanged?: () => void;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
@@ -854,6 +856,7 @@ export function createHostSession(deps: HostSessionDeps): {
           },
           ...(ctx.physics ? { physics: ctx.physics } : {}),
           vfxRuntimeHost: ctx.vfxRuntimeHost,
+          vfxRenderFeatureEnabled: ctx.vfxRenderFeatureEnabled,
           ...(ctx.onVfxDiagnosticsChanged
             ? { onRenderPhaseEnd: (phase: string) => {
               if (phase === 'features') ctx.onVfxDiagnosticsChanged?.();

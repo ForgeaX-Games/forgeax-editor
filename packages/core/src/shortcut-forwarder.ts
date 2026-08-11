@@ -33,38 +33,9 @@ function isComposing(e: KeyboardEvent): boolean {
   return e.isComposing || e.keyCode === 229 || e.key === 'Process';
 }
 
-/** 白名单:镜像 studio interface `global-shortcuts.ts` + CommandPalette 的 ⌘K。
- *  只转这些,普通输入 & 编辑键(Ctrl+C/V/X/A/Z…)不转,不干扰 iframe 内的编辑。 */
-function isTypingTarget(e: KeyboardEvent): boolean {
-  const candidates: Array<EventTarget | null> = [e.target];
-  if (typeof document !== 'undefined') candidates.push(document.activeElement);
-  for (const raw of candidates) {
-    if (!raw || !(raw instanceof Element)) continue;
-    const tag = raw.tagName;
-    if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
-    if (tag === 'INPUT') {
-      const type = (raw.getAttribute('type') || 'text').toLowerCase();
-      if (!['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'image', 'range', 'color', 'hidden'].includes(type)) {
-        return true;
-      }
-    }
-    const html = raw as HTMLElement;
-    if (html.isContentEditable) return true;
-    if (raw.closest('.im-editor, [contenteditable="true"]')) return true;
-  }
-  return false;
-}
-
 function isForwardable(e: KeyboardEvent): boolean {
   if (isComposing(e)) return false;
-  // Never forward Delete/Backspace/F2 while typing — host replay has target=window
-  // and would otherwise delete the Content Browser selection.
-  if (isTypingTarget(e) && (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'F2')) return false;
   if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) return true;
-  // Edit-domain keys (Plan-E): Delete/Backspace/F2 drive the host's keyboard
-  // router (routeDelete / routeF2). Without modifier, they must still be
-  // forwarded so the host's global-shortcuts capture-phase listener can route them.
-  if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'F2') && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) return true;
   const mod = e.metaKey || e.ctrlKey; // macOS ⌘ 与 Ctrl 同义
   if (!mod) return false;
   if (e.shiftKey) return true; // Ctrl/⌘ + Shift + *(F/B/C/D/Enter/1/2/3)

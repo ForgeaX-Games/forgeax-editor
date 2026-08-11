@@ -45,6 +45,26 @@ export function encodeSurfaceQuery(d: SurfaceDescriptor): string {
   return p.toString();
 }
 
+export type DetachedViewportCarrierKind = 'browser-page' | 'tauri-webview';
+
+/** Add the fenced Runtime identity only to the Viewport surface. Business panels remain ordinary shell pages. */
+export function encodeSurfaceWindowQuery(
+  d: SurfaceDescriptor,
+  carrierKind: DetachedViewportCarrierKind,
+  generation: number = Date.now(),
+  hostOrigin: string = typeof window !== 'undefined' ? window.location.origin : 'http://localhost',
+): string {
+  const params = new URLSearchParams(encodeSurfaceQuery(d));
+  if (d.kind === 'panel' && (d.id === 'viewport' || d.id === 'edit' || d.id === 'preview')) {
+    params.set('runtimeId', 'edit-runtime');
+    params.set('runtimeGeneration', String(generation));
+    params.set('carrierId', `${carrierKind}-${generation}`);
+    params.set('carrierKind', carrierKind);
+    params.set('hostOrigin', hostOrigin);
+  }
+  return params.toString();
+}
+
 /** Decode the current location's surface descriptor, or null if this is the
  *  normal full-shell entry (no `?surface=`). */
 export function decodeSurfaceFromLocation(

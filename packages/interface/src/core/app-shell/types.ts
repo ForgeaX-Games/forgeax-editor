@@ -5,6 +5,7 @@ import type { EventBus } from '../extension-foundation/bus';
 import type { CommandsRegistry, CommandDescriptor } from '../extension-foundation/commands';
 import type { ContextKeysApi } from '../extension-foundation/context-keys';
 import type { StorageApi } from '../extension-foundation/storage';
+import type { ContextualKeybindingsApi } from '../contextual-keybindings';
 import type { PanelRenderers } from '../../components/DockShell/panelRenderers';
 import type { PanelActionContribution, PanelActionsApi, PanelControlContribution, PanelControlsApi, StatusItemContribution } from '../panels';
 import type {
@@ -75,7 +76,7 @@ export interface AppBusEventMap extends Record<string, unknown> {
 }
 
 export type HostCapability =
-  | 'commands' | 'bus' | 'storage' | 'panels' | 'panelActions' | 'panelControls' | 'contextKeys' | 'pages'
+  | 'commands' | 'keybindings' | 'bus' | 'storage' | 'panels' | 'panelActions' | 'panelControls' | 'contextKeys' | 'pages'
   | 'activities' | 'resourceEditors'
   | 'session' | 'workbench' | 'observability' | 'editor'
   | (string & {});
@@ -89,6 +90,7 @@ export interface AppLogger {
 
 export interface AppHostBase {
   readonly commands: CommandsRegistry;
+  readonly keybindings: ContextualKeybindingsApi;
   readonly bus: EventBus<AppBusEventMap>;
   readonly storage: StorageApi;
   readonly contextKeys: ContextKeysApi;

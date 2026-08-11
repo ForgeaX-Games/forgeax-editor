@@ -19,6 +19,7 @@ export const EDITOR_PANELS = [
   'asset-overview',
   'asset-properties',
   'mesh-slots',
+  'mesh-preview',
   'mi-preview',
   'mi-properties',
   'mat-preview',

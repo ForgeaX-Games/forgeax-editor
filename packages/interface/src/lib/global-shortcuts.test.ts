@@ -19,21 +19,14 @@ import {
   isTypingTarget,
   isEditorSurfaceActive,
   type KeyboardRouterDeps,
-  type RouterSelectedAsset,
 } from './global-shortcuts';
 import { useShellStore } from '../store';
 import { setActiveWorkbench } from './workbenches';
 
 type Calls = {
   dispatch: Array<[unknown, string?]>;
-  deleteEntities: number[][];
-  deleteAssets: RouterSelectedAsset[][];
   duplicateEntities: number[][];
   duplicateAsset: Array<[string, string]>;
-  renameEntity: number[];
-  renameAsset: Array<[string, string]>;
-  selectAllEntities: number[];
-  selectAllAssets: number[];
   hideEntities: number[][];
   showAllHidden: number[];
   hideUnselected: number[];
@@ -42,14 +35,8 @@ type Calls = {
 function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & { calls: Calls } {
   const calls: Calls = {
     dispatch: [],
-    deleteEntities: [],
-    deleteAssets: [],
     duplicateEntities: [],
     duplicateAsset: [],
-    renameEntity: [],
-    renameAsset: [],
-    selectAllEntities: [],
-    selectAllAssets: [],
     hideEntities: [],
     showAllHidden: [],
     hideUnselected: [],
@@ -62,17 +49,13 @@ function mockDeps(over: Partial<KeyboardRouterDeps> = {}): KeyboardRouterDeps & 
     isPlayMode: () => false,
     getDisplay: () => 'scene',
     getInputTarget: () => 'editor',
-    deleteEntities: (ids) => { calls.deleteEntities.push(ids); },
+    deleteEntities: () => {},
     duplicateEntities: (ids) => { calls.duplicateEntities.push(ids); },
     hideEntities: (ids) => { calls.hideEntities.push(ids); },
     showAllHidden: () => { calls.showAllHidden.push(1); },
     hideUnselected: () => { calls.hideUnselected.push(1); },
-    renameEntity: (id) => { calls.renameEntity.push(id); },
-    selectAllEntities: () => { calls.selectAllEntities.push(1); },
-    deleteAssets: (assets) => { calls.deleteAssets.push(assets); },
+    selectAllEntities: () => {},
     duplicateAsset: (guid, packPath) => { calls.duplicateAsset.push([guid, packPath]); },
-    renameAsset: (guid, packPath) => { calls.renameAsset.push([guid, packPath]); },
-    selectAllAssets: () => { calls.selectAllAssets.push(1); },
     undo: () => { calls.dispatch.push([{ kind: 'undo' }, 'human']); },
     redo: () => { calls.dispatch.push([{ kind: 'redo' }, 'human']); },
     save: () => { calls.dispatch.push([{ kind: 'saveDocToDisk' }, 'human']); },
@@ -95,49 +78,6 @@ function findByCombo(sc: ReturnType<typeof buildShortcuts>, combo: string) {
 }
 
 beforeEach(() => { registerKeyboardRouterDeps(null); });
-
-describe('keyboard router — dual-domain Delete (AC-C2)', () => {
-  it('entity domain + selection → deleteEntities', () => {
-    const deps = mockDeps({ getLastSelectionDomain: () => 'entity', getEntitySelection: () => [1, 2] });
-    registerKeyboardRouterDeps(deps);
-    const del = findByCombo(buildShortcuts(), 'Delete');
-    expect(del.run()).toBe(true);
-    expect(deps.calls.deleteEntities).toEqual([[1, 2]]);
-    expect(deps.calls.deleteAssets).toEqual([]);
-  });
-
-  it('asset domain + selection → deleteAssets', () => {
-    const asset: RouterSelectedAsset = { guid: 'g1', kind: 'mesh', name: 'a', packPath: 'p', payload: {} };
-    const deps = mockDeps({ getLastSelectionDomain: () => 'asset', getAssetSelection: () => [asset] });
-    registerKeyboardRouterDeps(deps);
-    const del = findByCombo(buildShortcuts(), 'Delete');
-    expect(del.run()).toBe(true);
-    expect(deps.calls.deleteAssets).toEqual([[asset]]);
-  });
-
-  it('no selection in either domain → no-op (returns false)', () => {
-    const deps = mockDeps({ getLastSelectionDomain: () => 'entity', getEntitySelection: () => [] });
-    registerKeyboardRouterDeps(deps);
-    const del = findByCombo(buildShortcuts(), 'Delete');
-    expect(del.run()).toBe(false);
-    expect(deps.calls.deleteEntities).toEqual([]);
-  });
-
-  it('entity + play mode → early return (edit-rejected-in-play), asset still allowed', () => {
-    const deps = mockDeps({ getLastSelectionDomain: () => 'entity', getEntitySelection: () => [1], isPlayMode: () => true });
-    registerKeyboardRouterDeps(deps);
-    const del = findByCombo(buildShortcuts(), 'Delete');
-    expect(del.run()).toBe(false);
-    expect(deps.calls.deleteEntities).toEqual([]);
-
-    const asset: RouterSelectedAsset = { guid: 'g1', kind: 'mesh', name: 'a', packPath: 'p', payload: {} };
-    const deps2 = mockDeps({ getLastSelectionDomain: () => 'asset', getAssetSelection: () => [asset], isPlayMode: () => true });
-    registerKeyboardRouterDeps(deps2);
-    const del2 = findByCombo(buildShortcuts(), 'Delete');
-    expect(del2.run()).toBe(true);
-    expect(deps2.calls.deleteAssets).toEqual([[asset]]);
-  });
-});
 
 describe('keyboard router — UE-parity editor hide (H / Ctrl+H / Shift+H)', () => {
   const keyEvent = (init: { code: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean }): KeyboardEvent =>
@@ -376,16 +316,7 @@ describe('keyboard router — camera projection, scale, and bookmark keys', () =
   });
 });
 
-describe('keyboard router — F2 / Ctrl+D / Ctrl+A routing (AC-C3/C4/C6)', () => {
-  it('F2 asset domain → renameAsset', () => {
-    const asset: RouterSelectedAsset = { guid: 'g1', kind: 'mesh', name: 'a', packPath: 'p', payload: {} };
-    const deps = mockDeps({ getLastSelectionDomain: () => 'asset', getAssetSelection: () => [asset] });
-    registerKeyboardRouterDeps(deps);
-    const f2 = findByCombo(buildShortcuts(), 'F2');
-    expect(f2.run()).toBe(true);
-    expect(deps.calls.renameAsset).toEqual([['g1', 'p']]);
-  });
-
+describe('keyboard router — remaining Ctrl+D routing', () => {
   it('Ctrl+D entity domain → duplicateEntities (returns true → wrapper preventDefault)', () => {
     const deps = mockDeps({ getLastSelectionDomain: () => 'entity', getEntitySelection: () => [7] });
     registerKeyboardRouterDeps(deps);
@@ -394,19 +325,19 @@ describe('keyboard router — F2 / Ctrl+D / Ctrl+A routing (AC-C3/C4/C6)', () =>
     expect(deps.calls.duplicateEntities).toEqual([[7]]);
   });
 
-  it('Ctrl+A asset domain → selectAllAssets', () => {
-    const deps = mockDeps({ getLastSelectionDomain: () => 'asset' });
-    registerKeyboardRouterDeps(deps);
-    const ca = findByCombo(buildShortcuts(), 'Ctrl+A');
-    expect(ca.run()).toBe(true);
-    expect(deps.calls.selectAllAssets).toEqual([1]);
+  it('does not retain focus-owned F2/Delete/Mod+A in the legacy list', () => {
+    registerKeyboardRouterDeps(mockDeps());
+    const combos = buildShortcuts().map((shortcut) => shortcut.combo);
+    expect(combos).not.toContain('F2');
+    expect(combos).not.toContain('Delete');
+    expect(combos).not.toContain('Ctrl+A');
   });
 });
 
 describe('keyboard router — edit-group surface gate (ADR-0029 Phase 0)', () => {
   // The onKey wrapper skips edit-group shortcuts (letting them escape to the
   // focused component / browser) whenever isEditorSurfaceActive() is false, so
-  // F2 / Delete / W-E-R-F no longer route to a stale scene selection while the
+  // Remaining edit keys no longer route to a stale scene selection while the
   // user is on another workbench tab or under an overlay.
   beforeEach(() => {
     useShellStore.setState({ activeOverlay: null });

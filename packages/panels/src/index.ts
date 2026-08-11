@@ -17,6 +17,10 @@ export {
   registerMaterialInstancePreview,
   getMaterialInstancePreview,
 } from './mi-preview-slot';
+export {
+  registerMeshPreview,
+  getMeshPreview,
+} from './mesh-preview-slot';
 export { registerVfxPreview, getVfxPreview } from './vfx-preview-slot';
 
 // ── Panel components ──
@@ -42,6 +46,7 @@ export { SettingsPanel } from './Settings';
 export {
   AssetOverviewPanel,
   AssetPropertiesPanel,
+  MeshPreviewPanel,
   MeshSlotsPanel,
   loadDocumentAssetPayload,
 } from './AssetEditors';

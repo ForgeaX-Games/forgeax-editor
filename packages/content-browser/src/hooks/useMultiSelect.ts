@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import type { CBAsset, CBFile, CBFolder, CBSelection } from '../types';
 import {
   dispatchActiveEditorOperation,
   useAssetSelectionList,
   useAssetSelection,
-  registerAssetSelectAllHandler,
   useFolderSelectionSet,
   type PathSelectionItem,
 } from '@forgeax/editor-core';
@@ -122,13 +121,6 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   }, []);
 
   const isSelected = isItemSelected;
-
-  // Bridge Ctrl+A (asset scope) from the global keyboard router to this hook's
-  // live item list. Registered on mount, cleared on unmount.
-  useEffect(() => {
-    registerAssetSelectAllHandler(() => selectAll());
-    return () => registerAssetSelectAllHandler(null);
-  }, [selectAll]);
 
   // selection mirrors both stores (so the router's dispatch is reflected here too).
   const selection: CBSelection = {

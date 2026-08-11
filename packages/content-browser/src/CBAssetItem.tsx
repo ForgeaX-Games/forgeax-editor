@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useRef, useEffect } from 'react';
+import { memo, useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
@@ -11,6 +11,7 @@ interface Props {
   asset: CBAsset;
   index: number;
   selected: boolean;
+  tabIndex: number;
   thumbnailSize?: number;
   favorite?: boolean;
   onSelect: (item: CBAsset) => void;
@@ -18,6 +19,7 @@ interface Props {
   onContextMenu: (e: React.MouseEvent, item: CBAsset) => void;
   onToggleFavorite: (item: CBAsset) => void;
   onClickIndex: (index: number, e: React.MouseEvent) => void;
+  onFocusItem: (item: CBAsset) => void;
 }
 
 const TIP_W = 260;
@@ -38,12 +40,14 @@ function CBAssetItemImpl({
   asset,
   index,
   selected,
+  tabIndex,
   favorite = false,
   onSelect,
   onActivate,
   onContextMenu,
   onToggleFavorite,
   onClickIndex,
+  onFocusItem,
 }: Props) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
@@ -74,9 +78,16 @@ function CBAssetItemImpl({
   }, [asset.guid, asset.kind]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
+    (e.currentTarget as HTMLDivElement).focus();
     onSelect(asset);
     onClickIndex(index, e);
   }, [onSelect, onClickIndex, asset, index]);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    onActivate(asset);
+  }, [onActivate, asset]);
 
   const handleCtxMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -113,10 +124,13 @@ function CBAssetItemImpl({
       data-asset-name={asset.name}
       data-asset-kind={asset.kind}
       data-asset-guid={asset.guid}
+      tabIndex={tabIndex}
+      onFocus={() => onFocusItem(asset)}
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
       onDoubleClick={() => onActivate(asset)}
       onContextMenu={handleCtxMenu}
       onMouseEnter={(e) => {

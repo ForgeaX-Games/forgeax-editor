@@ -27,9 +27,10 @@ import { consoleLogger } from './logger';
 import { derivePanelRenderers } from './derive-panel-renderers';
 import { DEFAULT_PANEL_RENDERERS, type PanelRenderers } from '../../components/DockShell/panelRenderers';
 import { installPageNavigation } from '../page-navigation';
+import { createContextualKeybindings } from '../contextual-keybindings';
 
 const BUILT_IN_CAPS: readonly HostCapability[] = [
-  'commands', 'bus', 'storage', 'panels', 'panelActions', 'panelControls', 'contextKeys', 'pages',
+  'commands', 'keybindings', 'bus', 'storage', 'panels', 'panelActions', 'panelControls', 'contextKeys', 'pages',
   'activities', 'resourceEditors',
 ];
 
@@ -68,6 +69,11 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
   for (const c of BUILT_IN_CAPS) caps.add(c);
 
   const commands: CommandsRegistry = createCommandsRegistry();
+  const keybindings = createContextualKeybindings(commands, {
+    onCommandError(error, commandId) {
+      log.error(`[app-shell] keybinding command "${commandId}" failed`, error);
+    },
+  });
   const bus = new EventBus<AppBusEventMap>();
   const storage: StorageApi = createStorageApi(log);
   const contextKeys: ContextKeysApi = createContextKeys();
@@ -106,7 +112,7 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
   let activeSetup: AppExtension | null = null;
 
   const base: AppHostBase = {
-    commands, bus, storage, contextKeys,
+    commands, keybindings, bus, storage, contextKeys,
     get panels() { return panelsSnapshot(); },
     panelActions,
     panelControls,
@@ -222,6 +228,7 @@ export function createAppHost(deps: CreateAppHostDeps = {}): CreateAppHostResult
     async dispose() {
       removePageNavigation();
       await pageSession.dispose();
+      keybindings.dispose();
       bus.destroy();
     },
   };

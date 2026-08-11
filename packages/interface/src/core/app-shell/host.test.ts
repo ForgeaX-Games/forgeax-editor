@@ -7,6 +7,7 @@ describe('createAppHost', () => {
   it('has base capabilities present', () => {
     const { host } = createAppHost();
     expect(host.capabilities.has('commands')).toBe(true);
+    expect(host.capabilities.has('keybindings')).toBe(true);
     expect(host.capabilities.has('bus')).toBe(true);
     expect(host.capabilities.has('storage')).toBe(true);
     expect(host.capabilities.has('panels')).toBe(true);

@@ -7,6 +7,7 @@ interface Props {
   folder: CBFolder;
   index: number;
   selected: boolean;
+  tabIndex: number;
   thumbnailSize?: number;
   favorite?: boolean;
   onSelect: (item: CBFolder) => void;
@@ -14,18 +15,21 @@ interface Props {
   onContextMenu: (e: MouseEvent, item: CBFolder) => void;
   onToggleFavorite: (item: CBFolder) => void;
   onClickIndex: (index: number, e: MouseEvent) => void;
+  onFocusItem: (item: CBFolder) => void;
 }
 
 function CBFolderItemImpl({
   folder,
   index,
   selected,
+  tabIndex,
   favorite,
   onSelect,
   onActivate,
   onContextMenu,
   onToggleFavorite,
   onClickIndex,
+  onFocusItem,
 }: Props) {
   const { t } = useTranslation();
   const fav = favorite ?? folder.isFavorite;
@@ -40,6 +44,8 @@ function CBFolderItemImpl({
       className={`cb-grid-item cb-fe-card cb-grid-folder${selected ? ' sel' : ''}`}
       data-testid="cb-folder-item"
       data-folder-path={folder.path}
+      tabIndex={tabIndex}
+      onFocus={() => onFocusItem(folder)}
       onClick={handleClick}
       onDoubleClick={() => onActivate(folder)}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e, folder); }}

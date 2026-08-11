@@ -56,6 +56,7 @@ import {
   toggleHierarchyFilter,
   type HierarchyColumns,
 } from '../packages/panels/src/hierarchy-state';
+import { getHierarchyCommandActions, type HierarchyCommandActions } from '../packages/panels/src/Hierarchy';
 import './hierarchy-panel.css';
 
 type CommandPayload = { args?: unknown } | undefined;
@@ -137,8 +138,61 @@ function copySelectionJson(): void {
   }, null, 2));
 }
 
+export function registerHierarchyScopedCommands(
+  host: AppHost,
+  getActions: () => HierarchyCommandActions | null = getHierarchyCommandActions,
+): Array<() => void> {
+  const deleteKeys = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
+    ? ['Delete', 'Backspace']
+    : ['Delete'];
+  return [
+    host.keybindings.register({
+      keys: 'F2',
+      commandId: 'hierarchy.rename',
+      scope: 'editor.hierarchy',
+    }),
+    host.keybindings.register({
+      keys: deleteKeys,
+      commandId: 'hierarchy.delete',
+      scope: 'editor.hierarchy',
+    }),
+    host.keybindings.register({
+      keys: 'Mod+A',
+      commandId: 'hierarchy.selectAll',
+      scope: 'editor.hierarchy',
+    }),
+    host.commands.register({
+      id: 'hierarchy.delete',
+      title: 'Hierarchy: Delete focused entities',
+      when: () => getActions()?.canMutateFocusedTarget === true,
+      execute: () => {
+        getActions()?.deleteFocused();
+        return commandResult();
+      },
+    }),
+    host.commands.register({
+      id: 'hierarchy.rename',
+      title: 'Hierarchy: Rename focused entity',
+      when: () => getActions()?.canRenameFocusedTarget === true,
+      execute: () => {
+        getActions()?.renameFocused();
+        return commandResult();
+      },
+    }),
+    host.commands.register({
+      id: 'hierarchy.selectAll',
+      title: 'Hierarchy: Select all entities',
+      execute: () => {
+        getActions()?.selectAll();
+        return commandResult();
+      },
+    }),
+  ];
+}
+
 function registerHierarchyCommands(host: AppHost): Array<() => void> {
   return [
+    ...registerHierarchyScopedCommands(host),
     host.commands.register({
       id: 'hierarchy.create.entity',
       title: 'Hierarchy: Create entity',
@@ -161,20 +215,6 @@ function registerHierarchyCommands(host: AppHost): Array<() => void> {
       id: 'hierarchy.group',
       title: 'Hierarchy: Group selected entities',
       execute: () => commandResult(),
-    }),
-    host.commands.register({
-      id: 'hierarchy.delete',
-      title: 'Hierarchy: Delete selected entities',
-      execute: () => commandResult(),
-    }),
-    host.commands.register({
-      id: 'hierarchy.rename',
-      title: 'Hierarchy: Rename selected entity',
-      execute: () => {
-        const selection = getSelection();
-        if (selection !== null) gateway.dispatch({ kind: 'requestRename', entity: selection });
-        return commandResult();
-      },
     }),
     host.commands.register({
       id: 'hierarchy.copyJson',
@@ -448,7 +488,7 @@ export function createHierarchyPanelContributionsExtension(): AppExtension {
   return {
     id: 'editor.hierarchy-panel-contributions',
     version: '1.0.0',
-    requires: ['commands', 'panelActions', 'panelControls', 'contextKeys'],
+    requires: ['commands', 'keybindings', 'panelActions', 'panelControls', 'contextKeys'],
     setup(ctx) {
       const host = ctx.host;
       syncHierarchyContext(host);

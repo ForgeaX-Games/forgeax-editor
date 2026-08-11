@@ -44,6 +44,7 @@ import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
 import { createPlayProductRuntimeAdapter } from './product-runtime-adapter';
 import { createPlayVfxRuntime } from './vfx-runtime';
+import { supportsVfxRenderFeature } from './vfx-render-capability';
 import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
 import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
 
@@ -317,7 +318,6 @@ const devImportTransport = runtimeBinding === undefined
   : createDevImportTransport(runtimeBinding);
 const app = await createApp(canvas, {
   ...(physics ? { plugins: [physicsPlugin(physics)] } : {}),
-  features: [vfxRuntime.host.feature],
   lockProvider: {
     requestLock: () => post(true),
     exitLock: () => post(false),
@@ -334,6 +334,18 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
+if (supportsVfxRenderFeature(renderer.device.caps)) {
+  try {
+    const installed = await renderer.installRenderFeature(vfxRuntime.host.feature);
+    if (!installed.ok) {
+      console.warn('[play] VFX render feature disabled:', installed.error);
+    }
+  } catch (error) {
+    console.warn('[play] VFX render feature installation failed:', error);
+  }
+} else {
+  console.warn('[play] VFX render feature disabled: active RHI lacks compute or indirect-drawing capability');
+}
 carrierExecutionReport = app.value.execution.report();
 if (runtimeBinding !== undefined) {
   renderer.assets.configureRuntimeBinding(runtimeBinding);

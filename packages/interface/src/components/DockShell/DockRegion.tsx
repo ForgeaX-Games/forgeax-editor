@@ -1,9 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { FloatingMenu } from '../ui/FloatingMenu';
-import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type SerializedDockview } from 'dockview';
+import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type SerializedDockview } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
-import { getWindowManager } from '../../lib/platform';
+import { getWindowManager, surfaceKey } from '../../lib/platform';
 import { useTranslation, t as panelT } from '@/i18n';
 import { useShellStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
@@ -186,7 +186,7 @@ export function isPanelVisible(id: string): boolean {
 
 // Pop a dock panel OUT into a REAL OS window (index.html?surface=panel&id=<id>
 // → DetachedSurface, which renders the panel's in-process React component).
-// No-op in the browser (canDetach() false) — web users tear off via drag-float.
+// Browser uses a popup; Tauri uses a native WebviewWindow.
 //
 // ep:* editor panels are in-process and intentionally stay docked: DetachedSurface
 // has no editor-panel body. Other detachable shell panels use the shared
@@ -201,31 +201,17 @@ function popPanelToWindow(
   if (!wm.canDetach()) return;
 
   if (!SURFACE_PANELS.has(id)) return;
-  void wm
-    .openSurfaceWindow(
-      { kind: 'panel', id },
-      { title: titleFor(id), width: 480, height: 680, ...(pos ?? {}) },
-    )
-    .then((ok) => { if (ok) api.getPanel(id)?.api.close(); });
-}
-
-// Per-group header affordance: explicit "pop out to OS window" button, shown
-// only in Tauri (#10). Reliable counterpart to drag-tear-off.
-function PanelPopoutAction(props: IDockviewHeaderActionsProps): React.ReactNode {
-  const { t } = useTranslation();
-  if (!getWindowManager().canDetach()) return null;
-  const id = props.activePanel?.id;
-  if (!id || !SURFACE_PANELS.has(id)) return null;
-  return (
-    <button
-      type="button"
-      className="fx-dock-popout"
-      title={t('dockShell.popoutToWindow')}
-      onClick={() => popPanelToWindow(props.containerApi, id, () => id)}
-    >
-      ⧉
-    </button>
-  );
+  const descriptor = { kind: 'panel' as const, id };
+  const defaultSize = id === 'viewport'
+    ? { width: 1280, height: 800 }
+    : { width: 480, height: 680 };
+  void useShellStore.getState()
+    .detachSurface(descriptor, { title: titleFor(id), ...defaultSize, ...(pos ?? {}) })
+    .then(() => {
+      if (id !== 'viewport' && useShellStore.getState().floatingSurfaces[`panel:${id}`]) {
+        api.getPanel(id)?.api.close();
+      }
+    });
 }
 
 export function DockRegion({ region }: { region: DockRegionId }) {
@@ -1326,6 +1312,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // When a surface-popped panel's OS window closes, bring it back into the dock.
   useEffect(() => {
     return getWindowManager().onSurfaceWindowClosed((d) => {
+      useShellStore.getState().markSurfaceDocked(surfaceKey(d));
       if (SURFACE_PANELS.has(d.id)) reopen(d.id);
     });
   }, [reopen]);
@@ -1382,8 +1369,9 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         const api = apiRef.current;
         const panel = api?.getPanel(id);
         if (!api || !panel) return;
-        // In Tauri: ANY drop NOT handled by dockview (outside the window OR over
-        // empty space) → pop the panel to a REAL OS window. This gives a consistent
+        // When a physical carrier is available: ANY drop NOT handled by dockview
+        // (outside the window OR over empty space) → pop the panel to a real popup
+        // or OS window. This gives a consistent
         // UE/Blender feel: tear off = independent window, no intermediate in-app float.
         // ep:* editor panels are NOT tear-off targets: DetachedSurface has no editor-
         // panel body, so they stay docked in the single realm.
@@ -1403,7 +1391,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
           popPanelToWindow(api, id, titleFor, { x: wx, y: wy });
           return;
         }
-        // Browser (no Tauri): do nothing — panel stays docked where it was.
+        // No physical carrier: do nothing — panel stays docked where it was.
         // (addFloatingGroup caused confusing in-app "free panels"; removed.)
       }, 0);
     };
@@ -1545,9 +1533,6 @@ export function DockRegion({ region }: { region: DockRegionId }) {
             },
           );
         }}
-        // rightHeaderActionsComponent removed — the pop-out ⧉ button was
-        // rendering inside the tab strip in a confusing position. Pop-out is
-        // still available via drag-to-outside-window (Tauri) or the 布局 menu.
       />
       {/* The layout menu is a GLOBAL affordance (TopBar 布局 button → the shared
           dock:layout-toggle bus event). Every DockRegion listens for that event,
