@@ -65,7 +65,7 @@
   },
   {
     "name": "defineOp",
-    "signature": "(spec: { id: string; domain: \"document\" | \"session\"; argsSchema: Record<string, unknown> | null; plan: PlanFn; }) => { ok: true; } | { ok: false; error: CommandError; }"
+    "signature": "(spec: { id: string; domain: \"session\" | \"document\"; argsSchema: Record<string, unknown> | null; plan: PlanFn; }) => { ok: true; } | { ok: false; error: CommandError; }"
   },
   {
     "name": "diagnostics",
@@ -114,6 +114,10 @@
   {
     "name": "enterPlay",
     "signature": "(playWorld: World) => void"
+  },
+  {
+    "name": "enterRemotePlay",
+    "signature": "() => void"
   },
   {
     "name": "exitPlay",

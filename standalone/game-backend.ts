@@ -29,6 +29,7 @@ import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@fo
 import { createHash } from 'node:crypto';
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { GAME_TEMPLATE_SLUG_RE, listGameTemplates } from './template-catalog';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
 if (!gameDir) {
@@ -40,32 +41,6 @@ const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
 const instanceRootAbs = resolve(gameDir);
 const gameSlug = basename(instanceRootAbs);
 const engineTemplatesRoot = resolve(import.meta.dir, '../packages/engine/templates');
-
-const GAME_TEMPLATE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
-
-/** Read the standalone catalog from the same engine-owned template directory as Studio. */
-async function listGameTemplates(): Promise<Array<{ slug: string; name: string }>> {
-  const entries = await readdir(engineTemplatesRoot, { withFileTypes: true });
-  const templates: Array<{ slug: string; name: string }> = [];
-  for (const entry of entries) {
-    if (
-      !entry.isDirectory()
-      || entry.name.startsWith('.')
-      || entry.name.startsWith('_')
-      || entry.name === 'node_modules'
-      || !GAME_TEMPLATE_SLUG_RE.test(entry.name)
-    ) continue;
-    try {
-      const manifest = JSON.parse(await readFile(join(engineTemplatesRoot, entry.name, 'forge.json'), 'utf8')) as { name?: unknown };
-      if (typeof manifest.name === 'string' && manifest.name.trim().length > 0) {
-        templates.push({ slug: entry.name, name: manifest.name });
-      }
-    } catch {
-      // A template without a valid forge.json is not launchable and is omitted.
-    }
-  }
-  return templates.sort((a, b) => a.slug.localeCompare(b.slug));
-}
 
 interface GameManifest {
   id?: unknown;
@@ -305,7 +280,7 @@ const server = Bun.serve({
     }
     if (url.pathname === '/api/game-templates' && req.method === 'GET') {
       try {
-        return new Response(JSON.stringify({ templates: await listGameTemplates() }), {
+        return new Response(JSON.stringify({ templates: await listGameTemplates(engineTemplatesRoot) }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });

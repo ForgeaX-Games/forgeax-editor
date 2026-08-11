@@ -1,7 +1,7 @@
 [
   {
     "name": "broadcastAssetsChanged",
-    "signature": "(hint?: AssetsChangedHint | undefined, source?: AssetsChangedSource | undefined) => void"
+    "signature": "(hint?: AssetsChangedHint | undefined, source?: AssetsChangedSource | undefined, mutation?: AssetLifecycleMutation | undefined) => void"
   },
   {
     "name": "cancelPendingDiskSave",
@@ -170,6 +170,10 @@
   {
     "name": "onSelectionChange",
     "signature": "(fn: () => void) => () => void"
+  },
+  {
+    "name": "openEditorAssetPage",
+    "signature": "(asset: SelectedAsset) => Promise<void>"
   },
   {
     "name": "PlayConfig",

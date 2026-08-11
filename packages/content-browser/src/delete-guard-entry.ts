@@ -10,6 +10,12 @@
 
 export { DeleteGuardDialogHost } from './DeleteGuardDialogHost';
 export {
+  computeDeleteOpenResources,
+  type DeleteOpenResource,
+} from './delete-guard';
+export {
+  getDeleteGuardWorkspace,
+  publishDeleteGuardWorkspace,
   requestDeleteGuard,
   subscribeDeleteGuard,
   resolveDeleteGuard,

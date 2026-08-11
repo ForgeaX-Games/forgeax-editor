@@ -111,6 +111,21 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(calls.some((c) => c.url.includes('/api/files/upload'))).toBe(false);
   });
 
+  it('uploads the bounded UI companion inside the same Runtime-owned import', async () => {
+    const r = await executeAssetImport({
+      destPath: '/games/demo/assets/hud.ui.html',
+      sourceName: 'hud.ui.html',
+      base64: btoa('<main>HUD</main>'),
+      companionSources: [{
+        destPath: '/games/demo/assets/hud.ui.css',
+        base64: btoa('main { color: white; }'),
+      }],
+    });
+
+    expect(r.status).toBe('done');
+    expect(calls.filter((call) => call.url.includes('/api/files/upload'))).toHaveLength(2);
+  });
+
   it('unsupported extension fails fast without any disk write', async () => {
     const r = await executeAssetImport({
       destPath: '/games/demo/assets/notes.xyz',
@@ -197,6 +212,28 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     const terminal = await gw.waitOperationRun('import-test-1');
     expect(terminal).toMatchObject({ ok: true, value: { status: 'succeeded', result: { status: 'done', filename: 'logo.png' } } });
     expect(gw.ledger.length).toBe(beforeLedger + 1);
+  });
+
+  it('retains only a bounded fingerprint after Runtime consumes selected-file bytes', async () => {
+    const r = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      base64: btoa('selected-file-bytes'),
+      skipUpload: false,
+      requestId: 'import-byte-retention',
+    });
+    expect(r.ok).toBe(true);
+    const running = gw.getOperationRun('import-byte-retention');
+    expect(running?.input).toMatchObject({
+      destPath: 'assets/logo.png',
+      skipUpload: true,
+      payloadFingerprint: expect.stringMatching(/^fnv1a32:/),
+    });
+    expect(running?.input).not.toHaveProperty('base64');
+
+    expect(await gw.waitOperationRun('import-byte-retention')).toMatchObject({ ok: true, value: { status: 'succeeded' } });
+    expect(gw.ledger.at(-1)).not.toHaveProperty('base64');
   });
 
   it('projects executor-owned import phases through OperationRun progress', async () => {

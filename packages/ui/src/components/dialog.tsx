@@ -9,6 +9,15 @@ const DialogTrigger = DialogPrimitive.Trigger;
 const DialogPortal = DialogPrimitive.Portal;
 const DialogClose = DialogPrimitive.Close;
 
+interface DialogInteractionSurfaceProps {
+  /** Marks a portalled dialog as owned by the panel that opened it. */
+  interactionScope?: string;
+}
+
+function interactionSurfaceAttrs(scope: string | undefined): Record<string, string> {
+  return scope === undefined ? {} : { 'data-fx-interaction-scope': scope };
+}
+
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -32,10 +41,10 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogInteractionSurfaceProps
+>(({ className, children, interactionScope, ...props }, ref) => (
   <DialogPortal>
-    <DialogOverlay />
+    <DialogOverlay {...interactionSurfaceAttrs(interactionScope)} />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
@@ -54,6 +63,7 @@ const DialogContent = React.forwardRef<
         borderColor: 'var(--color-border-default, #333)',
         color: 'var(--color-text-primary, #fff)',
       }}
+      {...interactionSurfaceAttrs(interactionScope)}
       {...props}
     >
       {children}

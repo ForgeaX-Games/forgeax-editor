@@ -6,7 +6,7 @@ const contentBrowser = readFileSync(resolve(import.meta.dir, '..', 'ContentBrows
 
 describe('asset activation document route', () => {
   it('opens non-scene assets through the Gateway instead of focusing a Level panel', () => {
-    expect(contentBrowser).toContain("gateway.dispatch({ kind: 'openAssetEditor', asset: selectedAsset }, 'human')");
+    expect(contentBrowser).toContain("dispatchActiveEditorOperation({ kind: 'openAssetEditor', asset: selectedAsset }, 'human')");
     expect(contentBrowser).not.toContain("app.editor.focus', { panel: 'asset-inspector'");
   });
 });

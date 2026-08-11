@@ -374,7 +374,20 @@ describe('resolveFileActivateAction — double-click routing', () => {
     expect(action).toEqual({ type: 'open-asset', asset: file.assets[0]! });
   });
 
-  it('an asset-less file falls back to preview', () => {
+  it('an asset-less document file opens in the shared file editor', () => {
+    expect(resolveFileActivateAction({ assets: [], family: 'code' }, 'file')).toEqual({ type: 'open-file' });
+    expect(resolveFileActivateAction({ assets: [], family: 'config' }, 'asset')).toEqual({ type: 'open-file' });
+    expect(resolveFileActivateAction({ assets: [], family: 'doc' }, 'file')).toEqual({ type: 'open-file' });
+    expect(resolveFileActivateAction({ assets: [], family: 'data' }, 'asset')).toEqual({ type: 'open-file' });
+  });
+
+  it('an asset-less media file keeps the inline preview', () => {
+    expect(resolveFileActivateAction({ assets: [], family: 'image' }, 'file')).toEqual({ type: 'preview' });
+    expect(resolveFileActivateAction({ assets: [], family: 'audio' }, 'asset')).toEqual({ type: 'preview' });
+    expect(resolveFileActivateAction({ assets: [], family: 'font' }, 'file')).toEqual({ type: 'preview' });
+  });
+
+  it('an asset-less file with no family classification falls back to preview', () => {
     expect(resolveFileActivateAction({ assets: [] }, 'file')).toEqual({ type: 'preview' });
     expect(resolveFileActivateAction({ assets: [] }, 'asset')).toEqual({ type: 'preview' });
   });

@@ -29,6 +29,7 @@ const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
 const e2eTemplateHostPort = process.env.FORGEAX_E2E_TEMPLATE_PORT ?? '15490';
 const e2eTemplateEditPort = process.env.FORGEAX_E2E_TEMPLATE_EDIT_PORT ?? '15480';
 const e2eTemplateApiPort = process.env.FORGEAX_E2E_TEMPLATE_API_PORT ?? '15481';
+const e2eTemplateEnginePort = process.env.FORGEAX_E2E_TEMPLATE_ENGINE_PORT ?? '15473';
 const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
 const e2eRuntimeScopeId = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'standalone-sample';
 const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
@@ -62,6 +63,9 @@ process.once('exit', () => rmSync(e2eTempRoot, { recursive: true, force: true })
 
 export default defineConfig({
   testDir: './e2e',
+  // Keep Bun evidence/unit files in this folder out of Playwright's Node ESM
+  // loader. Browser journeys are the explicit *.spec.ts surface.
+  testMatch: '**/*.spec.ts',
   // Single chromium project — headless CI default. fullyParallel off
   // because the two webServers share singleton ports; tests within the
   // file are sequential by design (idempotent-mount AC-09 reads global
@@ -184,7 +188,7 @@ export default defineConfig({
       env: {
         ...process.env as Record<string, string>,
         FORGEAX_GAME_DIR: e2eTemplateGameDir,
-        FORGEAX_ENGINE_PORT: e2eEnginePort,
+        FORGEAX_ENGINE_PORT: e2eTemplateEnginePort,
         FORGEAX_INTERFACE_PORT: e2eTemplateHostPort,
         FORGEAX_STANDALONE_PORT: e2eTemplateHostPort,
         FORGEAX_EDIT_RUNTIME_PORT: e2eTemplateEditPort,
@@ -198,6 +202,27 @@ export default defineConfig({
       timeout: 90_000,
       stdout: 'pipe',
       stderr: 'pipe',
+    },
+    {
+      // Disposable Play is now a real child realm. The fresh-template host
+      // therefore needs a game-scoped Play producer too; sharing the sample
+      // producer would correctly fail the runtime binding identity check.
+      command: `bunx vite --port ${e2eTemplateEnginePort} --strictPort`,
+      cwd: './packages/play-runtime',
+      env: {
+        ...process.env,
+        FORGEAX_ENGINE_PORT: e2eTemplateEnginePort,
+        FORGEAX_GAME_DIR: e2eTemplateGameDir,
+        FORGEAX_GAME_ID: 'new-game-template',
+        FORGEAX_RUNTIME_SCOPE_ID: 'e2e-new-game-template',
+        FORGEAX_RUNTIME_GENERATION: '1',
+        FORGEAX_GAMES_URL_PREFIX: 'e2e-template-games',
+        FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
+        FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
+      },
+      url: `http://127.0.0.1:${e2eTemplateEnginePort}/preview/`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 90_000,
     },
     {
       // The template shell uses the same carrier architecture as the primary

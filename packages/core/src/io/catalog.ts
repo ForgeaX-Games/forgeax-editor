@@ -396,6 +396,20 @@ const builtinOps: ReadonlyArray<{
     title: 'Reparent',
   },
   {
+    id: 'hierarchyGesture', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['reparent', 'delete', 'visibility', 'group', 'ungroup', 'duplicate'] },
+        entities: { type: 'array', items: { type: 'number' } },
+        parent: { type: 'number', nullable: true },
+        state: { type: 'string', enum: ['inherited', 'hidden', 'visible'] },
+      },
+      required: ['action', 'entities'],
+    },
+    title: 'Apply Hierarchy Gesture',
+  },
+  {
     id: 'setComponent', domain: 'document',
     argsSchema: {
       type: 'object',
@@ -684,6 +698,34 @@ const builtinOps: ReadonlyArray<{
       required: ['packPath', 'guid', 'payload'],
     },
     title: 'Save Material Instance',
+  },
+  {
+    id: 'createInputMap', domain: 'document',
+    completion: { kind: 'asset-visible', guidField: 'guid' },
+    argsSchema: {
+      type: 'object',
+      properties: {
+        guid: { type: 'string', description: 'Caller-minted RFC 4122 asset GUID.' },
+        name: { type: 'string', description: 'Human-readable Input Map name (default prefix IM_).' },
+        actions: { type: 'array', description: 'Optional initial ActionConfig[] rows.' },
+        packPath: { type: 'string', description: 'Optional game-relative pack path. Defaults to assets/input.pack.json.' },
+      },
+      required: ['guid', 'name'],
+    },
+    title: 'Create Input Map',
+  },
+  {
+    id: 'saveInputMap', domain: 'document',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        packPath: { type: 'string' },
+        guid: { type: 'string' },
+        payload: { type: 'object', description: 'Full input-map payload to persist (staging flush).' },
+      },
+      required: ['packPath', 'guid', 'payload'],
+    },
+    title: 'Save Input Map',
   },
   {
     id: 'setMaterialInstanceParent', domain: 'document',
@@ -1177,7 +1219,21 @@ const builtinOps: ReadonlyArray<{
       properties: {
         destPath: { type: 'string', minLength: 1, description: 'On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller.' },
         sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source.' },
-        skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for dispatched ops; the UI path uploads via the assetIO gate before dispatch).' },
+        base64: { type: 'string', minLength: 1, description: 'Ephemeral source bytes for a human-selected file. Runtime uploads them through assetIO before import.' },
+        companionSources: {
+          type: 'array',
+          description: 'Optional bounded companion source for a compound import, currently the matching .ui.css file.',
+          items: {
+            type: 'object',
+            properties: {
+              destPath: { type: 'string', minLength: 1 },
+              base64: { type: 'string', minLength: 1 },
+            },
+            required: ['destPath', 'base64'],
+            additionalProperties: false,
+          },
+        },
+        skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for path-only callers).' },
         requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.' },
       },
       required: ['destPath', 'requestId'],
@@ -1401,6 +1457,34 @@ const builtinOps: ReadonlyArray<{
       required: ['entity', 'component', 'field', 'assetType', 'guids', 'requestId'],
     },
     title: 'Bind Asset Ref (resolve GUID -> shared<T> handle)',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
+  },
+  { id: 'assignAssetToEntity', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'number', description: 'Target edit-world EntityHandle.' },
+        asset: {
+          type: 'object',
+          properties: {
+            guid: { type: 'string' },
+            kind: { type: 'string', enum: ['material', 'mesh', 'texture', 'image'] },
+            name: { type: 'string' },
+          },
+          required: ['guid', 'kind', 'name'],
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      },
+      required: ['entity', 'asset', 'requestId'],
+    },
+    title: 'Assign Asset To Entity',
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],

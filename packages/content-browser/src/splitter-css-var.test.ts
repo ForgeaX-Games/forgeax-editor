@@ -18,6 +18,8 @@ const css = readFileSync(CSS_PATH, 'utf-8');
 
 const TSX_PATH = resolve(import.meta.dir, 'ContentBrowser.tsx');
 const tsx = readFileSync(TSX_PATH, 'utf-8');
+const PREVIEW_PATH = resolve(import.meta.dir, 'CBPreviewPanel.tsx');
+const preview = readFileSync(PREVIEW_PATH, 'utf-8');
 
 describe('splitter: CSS-variable isolation contract', () => {
   it('CSS reads --cb-src-w in .cb-source-panel flex rule', () => {
@@ -53,6 +55,22 @@ describe('splitter: CSS-variable isolation contract', () => {
     expect(tsx).toContain("'--cb-src-w'");
     expect(tsx).toContain('splitRef');
     expect(tsx).toContain("style.setProperty('--cb-src-w'");
+  });
+
+  it('keeps the preview below the toolbar and to the right of the grid', () => {
+    expect(css).toContain('var(--cb-preview-w');
+    expect(tsx).toContain("style.setProperty('--cb-preview-w'");
+    expect(tsx).toContain("useLocalSize('cb.previewWidth'");
+    expect(preview).toContain('<ResizeHandle orientation="col"');
+
+    const toolbarIndex = tsx.indexOf('<ContentBrowserActionBar');
+    const bodyIndex = tsx.indexOf('<div className="cb-content-body">');
+    const gridColumnIndex = tsx.indexOf('<div className="cb-grid-column">');
+    const previewIndex = tsx.lastIndexOf('<CBPreviewPanel');
+    expect(toolbarIndex).toBeGreaterThanOrEqual(0);
+    expect(bodyIndex).toBeGreaterThan(toolbarIndex);
+    expect(gridColumnIndex).toBeGreaterThan(bodyIndex);
+    expect(previewIndex).toBeGreaterThan(gridColumnIndex);
   });
 
   it('TSX does NOT set controlled style.width on source panel', () => {

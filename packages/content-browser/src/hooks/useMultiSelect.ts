@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { CBAsset, CBFile, CBFolder, CBSelection } from '../types';
 import {
-  gateway,
+  dispatchActiveEditorOperation,
   useAssetSelectionList,
   useAssetSelection,
-  clearAssetSelection,
   registerAssetSelectAllHandler,
   useFolderSelectionSet,
   type PathSelectionItem,
@@ -75,8 +74,8 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
     const p = primaryItem && primaryItem.type === 'asset'
       ? toSelectedAsset(primaryItem as CBAsset)
       : (assets[0] ?? null);
-    gateway.dispatch({ kind: 'setAssetSelection', assets, primary: p });
-    gateway.dispatch({ kind: 'setFolderSelection', items: pathItems });
+    void dispatchActiveEditorOperation({ kind: 'setAssetSelection', assets, primary: p });
+    void dispatchActiveEditorOperation({ kind: 'setFolderSelection', items: pathItems });
   }, []);
 
   // Read `items` / `isItemSelected` through latest-refs so the click/select-all
@@ -118,8 +117,8 @@ export function useMultiSelect(items: Selectable[]): MultiSelectAPI {
   }, [dispatchSet]);
 
   const clearSelection = useCallback(() => {
-    clearAssetSelection();
-    gateway.dispatch({ kind: 'setFolderSelection', items: [] });
+    void dispatchActiveEditorOperation({ kind: 'setAssetSelection', assets: [], primary: null });
+    void dispatchActiveEditorOperation({ kind: 'setFolderSelection', items: [] });
   }, []);
 
   const isSelected = isItemSelected;

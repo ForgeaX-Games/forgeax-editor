@@ -25,6 +25,7 @@ import type { SceneAsset } from '@forgeax/engine-types';
 import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { Visibility, VisibilityStateValue, visibilityStateFromU32, type VisibilityState } from '../visibility';
@@ -665,6 +666,127 @@ export function applyReparent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   return { ok: true, inverse: { kind: 'reparent', entity: cmd.entity, parent: before }, created: [] };
 }
 
+function hierarchyParent(ctx: DocApplierCtx, entity: EntityHandle): EntityHandle | null {
+  const result = ctx.engine.get(entity, ChildOf);
+  return result.ok ? result.value.parent as EntityHandle : null;
+}
+
+function hierarchyChildren(ctx: DocApplierCtx, entity: EntityHandle): EntityHandle[] {
+  const result = ctx.engine.get(entity, Children);
+  if (!result.ok) return [];
+  const entities = result.value.entities as ArrayLike<number>;
+  return Array.from(entities, (value) => value as EntityHandle);
+}
+
+function hierarchyContains(ctx: DocApplierCtx, ancestor: EntityHandle, candidate: EntityHandle): boolean {
+  if (ancestor === candidate) return true;
+  return hierarchyChildren(ctx, ancestor).some((child) => hierarchyContains(ctx, child, candidate));
+}
+
+function hierarchyWorldMatrix(ctx: DocApplierCtx, entity: EntityHandle): Float32Array | null {
+  const result = ctx.engine.get(entity, Transform);
+  if (!result.ok) return null;
+  const world = (result.value as { world?: ArrayLike<number> }).world;
+  if (world === undefined || world.length < 16) return null;
+  return Float32Array.from(world);
+}
+
+function hierarchyPreservedTransform(
+  ctx: DocApplierCtx,
+  entity: EntityHandle,
+  parent: EntityHandle | null,
+): Record<string, unknown> | null {
+  const childWorld = hierarchyWorldMatrix(ctx, entity);
+  if (childWorld === null) return null;
+  let local = childWorld;
+  if (parent !== null) {
+    const parentWorld = hierarchyWorldMatrix(ctx, parent);
+    if (parentWorld !== null) {
+      const inverse = mat4.create();
+      mat4.invert(inverse, parentWorld);
+      const product = mat4.create();
+      mat4.multiply(product, inverse, childWorld);
+      local = product as unknown as Float32Array;
+    }
+  }
+  const position = vec3.create();
+  const rotation = quat.create();
+  const scale = vec3.create();
+  mat4.decompose(position, rotation, scale, local);
+  return {
+    pos: Array.from(position),
+    quat: Array.from(rotation),
+    scale: Array.from(scale),
+  };
+}
+
+/**
+ * Runtime-owned planner for compound Hierarchy gestures. A remote Panel sends
+ * the same semantic op as an AI caller; only the authoritative Runtime reads
+ * topology/transforms and expands it into one undoable transaction.
+ */
+export function applyHierarchyGesture(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
+  const cmd = _cmd as Extract<EditorOp, { kind: 'hierarchyGesture' }>;
+  const live = [...new Set(cmd.entities)]
+    .map((entity) => toEntity(ctx.alias, entity))
+    .filter((entity) => ctx.engine.get(entity, Name).ok);
+  if (live.length === 0) {
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: 'hierarchyGesture has no live entity targets' } };
+  }
+
+  const commands: EditorOp[] = [];
+  if (cmd.action === 'reparent') {
+    const parent = cmd.parent === undefined || cmd.parent === null
+      ? null
+      : toEntity(ctx.alias, cmd.parent);
+    if (parent !== null && !ctx.engine.get(parent, Name).ok) {
+      return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${cmd.parent} not found` } };
+    }
+    for (const entity of live) {
+      if (parent !== null && hierarchyContains(ctx, entity, parent)) continue;
+      if (hierarchyParent(ctx, entity) === parent) continue;
+      const transform = hierarchyPreservedTransform(ctx, entity, parent);
+      if (transform !== null) commands.push({ kind: 'setComponent', entity, component: 'Transform', patch: transform });
+      commands.push({ kind: 'reparent', entity, parent });
+    }
+  } else if (cmd.action === 'delete') {
+    const roots = live.filter((entity) => !live.some((other) => other !== entity && hierarchyContains(ctx, other, entity)));
+    commands.push(...roots.map((entity) => ({ kind: 'destroyEntity' as const, entity })));
+  } else if (cmd.action === 'visibility') {
+    if (cmd.state === undefined) {
+      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'visibility hierarchyGesture requires state' } };
+    }
+    commands.push(...live.map((entity) => ({ kind: 'setVisibility' as const, entity, state: cmd.state! })));
+  } else if (cmd.action === 'group') {
+    const placeholder = -1;
+    const parent = hierarchyParent(ctx, live.at(-1)!);
+    commands.push({
+      kind: 'spawnEntity',
+      name: 'Group',
+      parent,
+      components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+      _id: placeholder,
+    });
+    commands.push(...live.map((entity) => ({ kind: 'reparent' as const, entity, parent: placeholder })));
+  } else if (cmd.action === 'ungroup') {
+    const group = live[0]!;
+    const parent = hierarchyParent(ctx, group);
+    commands.push(...hierarchyChildren(ctx, group).map((entity) => ({ kind: 'reparent' as const, entity, parent })));
+    commands.push({ kind: 'destroyEntity', entity: group });
+  } else {
+    commands.push(...live.map((entity) => ({ kind: 'duplicateEntity' as const, entity })));
+  }
+
+  if (commands.length === 0) {
+    return { ok: false, error: { code: 'PLAN_FAILED', hint: `hierarchyGesture ${cmd.action} produced no mutation` } };
+  }
+  return ctx.dispatchSub(ctx, {
+    kind: 'transaction',
+    label: `hierarchy ${cmd.action} x${live.length}`,
+    commands,
+  });
+}
+
 // ── setComponent applier ──────────────────────────────────────────────────────
 
 export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
@@ -1178,6 +1300,8 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       return applyRename(ctx, cmd);
     case 'reparent':
       return applyReparent(ctx, cmd);
+    case 'hierarchyGesture':
+      return applyHierarchyGesture(ctx, cmd);
     case 'setComponent':
       return applySetComponent(ctx, cmd);
     case 'setSceneOverride':

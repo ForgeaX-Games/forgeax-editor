@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { OperationRun } from '@forgeax/editor-core';
-import { importRunToResult, isRetryableImportRun } from './import-pipeline';
+import { importFiles, importRunToResult, isRetryableImportRun } from './import-pipeline';
 
 function run(overrides: Partial<OperationRun>): OperationRun {
   return {
@@ -32,6 +32,30 @@ describe('import pipeline terminal projection', () => {
       status: 'succeeded',
       result: { filename: 'logo.png', status: 'done', guid: 'stable-guid' },
     }))).toMatchObject({ filename: 'logo.png', status: 'done', guid: 'stable-guid' });
+  });
+
+  it('fails closed when a succeeded run omits its terminal import result', () => {
+    expect(importRunToResult('logo.png', '/games/demo/assets/logo.png', run({
+      status: 'succeeded',
+      result: undefined,
+    }))).toMatchObject({
+      filename: 'logo.png',
+      status: 'error',
+      error: 'Import completed without a terminal result',
+      errorDetail: { code: 'IMPORT_EXECUTION_FAILED', retryable: false },
+    });
+  });
+
+  it('skips a selection with no importable source without publishing reload work', async () => {
+    let reloaded = false;
+    const results = await importFiles(
+      [new File(['notes'], 'notes.txt', { type: 'text/plain' })],
+      'assets',
+      undefined,
+      () => { reloaded = true; },
+    );
+    expect(results).toEqual([]);
+    expect(reloaded).toBe(false);
   });
 
   it('preserves structured retry facts for a failed run', () => {

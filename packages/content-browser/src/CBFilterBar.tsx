@@ -1,5 +1,12 @@
 import {
   Button,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   IconButton,
   Input,
   Select,
@@ -12,6 +19,7 @@ import {
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import type { FilterAPI, SortAPI } from './hooks';
 import type { CBSortKey } from './types';
+import { CONTENT_BROWSER_INTERACTION_SCOPE } from './interaction-surface';
 
 interface Props {
   filter: FilterAPI;
@@ -22,6 +30,12 @@ interface Props {
 
 export function CBFilterBar({ filter, sort, thumbnailSize, onThumbnailSizeChange }: Props) {
   const { t } = useTranslation();
+  const activeFilters = filter.filters.filter(item => item.active);
+  const filterLabel = activeFilters.length === 0
+    ? t('editor.contentBrowser.actions.filterAll')
+    : activeFilters.length === 1
+      ? activeFilters[0]!.label
+      : t('editor.contentBrowser.actions.filterByType');
   const sortLabels: Record<CBSortKey, string> = {
     name: t('editor.contentBrowser.sort.name'),
     kind: t('editor.contentBrowser.sort.kind'),
@@ -30,6 +44,39 @@ export function CBFilterBar({ filter, sort, thumbnailSize, onThumbnailSizeChange
   };
   return (
     <div className="cb-filter-bar">
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="sm"
+            variant="subtle"
+            aria-label={t('editor.contentBrowser.actions.filterByType')}
+          >
+            {filterLabel}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
+          <DropdownMenuLabel>{t('editor.contentBrowser.actions.filterByType')}</DropdownMenuLabel>
+          {filter.filters.map(item => (
+            <DropdownMenuCheckboxItem
+              key={item.id}
+              size="sm"
+              checked={item.active}
+              onCheckedChange={() => filter.toggleFilter(item.id)}
+            >
+              {item.label}
+            </DropdownMenuCheckboxItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            size="sm"
+            disabled={filter.activeFilterCount === 0}
+            onSelect={filter.clearFilters}
+          >
+            {t('editor.contentBrowser.actions.clearFilters')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       <div className="cb-search-box">
         <Input
           size="sm"
@@ -60,7 +107,7 @@ export function CBFilterBar({ filter, sort, thumbnailSize, onThumbnailSizeChange
           <SelectTrigger className="cb-sort-select" size="sm">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
             {Object.entries(sortLabels).map(([key, label]) => (
               <SelectItem key={key} size="sm" value={key}>{label}</SelectItem>
             ))}

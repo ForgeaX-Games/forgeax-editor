@@ -9,6 +9,9 @@
 //     headless (no dialog/confirm in appliers). Cross-reference warning is the
 //     gate that decides whether a human confirm is needed.
 
+import type { AssetWorkspaceSnapshot } from '@forgeax/editor-core';
+import type { DeleteOpenResource } from './delete-guard';
+
 export interface DeleteGuardAsset {
   guid: string;
   name: string;
@@ -17,12 +20,27 @@ export interface DeleteGuardAsset {
 
 export interface DeleteGuardRequest {
   assets: DeleteGuardAsset[];
+  /** Workspace relation snapshot captured with the keyboard gesture. */
+  workspace?: AssetWorkspaceSnapshot;
+  /** Resource pages open for the target GUIDs at preflight time. */
+  openResources?: readonly DeleteOpenResource[];
 }
 
 type Resolver = (ok: boolean) => void;
 
 let pending: { req: DeleteGuardRequest; resolve: Resolver } | null = null;
 const listeners = new Set<(req: DeleteGuardRequest | null) => void>();
+let workspaceSnapshot: AssetWorkspaceSnapshot | null = null;
+
+/** Publish the latest Content Browser workspace projection for keyboard guards. */
+export function publishDeleteGuardWorkspace(snapshot: AssetWorkspaceSnapshot): void {
+  workspaceSnapshot = snapshot;
+}
+
+/** Read the latest workspace projection without creating a second authority. */
+export function getDeleteGuardWorkspace(): AssetWorkspaceSnapshot | null {
+  return workspaceSnapshot;
+}
 
 /** Ask the UI to confirm an asset delete. Resolves true if the user allows. */
 export function requestDeleteGuard(req: DeleteGuardRequest): Promise<boolean> {

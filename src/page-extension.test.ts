@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'bun:test';
-import { gateway } from '@forgeax/editor-core';
+import {
+  closeInputMapStaging,
+  createDefaultInputMapPayload,
+  gateway,
+  getActiveEditorAsset,
+  openInputMapStaging,
+  renameInputMapStaging,
+} from '@forgeax/editor-core';
+import { broadcastAssetsChanged } from '../packages/core/src/store/assets-changed';
 import { createEditorPageExtension } from './page-extension';
 
 describe('Editor Page contribution', () => {
-  it('registers Level, generic asset, mesh, material, and material-instance in the shared Page model', () => {
+  it('registers Level and dedicated asset workbenches in the shared Page model', () => {
     const extension = createEditorPageExtension(() => null);
     const pages = extension.contributes?.pages ?? [];
 
@@ -13,6 +21,8 @@ describe('Editor Page contribution', () => {
       ['@forgeax/editor#page/mesh', 'resource'],
       ['@forgeax/editor#page/material', 'resource'],
       ['@forgeax/editor#page/material-instance', 'resource'],
+      ['@forgeax/editor#page/input-map', 'resource'],
+      ['@forgeax/editor#page/vfx', 'resource'],
     ]);
     const level = pages.find((page) => page.id.endsWith('/level'));
     expect(level?.panels.map((panel) => panel.id)).toContain('ep:capabilities');
@@ -30,6 +40,14 @@ describe('Editor Page contribution', () => {
     expect(miPanels).toContain('ep:mi-preview');
     expect(miPanels).toContain('ep:mi-properties');
     expect(miPanels).not.toContain('ep:mesh-slots');
+    const inputMapPanels = pages.find((page) => page.id.endsWith('/input-map'))?.panels.map((panel) => panel.id) ?? [];
+    expect(inputMapPanels).toContain('ep:input-map-properties');
+    expect(inputMapPanels).not.toContain('ep:mi-preview');
+    const vfxPanels = pages.find((page) => page.id.endsWith('/vfx'))?.panels.map((panel) => panel.id) ?? [];
+    expect(vfxPanels).toEqual(expect.arrayContaining([
+      'ep:vfx-system', 'ep:vfx-preview', 'ep:vfx-timeline', 'ep:vfx-details', 'ep:vfx-diagnostics',
+    ]));
+    expect(vfxPanels).not.toContain('ep:asset-properties');
   });
 
   it('keeps the chrome Settings panel inside every editor page panel domain', () => {
@@ -38,7 +56,7 @@ describe('Editor Page contribution', () => {
     // page's closed panel domain lacks the id, so the button looked dead.
     const extension = createEditorPageExtension(() => null);
     const pages = extension.contributes?.pages ?? [];
-    for (const suffix of ['/level', '/asset', '/mesh', '/material', '/material-instance']) {
+    for (const suffix of ['/level', '/asset', '/mesh', '/material', '/material-instance', '/input-map', '/vfx']) {
       const page = pages.find((candidate) => candidate.id.endsWith(suffix));
       expect(page?.panels.map((panel) => panel.id), suffix).toContain('ep:settings');
     }
@@ -57,9 +75,13 @@ describe('Editor Page contribution', () => {
       .toBe('@forgeax/editor#page/material');
     expect(editors.find((editor) => editor.selector.kinds?.includes('material-instance'))?.pageTypeId)
       .toBe('@forgeax/editor#page/material-instance');
+    expect(editors.find((editor) => editor.selector.kinds?.includes('input-map'))?.pageTypeId)
+      .toBe('@forgeax/editor#page/input-map');
+    expect(editors.find((editor) => editor.selector.kinds?.includes('particle-effect'))?.pageTypeId)
+      .toBe('@forgeax/editor#page/vfx');
     // The generic page is the DEFAULT editor, not a hand-maintained kind list:
     // that list had rotted (it still claimed the retired `cube-texture` and
-    // never covered equirect / animation-graph / video / particle-effect).
+    // never covered equirect / animation-graph / video).
     const generic = editors.find((editor) => editor.pageTypeId === '@forgeax/editor#page/asset');
     expect(generic?.selector).toEqual({ fallback: true });
   });
@@ -87,8 +109,8 @@ describe('Editor Page contribution', () => {
     const extension = createEditorPageExtension(() => null);
     const dispose = await extension.setup?.({ host } as never);
     try {
-      // 'mesh' has a dedicated page; 'particle-effect' is an engine kind nobody
-      // declares. Both must reach the resolver identically.
+      // Both dedicated kinds must still reach the resolver identically; the
+      // ResourceEditor contribution, not this caller, chooses their pages.
       for (const kind of ['mesh', 'particle-effect']) {
         const result = gateway.dispatch({
           kind: 'openAssetEditor',
@@ -105,10 +127,84 @@ describe('Editor Page contribution', () => {
     expect(opened.map((resource) => resource.canonicalId)).toEqual(['guid-mesh', 'guid-particle-effect']);
   });
 
-  it('attaches a PageController factory to the material-instance page (M4/B2)', () => {
+  it('derives an open Input Map name from staging and closes its page after deletion lands', async () => {
+    const guid = '22222222-2222-4222-8222-222222222222';
+    const key = {
+      cardinality: 'resource',
+      typeId: '@forgeax/editor#page/input-map',
+      resourceId: guid,
+    };
+    const encodedKey = 'input-map-page';
+    const closed: Array<{ key: unknown; request: unknown }> = [];
+    openInputMapStaging({
+      guid,
+      packPath: 'assets/IM_Test.pack.json',
+      name: 'IM_Test',
+      payload: createDefaultInputMapPayload(),
+    });
+    const host = {
+      pages: {
+        open: async () => key,
+        close: async (pageKey: unknown, request: unknown) => {
+          closed.push({ key: pageKey, request });
+        },
+        getSnapshot: () => ({
+          generation: 0,
+          activeKey: encodedKey,
+          instances: [{
+            key,
+            encodedKey,
+            typeId: '@forgeax/editor#page/input-map',
+            context: {},
+            resource: {
+              canonicalId: guid,
+              uri: `forgeax-asset://${guid}`,
+              displayPath: 'IM_Test',
+              kind: 'input-map',
+              metadata: {
+                asset: {
+                  guid,
+                  kind: 'input-map',
+                  name: 'IM_Test',
+                  payload: createDefaultInputMapPayload(),
+                  packPath: 'assets/IM_Test.pack.json',
+                },
+              },
+            },
+            openedAt: 0,
+            closable: true,
+          }],
+        }),
+        subscribe: () => () => {},
+      },
+      resourceEditors: {
+        open: async () => key,
+      },
+    };
+    const extension = createEditorPageExtension(() => null);
+    const dispose = await extension.setup?.({ host } as never);
+    try {
+      renameInputMapStaging(guid, 'IM_Player');
+      expect(getActiveEditorAsset()?.name).toBe('IM_Player');
+
+      broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'deleted', guid });
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      expect(closed).toEqual([{
+        key,
+        request: { reason: 'user', decision: 'discard' },
+      }]);
+    } finally {
+      if (typeof dispose === 'function') dispose();
+      closeInputMapStaging(guid);
+    }
+  });
+
+  it('attaches a PageController factory to the material-instance and input-map pages', () => {
     const extension = createEditorPageExtension(() => null);
     const mi = extension.contributes?.pages?.find((page) => page.id.endsWith('/material-instance'));
     expect(typeof mi?.createController).toBe('function');
+    const inputMap = extension.contributes?.pages?.find((page) => page.id.endsWith('/input-map'));
+    expect(typeof inputMap?.createController).toBe('function');
   });
 
   it('bumps the Material page layoutVersion so pre-preview snapshots are discarded', () => {
@@ -122,7 +218,7 @@ describe('Editor Page contribution', () => {
     const pages = extension.contributes?.pages ?? [];
     const material = pages.find((page) => page.id.endsWith('/material'));
     expect(material?.layoutVersion).toBe(2);
-    for (const suffix of ['/level', '/asset', '/mesh', '/material-instance']) {
+    for (const suffix of ['/level', '/asset', '/mesh', '/material-instance', '/input-map', '/vfx']) {
       const page = pages.find((candidate) => candidate.id.endsWith(suffix));
       expect(page?.layoutVersion ?? 1, suffix).toBe(1);
     }

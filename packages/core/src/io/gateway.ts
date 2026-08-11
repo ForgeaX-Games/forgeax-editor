@@ -69,6 +69,36 @@ import {
 // builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets, O(1).
 import { resolveAssetHandle, type AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { Asset, AssetGuid, CatalogEntry, Handle } from '@forgeax/engine-types';
+
+function importPayloadFingerprint(base64: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < base64.length; i++) {
+    hash ^= base64.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}:${base64.length}`;
+}
+
+/** Keep selected-file bytes only for the active effect, never in retained runs or ledger. */
+function retainedCommand(cmd: EditorOp): EditorOp {
+  if (cmd.kind !== 'importAsset') return cmd;
+  const source = cmd as EditorOp & {
+    readonly base64?: unknown;
+    readonly companionSources?: readonly { readonly destPath?: unknown; readonly base64?: unknown }[];
+  };
+  const { base64, companionSources, ...intent } = source;
+  return {
+    ...intent,
+    skipUpload: true,
+    ...(typeof base64 === 'string' ? { payloadFingerprint: importPayloadFingerprint(base64) } : {}),
+    ...(Array.isArray(companionSources) ? {
+      companionFingerprints: companionSources.map((companion) => ({
+        destPath: companion.destPath,
+        ...(typeof companion.base64 === 'string' ? { fingerprint: importPayloadFingerprint(companion.base64) } : {}),
+      })),
+    } : {}),
+  } as EditorOp;
+}
 // Component read surface: same registry the query snapshot uses to resolve
 // component names, projected here so an AI can discover component names +
 // field schemas BEFORE a spawn/setComponent (instead of learning them only by
@@ -389,6 +419,9 @@ export class EditGateway {
   // and emit a notification so panels know to re-read the hierarchy.
 
   private _playWorld: World | null = null;
+  /** A disposable Play carrier owns its World in another realm. The edit World
+   * stays retained here only as a frozen projection and must never be mutated. */
+  private _remotePlayActive = false;
 
   // ── Game-owned Play projection ─────────────────────────────────────────────
   // The registry contains closures supplied by the CURRENT game bootstrap only.
@@ -436,7 +469,7 @@ export class EditGateway {
 
   /** Derived read surface for current mode (Derive from _playWorld, no second state field). */
   get mode(): 'edit' | 'play' {
-    return this._playWorld !== null ? 'play' : 'edit';
+    return this._playWorld !== null || this._remotePlayActive ? 'play' : 'edit';
   }
 
   /**
@@ -453,7 +486,7 @@ export class EditGateway {
    * for `play`|`failed` (both terminal) instead of blind-polling `mode` (round-8 #3).
    */
   get playPhase(): 'edit' | 'starting' | 'play' | 'failed' {
-    if (this._playWorld !== null) return 'play';
+    if (this._playWorld !== null || this._remotePlayActive) return 'play';
     if (this._playPending) return 'starting';
     if (this._lastPlayError !== null) return 'failed';
     return 'edit';
@@ -489,7 +522,19 @@ export class EditGateway {
   /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11).
    *  Success clears the pending flag + any stale error → playPhase 'play'. */
   enterPlay(playWorld: World): void {
+    this._remotePlayActive = false;
     this._playWorld = playWorld;
+    this._playPending = false;
+    this._lastPlayError = null;
+    clearSelection();
+    this._rev++;
+    for (const fn of this.listeners) fn(this.doc, null);
+  }
+
+  /** Enter read-only Play while the disposable child realm owns PlayWorld. */
+  enterRemotePlay(): void {
+    this._playWorld = null;
+    this._remotePlayActive = true;
     this._playPending = false;
     this._lastPlayError = null;
     clearSelection();
@@ -502,6 +547,7 @@ export class EditGateway {
   exitPlay(): void {
     this.clearGameProjection();
     this._playWorld = null;
+    this._remotePlayActive = false;
     this._playPending = false;
     this._lastPlayError = null;
     clearSelection();
@@ -1266,6 +1312,7 @@ export class EditGateway {
       // stubs for cycle detection) from the live asset catalog.
       if (
         kind === 'saveMaterialInstance'
+        || kind === 'saveInputMap'
         || kind === 'setMaterialInstanceParent'
         || kind === 'setMaterialInstanceOverride'
         || kind === 'setMaterialInstanceLightmass'
@@ -1526,7 +1573,7 @@ export class EditGateway {
           },
         };
       }
-      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...cmd }, actor, {
+      const accepted = this.operationRuns.acceptOperation(requestId as string, { ...retainedCommand(cmd) }, actor, {
         operationId: kind,
         cancellable: true,
         retryable: true,
@@ -1722,7 +1769,7 @@ export class EditGateway {
           : sResult.completion;
         this.operationRuns.bindCompletion(acceptedRun.value.runId, completion, (run) => {
           if (run.status !== 'succeeded' || this.transientMode || domain !== 'session') return;
-          this.ledger.push(cmd);
+          this.ledger.push(retainedCommand(cmd));
           this.origins.push(origin);
           this.emitDiagnostics();
         });

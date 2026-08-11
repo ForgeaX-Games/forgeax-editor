@@ -24,13 +24,22 @@ import {
   MaterialInstancePropertiesPanel,
   MaterialPreviewPanel,
   MeshSlotsPanel,
+  InputMapPropertiesPanel,
 } from './AssetEditors';
 import { SettingsPanel } from './Settings';
 import { OperationCenter } from './operations/OperationCenter';
+import {
+  VfxDetailsPanel,
+  VfxDiagnosticsPanel,
+  VfxPreviewPanel,
+  VfxSystemPanel,
+  VfxTimelinePanel,
+} from './VfxEditor';
 export {
   registerMaterialInstancePreview,
   getMaterialInstancePreview,
 } from './mi-preview-slot';
+export { registerVfxPreview, getVfxPreview } from './vfx-preview-slot';
 
 // D5 (plan-strategy §2): renamed PANEL_COMPONENTS -> EDITOR_PANEL_COMPONENTS to
 // disambiguate from interface's own same-named PANEL_COMPONENTS
@@ -56,5 +65,11 @@ export const EDITOR_PANEL_COMPONENTS: Record<string, React.ComponentType<any>> =
   'mi-preview': MaterialInstancePreviewPanel,
   'mi-properties': MaterialInstancePropertiesPanel,
   'mat-preview': MaterialPreviewPanel,
+  'input-map-properties': InputMapPropertiesPanel,
+  'vfx-system': VfxSystemPanel,
+  'vfx-preview': VfxPreviewPanel,
+  'vfx-timeline': VfxTimelinePanel,
+  'vfx-details': VfxDetailsPanel,
+  'vfx-diagnostics': VfxDiagnosticsPanel,
   'operation-center': OperationCenter,
 };

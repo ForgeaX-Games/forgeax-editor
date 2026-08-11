@@ -1,0 +1,25 @@
+.vfx-panel { height: 100%; overflow: auto; padding: 8px; color: var(--text-primary, #ddd); }
+.vfx-panel-heading { padding: 7px 8px; color: #f1f4fa; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; border-bottom: 1px solid #303641; }
+.vfx-section-heading { margin-top: 12px; }
+.vfx-tree-row { width: 100%; display: flex; align-items: center; gap: 7px; padding-block: 5px; color: inherit; text-align: left; background: transparent; border: 0; border-radius: 3px; }
+.vfx-tree-row:hover { background: #ffffff0a; }
+.vfx-tree-row[data-active='1'] { background: #4f7cff2a; color: #fff; }
+.vfx-role { min-width: 54px; padding: 1px 4px; color: #aeb8c8; font-size: 9px; text-align: center; text-transform: uppercase; border: 1px solid #3b4350; border-radius: 3px; }
+.vfx-role-emitter { color: #79d6ff; border-color: #357e9d; }
+.vfx-role-renderer { color: #ffbd70; border-color: #8d6334; }
+.vfx-role-stage { color: #caa1ff; border-color: #644991; }
+.vfx-source-path { padding: 6px 8px; overflow-wrap: anywhere; }
+.vfx-field, .vfx-dependency { display: grid; grid-template-columns: minmax(92px, .8fr) minmax(0, 1.4fr); gap: 10px; align-items: start; padding: 6px 8px; border-bottom: 1px solid #ffffff08; }
+.vfx-field code, .vfx-dependency code { color: #c9d6ed; white-space: normal; overflow-wrap: anywhere; }
+.vfx-track { padding: 8px; }
+.vfx-track-label { display: flex; justify-content: space-between; margin-bottom: 5px; }
+.vfx-track-rail { position: relative; height: 18px; overflow: hidden; background: #151922; border: 1px solid #353d4a; border-radius: 3px; }
+.vfx-rate-band { position: absolute; inset: 5px 0; background: linear-gradient(90deg, #3279bd, #57b5db); opacity: .65; }
+.vfx-burst { position: absolute; top: 1px; width: 3px; height: 14px; background: #ffd36a; box-shadow: 0 0 5px #ffd36a; }
+.vfx-capability { display: grid; grid-template-columns: 70px 1fr; gap: 7px; padding: 7px 8px; border-bottom: 1px solid #ffffff08; }
+.vfx-capability span { font-size: 9px; text-transform: uppercase; }
+.vfx-capability span[data-state='executable'] { color: #70dfa3; }
+.vfx-capability span[data-state='partial'] { color: #ffd36a; }
+.vfx-capability span[data-state='unavailable'] { color: #ff7b83; }
+.vfx-capability small { grid-column: 2; color: #8f9bad; }
+.vfx-preview-panel { height: 100%; padding: 0; overflow: hidden; }

@@ -11,6 +11,15 @@ const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
+interface InteractionSurfaceProps {
+  /** Marks a portalled menu as belonging to the panel that opened it. */
+  interactionScope?: string;
+}
+
+function interactionSurfaceAttrs(scope: string | undefined): Record<string, string> {
+  return scope === undefined ? {} : { 'data-fx-interaction-scope': scope };
+}
+
 const menuItemVariants = cva(
   'relative flex cursor-pointer select-none items-center gap-2 rounded-sm outline-none transition-colors focus:bg-[var(--color-interaction-hover)] focus:text-foreground data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
@@ -45,10 +54,11 @@ DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayNam
 
 const DropdownMenuSubContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
->(({ className, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent> & InteractionSurfaceProps
+>(({ className, interactionScope, ...props }, ref) => (
   <DropdownMenuPrimitive.SubContent
     ref={ref}
+    {...interactionSurfaceAttrs(interactionScope)}
     className={cn(
       'z-[var(--z-menu)] min-w-36 overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-xl data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1',
       className,
@@ -60,12 +70,13 @@ DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayNam
 
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(({ className, sideOffset = 4, onCloseAutoFocus, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content> & InteractionSurfaceProps
+>(({ className, sideOffset = 4, onCloseAutoFocus, interactionScope, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
+      {...interactionSurfaceAttrs(interactionScope)}
       // On close, Radix's DropdownMenu explicitly calls `triggerRef.focus()`
       // (react-dropdown-menu's own onCloseAutoFocus). When the trigger is also a
       // hover Tooltip trigger — as every viewport header menu is (Tooltip >

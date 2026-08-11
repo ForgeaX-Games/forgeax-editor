@@ -7,7 +7,7 @@
 // carrier boundary can later be hosted by a page or Tauri WebView without
 // changing the Runtime contract.
 
-import { StrictMode, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
 import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
@@ -16,7 +16,8 @@ import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/pa
 // removed in interface#112. panels-editor is interface's built-in factory for
 // the ep:* dock panels + surfaces; the custom extension below carries the
 // leftover fields (workbench layout seed + editor bridge hooks).
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
+import { isPageDirty } from '@forgeax/interface/core/page-platform';
 import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
 import { configureWorkbenchClient, useShellStore } from '@forgeax/interface/store';
@@ -28,22 +29,41 @@ import { prompt as promptDialog } from '@forgeax/editor-ui';
 // remain lightweight in-process components in the shell.
 import { ViewportRuntimeFrame } from '@forgeax/editor-edit-runtime/runtime-frame';
 import { MaterialPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/material-preview';
+import { VfxPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/vfx-preview';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
-import { EDITOR_PANEL_COMPONENTS, registerMaterialInstancePreview } from '@forgeax/editor/panels';
+import { EDITOR_PANEL_COMPONENTS, registerMaterialInstancePreview, registerVfxPreview } from '@forgeax/editor/panels';
 registerMaterialInstancePreview(MaterialPreviewViewport);
+registerVfxPreview(VfxPreviewViewport);
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
+import {
+  bindViewportRuntimeClient,
+  forwardViewportRuntimeTransportRequest,
+} from '@forgeax/editor-core';
+import {
+  createBrowserPanelPopupController,
+  installPanelPopupClient,
+  readPanelPopupIdentity,
+  type PanelPopupEventTarget,
+  type PanelPopupWindow,
+} from '@forgeax/editor-product';
 import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContributionsExtension, createEditorPageExtension } from '@forgeax/editor/bridge';
 import '@forgeax/interface/styles/global.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
-// T4-3 / AC-C2: UI-layer DeleteGuardDialog for risky asset deletes — core stays
-// headless, the router requests a human confirm through this bus.
-import { requestDeleteGuard } from './delete-guard-bus';
+// Keyboard asset deletes use the Content Browser's reference/resource-aware
+// preflight dialog. Path deletes retain the standalone path confirmation.
+import {
+  computeDeleteOpenResources,
+  DeleteGuardDialogHost,
+  getDeleteGuardWorkspace,
+  requestDeleteGuard,
+} from '@forgeax/editor-content-browser/delete-guard-entry';
+import { requestDeleteGuard as requestPathDeleteGuard } from './delete-guard-bus';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 
 // keyboard-router convergence M4: the interface submodule's global-shortcuts
@@ -71,12 +91,25 @@ import { createStandaloneGameClient } from './game-service-client';
 // useLastSelectionDomain hook) to show the current Delete jurisdiction. The
 // Derive itself lives in editor-core (store/last-selection-domain) so router and
 // UI share one source — no second divergent state (G-3).
+let standaloneAppHost: AppHost | null = null;
 
-// Standalone's router deps = the shared SSOT builder + this host's DeleteGuardDialog
-// bus as the risky-multi-delete confirm gate (the one host-specific piece).
+// Standalone's router deps = the shared SSOT builder + this host's
+// reference/resource-aware asset-delete preflight.
 function makeKeyboardRouterDeps(): KeyboardRouterDeps {
   const deps = buildKeyboardRouterDeps({
-    confirmDeleteAssets: (assets) => requestDeleteGuard({ assets }),
+    confirmDeleteAssets: (assets) => {
+      const pages = standaloneAppHost?.pages.getSnapshot().instances ?? [];
+      const workspace = getDeleteGuardWorkspace();
+      return requestDeleteGuard({
+        assets,
+        ...(workspace === null ? {} : { workspace }),
+        openResources: computeDeleteOpenResources(
+          assets.map((asset) => asset.guid),
+          pages,
+          isPageDirty,
+        ),
+      });
+    },
     // Folder/file delete confirm for the keyboard-router path. The editor-ui
     // `confirmDialog` (ConfirmProvider in the isolated #editor-overlay-root React
     // root) queues the AlertDialog but never paints/receives interaction in this
@@ -84,7 +117,7 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
     // same in-house DeleteGuardDialog the asset path uses — one consistent, reliable
     // confirm UI. `path` is a single dir path or a ', '-joined file list.
     confirmDeleteFolder: (path) =>
-      requestDeleteGuard({ paths: path.split(', ').filter(Boolean) }),
+      requestPathDeleteGuard({ paths: path.split(', ').filter(Boolean) }),
     promptRenameAsset: (currentName) => promptDialog({
       title: 'Rename Asset',
       label: 'New name',
@@ -130,9 +163,60 @@ configureWorkbenchClient(createStandaloneGameClient(() => {
 //     manifest). Its absence renders every editor panel as "Panel not mounted".
 // Mirrors studio's editorRenderers.tsx (the v9 reference assembly), minus the
 // studio-only chat/agents/overlays/detached/hostSDK slots.
+const panelPopupListeners = new Map<string, Set<() => void>>();
+const isPanelHostPage = window.location.pathname.startsWith('/panel-host');
+
+function emitPanelPopupChanged(panelId: string): void {
+  for (const listener of panelPopupListeners.get(panelId) ?? []) listener();
+}
+
+function subscribePanelPopup(panelId: string, listener: () => void): () => void {
+  const listeners = panelPopupListeners.get(panelId) ?? new Set<() => void>();
+  listeners.add(listener);
+  panelPopupListeners.set(panelId, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) panelPopupListeners.delete(panelId);
+  };
+}
+
 function EditorPanelBody({ id }: { id: string }): ReactNode {
   const Comp = EDITOR_PANEL_COMPONENTS[id];
-  if (Comp) return <Comp />;
+  const poppedOut = useSyncExternalStore(
+    (listener) => subscribePanelPopup(id, listener),
+    () => !isPanelHostPage && panelPopupController.isOpen(id),
+    () => false,
+  );
+  if (poppedOut) {
+    return (
+      <div className="surface-placeholder" data-panel={id} data-panel-popup-active="1">
+        <div className="surface-placeholder-title">{EDITOR_PANEL_TITLES[id] ?? id} is open in another window</div>
+        <button type="button" onClick={() => panelPopupController.close(id)}>Dock back</button>
+      </div>
+    );
+  }
+  if (Comp) {
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        {!isPanelHostPage && (
+          <button
+            type="button"
+            data-testid={`panel-popup-${id}`}
+            title={`Open ${EDITOR_PANEL_TITLES[id] ?? id} in a window`}
+            style={{ position: 'absolute', top: 4, right: 4, zIndex: 20 }}
+            onClick={() => {
+              void panelPopupController.open(id, EDITOR_PANEL_TITLES[id] ?? id).then((result) => {
+                if (result.ok) emitPanelPopupChanged(id);
+              });
+            }}
+          >
+            ⧉
+          </button>
+        )}
+        <Comp />
+      </div>
+    );
+  }
   return (
     <div className="surface-placeholder" data-panel={id} data-panel-unmounted="1">
       <div className="surface-placeholder-title">Panel not mounted</div>
@@ -148,6 +232,8 @@ const EDITOR_PANEL_TITLES: Record<string, string> = {
   launcher: 'Launcher', 'asset-overview': 'Asset Overview',
   'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
   'mat-preview': 'Preview', 'mi-preview': 'Preview', 'mi-properties': 'Properties',
+  'vfx-system': 'System Outline', 'vfx-preview': 'Preview', 'vfx-timeline': 'Timeline',
+  'vfx-details': 'Details', 'vfx-diagnostics': 'Diagnostics',
   settings: 'Settings',
 };
 
@@ -155,7 +241,6 @@ const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
   EDITOR_PANELS.map((id, i) => [id, {
     title: EDITOR_PANEL_TITLES[id] ?? id,
     order: 100 + i,
-    ...(id === 'assets' ? { header: { visible: true, showTitle: false } } : {}),
     render: () => <EditorPanelBody id={id} />,
   }]),
 );
@@ -170,6 +255,17 @@ const STANDALONE_VIEWPORT_RUNTIME = {
   carrierId: 'standalone-viewport',
   carrierKind: 'iframe',
 } as const;
+
+const panelPopupController = createBrowserPanelPopupController({
+  eventTarget: window as unknown as PanelPopupEventTarget,
+  origin: window.location.origin,
+  runtime: STANDALONE_VIEWPORT_RUNTIME,
+  openWindow: (url, name, features) => window.open(url, name, features) as unknown as PanelPopupWindow | null,
+  createChannel: () => new MessageChannel(),
+  forward: forwardViewportRuntimeTransportRequest,
+  timeoutMs: 30_000,
+  onClosed: emitPanelPopupChanged,
+});
 
 function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
   const disposeActionsRef = useRef<(() => void) | null>(null);
@@ -210,6 +306,7 @@ const standaloneEditorIntegrationExtension: AppExtension = {
   id: 'standalone.editor-integration', version: '1.0.0',
   requires: ['panels'],
   setup(ctx) {
+    standaloneAppHost = ctx.host;
     const disposePanels = ctx.contributePanels({
       builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
       editor: {
@@ -225,7 +322,11 @@ const standaloneEditorIntegrationExtension: AppExtension = {
       ctx.bus,
       () => isPanelVisible(SETTINGS_PANEL_ID),
     );
-    return () => { disposeRedirect(); disposePanels(); };
+    return () => {
+      if (standaloneAppHost === ctx.host) standaloneAppHost = null;
+      disposeRedirect();
+      disposePanels();
+    };
   },
 };
 
@@ -312,15 +413,15 @@ function boot(): void {
     throw err;
   }
 
-  // T4-3 / AC-C2: mount the UI-layer DeleteGuardDialog on its own React root so
-  // the keyboard router (which runs outside React, in the DI above) can request a
-  // human confirm. Dedicated root keeps the dialog above the dock chrome.
+  // Mount keyboard delete guards above the dock chrome. Assets use the shared
+  // Content Browser preflight; filesystem paths keep their irreversible warning.
   try {
     const guardEl = document.createElement('div');
     guardEl.id = 'delete-guard-root';
     document.body.appendChild(guardEl);
     createRoot(guardEl).render(
       <StrictMode>
+        <DeleteGuardDialogHost />
         <DeleteGuardDialog />
       </StrictMode>,
     );
@@ -342,4 +443,33 @@ function boot(): void {
   }
 }
 
-boot();
+function bootPanelHost(): void {
+  const identity = readPanelPopupIdentity(window.location.search);
+  const opener = window.opener as unknown as PanelPopupWindow | null;
+  if (identity === null || opener === null) {
+    document.body.textContent = 'Panel popup handshake is unavailable.';
+    return;
+  }
+  const disposeClient = installPanelPopupClient({
+    eventTarget: window as unknown as PanelPopupEventTarget,
+    opener,
+    origin: new URL(window.location.search ? new URLSearchParams(window.location.search).get('hostOrigin') ?? window.location.origin : window.location.origin).origin,
+    identity,
+    onClient: (client) => {
+      const unbind = bindViewportRuntimeClient(identity.runtime, client);
+      window.addEventListener('beforeunload', unbind, { once: true });
+    },
+  });
+  window.addEventListener('beforeunload', disposeClient, { once: true });
+  const appRoot = document.getElementById('app') ?? document.body;
+  createRoot(appRoot).render(
+    <StrictMode>
+      <EditorOverlayProvider>
+        <EditorPanelBody id={identity.panelId} />
+      </EditorOverlayProvider>
+    </StrictMode>,
+  );
+}
+
+if (isPanelHostPage) bootPanelHost();
+else boot();

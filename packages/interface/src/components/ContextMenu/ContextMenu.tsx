@@ -305,6 +305,10 @@ export function ContextMenu() {
   return (
     <DropdownMenu
       open={state !== null}
+      // This is an app-wide context menu, not a modal dialog. Keep the
+      // underlying panel hit-testable so an edge drawer can distinguish
+      // "returning to the panel" from clicking another surface.
+      modal={false}
       onOpenChange={(o) => {
         if (!o) setState(null);
       }}

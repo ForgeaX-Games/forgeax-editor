@@ -14,7 +14,7 @@
 //     pack-ops low-level primitives readPack / writePack / deleteAsset.
 import { normalizePackForRuntime, type PackFile } from '../scene/scene-pack';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
-import { resolveGamePathOnce } from '../util/path-resolver';
+import { resolveGamePath, hasPathResolver } from '../util/path-resolver';
 import {
   readPack, writePack, deleteAsset, generateAssetGuid,
   readPackDetailed, writePackDetailed,
@@ -25,6 +25,22 @@ import {
 import { recordAssetLeaf } from './trace';
 import type { CommandError } from '../types';
 import { deletedEntryCache as rawDeletedEntryCache } from './asset-op-caches';
+
+/**
+ * Resolve a game-relative pack path exactly once. Appliers historically called
+ * resolveGamePath before createAssetInPack, which also resolves and nests the
+ * installed game root twice. Paths under that root are returned unchanged.
+ */
+function resolvePackPathOnce(packPath: string): string {
+  if (!hasPathResolver()) return packPath;
+  try {
+    const root = resolveGamePath('');
+    if (root && (packPath === root || packPath.startsWith(`${root}/`))) return packPath;
+    return resolveGamePath(packPath);
+  } catch {
+    return packPath;
+  }
+}
 
 /** Mirror of the `/api/files/tree` response node (same shape as assets.ts TreeNode). */
 interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
@@ -406,18 +422,28 @@ export class AssetIOFacade {
   }
 
   /** Write (create or replace) one asset entry. Returns true on success.
-   *  Dispatches on the path suffix like readPackEntry. */
+   *  Dispatches on the path suffix like readPackEntry.
+   *  Resolves game-relative paths once (same contract as createAssetInPack) and
+   *  creates an empty pack shell when the target file is missing — so Ctrl+S on
+   *  a newly authored host-kind asset still lands on disk. */
   async writePackEntry(packPath: string, entry: AssetEntry): Promise<boolean> {
     recordAssetLeaf('assetIO.writePackEntry');
     if (isMetaPath(packPath)) return writeMetaSubAsset(packPath, entry as MetaSubAsset);
-    return this.runExclusivePackWrite(packPath, async () => {
-      const pack = await readPack(packPath);
-      if (!pack) return false;
+    const resolvedPackPath = resolvePackPathOnce(packPath);
+    return this.runExclusivePackWrite(resolvedPackPath, async () => {
+      const read = await readPackDetailed(resolvedPackPath);
+      let pack: PackFile;
+      if (read.status === 'error') return false;
+      if (read.status === 'missing') {
+        pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
+      } else {
+        pack = read.pack;
+      }
       const packEntry = entry as PackAssetEntry;
-      const idx = pack.assets.findIndex((a) => a.guid === packEntry.guid);
+      const idx = pack.assets.findIndex((a) => a.guid.toLowerCase() === packEntry.guid.toLowerCase());
       if (idx >= 0) pack.assets[idx] = packEntry;
       else pack.assets.push(packEntry);
-      return writePack(packPath, pack);
+      return writePack(resolvedPackPath, pack);
     });
   }
 
@@ -438,12 +464,7 @@ export class AssetIOFacade {
     extraAssets?: Array<{ guid: string; kind: string; name: string; payload: unknown; refs?: string[] }>;
   }): Promise<CreateAssetInPackResult> {
     recordAssetLeaf('assetIO.createAssetInPack');
-    let resolvedPackPath: string;
-    try {
-      resolvedPackPath = resolveGamePathOnce(opts.packPath);
-    } catch {
-      resolvedPackPath = opts.packPath;
-    }
+    const resolvedPackPath = resolvePackPathOnce(opts.packPath);
     return this.runExclusivePackWrite(resolvedPackPath, async () => {
       const read = await readPackDetailed(resolvedPackPath);
       let pack: PackFile;

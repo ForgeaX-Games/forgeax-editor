@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 
 export interface PromptOptions {
   title: ReactNode;
+  /** Marks a portalled prompt as owned by the panel that opened it. */
+  interactionScope?: string;
   description?: ReactNode;
   label?: ReactNode;
   defaultValue?: string;

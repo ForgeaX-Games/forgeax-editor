@@ -30,6 +30,8 @@ import {
   getLastSelectionDomain,
   getFolderSelectionList,
   getPathSelectionList,
+  getViewportRuntimeClientSnapshot,
+  getViewportRuntimeSelectionSnapshot,
   deleteManyCascade,
   duplicateEntity,
   hideMany,
@@ -45,6 +47,30 @@ import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadran
 import { routeViewportKeydown } from './viewport/viewport';
 import type { InputTarget } from './viewport/viewport-camera';
 import { createHumanSaveRequest } from './save-operation-projection';
+
+/** True when a text-editing control (or Input Map panel) owns focus.
+ *  Uses tagName (realm-safe) and walks open shadow roots. Host-side callers
+ *  still cannot see into cross-origin iframes — shortcut-forwarder must not
+ *  forward Delete/Backspace while typing there. */
+function isTextFieldFocused(): boolean {
+  if (typeof document === 'undefined') return false;
+  let el: Element | null = document.activeElement;
+  for (;;) {
+    const root = el && 'shadowRoot' in el ? (el as HTMLElement).shadowRoot : null;
+    const next = root?.activeElement ?? null;
+    if (!next || next === el) break;
+    el = next;
+  }
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag === 'INPUT') {
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    return !['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'image', 'range', 'color', 'hidden'].includes(type);
+  }
+  if ((el as HTMLElement).isContentEditable) return true;
+  return !!el.closest('.im-editor, [contenteditable="true"]');
+}
 
 /** Minimal asset shape the router hands back for delete/dup/rename. */
 export interface RouterAsset {
@@ -96,9 +122,8 @@ export interface KeyboardRouterDepsShape {
 
 export interface BuildKeyboardRouterDepsOptions {
   /**
-   * Host-supplied confirm gate for a risky MULTI-asset delete (>1). Resolves true
-   * to proceed, false to cancel. Single-asset deletes never call this (they match
-   * entity-delete, which has no confirm). UI-layer concern — core stays headless.
+   * Host-supplied preflight/confirm gate for every asset delete. Resolves true
+   * to proceed, false to cancel. UI-layer concern — core stays headless.
    */
   confirmDeleteAssets: (assets: RouterAsset[]) => Promise<boolean>;
   /** Host-supplied confirm gate for folder deletion. */
@@ -112,12 +137,17 @@ export interface BuildKeyboardRouterDepsOptions {
  * compatible with interface's `KeyboardRouterDeps`; cast at the call site.
  */
 export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): KeyboardRouterDepsShape {
+  const runtimeSelection = () => getViewportRuntimeClientSnapshot().status === 'ready'
+    ? getViewportRuntimeSelectionSnapshot()
+    : null;
   return {
     dispatch: (op: { kind: string; [k: string]: unknown }, origin?: string) =>
       gateway.dispatch(op as never, (origin ?? 'human') as never),
-    getEntitySelection: () => Array.from(getSelectionList()) as unknown as number[],
-    getAssetSelection: () => getAssetSelectionList(),
-    getLastSelectionDomain: () => getLastSelectionDomain(),
+    getEntitySelection: () => runtimeSelection()?.entityIds.slice()
+      ?? Array.from(getSelectionList()) as unknown as number[],
+    getAssetSelection: () => runtimeSelection()?.assets.map((asset) => ({ ...asset }))
+      ?? getAssetSelectionList(),
+    getLastSelectionDomain: () => runtimeSelection()?.lastDomain ?? getLastSelectionDomain(),
     // Play owns a fresh transient world; gateway.mode still reflects the
     // persistent edit document during that session. The viewport quadrant is the
     // authoritative lifecycle state used by the keyboard router.
@@ -149,22 +179,15 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       gateway.dispatch({ kind: 'setSelectionMany', ids: all } as never);
     },
     deleteAssets: (assets: RouterAsset[]) => {
-      // Risky multi-asset delete surfaces the host confirm dialog; single-asset
-      // deletes proceed directly (matching entity-delete, no confirm).
-      if (assets.length > 1) {
-        void opts.confirmDeleteAssets(
-          assets.map((a) => ({ guid: a.guid, name: a.name, packPath: a.packPath })),
-        ).then((ok) => {
-          if (!ok) return;
-          for (const a of assets) {
-            gateway.dispatch({ kind: 'destroyAsset', guid: a.guid } as never, 'human');
-          }
-        });
-        return;
-      }
-      for (const a of assets) {
-        gateway.dispatch({ kind: 'destroyAsset', guid: a.guid } as never, 'human');
-      }
+      // Keyboard Delete uses the same host preflight for one or many targets.
+      void opts.confirmDeleteAssets(
+        assets.map((a) => ({ guid: a.guid, name: a.name, packPath: a.packPath })),
+      ).then((ok) => {
+        if (!ok) return;
+        for (const a of assets) {
+          gateway.dispatch({ kind: 'destroyAsset', guid: a.guid } as never, 'human');
+        }
+      });
     },
     // Both asset mutations route through the ONE gateway door (G-4): duplicate and
     // rename are DOCUMENT ops (undoable) — the applier reaches pack IO through
@@ -181,9 +204,16 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       });
     },
     selectAllAssets: () => triggerAssetSelectAll(),
-    getFolderSelection: () => getFolderSelectionList().map((p) => ({ path: p })),
-    getPathSelection: () => getPathSelectionList(),
+    getFolderSelection: () => runtimeSelection()?.paths
+      .filter((item) => item.kind === 'dir')
+      .map(({ path }) => ({ path }))
+      ?? getFolderSelectionList().map((p) => ({ path: p })),
+    getPathSelection: () => runtimeSelection()?.paths.map((item) => ({ ...item }))
+      ?? getPathSelectionList(),
     deleteFolders: (folders) => {
+      // Last-line guard: never confirm-delete paths while a text field owns focus
+      // (global Delete/Backspace can still race past isTypingTarget in edge cases).
+      if (isTextFieldFocused()) return;
       void (async () => {
         for (const f of folders) {
           const ok = await opts.confirmDeleteFolder(f.path);
@@ -193,6 +223,7 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       })();
     },
     deletePathItems: (items) => {
+      if (isTextFieldFocused()) return;
       const dirs = items.filter((i) => i.kind === 'dir');
       const files = items.filter((i) => i.kind === 'file');
       void (async () => {
@@ -218,10 +249,6 @@ export function buildKeyboardRouterDeps(opts: BuildKeyboardRouterDepsOptions): K
       if (trySaveActivePage()) return;
       gateway.dispatch(createHumanSaveRequest(), 'human');
     },
-    // routeViewportKeydown (not a raw getViewportKeyHandler()?.call) so discrete
-    // modified-key commands pressed during the async engine boot are buffered
-    // and flushed when createViewport installs the handler — before this they
-    // vanished silently (Alt+G/H/J/K dead on slow boots).
-    handleViewportKeyDown: (event) => { routeViewportKeydown(event); },
+    handleViewportKeyDown: routeViewportKeydown,
   };
 }

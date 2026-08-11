@@ -3,8 +3,7 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // (resolves GUID → shared<T> handle) instead of setComponent with deprecated names.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  dispatchActiveEditorOperation, gateway, getSelection, entComponent, validateAssetBasename,
-  awaitAuthoredMaterialReady, broadcastAssetsError,
+  dispatchActiveEditorOperation, gateway, getSelection, validateAssetBasename,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
@@ -12,81 +11,19 @@ import { t as tr } from '@forgeax/editor-core/i18n';
 // onRename callback is supplied). Delete no longer uses the editor-ui confirm —
 // it always routes through the host's reliable cb-dialog delete guards
 // (onDelete / onDeleteFolder), which paint correctly in the standalone host.
-import { prompt as promptDialog } from '@forgeax/editor-ui';
 import { isAssetPlacementAvailable } from './content-browser-format';
+import { contentBrowserPrompt } from './interaction-surface';
 import type { SubjectActionRequest } from './workspace/subject-actions';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
  *  material/mesh: direct bindAssetRef op. texture/image: createMaterial + bindAssetRef.
  *  Returns true if the asset was assignable (op dispatched), false otherwise. */
 function assignAssetToEntity(kind: string, guid: string, name: string, entity: EntityHandle): boolean {
-  // material → MeshRenderer.materials
-  if (kind === 'material') {
-    gateway.dispatch({
-      kind: 'bindAssetRef', entity,
-      component: 'MeshRenderer', field: 'materials',
-      assetType: 'MaterialAsset', guids: [guid], requestId: crypto.randomUUID(),
-    }, 'human');
-    return true;
-  }
-  // mesh → MeshFilter.assetHandle
-  if (kind === 'mesh') {
-    gateway.dispatch({
-      kind: 'bindAssetRef', entity,
-      component: 'MeshFilter', field: 'assetHandle',
-      assetType: 'MeshAsset', guids: [guid], requestId: crypto.randomUUID(),
-    }, 'human');
-    return true;
-  }
-  // texture/image → createMaterial + bindAssetRef (Task 3 & Task 5)
-  if (kind === 'texture' || kind === 'image') {
-    // Ensure the entity has MeshRenderer (bindAssetRef requires it)
-    const mr = entComponent(gateway.activeWorld, entity, 'MeshRenderer');
-    if (!mr.ok) {
-      gateway.dispatch({ kind: 'addComponent', entity, component: 'MeshRenderer', value: { materials: [] } }, 'human');
-    }
-    const materialGuid = crypto.randomUUID();
-    const r1 = gateway.dispatch({
-      kind: 'createMaterial',
-      guid: materialGuid,
-      name: `mat_${name}`,
-      baseColor: [1, 1, 1, 1],
-      baseColorTexture: guid,
-    }, 'human');
-    if (!r1.ok) {
-      broadcastAssetsError({
-        op: 'createMaterial',
-        hint: `could not author material for '${name}': ${r1.error.hint}`,
-      });
-      return true;
-    }
-    // Same completion contract as the viewport drop path: the bind waits until
-    // the material's pack write landed AND the catalog barrier observed the
-    // GUID. Dispatching bindAssetRef immediately raced the async write —
-    // loadByGuid missed and fell back to `/__import/{materialGuid}` (404 for
-    // internal materials), leaving the entity permanently gray.
-    void (async () => {
-      const ready = await awaitAuthoredMaterialReady(materialGuid);
-      if (!ready.ok) {
-        // The applier already broadcast the staged assetsError — log only.
-        console.error('[CBContextMenu] authored material never became ready; bind aborted', { materialGuid, stage: ready.stage, hint: ready.hint });
-        return;
-      }
-      const r2 = gateway.dispatch({
-        kind: 'bindAssetRef', entity,
-        component: 'MeshRenderer', field: 'materials',
-        assetType: 'MaterialAsset', guids: [materialGuid], requestId: crypto.randomUUID(),
-      }, 'human');
-      if (!r2.ok) {
-        broadcastAssetsError({
-          op: 'bindAssetRef',
-          hint: `could not bind material for '${name}': ${r2.error.hint}`,
-        });
-      }
-    })();
-    return true;
-  }
-  return false;
+  if (!['material', 'mesh', 'texture', 'image'].includes(kind)) return false;
+  void dispatchActiveEditorOperation({
+    kind: 'assignAssetToEntity', entity, asset: { guid, kind, name }, requestId: crypto.randomUUID(),
+  }, 'human');
+  return true;
 }
 
 export interface ContextMenuItem {
@@ -159,7 +96,7 @@ export function buildAssetContextMenu(
         callbacks.onRename(asset);
       } else {
         void (async () => {
-          const newName = await promptDialog({
+          const newName = await contentBrowserPrompt({
             title: tr('editor.contentBrowser.contextMenu.rename'),
             label: tr('editor.contentBrowser.dialogs.renameAssetPrompt'),
             defaultValue: asset.name,
@@ -240,7 +177,7 @@ export function buildAssetContextMenu(
       }
       // Fall back to publishing the asset selection (so the Inspector / Material panel
       // can pick it up).
-      gateway.dispatch({ kind: 'setAssetSelectionOne', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
+      void dispatchActiveEditorOperation({ kind: 'setAssetSelectionOne', asset: { guid: asset.guid, kind: asset.kind, name: asset.name, payload: asset.payload, packPath: asset.packPath } });
     }},
     { id: 'sep-3', label: '', separator: true, action: () => {} },
 
@@ -327,41 +264,29 @@ export function buildFolderContextMenu(
   ];
 }
 
+/** One blank-area "create asset" row — caller maps CREATABLE_ASSET_KINDS. */
+export interface BlankAreaCreateAssetEntry {
+  readonly id: string;
+  readonly label: string;
+  readonly action: () => void;
+}
+
 /** Build context menu for blank area right-click (UE5 Content Browser parity). */
 export function buildBlankAreaContextMenu(
   currentPath: string,
   onCreateDirectory: (parentPath: string) => void,
-  onCreateMaterial?: () => void,
-  onCreateMaterialInstance?: () => void,
-  onCreateParticleEffect?: () => void,
+  createAssets: readonly BlankAreaCreateAssetEntry[] = [],
 ): ContextMenuItem[] {
-  const items: ContextMenuItem[] = [
+  return [
     {
       id: 'new-folder',
       label: tr('editor.contentBrowser.contextMenu.newFolder'),
       action: () => onCreateDirectory(currentPath),
     },
+    ...createAssets.map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      action: entry.action,
+    })),
   ];
-  if (onCreateMaterial) {
-    items.push({
-      id: 'new-material',
-      label: tr('editor.contentBrowser.contextMenu.newMaterial'),
-      action: onCreateMaterial,
-    });
-  }
-  if (onCreateMaterialInstance) {
-    items.push({
-      id: 'new-material-instance',
-      label: 'Material Instance（材质实例）',
-      action: onCreateMaterialInstance,
-    });
-  }
-  if (onCreateParticleEffect) {
-    items.push({
-      id: 'new-particle-effect',
-      label: 'Particle Effect',
-      action: onCreateParticleEffect,
-    });
-  }
-  return items;
 }

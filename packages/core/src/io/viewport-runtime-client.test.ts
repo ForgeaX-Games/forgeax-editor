@@ -8,14 +8,17 @@ import {
 } from '@forgeax/editor-product';
 import {
   bindViewportRuntimeClient,
+  cancelViewportRuntimeOperationRun,
   discoverViewportRuntimeCapabilities,
   dispatchViewportRuntimeOperation,
   getViewportRuntimeClientSnapshot,
+  getViewportRuntimeSelectionSnapshot,
+  getViewportRuntimeOperationRun,
   queryViewportRuntimeProjection,
   retryViewportRuntimeOperationRun,
+  waitViewportRuntimeOperationRun,
 } from './viewport-runtime-client';
 import { dispatchActiveEditorOperation } from '../store/active-operation';
-import { getSelection } from '../store/selection';
 
 const runtime = (generation: number): ViewportRuntimeIdentity => ({
   version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
@@ -59,6 +62,31 @@ describe('viewport runtime client cache', () => {
     dispose();
   });
 
+  test('does not let a late old-generation query overwrite a replacement Runtime', async () => {
+    let resolveOld!: (value: unknown) => void;
+    const oldResponse = new Promise((resolve) => { resolveOld = resolve; });
+    const disposeOld = bindViewportRuntimeClient(runtime(11), client(() => oldResponse));
+    const pending = queryViewportRuntimeProjection({ kind: 'selection.current' });
+    const disposeNew = bindViewportRuntimeClient(runtime(12), client(() => ({})));
+    resolveOld({
+      jsonrpc: '2.0',
+      version: TRANSPORT_PROTOCOL_VERSION,
+      id: 'late',
+      correlationId: 'late',
+      result: {
+        version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
+        runtime: runtime(11),
+        revision: 1,
+        status: 'ready',
+        value: { entityIds: [99], assets: [], paths: [], lastDomain: 'entity' },
+      },
+    });
+    await expect(pending).rejects.toThrow('viewport-runtime-stale-generation');
+    expect(getViewportRuntimeClientSnapshot()).toMatchObject({ runtime: { runtimeGeneration: 12 } });
+    disposeOld();
+    disposeNew();
+  });
+
   test('projects panel writes onto the canonical editor capability id', async () => {
     const requests: TransportRequest[] = [];
     const dispose = bindViewportRuntimeClient(runtime(5), client((request) => {
@@ -90,6 +118,23 @@ describe('viewport runtime client cache', () => {
         actor: { id: 'editor-panel', kind: 'human' },
       },
     });
+    dispose();
+  });
+
+  test('gets, waits, and cancels the Runtime-owned run through the same transport', async () => {
+    const requests: TransportRequest[] = [];
+    const dispose = bindViewportRuntimeClient(runtime(9), client((request) => {
+      requests.push(request);
+      return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: request.id, correlationId: request.correlationId, result: { status: 'running' } };
+    }));
+    await getViewportRuntimeOperationRun('asset-run');
+    await waitViewportRuntimeOperationRun('asset-run');
+    await cancelViewportRuntimeOperationRun('asset-run');
+    expect(requests.map((request) => [request.method, request.params])).toEqual([
+      ['run.get', { requestId: 'asset-run' }],
+      ['run.wait', { requestId: 'asset-run' }],
+      ['run.cancel', { requestId: 'asset-run' }],
+    ]);
     dispose();
   });
 
@@ -146,10 +191,55 @@ describe('viewport runtime client cache', () => {
     dispose();
   });
 
-  test('uses the local Gateway when no Runtime carrier is connected', async () => {
-    await expect(dispatchActiveEditorOperation({ kind: 'setSelection', id: 18 })).resolves.toEqual({ ok: true });
-    expect(Number(getSelection())).toBe(18);
-    await dispatchActiveEditorOperation({ kind: 'setSelection', id: null });
+  test('refreshes selection from Runtime authority and clears it on disconnect', async () => {
+    const selected = {
+      entityIds: [],
+      assets: [{ guid: 'material-1', kind: 'material', name: 'Material 1', packPath: 'assets/material.pack.json' }],
+      paths: [],
+      lastDomain: 'asset',
+    } as const;
+    const dispose = bindViewportRuntimeClient(runtime(10), client((request) => request.method === 'query'
+      ? {
+          jsonrpc: '2.0',
+          version: TRANSPORT_PROTOCOL_VERSION,
+          id: request.id,
+          correlationId: request.correlationId,
+          result: {
+            version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
+            runtime: runtime(10),
+            revision: 1,
+            status: 'ready',
+            value: selected,
+          },
+        }
+      : {
+          jsonrpc: '2.0',
+          version: TRANSPORT_PROTOCOL_VERSION,
+          id: request.id,
+          correlationId: request.correlationId,
+          result: { status: 'succeeded' },
+        }));
+
+    await expect(dispatchActiveEditorOperation({
+      kind: 'setAssetSelectionOne',
+      asset: { ...selected.assets[0], payload: {} },
+    })).resolves.toEqual({ ok: true });
+    expect(getViewportRuntimeSelectionSnapshot()).toEqual(selected);
+
+    dispose();
+    expect(getViewportRuntimeSelectionSnapshot()).toEqual({
+      entityIds: [], assets: [], paths: [], lastDomain: null,
+    });
+  });
+
+  test('fails closed instead of promoting the shell Gateway when disconnected', async () => {
+    await expect(dispatchActiveEditorOperation({ kind: 'setSelection', id: 18 })).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'operation-failed',
+        hint: 'Viewport Runtime is disconnected; reconnect before retrying the operation.',
+      },
+    });
   });
 
   test('preserves a Runtime operation failure as a structured dispatch result', async () => {

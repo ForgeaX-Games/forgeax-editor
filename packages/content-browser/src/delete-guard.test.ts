@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { computeDeleteImpact, computeSceneDeleteGuards } from './delete-guard';
+import { computeDeleteImpact, computeDeleteOpenResources, computeSceneDeleteGuards } from './delete-guard';
 
 // tex ← mat ← mesh ; standalone has no referencers.
 const graph = {
@@ -78,5 +78,34 @@ describe('computeSceneDeleteGuards', () => {
   it('does not guard an unreferenced non-current scene', () => {
     const guards = computeSceneDeleteGuards([{ guid: 'target', kind: 'scene' }], sceneModel, graph);
     expect(guards.size).toBe(0);
+  });
+});
+
+describe('computeDeleteOpenResources', () => {
+  it('matches target GUIDs case-insensitively and projects dirty resource tabs', () => {
+    const pages = [
+      {
+        encodedKey: 'material:target',
+        typeId: '@forgeax/editor#page/material',
+        title: 'Target Material',
+        resource: { canonicalId: 'TARGET', displayPath: 'Target.mat' },
+      },
+      {
+        encodedKey: 'material:other',
+        typeId: '@forgeax/editor#page/material',
+        resource: { canonicalId: 'other', displayPath: 'Other.mat' },
+      },
+      {
+        encodedKey: 'level',
+        typeId: '@forgeax/editor#page/level',
+      },
+    ];
+
+    expect(computeDeleteOpenResources(['target'], pages, (page) => page.encodedKey === 'material:target')).toEqual([{
+      guid: 'TARGET',
+      encodedKey: 'material:target',
+      title: 'Target Material',
+      dirty: true,
+    }]);
   });
 });

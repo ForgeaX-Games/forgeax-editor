@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { createPortal } from 'react-dom';
 import { useHost } from '@forgeax/interface/core/app-shell';
 import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
+import { isPageDirty } from '@forgeax/interface/core/page-platform';
+import { publish } from '@forgeax/interface/lib/bus';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, requestAddAssetsToChat, resolveGamePath, showContextMenu,
+import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, requestAddAssetsToChat, resolveGamePath, showContextMenu, waitViewportRuntimeOperationRun,
   ResizeHandle, useLocalSize, useSceneReadModel, validateAssetBasename } from '@forgeax/editor-core';
 import type { OperationRun } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
@@ -16,7 +18,14 @@ import type { OperationRun } from '@forgeax/editor-core';
 // hanging the delete. Folder/file deletes now route through the in-package
 // cb-dialog path-confirm modal (same reliable styling as the asset DeleteGuard),
 // so keyboard + context-menu delete are consistent across studio & standalone.
-import { Button, prompt as promptDialog } from '@forgeax/editor-ui';
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@forgeax/editor-ui';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
 import { useFilter } from './hooks/useFilter';
@@ -25,7 +34,8 @@ import { useFavorites, type CBFavoriteRef } from './hooks/useFavorites';
 import { useCBData } from './hooks/useCBData';
 import { useCBDerivedView } from './hooks/useCBDerivedView';
 import { useContentBrowserCommands } from './hooks/useContentBrowserCommands';
-import { computeDeleteImpact, computeSceneDeleteGuards } from './delete-guard';
+import { computeDeleteImpact, computeDeleteOpenResources, computeSceneDeleteGuards } from './delete-guard';
+import { publishDeleteGuardWorkspace } from './delete-guard-bus';
 import { authorizeSubjectAction, preflightSubjectAction, type SubjectActionRequest } from './workspace/subject-actions';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 import { SaveAssetsDialog } from './SaveAssetsDialog';
@@ -33,17 +43,20 @@ import { subscribeSaveAllRequest, resolveSaveAll } from './save-all-bus';
 import { buildAssetContextMenu, buildBlankAreaContextMenu, buildFolderContextMenu, dispatchReimportAsset, type CRUDCallbacks } from './CBContextMenu';
 import { resolveFolderMenuItems } from './folder-menu';
 import { CBNavigationBar } from './CBNavigationBar';
+import { CBFilterBar } from './CBFilterBar';
 import { CBGrid } from './CBGrid';
 import { CBPreviewPanel } from './CBPreviewPanel';
 import { CBSourceTree } from './CBSourceTree';
+import { CONTENT_BROWSER_INTERACTION_SCOPE, contentBrowserInteractionAttrs, contentBrowserPrompt } from './interaction-surface';
 import { iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
 import { importFiles, isRetryableImportRun, retryImportRun, type ImportProgress, type ImportRunRecord } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { createMaterialInstanceAndOpen } from './create-material-instance';
+import { createInputMapAndOpen } from './create-input-map';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { resolveFileActivateAction } from './folder-view';
-import { useContentBrowserPanelContributions } from './useContentBrowserPanelContributions';
+import { pickNativeImportFiles } from './native-file-picker';
 import { SourceMutationDialog } from './source-authoring/SourceMutationDialog';
 import {
   createSourceMutationViewModel,
@@ -66,6 +79,8 @@ import {
   menuIconForId,
   fileSpecificMenuItems,
   dirOfPath,
+  importDirectoryForViewItem,
+  sourcePathForViewItem,
   type CBContextMenuEntry,
 } from './content-browser-format';
 import './content-browser.css';
@@ -85,17 +100,95 @@ import './content-browser.css';
 // layout conventions itself.
 declare const __FORGEAX_CATALOG_ASSET_ROOTS__: readonly CatalogAssetRoot[];
 declare const __FORGEAX_GAME_SLUG__: string | null;
+declare const __FORGEAX_GAME_DIR_ABS__: string | null;
 
 const catalogAssetRoots: readonly CatalogAssetRoot[] =
   typeof __FORGEAX_CATALOG_ASSET_ROOTS__ === 'undefined'
     ? []
     : __FORGEAX_CATALOG_ASSET_ROOTS__;
 
+function ContentBrowserActionBar({
+  executeCommand,
+  nav,
+  gameSlug,
+}: {
+  executeCommand: (command: string) => void;
+  nav: ReturnType<typeof useNavHistory>;
+  gameSlug: string;
+}): ReactNode {
+  const { t } = useTranslation();
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+
+  return (
+    <div className="cb-toolbar" data-testid="cb-content-actions" role="toolbar">
+      <div className="cb-toolbar-group">
+        <DropdownMenu modal={false} open={createMenuOpen} onOpenChange={setCreateMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="subtle">+ {t('editor.contentBrowser.actions.create')}</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
+            <DropdownMenuItem size="sm" onClick={() => executeCommand('contentBrowser.createFolder')}>
+              {t('editor.contentBrowser.actions.createFolder')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {CREATABLE_ASSET_KINDS.map(spec => (
+              <DropdownMenuItem
+                key={spec.kind}
+                size="sm"
+                onClick={() => executeCommand(`contentBrowser.createAsset.${spec.kind}`)}
+              >
+                {spec.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button size="sm" variant="subtle" onClick={() => executeCommand('contentBrowser.import')}>
+          {t('editor.contentBrowser.actions.import')}
+        </Button>
+        <Button size="sm" variant="subtle" onClick={() => executeCommand('contentBrowser.saveAll')}>
+          {t('editor.contentBrowser.actions.saveAll')}
+        </Button>
+      </div>
+      <CBNavigationBar nav={nav} gameSlug={gameSlug} inline />
+    </div>
+  );
+}
+
 /** Assets are identified by guid (a pack file holds N of them); folders and
  *  files are identified by their game-relative path. */
 const favoriteRef = (item: CBViewItem): CBFavoriteRef => (
   item.type === 'asset' ? { kind: 'asset', guid: item.guid } : { kind: 'path', path: item.path }
 );
+
+function useProjectName(gameSlug: string): string {
+  const [projectName, setProjectName] = useState(gameSlug);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProjectName(gameSlug);
+    if (!gameSlug || gameSlug === 'default') return () => { cancelled = true; };
+
+    let manifestPath: string;
+    try {
+      manifestPath = resolveGamePath('forge.json');
+    } catch {
+      return () => { cancelled = true; };
+    }
+
+    void fetch(`/api/files/raw?path=${encodeURIComponent(manifestPath)}`, { cache: 'no-store' })
+      .then(response => response.ok ? response.json() : null)
+      .then((manifest: unknown) => {
+        if (cancelled || manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) return;
+        const name = (manifest as { name?: unknown }).name;
+        if (typeof name === 'string' && name.trim()) setProjectName(name.trim());
+      })
+      .catch(() => { /* slug fallback is the stable project label */ });
+
+    return () => { cancelled = true; };
+  }, [gameSlug]);
+
+  return projectName;
+}
 
 // Asset invalidation is owned by useAssetBrowserSnapshot via assetsChanged; this
 // component only consumes the resulting read model through useCBData.
@@ -119,7 +212,11 @@ const localOperationRuns: ContentBrowserOperationRuns = {
 export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const host = useHost();
   const { t } = useTranslation();
-  useContentBrowserPanelContributions();
+  const executeContentBrowserCommand = useCallback((command: string) => {
+    void host.commands.execute(command).catch((err: unknown) => {
+      console.error(`[content-browser] command "${command}" failed`, err);
+    });
+  }, [host]);
   // Host boot configures the game session asynchronously after the shell mounts.
   // Subscribe to the existing scene-list signal so the read model is rebuilt
   // from the real slug instead of remaining on the initial `default` guard.
@@ -136,7 +233,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const gameSlug = sceneModel.gameId === null && typeof __FORGEAX_GAME_SLUG__ === 'string'
     ? __FORGEAX_GAME_SLUG__
     : (sceneModel.gameId ?? 'default');
+  const projectName = useProjectName(gameSlug);
+  const projectPickerPath = useMemo(() => {
+    if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {
+      return __FORGEAX_GAME_DIR_ABS__;
+    }
+    try {
+      return resolveGamePath('');
+    } catch {
+      return '';
+    }
+  }, [gameSlug]);
   const { allAssets: catalogAssets, loading, reload, catalogStale, diskTree, fetchDiskDirs, workspaceSnapshot } = useCBData(gameSlug, catalogAssetRoots);
+  useEffect(() => publishDeleteGuardWorkspace(workspaceSnapshot), [workspaceSnapshot]);
   const allAssets = useMemo(() => catalogAssets.map((asset) => {
     const activation = describeSceneActivation({
       guid: asset.guid,
@@ -162,6 +271,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const [dragOver, setDragOver] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
+  const [selectedItem, setSelectedItem] = useState<CBViewItem | null>(null);
   const [previewItem, setPreviewItem] = useState<CBViewItem | null>(null);
   const [sourceMutationAsset, setSourceMutationAsset] = useState<CBAsset | null>(null);
   useEffect(() => {
@@ -260,6 +370,25 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     expandedPacks,
   });
 
+  // Selection has two deliberate projections:
+  //   1. selectedItem is the exact directory/file/asset subject;
+  //   2. selectedSourcePath is the source-tree path chain used to paint every
+  //      ancestor from the project root to that subject.
+  // Keep previewItem separate so closing the preview does not erase selection.
+  const selectedSourcePath = useMemo(() => {
+    if (!selectedItem) return null;
+    return sourcePathForViewItem(
+      selectedItem,
+      selectedItem.type === 'asset' ? relByAssetGuid.get(selectedItem.guid) : null,
+    );
+  }, [relByAssetGuid, selectedItem]);
+  const selectedImportPath = useMemo(
+    () => selectedItem
+      ? importDirectoryForViewItem(selectedItem, selectedSourcePath, nav.currentPath || 'assets')
+      : nav.currentPath,
+    [nav.currentPath, selectedItem, selectedSourcePath],
+  );
+
   const togglePackExpansion = useCallback((filePath: string) => {
     setExpandedPacks(prev => {
       const next = new Set(prev);
@@ -269,12 +398,16 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   }, []);
 
   const multiSelect = useMultiSelect(viewItems);
-  const selectItemForContextMenu = useCallback((item: CBViewItem, e: React.MouseEvent) => {
+  const selectItem = useCallback((item: CBViewItem) => {
+    setSelectedItem(item);
     setPreviewItem(item);
+  }, []);
+  const selectItemForContextMenu = useCallback((item: CBViewItem, e: React.MouseEvent) => {
+    selectItem(item);
     if (multiSelect.isSelected(item)) return;
     const index = viewItems.findIndex(viewItem => viewItemKey(viewItem) === viewItemKey(item));
     if (index >= 0) multiSelect.handleClick(index, e);
-  }, [multiSelect, viewItems]);
+  }, [multiSelect, selectItem, viewItems]);
 
   // ── Locate-in-Content-Browser (`content-browser:reveal` bus event) ──────────
   // Any caller (an editor page tab, chat, another app) emits the neutral
@@ -291,7 +424,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     if (target.path) {
       const kind = target.pathKind ?? 'file';
       dir = dirOfPath(target.path);
-      gateway.dispatch({ kind: 'setFolderSelection', items: [{ path: target.path, kind }] });
+      void dispatchActiveEditorOperation({ kind: 'setFolderSelection', items: [{ path: target.path, kind }] });
       selector = kind === 'dir'
         ? `[data-folder-path="${CSS.escape(target.path)}"]`
         : `[data-file-path="${CSS.escape(target.path)}"]`;
@@ -299,7 +432,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       const rel = relByAssetGuid.get(target.guid)
         ?? (target.packPath ? catalogPathToRoot(target.packPath, gameSlug, catalogAssetRoots) : null);
       if (rel) dir = dirOfPath(rel);
-      gateway.dispatch({ kind: 'setAssetSelectionOne', asset: {
+      void dispatchActiveEditorOperation({ kind: 'setAssetSelectionOne', asset: {
         guid: target.guid,
         kind: target.assetKind ?? 'unknown',
         name: target.name ?? target.guid,
@@ -379,7 +512,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     // for BOTH kinds (previously only folders were re-bound, so renaming a
     // selected FILE silently lost its selection). Assets are guid-keyed and
     // already returned above.
-    gateway.dispatch({
+    void dispatchActiveEditorOperation({
       kind: 'setFolderSelection',
       items: [{ path: pending.newPath, kind: previewItem.type === 'folder' ? 'dir' : 'file' }],
     });
@@ -395,6 +528,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const sceneDeleteGuards = useMemo(
     () => computeSceneDeleteGuards(deleteTargets ?? [], sceneModel, workspaceSnapshot),
     [deleteTargets, sceneModel, workspaceSnapshot],
+  );
+  const deleteOpenResources = useMemo(
+    () => computeDeleteOpenResources(
+      (deleteTargets ?? []).map((target) => target.guid),
+      host.pages.getSnapshot().instances,
+      isPageDirty,
+    ),
+    [deleteTargets, host.pages],
   );
   const [pendingSceneSwitch, setPendingSceneSwitch] = useState<string | null>(null);
   // UE-style "Save Content" dialog: opened by save-all-bus requests (CBToolbar
@@ -441,18 +582,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         }
 
         const requestId = crypto.randomUUID();
-        const accepted = gateway.dispatch({ kind: 'deleteScene', sceneGuid: asset.guid, requestId }, 'human');
+        const accepted = await dispatchActiveEditorOperation({ kind: 'deleteScene', sceneGuid: asset.guid, requestId }, 'human');
         if (!accepted.ok) {
           setDeleteError(accepted.error.hint);
           return;
         }
-        const terminal = await gateway.waitOperationRun(requestId);
-        if (!terminal.ok) {
-          setDeleteError(terminal.error.hint);
+        const terminalResponse = await waitViewportRuntimeOperationRun(requestId);
+        if (terminalResponse.error !== undefined) {
+          setDeleteError(terminalResponse.error.hint);
           return;
         }
-        if (terminal.value.status !== 'succeeded') {
-          setDeleteError(terminal.value.error?.hint ?? 'Scene deletion was refused; inspect the reported impact and retry.');
+        const terminal = terminalResponse.result as OperationRun;
+        if (terminal.status !== 'succeeded') {
+          setDeleteError(terminal.error?.hint ?? 'Scene deletion was refused; inspect the reported impact and retry.');
           return;
         }
       }
@@ -467,23 +609,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // standalone host). Context-menu folder/file delete routes through this.
   const [pathDeleteTarget, setPathDeleteTarget] = useState<{ path: string; name: string; kind: 'dir' | 'file' } | null>(null);
   const performPathDelete = useCallback(() => {
-    setPathDeleteTarget(current => {
-      if (current) {
-        if (current.kind === 'dir') {
-          gateway.dispatch({ kind: 'deleteDirectory', path: current.path }, 'human');
-        } else {
-          gateway.dispatch({ kind: 'deleteSourceFile', path: current.path, requestId: crypto.randomUUID() }, 'human');
-        }
-      }
-      return null;
-    });
-  }, []);
+    const current = pathDeleteTarget;
+    setPathDeleteTarget(null);
+    if (current === null) return;
+    void dispatchActiveEditorOperation(current.kind === 'dir'
+      ? { kind: 'deleteDirectory', path: current.path }
+      : { kind: 'deleteSourceFile', path: current.path, requestId: crypto.randomUUID() }, 'human');
+  }, [pathDeleteTarget]);
 
   // M3 (AC-03): asset-selection is a transient op — it goes through the one
   // gateway door (gateway.dispatch), never the direct setAssetSelection setter
   // (gateway-only door, M3), which is no longer exported from the barrel.
-  const requestSceneSwitch = useCallback((id: string) => {
-    const result = gateway.dispatch({ kind: 'switchSceneFile', id, requestId: crypto.randomUUID() }, 'human');
+  const requestSceneSwitch = useCallback(async (id: string) => {
+    const result = await dispatchActiveEditorOperation({ kind: 'switchSceneFile', id, requestId: crypto.randomUUID() }, 'human');
     if (!result.ok && result.error.code === 'scene-switch-dirty') {
       setPendingSceneSwitch(id);
     }
@@ -493,13 +631,13 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     const id = pendingSceneSwitch;
     setPendingSceneSwitch(null);
     if (id !== null && dirtyPolicy !== 'cancel') {
-      gateway.dispatch({ kind: 'switchSceneFile', id, dirtyPolicy, requestId: crypto.randomUUID() }, 'human');
+      void dispatchActiveEditorOperation({ kind: 'switchSceneFile', id, dirtyPolicy, requestId: crypto.randomUUID() }, 'human');
     }
   }, [pendingSceneSwitch]);
 
   // M3 (AC-03): asset-selection is a transient op dispatched through the one
   // gateway door, and scene switches use the same Gateway policy path as AI.
-  const openAsset = useCallback((asset: CBAsset) => {
+  const openAsset = useCallback(async (asset: CBAsset) => {
     // M1 (AC-B2): single-asset select uses the `setAssetSelectionOne` sugar op
     // (forwards to the multi-base setAssetSelection applier). The bare
     // `{kind:'setAssetSelection', asset}` mix is no longer valid — argsSchema
@@ -512,18 +650,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       payload: asset.payload,
       packPath: asset.packPath,
     };
-    gateway.dispatch({ kind: 'setAssetSelectionOne', asset: selectedAsset });
+    const selection = await dispatchActiveEditorOperation({ kind: 'setAssetSelectionOne', asset: selectedAsset });
+    if (!selection.ok) return;
     if (asset.activation) {
       if (asset.activation.mode === 'open-authored') {
-        requestSceneSwitch(asset.activation.authoredSceneId ?? '');
+        await requestSceneSwitch(asset.activation.authoredSceneId ?? '');
       } else {
-        gateway.dispatch(sceneActivationToOp(asset.activation, asset.sourcePath), 'human');
+        await dispatchActiveEditorOperation(sceneActivationToOp(asset.activation, asset.sourcePath), 'human');
       }
     } else if (asset.kind !== 'scene') {
       // A double-click opens a semantic editor document. The document tab owns
       // its panel domain; focusing Asset Inspector inside the Level layout was
       // the old layout-as-document conflation.
-      gateway.dispatch({ kind: 'openAssetEditor', asset: selectedAsset }, 'human');
+      await dispatchActiveEditorOperation({ kind: 'openAssetEditor', asset: selectedAsset }, 'human');
     }
   }, [requestSceneSwitch]);
 
@@ -531,18 +670,25 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // routing (scene switch beats pack expansion) lives in the pure
   // resolveFileActivateAction so it is unit-tested without rendering.
   const handleActivate = useCallback((item: CBViewItem) => {
+    selectItem(item);
     if (item.type === 'folder') { nav.navigate(item.path); return; }
     if (item.type === 'file') {
       const action = resolveFileActivateAction(item, viewMode);
       if (action.type === 'toggle-expand') { togglePackExpansion(item.path); return; }
-      setPreviewItem(item);
       if (action.type === 'open-asset') {
-        openAsset(action.asset);
+        void openAsset(action.asset);
+      } else if (action.type === 'open-file') {
+        // ADR 0030: the CB never picks a viewer. It requests "open this file" on
+        // the shared workbench file-open bus; workbench.openFile fetches content
+        // and routes through the ResourceEditorResolver (same door the Files
+        // sidebar / Agents workspace use), so a third-party resource editor can
+        // claim the extension without any CB change.
+        publish('workbench:open-file', { path: item.diskPath });
       }
       return;
     }
     openAsset(item);
-  }, [nav, openAsset, togglePackExpansion, viewMode]);
+  }, [nav, openAsset, selectItem, togglePackExpansion, viewMode]);
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
@@ -552,7 +698,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       setPathDeleteTarget({ path: folder.path, name: folder.name, kind: 'dir' }),
     onRename: (asset: CBAsset) => {
       void (async () => {
-        const newName = await promptDialog({
+        const newName = await contentBrowserPrompt({
           title: t('editor.contentBrowser.contextMenu.rename'),
           label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
           defaultValue: asset.name,
@@ -586,7 +732,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     },
     onNewFolder: (parentPath: string) => {
       void (async () => {
-        const name = await promptDialog({
+        const name = await contentBrowserPrompt({
           title: t('editor.contentBrowser.actions.createFolder'),
           label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
           confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
@@ -594,7 +740,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
           validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
         });
         if (!name) return;
-        gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+        void dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath, name }, 'human');
       })();
     },
   }), [host, reload, requestDelete, setSourceMutationAsset, t, workspaceSnapshot]);
@@ -670,7 +816,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
 
   const createFolderInCurrentPath = useCallback(() => {
     void (async () => {
-      const name = await promptDialog({
+      const name = await contentBrowserPrompt({
         title: t('editor.contentBrowser.actions.createFolder'),
         label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
         confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
@@ -678,13 +824,13 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
       });
       if (!name) return;
-      gateway.dispatch({ kind: 'createDirectory', parentPath: nav.currentPath, name }, 'human');
+      void dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath: nav.currentPath, name }, 'human');
     })();
   }, [nav.currentPath, t]);
 
   const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
     void (async () => {
-      const name = (await promptDialog({
+      const name = (await contentBrowserPrompt({
         title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
         label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
         defaultValue: spec.defaultNamePrefix,
@@ -694,7 +840,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       if (!name) return;
       if (spec.kind === 'scene') {
         const requestId = crypto.randomUUID();
-        const result = gateway.dispatch({ kind: 'createSceneFile', id: name, duplicateCurrent: false, requestId }, 'human');
+        const result = await dispatchActiveEditorOperation({ kind: 'createSceneFile', id: name, duplicateCurrent: false, requestId }, 'human');
         if (!result.ok) console.warn('[content-browser] create scene dispatch rejected', result.error);
         return;
       }
@@ -702,7 +848,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       // Pre-resolving here double-prefixes the host game root onto itself.
       const packDir = (nav.currentPath || 'assets').replace(/^\/+|\/+$/g, '') || 'assets';
       if (spec.kind === 'material') {
-        gateway.dispatch({
+        void dispatchActiveEditorOperation({
           kind: 'createMaterial',
           guid: generateAssetGuid(),
           name,
@@ -713,8 +859,10 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         }, 'human');
       } else if (spec.kind === 'material-instance') {
         await createMaterialInstanceAndOpen(name, packDir);
+      } else if (spec.kind === 'input-map') {
+        await createInputMapAndOpen(name, packDir);
       } else {
-        gateway.dispatch({
+        void dispatchActiveEditorOperation({
           kind: 'createAsset',
           packPath: `${packDir}/${name}.pack.json`,
           guid: generateAssetGuid(),
@@ -744,7 +892,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
         { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
           void (async () => {
-            const newName = await promptDialog({
+            const newName = await contentBrowserPrompt({
               title: t('editor.contentBrowser.contextMenu.rename'),
               label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
               defaultValue: item.name,
@@ -762,14 +910,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
               if (cur === item.path || cur.startsWith(`${item.path}/`)) {
                 nav.navigate(`${newPath}${cur.slice(item.path.length)}`);
               }
-              gateway.dispatch({ kind: 'renameDirectory', path: item.path, newName }, 'human');
+              void dispatchActiveEditorOperation({ kind: 'renameDirectory', path: item.path, newName }, 'human');
             }
           })();
         } },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
-          gateway.dispatch({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
+          void dispatchActiveEditorOperation({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
         } },
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => {
           setPathDeleteTarget({ path: item.path, name: item.name, kind: 'dir' });
@@ -782,7 +930,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
         { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => {
           void (async () => {
-            const newName = await promptDialog({
+            const newName = await contentBrowserPrompt({
               title: t('editor.contentBrowser.contextMenu.rename'),
               label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
               defaultValue: item.name,
@@ -793,14 +941,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
               const slash = item.path.lastIndexOf('/');
               const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
               pendingReselectRef.current = { oldPath: item.path, newPath, newName };
-              gateway.dispatch({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
+              void dispatchActiveEditorOperation({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
             }
           })();
         } },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(item.diskPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
-          gateway.dispatch({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
+          void dispatchActiveEditorOperation({ kind: 'revealInFileManager', path: resolveGamePath(item.path) }, 'human');
         } },
         { label: t('editor.contentBrowser.contextMenu.addToChat'), icon: 'spark', forge: true, onClick: () => {
           void host.commands.execute('app.chat.insertPill', {
@@ -829,7 +977,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
           onClick: item.activation.canPromote
             ? () => {
                 void (async () => {
-                  const targetName = await promptDialog({
+                  const targetName = await contentBrowserPrompt({
                     title: 'Promote Imported Scene',
                     label: 'Authored scene name',
                     defaultValue: item.name,
@@ -845,7 +993,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
                     .replace(/[^a-z0-9-]+/g, '-')
                     .replace(/^-+|-+$/g, '');
                   if (!slug) return;
-                  gateway.dispatch(scenePromoteToOp(item.activation!, {
+                  void dispatchActiveEditorOperation(scenePromoteToOp(item.activation!, {
                     targetPackPath: `assets/scenes/${slug}.pack.json`,
                     targetName,
                     contentPolicy: 'effective-base',
@@ -879,16 +1027,64 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     ];
   }, [crudCallbacks, favorites, fetchDiskDirs, gameSlug, host.commands, multiSelect.selection, relByAssetGuid, reload, requestDelete, t]);
 
+  const importSelectedFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
+      logImport('ContentBrowser.import.cancel', { reason: 'no files selected' });
+      return;
+    }
+
+    logImport('ContentBrowser.import.selected', {
+      count: files.length,
+      names: files.map(file => file.name),
+      currentPath: selectedImportPath,
+    });
+
+    setImportProgress({ total: files.length, completed: 0, current: '', results: [], runs: [] });
+    const results = await importFiles(
+      files,
+      selectedImportPath,
+      (progress) => setImportProgress(progress),
+      reload,
+    );
+
+    logImport('ContentBrowser.import.done', {
+      results: results.map(r => ({ filename: r.filename, status: r.status, error: r.error })),
+    });
+
+    const errors = results.filter(r => r.status === 'error');
+    if (errors.length > 0) {
+      console.warn('[ContentBrowser] import errors:', errors.map(e => `${e.filename}: ${e.error}`));
+    }
+
+    if (errors.length === 0) setTimeout(() => setImportProgress(null), 3000);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [reload, selectedImportPath]);
+
   const handleImport = useCallback(() => {
     const input = fileInputRef.current;
     logImport('ContentBrowser.import.click', {
-      currentPath: nav.currentPath,
+      currentPath: selectedImportPath,
+      projectPickerPath,
       accept: acceptString,
       hasFbx: acceptString.includes('.fbx'),
       acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
     });
-    input?.click();
-  }, [acceptString, nav.currentPath]);
+    void (async () => {
+      if (!projectPickerPath) {
+        input?.click();
+        return;
+      }
+      const nativePick = await pickNativeImportFiles(projectPickerPath);
+      if (nativePick.kind === 'selected') {
+        await importSelectedFiles(nativePick.files);
+        return;
+      }
+      if (nativePick.kind === 'cancelled') return;
+      // Browser-only hosts and older servers keep the normal file input path.
+      logImport('ContentBrowser.import.fallback', { reason: 'native picker unavailable' });
+      input?.click();
+    })();
+  }, [acceptString, importSelectedFiles, projectPickerPath, selectedImportPath]);
 
   const openFolderContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, folder: CBFolder) => {
     const assetsInFolder = scopedAssets
@@ -927,17 +1123,18 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         onClick: item.id === 'expand-sub-assets'
           ? () => togglePackExpansion(file.path)
           : item.id === 'render-preview' || item.id === 'audition'
-          ? () => setPreviewItem(file)
+          ? () => selectItem(file)
           : item.id === 'reimport' && firstAsset
             ? () => setSourceMutationAsset(firstAsset)
           : item.id === 'set-default-scene' && sceneAsset
             ? () => {
-              const result = gateway.dispatch({
+              void dispatchActiveEditorOperation({
                 kind: 'setDefaultScene',
                 sceneGuid: sceneAsset.guid,
                 requestId: crypto.randomUUID(),
-              }, 'human');
-              if (!result.ok) console.warn('[content-browser] set default scene dispatch rejected', result.error);
+              }, 'human').then((result) => {
+                if (!result.ok) console.warn('[content-browser] set default scene dispatch rejected', result.error);
+              });
             }
           : item.id === 'copy-guid' && firstAsset
             ? () => { void navigator.clipboard.writeText(file.assets.map(asset => asset.guid).join('\n')); }
@@ -958,49 +1155,24 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       items.splice(1, 0, { label: activationLabel, icon: 'flag', onClick: () => openAsset(sceneAsset) });
     }
     setTimeout(() => showContextMenu(pos, orderContextMenuEntries(items)), 0);
-  }, [commonItemMenu, openAsset, sceneModel.defaultScene?.guid, togglePackExpansion, t]);
+  }, [commonItemMenu, openAsset, sceneModel.defaultScene?.guid, selectItem, togglePackExpansion, t]);
 
-  const handleFileSelected = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelected = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) {
       logImport('ContentBrowser.import.cancel', { reason: 'no files selected' });
       return;
     }
-
-    logImport('ContentBrowser.import.selected', {
-      count: files.length,
-      names: Array.from(files).map(f => f.name),
-      currentPath: nav.currentPath,
-    });
-
-    setImportProgress({ total: files.length, completed: 0, current: '', results: [], runs: [] });
-    const results = await importFiles(
-      Array.from(files),
-      nav.currentPath,
-      (progress) => setImportProgress(progress),
-      reload,
-    );
-
-    logImport('ContentBrowser.import.done', {
-      results: results.map(r => ({ filename: r.filename, status: r.status, error: r.error })),
-    });
-
-    const errors = results.filter(r => r.status === 'error');
-    if (errors.length > 0) {
-      console.warn('[ContentBrowser] import errors:', errors.map(e => `${e.filename}: ${e.error}`));
-    }
-
-    if (errors.length === 0) setTimeout(() => setImportProgress(null), 3000);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [nav.currentPath, reload]);
+    void importSelectedFiles(Array.from(files));
+  }, [importSelectedFiles]);
 
   const handleCancelImport = useCallback(() => {
     const requestId = importProgress?.currentRequestId;
     if (requestId === undefined) return;
-    const cancelled = gateway.cancelOperationRun(requestId);
-    if (!cancelled.ok) {
-      setImportProgress(previous => previous === null ? previous : { ...previous, actionError: cancelled.error.hint });
-    }
+    void cancelViewportRuntimeOperationRun(requestId).then((response) => {
+      if (response.error === undefined) return;
+      setImportProgress(previous => previous === null ? previous : { ...previous, actionError: response.error!.hint });
+    });
   }, [importProgress?.currentRequestId]);
 
   const handleRetryImport = useCallback(async (record: ImportRunRecord) => {
@@ -1101,14 +1273,11 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
-    const materialSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'material');
-    const materialInstanceSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'material-instance');
-    const particleSpec = CREATABLE_ASSET_KINDS.find(s => s.kind === 'particle-effect');
     const menuItems = buildBlankAreaContextMenu(
       nav.currentPath,
       (parentPath) => {
         void (async () => {
-          const name = await promptDialog({
+          const name = await contentBrowserPrompt({
             title: t('editor.contentBrowser.actions.createFolder'),
             label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
             confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
@@ -1116,12 +1285,18 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
             validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
           });
           if (!name) return;
-          gateway.dispatch({ kind: 'createDirectory', parentPath, name }, 'human');
+          void dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath, name }, 'human');
         })();
       },
-      materialSpec ? () => createAssetInCurrentPath(materialSpec) : undefined,
-      materialInstanceSpec ? () => createAssetInCurrentPath(materialInstanceSpec) : undefined,
-      particleSpec ? () => createAssetInCurrentPath(particleSpec) : undefined,
+      CREATABLE_ASSET_KINDS.map((spec) => ({
+        id: `new-${spec.kind}`,
+        label: spec.kind === 'material'
+          ? t('editor.contentBrowser.contextMenu.newMaterial')
+          : spec.kind === 'scene'
+            ? t('editor.contentBrowser.fileKinds.scene')
+            : spec.label,
+        action: () => createAssetInCurrentPath(spec),
+      })),
     );
     const resolved = menuItems.map(m => ({
       label: m.label,
@@ -1133,7 +1308,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       disabled: m.disabled,
     }));
     setTimeout(() => showContextMenu(pos, resolved), 0);
-  }, [nav.currentPath, t]);
+  }, [nav.currentPath, t, createAssetInCurrentPath]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return;
@@ -1150,18 +1325,18 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     logImport('ContentBrowser.drop', {
       allNames: all.map(f => f.name),
       importableNames: files.map(f => f.name),
-      currentPath: nav.currentPath,
+      currentPath: selectedImportPath,
     });
     if (files.length === 0 || !gameSlug || gameSlug === 'default') return;
     void importFiles(
       files,
-      nav.currentPath,
+      selectedImportPath,
       (p) => setImportProgress(p),
       reload,
     ).then((results) => {
       if (results.every(result => result.status === 'done')) setTimeout(() => setImportProgress(null), 3000);
     });
-  }, [gameSlug, nav.currentPath, reload]);
+  }, [gameSlug, reload, selectedImportPath]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
@@ -1208,12 +1383,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
           {/* Left: Source panel — width reads the --cb-src-w CSS variable on the
               parent (set by React on commit, by the drag handle imperatively). */}
           <CBSourceTree
+            projectName={projectName}
+            favoritesOnly={favoritesOnly}
+            setFavoritesOnly={setFavoritesOnly}
             sourceTree={sourceTree}
-            gameSlug={gameSlug}
-            scopedAssetsCount={scopedAssets.length}
             collapsedSourceFolders={collapsedSourceFolders}
             setCollapsedSourceFolders={setCollapsedSourceFolders}
-            previewItem={previewItem}
+            selectedPath={selectedSourcePath}
+            setSelectedItem={setSelectedItem}
             setPreviewItem={setPreviewItem}
             nav={nav}
             openFolderContextMenu={openFolderContextMenu}
@@ -1226,46 +1403,55 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
 
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
-            <CBNavigationBar nav={nav} gameSlug={gameSlug} />
-            {catalogStale && (
-              <div className="cb-catalog-stale" data-testid="cb-catalog-stale" role="status">
-                <span>Catalog is stale. Browser context is preserved until reconciliation.</span>
-                <Button size="sm" variant="subtle" onClick={dispatchCatalogReconcile}>Reconcile Catalog</Button>
+            <ContentBrowserActionBar executeCommand={executeContentBrowserCommand} nav={nav} gameSlug={gameSlug} />
+            <div className="cb-content-body">
+              <div className="cb-grid-column">
+                <CBFilterBar filter={filter} sort={sort} thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
+                {catalogStale && (
+                  <div className="cb-catalog-stale" data-testid="cb-catalog-stale" role="status">
+                    <span>Catalog is stale. Browser context is preserved until reconciliation.</span>
+                    <Button size="sm" variant="subtle" onClick={dispatchCatalogReconcile}>Reconcile Catalog</Button>
+                  </div>
+                )}
+                {loading && viewItems.length === 0 ? (
+                  <div style={{ padding: 16, opacity: 0.5 }}>{t('editor.contentBrowser.empty.loading')}</div>
+                ) : viewItems.length === 0 ? (
+                  <div style={{ padding: 16, opacity: 0.5 }}>
+                    {filter.activeFilterCount > 0 || filter.searchQuery
+                      ? t('editor.contentBrowser.empty.noMatching')
+                      : favoritesOnly
+                        ? t('editor.contentBrowser.empty.noAssets')
+                        : t('editor.contentBrowser.empty.emptyFolder')}
+                  </div>
+                ) : (
+                  <CBGrid
+                    items={viewItems}
+                    thumbnailSize={thumbnailSize}
+                    multiSelect={multiSelect}
+                    viewMode={viewMode}
+                    expandedPacks={expandedPacks}
+                    onTogglePackExpansion={togglePackExpansion}
+                    onSelect={selectItem}
+                    onDoubleClick={handleActivate}
+                    onContextMenu={handleContextMenu}
+                    isItemFavorite={isItemFavorite}
+                    onToggleFavorite={toggleItemFavorite}
+                  />
+                )}
               </div>
-            )}
-            {loading && viewItems.length === 0 ? (
-              <div style={{ padding: 16, opacity: 0.5 }}>{t('editor.contentBrowser.empty.loading')}</div>
-            ) : viewItems.length === 0 ? (
-              <div style={{ padding: 16, opacity: 0.5 }}>
-                {filter.activeFilterCount > 0 || filter.searchQuery ? t('editor.contentBrowser.empty.noMatching') : t('editor.contentBrowser.empty.noAssets')}
-              </div>
-            ) : (
-              <CBGrid
-                items={viewItems}
-                thumbnailSize={thumbnailSize}
-                multiSelect={multiSelect}
-                viewMode={viewMode}
-                expandedPacks={expandedPacks}
-                onTogglePackExpansion={togglePackExpansion}
-                onSelect={setPreviewItem}
-                onDoubleClick={handleActivate}
-                onContextMenu={handleContextMenu}
-                isItemFavorite={isItemFavorite}
-                onToggleFavorite={toggleItemFavorite}
-              />
-            )}
+              {previewItem && (
+                <CBPreviewPanel
+                  previewItem={previewItem}
+                  foldersInPath={foldersInPath}
+                  diskFiles={diskFiles}
+                  gameSlug={gameSlug}
+                  onClose={() => setPreviewItem(null)}
+                  onDrag={onPreviewDrag}
+                  onDragEnd={onPreviewDragEnd}
+                />
+              )}
+            </div>
           </div>
-          {previewItem && (
-            <CBPreviewPanel
-              previewItem={previewItem}
-              foldersInPath={foldersInPath}
-              diskFiles={diskFiles}
-              gameSlug={gameSlug}
-              onClose={() => setPreviewItem(null)}
-              onDrag={onPreviewDrag}
-              onDragEnd={onPreviewDragEnd}
-            />
-          )}
         </div>
       )}
 
@@ -1346,7 +1532,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       )}
 
       {sourceMutationViewModel && createPortal(
-        <div className="cb-dialog-overlay" data-testid="cb-source-mutation-overlay" onClick={() => setSourceMutationAsset(null)}>
+        <div className="cb-dialog-overlay" data-testid="cb-source-mutation-overlay" {...contentBrowserInteractionAttrs} onClick={() => setSourceMutationAsset(null)}>
           <div className="cb-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <SourceMutationDialog viewModel={sourceMutationViewModel} onAction={handleSourceMutationAction} />
             <Button size="sm" variant="subtle" onClick={() => setSourceMutationAsset(null)}>Close</Button>
@@ -1359,6 +1545,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         <DeleteGuardDialog
           targets={deleteTargets}
           impact={computeDeleteImpact(deleteTargets.map(t => t.guid), workspaceSnapshot)}
+          openResources={deleteOpenResources}
           sceneGuards={sceneDeleteGuards}
           preflight={preflightSubjectAction({
             operation: 'delete',
@@ -1367,6 +1554,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
           }).preflight}
           nameByGuid={nameByGuid}
           error={deleteError}
+          interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}
           onConfirm={performDelete}
           onCancel={() => setDeleteTargets(null)}
         />,
@@ -1375,6 +1563,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
 
       {saveAllOpen && createPortal(
         <SaveAssetsDialog
+          interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}
           onClose={(confirmed) => { resolveSaveAll(confirmed); setSaveAllOpen(false); }}
         />,
         document.body,
@@ -1384,6 +1573,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         <div
           className="cb-dialog-overlay"
           data-testid="cb-path-delete-overlay"
+          {...contentBrowserInteractionAttrs}
           onClick={() => setPathDeleteTarget(null)}
         >
           <div
@@ -1440,6 +1630,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         <div
           className="cb-dialog-overlay"
           data-testid="scene-switch-policy-dialog"
+          {...contentBrowserInteractionAttrs}
           onClick={() => resolveSceneSwitch('cancel')}
         >
           <div

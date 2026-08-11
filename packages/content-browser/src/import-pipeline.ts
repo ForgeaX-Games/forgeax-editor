@@ -6,24 +6,23 @@
  * (session/import-ops.ts `executeAssetImport`) behind the assetIO write-gate, and
  * is dispatched as a first-class `importAsset` session op. This file keeps only the
  * UI-side concerns: the multi-file loop and the `ImportProgress` overlay (chrome),
- * plus uploading each file's bytes through the assetIO gate before dispatch (the
- * op carries a path, not bytes — see import-ops.ts for the rationale).
+ * plus reading each selected file. Runtime owns source upload and import.
  *
  * Flow per file (human drag-drop / toolbar):
- *   1. Upload binary through assetIO.uploadSourceBytes (write-gate)
- *   2. gateway.dispatch({ kind: 'importAsset', destPath, sourceName, skipUpload:true, requestId })
- *      → the applier cooks + writes the sidecar + triggers cook (all gated)
- *   3. Await the same Gateway terminal run, then report the result.
+ *   1. Read the selected source bytes in the Shell.
+ *   2. Dispatch one importAsset request to Runtime.
+ *   3. Runtime uploads, cooks, writes the sidecar, and publishes one terminal run.
  *
  * The startup scan does NOT use this file — it runs while the gateway is scan-locked
  * and calls `executeAssetImport` directly through the shared import executor.
  */
 
 import {
-  assetIO,
   createImportFailure,
-  gateway,
+  dispatchActiveEditorOperation,
   resolveGamePath,
+  retryViewportRuntimeOperationRun,
+  waitViewportRuntimeOperationRun,
   type ImportFailureCode,
   type ImportFileResult,
   type OperationRun,
@@ -110,31 +109,30 @@ export async function retryImportRun(
   onRun?: (requestId: string, run: OperationRun) => void,
 ): Promise<ImportRetryResult> {
   const requestId = crypto.randomUUID();
-  const dispatched = gateway.retryOperationRun(record.requestId, requestId, 'human');
-  if (!dispatched.ok) return { ok: false, error: { code: dispatched.error.code, hint: dispatched.error.hint } };
-  const accepted = dispatched.result?.operationRun;
+  const dispatched = await retryViewportRuntimeOperationRun(record.requestId, requestId);
+  if (dispatched.error !== undefined) return { ok: false, error: { code: dispatched.error.code, hint: dispatched.error.hint } };
+  const accepted = dispatched.result as OperationRun | undefined;
   if (accepted === undefined) {
     return { ok: false, error: { code: 'IMPORT_EXECUTION_FAILED', hint: 'Retry was accepted without an OperationRun.' } };
   }
   onRun?.(requestId, accepted);
-  const unsubscribe = gateway.subscribeOperationRun(requestId, (run) => onRun?.(requestId, run));
-  const terminal = await gateway.waitOperationRun(requestId);
-  unsubscribe();
-  if (!terminal.ok) return { ok: false, error: { code: terminal.error.code, hint: terminal.error.hint } };
-  onRun?.(requestId, terminal.value);
+  const response = await waitViewportRuntimeOperationRun(requestId);
+  if (response.error !== undefined) return { ok: false, error: { code: response.error.code, hint: response.error.hint } };
+  const terminal = response.result as OperationRun;
+  onRun?.(requestId, terminal);
   return {
     ok: true,
     requestId,
-    terminal: terminal.value,
-    result: importRunToResult(record.filename, record.path, terminal.value),
+    terminal,
+    result: importRunToResult(record.filename, record.path, terminal),
   };
 }
 
 /**
  * Import multiple files with progress reporting.
  *
- * Uploads each file's bytes through the assetIO gate, then dispatches the
- * `importAsset` op (one door). Calls `onProgress` after each dispatch and
+ * Sends each file's bytes to Runtime through the `importAsset` op (one door).
+ * Calls `onProgress` after each dispatch and
  * `onReload` once at the end to refresh the Content Browser.
  */
 export async function importFiles(
@@ -198,50 +196,29 @@ export async function importFiles(
     try {
       logImport('pipeline.file.readBytes', { filename: file.name, size: file.size, uploadPath, gameRelPath });
       const base64 = arrayBufferToBase64(await file.arrayBuffer());
-      logImport('pipeline.file.uploading', { filename: file.name, base64Len: base64.length, uploadPath });
-      // Upload bytes through the assetIO write-gate BEFORE dispatch — the op
-      // carries a path, not bytes (ledger stays clean, op stays AI-replayable).
-      const uploaded = await assetIO.uploadSourceBytes(uploadPath, base64);
-      logImport('pipeline.file.uploadResult', { filename: file.name, uploaded });
-      if (!uploaded.ok) {
-        result = failureResult(
-          file.name,
-          uploadPath,
-          uploaded.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
-          uploaded.error.hint,
-        );
-      } else {
-        // `.ui.css` is a companion, not an independently imported asset. When
-        // the user drops/selects an HTML/CSS pair, put the companion on disk
-        // before the UI importer runs so its same-name sibling read succeeds.
-        const uiCompanion = file.name.toLowerCase().endsWith('.ui.html')
-          ? files.find(candidate => candidate.name.toLowerCase() === file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'))
-          : undefined;
-        if (uiCompanion) {
-          const companionPath = `${basePath}/${uiCompanion.name}`;
-          const companionBase64 = arrayBufferToBase64(await uiCompanion.arrayBuffer());
-          const companionUploaded = await assetIO.uploadSourceBytes(companionPath, companionBase64);
-          if (!companionUploaded.ok) {
-            result = failureResult(
-              file.name,
-              companionPath,
-              companionUploaded.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
-              `Failed to upload UI stylesheet companion: ${uiCompanion.name}: ${companionUploaded.error.hint}`,
-            );
-            results.push(result);
-            progress.completed++;
-            publishProgress();
-            continue;
-          }
-        }
-        // Bytes are now on disk → dispatch the one-door import op (skipUpload).
-        // Pass the game-RELATIVE path (without slug) — the applier calls
-        // resolveGamePath() to add the slug, so passing the already-resolved
-        // uploadPath would double-prefix (hellforge/hellforge/...).
+      const uiCompanion = file.name.toLowerCase().endsWith('.ui.html')
+        ? files.find(candidate => candidate.name.toLowerCase() === file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'))
+        : undefined;
+      const companionSources = uiCompanion === undefined
+        ? undefined
+        : [{
+          destPath: `${gameRelBase}/${uiCompanion.name}`,
+          base64: arrayBufferToBase64(await uiCompanion.arrayBuffer()),
+        }];
+      {
+        // Pass game-relative paths. Runtime owns resolveGamePath and every write.
         logImport('pipeline.file.dispatching', { filename: file.name, gameRelPath });
         const requestId = crypto.randomUUID();
-        const r = gateway.dispatch(
-          { kind: 'importAsset', destPath: gameRelPath, sourceName: file.name, skipUpload: true, requestId },
+        const r = await dispatchActiveEditorOperation(
+          {
+            kind: 'importAsset',
+            destPath: gameRelPath,
+            sourceName: file.name,
+            base64,
+            ...(companionSources === undefined ? {} : { companionSources }),
+            skipUpload: false,
+            requestId,
+          },
           'human',
         );
         logImport('pipeline.file.dispatchResult', { filename: file.name, ok: r.ok, error: (r as { error?: { code?: string } }).error?.code });
@@ -256,23 +233,15 @@ export async function importFiles(
             progress.currentRun = acceptedRun;
             progress.runs.push({ filename: file.name, path: uploadPath, requestId, run: acceptedRun });
             publishProgress();
-            const unsubscribe = gateway.subscribeOperationRun(requestId, (run) => {
+            const terminalResponse = await waitViewportRuntimeOperationRun(requestId);
+            if (terminalResponse.error === undefined) {
+              const terminal = terminalResponse.result as OperationRun;
               const record = progress.runs.find(entry => entry.requestId === requestId);
-              if (record) record.run = run;
-              progress.currentRun = run;
-              publishProgress();
-            });
-            const terminal = await gateway.waitOperationRun(requestId);
-            unsubscribe();
-            if (terminal.ok) {
-              const record = progress.runs.find(entry => entry.requestId === requestId);
-              if (record) record.run = terminal.value;
-              progress.currentRun = terminal.value;
-            }
-            if (terminal.ok) {
-              result = importRunToResult(file.name, uploadPath, terminal.value);
+              if (record) record.run = terminal;
+              progress.currentRun = terminal;
+              result = importRunToResult(file.name, uploadPath, terminal);
             } else {
-              result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', terminal.error.code, false);
+              result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', terminalResponse.error.code, false);
             }
           }
         }

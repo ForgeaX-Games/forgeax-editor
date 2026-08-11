@@ -991,7 +991,12 @@ function useLiveFieldNumber(
   return typeof value === 'number' ? value : fallback;
 }
 
-function useRemoteInspectorProjection(): InspectorRuntimeProjection | undefined {
+interface RemoteInspectorState {
+  readonly connected: boolean;
+  readonly projection: InspectorRuntimeProjection | undefined;
+}
+
+function useRemoteInspectorProjection(): RemoteInspectorState {
   const connection = useSyncExternalStore(
     subscribeViewportRuntimeClient,
     getViewportRuntimeClientSnapshot,
@@ -1013,7 +1018,7 @@ function useRemoteInspectorProjection(): InspectorRuntimeProjection | undefined 
         if (disposed) return;
         setProjection(envelope.status === 'ready'
           ? envelope.value
-          : envelope.status === 'empty' ? { selectionIds: [] } : undefined);
+          : envelope.status === 'empty' ? { selectionIds: [], entities: [] } : undefined);
       } catch {
         if (!disposed) setProjection(undefined);
       } finally {
@@ -1027,7 +1032,161 @@ function useRemoteInspectorProjection(): InspectorRuntimeProjection | undefined 
       window.clearInterval(timer);
     };
   }, [connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
-  return projection;
+  return { connected: connection.status === 'ready', projection };
+}
+
+function remoteInspectorMutation(
+  entity: NonNullable<InspectorRuntimeProjection['entity']>,
+  component: string,
+  patch: Record<string, unknown>,
+): void {
+  const fields = Object.entries(patch);
+  const operation: EditorOp = entity.sceneInstance === undefined
+    ? { kind: 'setComponent', entity: entity.id, component, patch }
+    : fields.length === 1
+      ? {
+          kind: 'setSceneOverride',
+          root: entity.sceneInstance.root,
+          member: entity.sceneInstance.member,
+          component,
+          field: fields[0]![0],
+          value: fields[0]![1],
+        }
+      : {
+          kind: 'transaction',
+          label: `override ${component} ×${fields.length}`,
+          commands: fields.map(([field, value]) => ({
+            kind: 'setSceneOverride',
+            root: entity.sceneInstance!.root,
+            member: entity.sceneInstance!.member,
+            component,
+            field,
+            value,
+          })),
+        };
+  void dispatchActiveEditorOperation(operation);
+}
+
+function RemoteComponentFields({
+  entity,
+  component,
+  value,
+}: {
+  entity: NonNullable<InspectorRuntimeProjection['entity']>;
+  component: string;
+  value: Record<string, unknown>;
+}) {
+  const fields = mergedFieldKeys(component, value)
+    .filter((key) => fieldVisible(component, fieldSchema(component, key), value));
+  const dispatch = (op: EditorOp) => {
+    if (op.kind === 'setComponent') {
+      remoteInspectorMutation(
+        entity,
+        component,
+        (op as Extract<EditorOp, { kind: 'setComponent' }>).patch,
+      );
+      return;
+    }
+    void dispatchActiveEditorOperation(op);
+  };
+  return (
+    <div className="cat-fields">
+      {fields.map((key) => {
+        const fs = fieldSchema(component, key);
+        const raw = value[key];
+        const fallbackType = typeof raw === 'number'
+          ? 'number'
+          : typeof raw === 'boolean'
+            ? 'bool'
+            : 'string';
+        const renderer = inspectorFieldRendererKind(fs ?? { type: fallbackType });
+        const testid = `insp-${component}-${key}`;
+        if (isVectorRendererKind(renderer)) {
+          const vec = readVec(fs, raw);
+          const labels = vecAxisLabels(fs);
+          return (
+            <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
+              <span className="f-name" title={fs?.tooltip}>{key}</span>
+              <span className="f-val vec">
+                {vec.map((axisValue, axis) => (
+                  <span className={`vcell ${labels[axis] ?? axis}`} key={axis}>
+                    <ScrubInput
+                      value={axisValue}
+                      fs={{ key, type: 'number', step: fs?.step, tooltip: fs?.tooltip }}
+                      testid={`${testid}-${axis}`}
+                      className="box-i"
+                      onCommit={(nextValue) => {
+                        const next = [...vec];
+                        next[axis] = nextValue;
+                        remoteInspectorMutation(entity, component, { [key]: next });
+                      }}
+                    />
+                  </span>
+                ))}
+              </span>
+            </div>
+          );
+        }
+        if (renderer === 'array' && fs !== undefined) {
+          return (
+            <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
+              <span className="f-name" title={fs.tooltip}>{key}</span>
+              <span className="f-val">
+                <ArrayFieldEditor
+                  entity={entity.id}
+                  component={component}
+                  field={key}
+                  fs={fs}
+                  value={raw}
+                  data={value}
+                  readOnly={false}
+                  dispatch={dispatch}
+                  reset={null}
+                />
+              </span>
+            </div>
+          );
+        }
+        if (renderer === 'asset-ref') {
+          return (
+            <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
+              <span className="f-name" title={fs?.tooltip}>{key}</span>
+              <span className="f-val">
+                <span className="asset-slotnote">{JSON.stringify(raw)}</span>
+              </span>
+            </div>
+          );
+        }
+        if (isUnsupportedRendererKind(renderer)) {
+          return <UnsupportedField component={component} field={key} kind={fs?.shape ?? renderer} key={key} />;
+        }
+        return (
+          <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
+            <span className="f-name" title={fs?.tooltip}>{key}</span>
+            <span className="f-val">
+              {renderer === 'boolean' ? (
+                <BoolCheckbox checked={raw === true} testid={testid} onToggle={(next) => remoteInspectorMutation(entity, component, { [key]: next })} />
+              ) : renderer === 'enum' ? (
+                <EnumSelect value={Number(raw)} options={fs?.enumOptions ?? []} testid={testid} onChange={(next) => remoteInspectorMutation(entity, component, { [key]: next })} />
+              ) : renderer === 'optional' ? (
+                <OptionalInput value={raw} fs={fs} testid={testid} onCommit={(next) => remoteInspectorMutation(entity, component, { [key]: next })} />
+              ) : renderer === 'scalar' ? (
+                <ScrubInput value={Number(raw)} fs={fs} testid={testid} className="box-i num" onCommit={(next) => remoteInspectorMutation(entity, component, { [key]: next })} />
+              ) : (
+                <input
+                  className="box-i txt"
+                  data-testid={testid}
+                  defaultValue={String(raw ?? '')}
+                  onBlur={(event) => remoteInspectorMutation(entity, component, { [key]: event.currentTarget.value })}
+                  onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                />
+              )}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProjection | undefined }) {
@@ -1036,6 +1195,13 @@ function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProj
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameAttempt, setRenameAttempt] = useState(0);
   useEffect(() => setRenameError(null), [entity?.id]);
+  if (projection === undefined) {
+    return (
+      <div className="fx-inspector" data-testid="panel-inspector" data-runtime-projection="1" data-runtime-status="connecting">
+        <div className="dp-empty">Connecting to Viewport Runtime…</div>
+      </div>
+    );
+  }
   if (entity === undefined) {
     return (
       <div className="fx-inspector" data-testid="panel-inspector" data-runtime-projection="1">
@@ -1067,6 +1233,33 @@ function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProj
         <span className="badge">{deriveKind(entity.components as Record<string, unknown>)}</span>
       </div>
       {renameError && <div className="dp-note" role="alert">{renameError}</div>}
+      <div className="dp-comp">
+        <div className="ch">
+          <span className="lbl">{t('editor.inspector.components')}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" className="add" data-testid="insp-add-comp">
+                <ForgeaxIcon name="plus" size={12} />{t('editor.inspector.addComponent')}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={6} className="fx-insp-menu">
+              {listComponentSchemas()
+                .map((schema) => schema.name)
+                .filter((name) => !(name in entity.components))
+                .map((name) => (
+                  <DropdownMenuItem
+                    key={name}
+                    className="fx-insp-menu-item"
+                    data-testid={`insp-add-${name}`}
+                    onSelect={() => void dispatchActiveEditorOperation({ kind: 'addComponent', entity: entity.id, component: name, value: defaultComponentData(name) })}
+                  >
+                    {componentTypeLabel(name, t)}
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
       {Object.entries(entity.components)
         .filter(([name]) => name !== 'Name' && !isComponentHidden(name))
         .map(([name, value]) => (
@@ -1074,10 +1267,18 @@ function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProj
             <div className="ch">
               <span className="ci"><ForgeaxIcon name={compIcon(name)} size={14} /></span>
               <span className="lbl">{componentTypeLabel(name, t)}</span>
+              <button
+                type="button"
+                className="comp-del"
+                data-testid={`insp-remove-${name}`}
+                onClick={() => void dispatchActiveEditorOperation({ kind: 'removeComponent', entity: entity.id, component: name })}
+              >
+                <ForgeaxIcon name="trash" size={12} />
+              </button>
             </div>
-            <pre className="dp-note" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-              {JSON.stringify(value, null, 2)}
-            </pre>
+            {typeof value === 'object' && value !== null
+              ? <RemoteComponentFields entity={entity} component={name} value={value as Record<string, unknown>} />
+              : <pre className="dp-note">{JSON.stringify(value)}</pre>}
           </div>
         ))}
     </div>
@@ -1086,8 +1287,17 @@ function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProj
 
 export function InspectorPanel() {
   const remote = useRemoteInspectorProjection();
-  if (remote !== undefined) return <RemoteInspectorPanel projection={remote} />;
-  return <LocalInspectorPanel />;
+  // The in-process Studio realm has a live Gateway world and must keep using
+  // LocalInspectorPanel so schema-driven controls (vectors, enums, assets,
+  // arrays, color pickers, etc.) remain interactive. The runtime projection is
+  // the fallback for a shell realm that has no local world of its own.
+  if (gateway.activeWorld != null) return <LocalInspectorPanel />;
+  if (remote.connected) return <RemoteInspectorPanel projection={remote.projection} />;
+  return (
+    <div className="fx-inspector" data-testid="panel-inspector" data-runtime-status="unavailable">
+      <div className="dp-empty">Viewport Runtime unavailable</div>
+    </div>
+  );
 }
 
 function LocalInspectorPanel() {

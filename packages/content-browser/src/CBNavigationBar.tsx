@@ -14,14 +14,15 @@ import type { NavHistoryAPI } from './hooks';
 interface Props {
   nav: NavHistoryAPI;
   gameSlug: string;
+  inline?: boolean;
 }
 
-export function CBNavigationBar({ nav, gameSlug }: Props) {
+export function CBNavigationBar({ nav, gameSlug, inline = false }: Props) {
   const { t } = useTranslation();
   const segments = nav.currentPath ? nav.currentPath.split('/').filter(Boolean) : [];
 
   return (
-    <div className="cb-navigation-bar">
+    <div className={`cb-navigation-bar${inline ? ' cb-navigation-bar-inline' : ''}`}>
       <Button
         className="cb-nav-btn"
         disabled={!nav.canGoBack}

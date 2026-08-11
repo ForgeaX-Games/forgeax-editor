@@ -22,6 +22,12 @@ export const EDITOR_PANELS = [
   'mi-preview',
   'mi-properties',
   'mat-preview',
+  'input-map-properties',
+  'vfx-system',
+  'vfx-preview',
+  'vfx-timeline',
+  'vfx-details',
+  'vfx-diagnostics',
   'settings',
 ] as const;
 

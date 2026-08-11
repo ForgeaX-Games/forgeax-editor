@@ -344,8 +344,8 @@ const selectItemRowVariants = cva(
 
 const SelectContent = React.forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & { position?: string }
->(({ className, position: _position, ...props }, ref) => {
+  React.HTMLAttributes<HTMLDivElement> & { position?: string; interactionScope?: string }
+>(({ className, position: _position, interactionScope, ...props }, ref) => {
   const ctx = useSelectCtx('SelectContent');
   const { open, filtered, value, select, active } = ctx;
   const panelRef = React.useRef<HTMLDivElement | null>(null);
@@ -366,10 +366,15 @@ const SelectContent = React.forwardRef<
 
   if (!open || !style) return null;
 
+  const interactionAttrs = interactionScope === undefined
+    ? {}
+    : { 'data-fx-interaction-scope': interactionScope };
+
   return createPortal(
     <>
       {/* transparent dismiss layer — replaces a global outside-click listener */}
       <div
+        {...interactionAttrs}
         className="fixed inset-0 z-[var(--z-menu)]"
         onPointerDown={() => ctx.setOpen(false)}
       />
@@ -380,6 +385,7 @@ const SelectContent = React.forwardRef<
           else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node;
         }}
         role="listbox"
+        {...interactionAttrs}
         data-state="open"
         data-placement={style.placement}
         className={cn(

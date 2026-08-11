@@ -91,6 +91,12 @@ describe('viewport runtime transport', () => {
     const connect = { type: VIEWPORT_RUNTIME_CONNECT, challenge: 'challenge-a', runtime };
     const port = fakePort();
 
+    target.emit({
+      data: { type: 'VAG_CARRIER_HEARTBEAT', payload: { renderReadiness: 'ready' } },
+      origin: 'https://editor.test',
+      source: {},
+      ports: [],
+    });
     target.emit({ data: connect, origin: 'https://evil.test', source, ports: [port] });
     target.emit({ data: { ...connect, runtime: { ...runtime, runtimeGeneration: 3 } }, origin: 'https://editor.test', source, ports: [port] });
     target.emit({ data: connect, origin: 'https://editor.test', source, ports: [port] });
@@ -165,6 +171,7 @@ describe('viewport runtime transport', () => {
     const panelProjection = {
       structure: hierarchy,
       selectionIds: [hierarchy.rows[0]!.id],
+      mode: 'edit',
     } satisfies HierarchyRuntimeProjection;
     const query = createViewportProjectionQuery({ runtime, graph, gateway, readHierarchy: () => panelProjection });
     const result = query({ kind: 'hierarchy.structure' });
@@ -232,7 +239,7 @@ describe('viewport runtime transport', () => {
       runtime,
       graph,
       gateway,
-      readInspector: () => ({ selectionIds: [entity.id], entity }),
+      readInspector: () => ({ selectionIds: [entity.id], entities: [entity], entity }),
     });
     expect(query({ kind: 'inspector.selection' })).toMatchObject({
       status: 'ready',
@@ -249,6 +256,23 @@ describe('viewport runtime transport', () => {
       status: 'ready',
       value: { entries },
     });
+  });
+
+  test('projects one Runtime-owned asset payload by stable guid', () => {
+    const graph = { stats: () => ({ status: 'bound' }) } as any;
+    const gateway = { buildQueryFn: () => () => ({ ok: true, rows: [] }) } as any;
+    const payload = { guid: 'vfx-a', program: { emitters: [] } };
+    const query = createViewportProjectionQuery({
+      runtime,
+      graph,
+      gateway,
+      readAssetPayload: (guid) => guid === 'vfx-a' ? payload : undefined,
+    });
+    expect(query({ kind: 'assets.payload', guid: 'vfx-a' })).toMatchObject({
+      status: 'ready',
+      value: { guid: 'vfx-a', payload },
+    });
+    expect(query({ kind: 'assets.payload', guid: 'missing' })).toMatchObject({ status: 'empty' });
   });
 
   test('accepts panel writes in the fenced viewport journal scope', async () => {

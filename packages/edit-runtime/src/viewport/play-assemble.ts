@@ -66,6 +66,7 @@ import type { GamePluginInstallResult, GameProjectionRegistrar } from '@forgeax/
 import {
   World,
   Time,
+  FixedUpdate,
   Update,
   type EntityHandle,
 } from '@forgeax/engine-ecs';
@@ -603,13 +604,16 @@ export async function assemblePlayWorld(
   // overlap detection — NOT from the stripped transient marker or a name list
   // (architecture §2.5: depend on the persisting `isSensor` signal, which DOES
   // round-trip, not a consumer-side enumeration). This system runs BEFORE the
-  // physics backend sync each frame and adds an empty CollidingEntities to any
+  // physics backend sync each fixed tick and adds an empty CollidingEntities to any
   // sensor lacking it, so the writeback has a target. Gated on deps.physics (no
   // physics backend → no writeback → nothing to receive). Targets are collected
   // first, then added AFTER the query completes (addComponent migrates archetypes,
   // which must not happen mid-iteration).
   if (deps.physics) {
-    (playWorld as World).addSystem(Update, {
+    // Engine physics owns its full phase set in FixedUpdate. Keep the receiver
+    // in that same schedule so its ordering edge is scope-valid and the target
+    // exists before physicsCollisionSync writes this tick's overlap set.
+    (playWorld as World).addSystem(FixedUpdate, {
       name: 'sensor-colliding-entities-receiver',
       before: ['physicsSyncBackend'],
       queries: [],

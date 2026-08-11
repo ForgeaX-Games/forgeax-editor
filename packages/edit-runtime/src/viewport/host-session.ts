@@ -35,6 +35,7 @@ import {
   type GamePluginInstallation,
   type GamePluginLoad,
 } from '@forgeax/editor-game-plugins';
+import { createDisposablePlayCarrier } from './disposable-play-carrier';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -58,6 +59,8 @@ type EditorAppLike = {
   start(): void;
   pause(): { ok: boolean; error?: unknown };
   resume(): { ok: boolean; error?: unknown };
+  releaseSurfacePreserveWorld?(): Promise<{ ok: boolean; error?: { code?: string; hint?: string } }>;
+  restoreSurface?(): Promise<{ ok: boolean; error?: { code?: string; hint?: string } }>;
 };
 type ViewportLike = { resetCamera(): void };
 
@@ -126,6 +129,8 @@ export interface HostSessionContext {
   readonly onVfxDiagnosticsChanged?: () => void;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
+  /** Disposable Play runtime URL. Omitted keeps the legacy in-realm test path. */
+  readonly playChildUrl?: (generation: number) => string;
   /**
    * Optional per-frame callback the run-lifecycle registers on the PLAY App so it
    * keeps ticking while the edit App is paused during play. Production wires the
@@ -135,6 +140,7 @@ export interface HostSessionContext {
   readonly onPlayFrame?: () => void;
   /** The play world is now active; host commits its matching viewport quadrant. */
   readonly onPlayStarted: (playWorld: unknown) => void;
+  readonly onRemotePlayStarted?: () => void;
   /** Play assembly failed and the gateway has returned to its edit-side state. */
   readonly onPlayFailed: () => void;
 }
@@ -729,11 +735,39 @@ export function createHostSession(deps: HostSessionDeps): {
       && typeof (ctx.world as unknown as { removeSystem?: unknown }).removeSystem === 'function';
     if (canPublishFrameEnd) liveWorldPublisher.bind(ctx.world as never);
 
+    const remoteCarrier = ctx.playChildUrl !== undefined
+      && app.releaseSurfacePreserveWorld !== undefined
+      && app.restoreSurface !== undefined
+      ? createDisposablePlayCarrier({
+        container: ctx.viewportContainer,
+        url: ctx.playChildUrl,
+        releaseEditSurface: async () => {
+          const result = await app.releaseSurfacePreserveWorld!();
+          return result.ok ? { ok: true as const } : { ok: false as const, error: {
+            code: result.error?.code ?? 'edit-surface-release-failed',
+            hint: result.error?.hint ?? 'Edit surface release failed',
+          } };
+        },
+        restoreEditSurface: async () => {
+          const result = await app.restoreSurface!();
+          return result.ok ? { ok: true as const } : { ok: false as const, error: {
+            code: result.error?.code ?? 'edit-surface-restore-failed',
+            hint: result.error?.hint ?? 'Edit surface restore failed',
+          } };
+        },
+        onReady: (payload) => {
+          const execution = (payload as { execution?: { requestedTier?: unknown; actualTier?: unknown; engine?: { realm?: unknown } } } | null)?.execution;
+          emitBoot(`play ▸ child ready; execution requested=${String(execution?.requestedTier ?? 'unreported')} actual=${String(execution?.actualTier ?? 'unreported')} realm=${String(execution?.engine?.realm ?? 'unreported')}`);
+        },
+      })
+      : undefined;
+
     runLifecycle = createRunLifecycle({
       editorApp: app,
       gateway,
       publisher: canPublishFrameEnd ? liveWorldPublisher : undefined,
       editWorld: ctx.world,
+      ...(remoteCarrier === undefined ? {} : { remoteCarrier }),
       assemble: async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> => {
         // Load asset-resident plugins BEFORE assembling so every plugin component
         // is registered when the defaultScene instantiates (a scene entity carrying
@@ -845,6 +879,7 @@ export function createHostSession(deps: HostSessionDeps): {
       },
       onAfterPlay: (playWorld) => { discoverGameCameraFromWorld(playWorld); applyActiveCamera(); },
       onPlayStarted: ctx.onPlayStarted,
+      onRemotePlayStarted: () => ctx.onRemotePlayStarted?.(),
       onPlayFailed: ctx.onPlayFailed,
       // DEV bridge only: register the eval-queue drain on the play world so a CLI
       // eval submitted during play still drains while the edit App is paused.

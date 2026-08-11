@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { buildAcceptString, generateAssetGuid, gateway, logImport, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
+import { buildAcceptString, dispatchActiveEditorOperation, generateAssetGuid, logImport, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import {
   Button,
@@ -11,12 +11,14 @@ import {
   Input,
   toast,
 } from '@forgeax/editor-ui';
-import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
+import { CONTENT_BROWSER_INTERACTION_SCOPE, contentBrowserPrompt } from './interaction-surface';
 import { importFiles, type ImportProgress } from './import-pipeline';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { createMaterialInstanceAndOpen } from './create-material-instance';
+import { createInputMapAndOpen } from './create-input-map';
 import { ContentBrowserIcon } from './content-browser-icons';
 import { requestSaveAll } from './save-all-bus';
+import { pickNativeImportFiles } from './native-file-picker';
 
 interface Props {
   currentPath: string;
@@ -34,12 +36,14 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const packDir = (currentPath || 'assets').replace(/^\/+|\/+$/g, '') || 'assets';
   // Host-resolved path — only for import diagnostics / file picker context.
   const basePath = resolveGamePath(packDir);
+  const projectPath = resolveGamePath('');
 
   useEffect(() => {
     const input = fileInputRef.current;
     logImport('CBToolbar.mount', {
       currentPath,
       basePath,
+      projectPath,
       accept: acceptString,
       hasFbx: acceptString.includes('.fbx'),
       acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
@@ -61,7 +65,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const handleCreateAsset = useCallback((spec: CreatableAssetSpec) => {
     setAddMenuOpen(false);
     void (async () => {
-      const name = (await promptDialog({
+      const name = (await contentBrowserPrompt({
         title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
         label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
         defaultValue: spec.defaultNamePrefix,
@@ -83,7 +87,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
       if (spec.kind === 'scene') {
         const requestId = crypto.randomUUID();
-        const result = gateway.dispatch({
+        const result = await dispatchActiveEditorOperation({
           kind: 'createSceneFile',
           id: name,
           duplicateCurrent: false,
@@ -94,7 +98,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
       }
 
       if (spec.kind === 'material') {
-        gateway.dispatch({
+        void dispatchActiveEditorOperation({
           kind: 'createMaterial',
           guid: generateAssetGuid(),
           name,
@@ -111,7 +115,12 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
         return;
       }
 
-      gateway.dispatch({
+      if (spec.kind === 'input-map') {
+        await createInputMapAndOpen(name, packDir);
+        return;
+      }
+
+      void dispatchActiveEditorOperation({
         kind: 'createAsset',
         packPath: `${packDir}/${name}.pack.json`,
         guid: generateAssetGuid(),
@@ -123,7 +132,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
   const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);
-    void promptDialog({
+    void contentBrowserPrompt({
       title: t('editor.contentBrowser.actions.createFolder'),
       label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
       confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
@@ -132,38 +141,25 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
         const r = validateAssetBasename(v);
         return r.ok ? null : r.hint;
       },
-    }).then((name) => {
+    }).then(async (name) => {
       if (!name) return;
-      const result = gateway.dispatch({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
-      // Belt+suspenders: promptDialog.validate already blocked bad input, but
+      const result = await dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
+      // Belt+suspenders: contentBrowserPrompt.validate already blocked bad input, but
       // a schema/logic bug or an AI-parity concurrent dispatch could still
       // surface INVALID_ARGS at dispatch time. Toast if so.
       if (!result.ok) toast.error('createDirectory', { description: result.error.hint });
     });
   }, [currentPath, t]);
 
-  const handleImport = useCallback(() => {
-    const input = fileInputRef.current;
-    logImport('CBToolbar.import.click', {
-      currentPath,
-      basePath,
-      accept: acceptString,
-      hasFbx: acceptString.includes('.fbx'),
-      acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
-    });
-    input?.click();
-  }, [acceptString, basePath, currentPath]);
-
-  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) {
+  const importSelectedFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
       logImport('CBToolbar.import.cancel', { reason: 'no files selected' });
       return;
     }
 
     logImport('CBToolbar.import.selected', {
       count: files.length,
-      names: Array.from(files).map(f => f.name),
+      names: files.map(file => file.name),
       currentPath,
       basePath,
     });
@@ -171,7 +167,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
     onImportProgress?.({ total: files.length, completed: 0, current: '', results: [], runs: [] });
 
     const results = await importFiles(
-      Array.from(files),
+      files,
       currentPath,
       (progress) => onImportProgress?.(progress),
       onReload,
@@ -188,7 +184,37 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
     if (errors.length === 0) setTimeout(() => onImportProgress?.(null), 3000);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [currentPath, onReload, onImportProgress]);
+  }, [basePath, currentPath, onImportProgress, onReload]);
+
+  const handleImport = useCallback(() => {
+    const input = fileInputRef.current;
+    logImport('CBToolbar.import.click', {
+      currentPath,
+      basePath,
+      projectPath,
+      accept: acceptString,
+      hasFbx: acceptString.includes('.fbx'),
+      acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
+    });
+    void (async () => {
+      const nativePick = await pickNativeImportFiles(projectPath);
+      if (nativePick.kind === 'selected') {
+        await importSelectedFiles(nativePick.files);
+        return;
+      }
+      if (nativePick.kind === 'cancelled') return;
+      input?.click();
+    })();
+  }, [acceptString, basePath, currentPath, importSelectedFiles, projectPath]);
+
+  const handleFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) {
+      logImport('CBToolbar.import.cancel', { reason: 'no files selected' });
+      return;
+    }
+    void importSelectedFiles(Array.from(files));
+  }, [importSelectedFiles]);
 
   const handleSaveAll = useCallback(() => {
     void requestSaveAll();
@@ -197,11 +223,11 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   return (
     <div className="cb-toolbar">
       <div className="cb-toolbar-group">
-        <DropdownMenu open={addMenuOpen} onOpenChange={setAddMenuOpen}>
+        <DropdownMenu modal={false} open={addMenuOpen} onOpenChange={setAddMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="subtle">+ {t('editor.contentBrowser.actions.create')}</Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent align="start" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
             <DropdownMenuItem size="sm" onClick={handleNewFolder}>
               {t('editor.contentBrowser.actions.createFolder')}
             </DropdownMenuItem>

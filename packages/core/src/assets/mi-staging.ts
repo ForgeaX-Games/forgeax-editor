@@ -73,11 +73,11 @@ export function openMiStaging(args: {
   if (existing) {
     existing.packPath = args.packPath;
     existing.name = args.name;
-    // Keep staging if already dirty; otherwise resync from disk/catalog.
-    if (!isMiStagingDirty(args.guid)) {
-      existing.saved = clonePayload(payload);
-      existing.staging = clonePayload(payload);
-    }
+    // Do NOT overwrite saved/staging when the entry already exists.
+    // The staging was initialized on first open; a re-mount (React
+    // StrictMode, HMR, tab re-focus) must not clobber committed edits
+    // with a potentially stale catalog payload. The user can close and
+    // reopen the tab to pull fresh disk content.
     notify();
     return existing;
   }

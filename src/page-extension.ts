@@ -14,13 +14,17 @@ import {
   configureEditorPageNavigation,
   gateway,
   getActiveScenePackPath,
+  getInputMapStaging,
   getSceneFile,
   getSceneList,
   hasPendingDiskSave,
   isMiStagingDirty,
+  isInputMapStagingDirty,
   onSceneListChange,
   registerActivePageSaveHandler,
+  subscribeAssetsChanged,
   subscribeMiStaging,
+  subscribeInputMapStaging,
   type SelectedAsset,
 } from '@forgeax/editor-core';
 import { t } from '@forgeax/editor-core/i18n';
@@ -30,11 +34,17 @@ import {
   DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT,
   DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
   DEFAULT_MI_EDITOR_DOCK_LAYOUT,
+  DEFAULT_INPUT_MAP_EDITOR_DOCK_LAYOUT,
+  DEFAULT_VFX_EDITOR_DOCK_LAYOUT,
 } from './default-dock-layout';
 import {
   createMaterialInstancePageController,
   getMiPageController,
 } from './mi-page-controller';
+import {
+  createInputMapPageController,
+  getInputMapPageController,
+} from './input-map-page-controller';
 
 const OWNER = '@forgeax/editor';
 const pageId = (id: string) => `${OWNER}#page/${id}` as PageTypeRegistration['id'];
@@ -47,6 +57,8 @@ const ASSET_PAGE = pageId('asset');
 const MESH_PAGE = pageId('mesh');
 const MATERIAL_PAGE = pageId('material');
 const MATERIAL_INSTANCE_PAGE = pageId('material-instance');
+const INPUT_MAP_PAGE = pageId('input-map');
+const VFX_PAGE = pageId('vfx');
 
 // `info` / `checkpoints` / `events` are interface-owned footer chrome that
 // default into the merged bottom EDGE group (see default-dock-layout.ts
@@ -66,6 +78,8 @@ const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview', 'ep:settings']
 const MESH_PANELS = [...ASSET_PANELS, 'ep:mesh-slots'];
 const MATERIAL_PANELS = ['ep:mat-preview', ...ASSET_PANELS];
 const MATERIAL_INSTANCE_PANELS = ['ep:mi-preview', 'ep:mi-properties', 'ep:settings'];
+const INPUT_MAP_PANELS = ['ep:input-map-properties', 'ep:settings'];
+const VFX_PANELS = ['ep:vfx-system', 'ep:vfx-preview', 'ep:vfx-timeline', 'ep:vfx-details', 'ep:vfx-diagnostics', 'ep:asset-overview', 'ep:settings'];
 
 function placements(ids: readonly string[]): PagePanelPlacement[] {
   return ids.map((id) => ({ id, panelTypeId: panelId(id.replace(/^ep:/u, '')) }));
@@ -261,7 +275,14 @@ function page(
 export function createEditorPageExtension(
   renderPanel: (id: string) => ReactNode,
 ): AppExtension {
-  const allPanelIds = [...new Set([...LEVEL_PANELS, ...MESH_PANELS, ...MATERIAL_PANELS, ...MATERIAL_INSTANCE_PANELS])];
+  const allPanelIds = [...new Set([
+    ...LEVEL_PANELS,
+    ...MESH_PANELS,
+    ...MATERIAL_PANELS,
+    ...MATERIAL_INSTANCE_PANELS,
+    ...INPUT_MAP_PANELS,
+    ...VFX_PANELS,
+  ])];
   return {
     id: OWNER,
     version: '2.0.0',
@@ -286,6 +307,17 @@ export function createEditorPageExtension(
           ),
           createController: createMaterialInstancePageController,
         },
+        {
+          ...page(
+            INPUT_MAP_PAGE,
+            'Input Map',
+            'resource',
+            DEFAULT_INPUT_MAP_EDITOR_DOCK_LAYOUT,
+            INPUT_MAP_PANELS,
+          ),
+          createController: createInputMapPageController,
+        },
+        page(VFX_PAGE, 'VFX', 'resource', DEFAULT_VFX_EDITOR_DOCK_LAYOUT, VFX_PANELS, fileController),
       ],
       activities: [{
         id: activityId('editor'),
@@ -302,6 +334,20 @@ export function createEditorPageExtension(
           id: editorId('material-instance'),
           selector: { kinds: ['material-instance'] },
           pageTypeId: MATERIAL_INSTANCE_PAGE,
+          priority: 'default',
+          sourceLayer: 'builtin',
+        },
+        {
+          id: editorId('input-map'),
+          selector: { kinds: ['input-map'] },
+          pageTypeId: INPUT_MAP_PAGE,
+          priority: 'default',
+          sourceLayer: 'builtin',
+        },
+        {
+          id: editorId('vfx'),
+          selector: { kinds: ['particle-effect'] },
+          pageTypeId: VFX_PAGE,
           priority: 'default',
           sourceLayer: 'builtin',
         },
@@ -325,7 +371,13 @@ export function createEditorPageExtension(
         const snapshot = ctx.host.pages.getSnapshot();
         const instance = snapshot.instances.find((candidate) => candidate.encodedKey === snapshot.activeKey);
         const value = instance?.resource?.metadata?.asset;
-        return value && typeof value === 'object' ? value as SelectedAsset : null;
+        if (!value || typeof value !== 'object') return null;
+        const asset = value as SelectedAsset;
+        if (instance?.typeId !== INPUT_MAP_PAGE) return asset;
+        const staging = getInputMapStaging(asset.guid);
+        return staging
+          ? { ...asset, name: staging.name, packPath: staging.packPath }
+          : asset;
       };
       const resetNavigation = configureEditorPageNavigation({
         async openAsset(asset) {
@@ -345,24 +397,63 @@ export function createEditorPageExtension(
       });
       const resetDirtyProbe = registerPageDirtyProbe({
         isDirty: (page) => {
-          if (page.typeId !== MATERIAL_INSTANCE_PAGE) return false;
-          const guid = page.resource?.canonicalId;
-          return typeof guid === 'string' && isMiStagingDirty(guid);
+          if (page.typeId === MATERIAL_INSTANCE_PAGE) {
+            const guid = page.resource?.canonicalId;
+            return typeof guid === 'string' && isMiStagingDirty(guid);
+          }
+          if (page.typeId === INPUT_MAP_PAGE) {
+            const guid = page.resource?.canonicalId;
+            return typeof guid === 'string' && isInputMapStagingDirty(guid);
+          }
+          return false;
         },
-        subscribe: subscribeMiStaging,
+        subscribe: (listener) => {
+          const unsubMi = subscribeMiStaging(listener);
+          const unsubIm = subscribeInputMapStaging(listener);
+          return () => {
+            unsubMi();
+            unsubIm();
+          };
+        },
       });
       const resetActiveSave = registerActivePageSaveHandler(() => {
         const snapshot = ctx.host.pages.getSnapshot();
         if (!snapshot.activeKey) return false;
         const instance = snapshot.instances.find((candidate) => candidate.encodedKey === snapshot.activeKey);
-        if (!instance || instance.typeId !== MATERIAL_INSTANCE_PAGE) return false;
-        const controller = getMiPageController(snapshot.activeKey);
-        if (!controller?.save) return false;
-        void controller.save();
-        return true;
+        if (!instance) return false;
+        if (instance.typeId === MATERIAL_INSTANCE_PAGE) {
+          const controller = getMiPageController(snapshot.activeKey);
+          if (!controller?.save) return false;
+          void Promise.resolve(controller.save()).catch(() => {});
+          return true;
+        }
+        if (instance.typeId === INPUT_MAP_PAGE) {
+          const controller = getInputMapPageController(snapshot.activeKey);
+          if (!controller?.save) return false;
+          void Promise.resolve(controller.save()).catch(() => {});
+          return true;
+        }
+        return false;
+      });
+      const unsubscribeAssetLifecycle = subscribeAssetsChanged((event) => {
+        if (event.mutation?.kind !== 'deleted') return;
+        const guid = event.mutation.guid.toLowerCase();
+        const pages = ctx.host.pages.getSnapshot().instances.filter(
+          (instance) => instance.typeId === INPUT_MAP_PAGE
+            && instance.resource?.canonicalId.toLowerCase() === guid,
+        );
+        for (const instance of pages) {
+          void ctx.host.pages.close(instance.key, {
+            reason: 'user',
+            decision: 'discard',
+          }).catch((cause) => {
+            console.error('[input-map] failed to close deleted asset page', cause);
+          });
+        }
       });
       void ctx.host.pages.open({ typeId: LEVEL_PAGE });
       return () => {
+        unsubscribeAssetLifecycle();
         resetActiveSave();
         resetDirtyProbe();
         resetNavigation();

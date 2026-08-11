@@ -20,6 +20,10 @@ import {
   entComponents,
   entExists,
   entName,
+  ensureAssetCataloged,
+  getAssetSelectionList,
+  getLastSelectionDomain,
+  getPathSelectionList,
   getSelectionList,
   type AssetBrowserRegistryEntry,
   type EditGateway,
@@ -37,6 +41,7 @@ export const VIEWPORT_RUNTIME_CONNECT = 'FORGEAX_VIEWPORT_RUNTIME_CONNECT' as co
 export const VIEWPORT_RUNTIME_CONNECTED = 'FORGEAX_VIEWPORT_RUNTIME_CONNECTED' as const;
 export const VIEWPORT_RUNTIME_READY = 'FORGEAX_VIEWPORT_RUNTIME_READY' as const;
 export const VIEWPORT_RUNTIME_PROJECTION_INVALIDATED = 'FORGEAX_VIEWPORT_RUNTIME_PROJECTION_INVALIDATED' as const;
+export const VIEWPORT_RUNTIME_OPEN_ASSET = 'FORGEAX_VIEWPORT_RUNTIME_OPEN_ASSET' as const;
 
 export interface ViewportRuntimeConnectMessage {
   readonly type: typeof VIEWPORT_RUNTIME_CONNECT;
@@ -60,6 +65,18 @@ export interface ViewportRuntimeProjectionInvalidatedMessage {
   readonly runtime: ViewportRuntimeIdentity;
   readonly projection: 'operations';
   readonly revision: number;
+}
+
+export interface ViewportRuntimeOpenAssetMessage {
+  readonly type: typeof VIEWPORT_RUNTIME_OPEN_ASSET;
+  readonly runtime: ViewportRuntimeIdentity;
+  readonly asset: {
+    readonly guid: string;
+    readonly kind: string;
+    readonly name: string;
+    readonly payload: Record<string, unknown>;
+    readonly packPath: string;
+  };
 }
 
 export interface ViewportRuntimeMessageSource {
@@ -89,6 +106,17 @@ export interface ViewportRuntimeConnectionHostOptions {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function isViewportRuntimeOpenAssetMessage(value: unknown): value is ViewportRuntimeOpenAssetMessage {
+  if (!isRecord(value) || value.type !== VIEWPORT_RUNTIME_OPEN_ASSET || !isViewportRuntimeIdentity(value.runtime)) return false;
+  const asset = value.asset;
+  return isRecord(asset)
+    && typeof asset.guid === 'string'
+    && typeof asset.kind === 'string'
+    && typeof asset.name === 'string'
+    && isRecord(asset.payload)
+    && typeof asset.packPath === 'string';
 }
 
 export function viewportRuntimeTransportScope(runtime: ViewportRuntimeIdentity): string {
@@ -189,6 +217,10 @@ export function installViewportRuntimeConnectionHost(
   const acceptedChallenges = new Set<string>();
   const reject = (reason: string, value: unknown) => options.onReject?.(reason, value);
   const onMessage = (event: RuntimeMessageEvent): void => {
+    // This window can also own nested Play carriers that publish VAG_* health
+    // heartbeats. They are not attempts to connect to the Shell transport and
+    // must not become an untrusted-source warning on every frame.
+    if (!isRecord(event.data) || event.data.type !== VIEWPORT_RUNTIME_CONNECT) return;
     if (event.origin !== options.expectedOrigin || event.source !== options.expectedSource) {
       reject('viewport-runtime-untrusted-source', event.data);
       return;
@@ -245,7 +277,9 @@ type ProjectionQuery =
   | { readonly kind: 'viewport.status' }
   | { readonly kind: 'hierarchy.structure' }
   | { readonly kind: 'inspector.selection' }
+  | { readonly kind: 'selection.current' }
   | { readonly kind: 'assets.catalog' }
+  | { readonly kind: 'assets.payload'; readonly guid: string }
   | { readonly kind: 'operations.snapshot' }
   | { readonly kind: 'world.snapshot'; readonly with: readonly string[] };
 
@@ -257,7 +291,11 @@ function parseProjectionQuery(value: unknown): ProjectionQuery | null {
   if (value.kind === 'viewport.status') return { kind: value.kind };
   if (value.kind === 'hierarchy.structure') return { kind: value.kind };
   if (value.kind === 'inspector.selection') return { kind: value.kind };
+  if (value.kind === 'selection.current') return { kind: value.kind };
   if (value.kind === 'assets.catalog') return { kind: value.kind };
+  if (value.kind === 'assets.payload' && typeof value.guid === 'string' && value.guid.length > 0) {
+    return { kind: value.kind, guid: value.guid };
+  }
   if (value.kind === 'operations.snapshot') return { kind: value.kind };
   if (value.kind === 'world.snapshot'
     && Array.isArray(value.with)
@@ -277,6 +315,7 @@ export function createViewportProjectionQuery(options: {
   readonly readHierarchy?: () => HierarchyRuntimeProjection | undefined;
   readonly readInspector?: () => InspectorRuntimeProjection;
   readonly readAssetCatalog?: () => readonly AssetBrowserRegistryEntry[];
+  readonly readAssetPayload?: (guid: string) => unknown;
   readonly readOperationRuns?: () => { readonly revision: number; readonly runs: readonly OperationRun[] };
   readonly readViewportStatus?: () => unknown;
   readonly readDiagnostics?: () => DiagnosticsSnapshot;
@@ -291,7 +330,7 @@ export function createViewportProjectionQuery(options: {
     if (query === null) return {
       ...base,
       status: 'faulted',
-      error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, engine.execution, viewport.status, hierarchy.structure, inspector.selection, assets.catalog, operations.snapshot, or world.snapshot with a component-name list.'),
+      error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, assets.catalog, assets.payload with a guid, operations.snapshot, or world.snapshot with a component-name list.'),
     };
     if (options.graph.stats().status !== 'bound') return {
       ...base,
@@ -350,16 +389,32 @@ export function createViewportProjectionQuery(options: {
         : { ...base, status: 'ready', value: hierarchy };
     }
     if (query.kind === 'inspector.selection') {
-      const inspector = options.readInspector?.() ?? { selectionIds: [] };
+      const inspector = options.readInspector?.() ?? { selectionIds: [], entities: [] };
       return inspector.entity === undefined
         ? { ...base, status: 'empty' }
         : { ...base, status: 'ready', value: inspector };
     }
+    if (query.kind === 'selection.current') return {
+      ...base,
+      status: 'ready',
+      value: {
+        entityIds: [...getSelectionList()],
+        assets: getAssetSelectionList().map(({ guid, kind, name, packPath }) => ({ guid, kind, name, packPath })),
+        paths: getPathSelectionList().map(({ path, kind }) => ({ path, kind })),
+        lastDomain: getLastSelectionDomain(),
+      },
+    };
     if (query.kind === 'assets.catalog') {
       const entries = options.readAssetCatalog?.() ?? [];
       return entries.length === 0
         ? { ...base, status: 'empty' }
         : { ...base, status: 'ready', value: { entries } };
+    }
+    if (query.kind === 'assets.payload') {
+      const payload = options.readAssetPayload?.(query.guid);
+      return payload === undefined
+        ? { ...base, status: 'empty' }
+        : { ...base, status: 'ready', value: { guid: query.guid, payload } };
     }
     if (query.kind === 'operations.snapshot') {
       const snapshot = options.readOperationRuns?.() ?? { revision: 0, runs: [] };
@@ -418,6 +473,37 @@ export function createViewportRuntimeTransportService(options: {
   });
   const hierarchy = createHierarchyStructureSelector(options.graph).mount();
   const scope = viewportRuntimeTransportScope(options.runtime);
+  const projectionQuery = createViewportProjectionQuery({
+    ...options,
+    readHierarchy: () => {
+      const structure = hierarchy.getSnapshot();
+      return structure === undefined
+        ? undefined
+        : { structure, selectionIds: [...getSelectionList()], mode: options.gateway.mode };
+    },
+    readInspector: () => {
+      const selectionIds = [...getSelectionList()];
+      const world = options.gateway.activeWorld;
+      const entities = world === null
+        ? []
+        : selectionIds.flatMap((id) => {
+            if (!entExists(world, id)) return [];
+            const instance = options.gateway.sceneInstanceForMember(id);
+            return [{
+              id,
+              name: entName(world, id),
+              components: entComponents(world, id),
+              ...(instance.ok ? { sceneInstance: { root: instance.value.root, member: id } } : {}),
+            }];
+          });
+      const entity = entities.at(-1);
+      return { selectionIds, entities, ...(entity === undefined ? {} : { entity }) };
+    },
+    readAssetCatalog: () => options.gateway.assetCatalog(),
+    readAssetPayload: (guid) => options.gateway.lookupAsset(guid),
+    readOperationRuns: () => options.gateway.operationRunSnapshot(),
+    readDiagnostics: () => options.gateway.diagnostics.snapshot(),
+  });
   return createTransportService({
     journal: new RunJournal({ scope }),
     product: adapter.product(),
@@ -427,28 +513,12 @@ export function createViewportRuntimeTransportService(options: {
       scopes: [scope],
       permissions: {},
     }),
-    query: createViewportProjectionQuery({
-      ...options,
-      readHierarchy: () => {
-        const structure = hierarchy.getSnapshot();
-        return structure === undefined
-          ? undefined
-          : { structure, selectionIds: [...getSelectionList()] };
-      },
-      readInspector: () => {
-        const selectionIds = [...getSelectionList()];
-        const id = selectionIds.at(-1);
-        const world = options.gateway.activeWorld;
-        return id === undefined || world === null || !entExists(world, id)
-          ? { selectionIds }
-          : {
-              selectionIds,
-              entity: { id, name: entName(world, id), components: entComponents(world, id) },
-            };
-      },
-      readAssetCatalog: () => options.gateway.assetCatalog(),
-      readOperationRuns: () => options.gateway.operationRunSnapshot(),
-      readDiagnostics: () => options.gateway.diagnostics.snapshot(),
-    }),
+    query: async (input) => {
+      const parsed = parseProjectionQuery(input);
+      if (parsed?.kind === 'assets.payload' && options.gateway.lookupAsset(parsed.guid) === undefined) {
+        await ensureAssetCataloged(options.gateway.doc.registry, parsed.guid);
+      }
+      return projectionQuery(input);
+    },
   });
 }

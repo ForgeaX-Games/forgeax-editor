@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@forgeax/editor-ui';
 import {
   gateway,
+  dispatchActiveEditorOperation,
   usePendingDiskSave,
   useSceneReadModel,
   useSessionDirtyAssets,
@@ -32,6 +33,8 @@ function prettifyPackPath(packPath: string): string {
 export interface SaveAssetsDialogProps {
   /** 用户确认时传 true，取消时传 false。 */
   onClose: (confirmed: boolean) => void;
+  /** Marks this portalled dialog as owned by the panel that opened it. */
+  interactionScope?: string;
 }
 
 interface Row {
@@ -93,7 +96,7 @@ function useRows(): readonly Row[] {
   }, [sceneDirty, sceneModel, dirtyAssets, t]);
 }
 
-export function SaveAssetsDialog({ onClose }: SaveAssetsDialogProps) {
+export function SaveAssetsDialog({ onClose, interactionScope }: SaveAssetsDialogProps) {
   const { t } = useTranslation();
   const rows = useRows();
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rows.map((r) => r.id)));
@@ -131,7 +134,7 @@ export function SaveAssetsDialog({ onClose }: SaveAssetsDialogProps) {
 
   function handleSave(): void {
     if (selected.has(SCENE_ROW_ID)) {
-      gateway.dispatch({ kind: 'saveDocToDisk', requestId: crypto.randomUUID() }, 'human');
+      void dispatchActiveEditorOperation({ kind: 'saveDocToDisk', requestId: crypto.randomUUID() }, 'human');
     }
     const assetGuids = rows.filter((r) => !r.isScene && selected.has(r.id)).map((r) => r.id);
     clearSessionDirtyAssets(assetGuids);
@@ -143,7 +146,7 @@ export function SaveAssetsDialog({ onClose }: SaveAssetsDialogProps) {
   }
 
   return (
-    <div className="cb-dialog-overlay" data-testid="cb-save-all-overlay" onClick={handleCancel}>
+    <div className="cb-dialog-overlay" data-testid="cb-save-all-overlay" data-fx-interaction-scope={interactionScope} onClick={handleCancel}>
       <div
         className="cb-dialog cb-dialog-wide cb-dialog-ue"
         role="dialog"

@@ -26,6 +26,7 @@ export const CREATABLE_ASSET_KINDS: readonly CreatableAssetSpec[] = [
   { kind: 'material', label: 'Material', icon: 'paintbrush', defaultNamePrefix: 'NewMaterial' },
   { kind: 'material-instance', label: 'Material Instance（材质实例）', icon: 'layers', defaultNamePrefix: 'MI_' },
   { kind: 'particle-effect', label: 'Particle Effect', icon: 'star', defaultNamePrefix: 'NewParticle' },
+  { kind: 'input-map', label: 'Input Map', icon: 'gamepad-2', defaultNamePrefix: 'IM_' },
 ] as const;
 
 /** 类型层守卫：`CreatableAssetKind` 字面量通过 core applier 的 exhaustive switch

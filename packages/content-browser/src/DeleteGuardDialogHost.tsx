@@ -4,26 +4,20 @@
 // Standalone (and other hosts running the keyboard router outside the React
 // tree) mount ONE <DeleteGuardDialogHost/> on a dedicated root; the router
 // deps call requestDeleteGuard(...) to raise a modal, and this host resolves
-// it via the shared dialog. Reference-aware impact analysis (C3) is computed
-// on the fly from the engine AssetRegistry so router-driven deletes get the
-// same "still referenced from…" warning the Content Browser context-menu
-// delete does.
+// it via the shared dialog. Reference-aware impact analysis (C3) consumes the
+// Content Browser's latest workspace projection so router-driven deletes get
+// the same "still referenced from…" warning as context-menu deletes.
 
 import { useEffect, useMemo, useState } from 'react';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
-import { computeDeleteImpact, type DeleteImpact } from './delete-guard';
+import { computeDeleteImpact } from './delete-guard';
 import {
+  getDeleteGuardWorkspace,
   subscribeDeleteGuard,
   resolveDeleteGuard,
   type DeleteGuardRequest,
 } from './delete-guard-bus';
 import type { CBAsset } from './types';
-
-const EMPTY_IMPACT: DeleteImpact = {
-  externalReferencers: new Map(),
-  hasExternalReferencers: false,
-  externalReferencerCount: 0,
-};
 
 function busAssetToCBAsset(a: DeleteGuardRequest['assets'][number]): CBAsset {
   return {
@@ -50,8 +44,26 @@ export function DeleteGuardDialogHost() {
 
   const { impact, catalogNameByGuid } = useMemo(() => {
     const nameByGuid = new Map<string, string>();
-    for (const a of req?.assets ?? []) nameByGuid.set(a.guid, a.name);
-    return { impact: EMPTY_IMPACT, catalogNameByGuid: nameByGuid };
+    for (const a of req?.assets ?? []) nameByGuid.set(a.guid.toLowerCase(), a.name);
+    const workspace = req?.workspace ?? getDeleteGuardWorkspace();
+    for (const subject of workspace?.subjects ?? []) {
+      if (subject.name) nameByGuid.set(subject.id.toLowerCase(), subject.name);
+    }
+    return {
+      impact: computeDeleteImpact(
+        (req?.assets ?? []).map((asset) => asset.guid),
+        workspace ?? {
+          schemaVersion: 'asset-workspace/v1',
+          revision: 'workspace:r0',
+          resourceRevision: 'resource:r0',
+          identity: 'workspace-snapshot:empty',
+          subjects: [],
+          relations: [],
+          issues: [],
+        },
+      ),
+      catalogNameByGuid: nameByGuid,
+    };
   }, [req]);
 
   if (!req) return null;
@@ -60,7 +72,8 @@ export function DeleteGuardDialogHost() {
     <DeleteGuardDialog
       targets={targets}
       impact={impact}
-      nameByGuid={(guid) => catalogNameByGuid.get(guid) ?? `${guid.slice(0, 8)}…`}
+      openResources={req.openResources}
+      nameByGuid={(guid) => catalogNameByGuid.get(guid.toLowerCase()) ?? `${guid.slice(0, 8)}…`}
       onConfirm={() => resolveDeleteGuard(true)}
       onCancel={() => resolveDeleteGuard(false)}
     />

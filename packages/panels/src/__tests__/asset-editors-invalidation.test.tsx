@@ -8,8 +8,10 @@ describe('asset editor document identity', () => {
   it('binds every asset page panel to the active document instead of transient Content Browser selection', () => {
     const editors = source('AssetEditors.tsx');
     expect(editors).toContain('useActiveEditorAsset');
-    expect(editors).toContain('ensureAssetCataloged');
+    expect(editors).toContain('queryViewportRuntimeProjection');
+    expect(editors).toContain("kind: 'assets.payload'");
     expect(editors).toContain("panelBridge.on('assetsChanged'");
+    expect(editors).not.toContain('gateway.lookupAsset');
     expect(editors).not.toContain('useAssetSelection');
     expect(editors).not.toContain('useDocVersion');
     expect(editors).not.toContain('LiveWorldSelectorGraph');

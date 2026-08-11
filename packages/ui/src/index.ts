@@ -124,5 +124,6 @@ export { Toaster } from './components/toaster';
 export { EditorOverlayProvider, ConfirmProvider, PromptProvider } from './overlays';
 export { toast } from './lib/toast';
 export { confirm, type ConfirmOptions } from './lib/confirm';
+export { decide, type Decision, type DecisionOptions } from './lib/decision';
 export { prompt, type PromptOptions } from './lib/prompt';
 export { cn } from './lib/utils';

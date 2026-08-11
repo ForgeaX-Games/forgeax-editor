@@ -302,6 +302,9 @@
         "forward": "前进",
         "all": "全部"
       },
+      "sourceTree": {
+        "favorites": "收藏夹"
+      },
       "sort": {
         "name": "名称",
         "kind": "类型",
@@ -425,6 +428,7 @@
         "loading": "正在加载资产...",
         "noMatching": "无匹配资产",
         "noAssets": "未找到资产",
+        "emptyFolder": "将文件放置在此处，或点击右键创建内容",
         "dropFiles": "拖放文件以导入"
       },
       "importProgress": {
@@ -436,10 +440,6 @@
         "cancel": "取消",
         "retry": "重试 {{name}}",
         "dismiss": "关闭"
-      },
-      "sourceTree": {
-        "gameAssets": "游戏资产",
-        "assetCount": "{{count}} 资产"
       },
       "tooltip": {
         "kind": "类型：{{kind}}",

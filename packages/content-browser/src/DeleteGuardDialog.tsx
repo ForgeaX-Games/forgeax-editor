@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@forgeax/editor-ui';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import type { CBAsset } from './types';
-import type { DeleteImpact, SceneDeleteGuard } from './delete-guard';
+import type { DeleteImpact, DeleteOpenResource, SceneDeleteGuard } from './delete-guard';
 import type { AssetPreflightResult } from '@forgeax/editor-core';
 
 export interface DeleteGuardDialogProps {
@@ -12,11 +12,15 @@ export interface DeleteGuardDialogProps {
   impact: DeleteImpact;
   /** Scene-specific current/default/reference guard projection. */
   sceneGuards?: ReadonlyMap<string, SceneDeleteGuard>;
+  /** Open resource pages bound to the target GUIDs. */
+  openResources?: readonly DeleteOpenResource[];
   preflight?: AssetPreflightResult;
   /** Resolve a guid to a human-readable label for the referencer list. */
   nameByGuid: (guid: string) => string;
   /** Latest Gateway refusal, if a race changed the authoritative guard. */
   error?: string | null;
+  /** Marks this portalled dialog as owned by the panel that opened it. */
+  interactionScope?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -32,9 +36,11 @@ export function DeleteGuardDialog({
   targets,
   impact,
   sceneGuards,
+  openResources = [],
   preflight,
   nameByGuid,
   error,
+  interactionScope,
   onConfirm,
   onCancel,
 }: DeleteGuardDialogProps) {
@@ -47,10 +53,10 @@ export function DeleteGuardDialog({
 
   const count = targets.length;
   const hasSceneGuards = sceneGuards !== undefined && sceneGuards.size > 0;
-  const danger = impact.hasExternalReferencers || hasSceneGuards;
+  const danger = impact.hasExternalReferencers || hasSceneGuards || openResources.some((resource) => resource.dirty);
 
   return (
-    <div className="cb-dialog-overlay" data-testid="cb-delete-guard-overlay" onClick={onCancel}>
+    <div className="cb-dialog-overlay" data-testid="cb-delete-guard-overlay" data-fx-interaction-scope={interactionScope} onClick={onCancel}>
       <div
         className="cb-dialog"
         role="alertdialog"
@@ -72,6 +78,9 @@ export function DeleteGuardDialog({
           <ul className="cb-dialog-list">
             {targets.map((target) => {
               const external = impact.externalReferencers.get(target.guid) ?? [];
+              const resourceTabs = openResources.filter(
+                (resource) => resource.guid.toLowerCase() === target.guid.toLowerCase(),
+              );
               return (
               <li key={target.guid} className="cb-dialog-item">
                 <span className="cb-dialog-item-name">{target.name}</span>
@@ -97,6 +106,15 @@ export function DeleteGuardDialog({
                       })}
                     </span>
                   )}
+                {resourceTabs.map((resource) => (
+                  <span
+                    key={resource.encodedKey}
+                    className="cb-dialog-item-refs"
+                    data-testid="cb-delete-open-resource"
+                  >
+                    Open tab: {resource.title} ({resource.dirty ? 'dirty' : 'clean'})
+                  </span>
+                ))}
                 </li>
               );
             })}

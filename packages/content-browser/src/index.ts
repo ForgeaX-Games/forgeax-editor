@@ -14,7 +14,12 @@ export { resolveViewMode, isHiddenDir, isHiddenPath } from './view-mode';
 export { resolveFolderMenuItems } from './folder-menu';
 export { DeleteGuardDialog, type DeleteGuardDialogProps } from './DeleteGuardDialog';
 export { DeleteGuardDialogHost } from './DeleteGuardDialogHost';
-export { computeDeleteImpact, type DeleteImpact } from './delete-guard';
+export {
+  computeDeleteImpact,
+  computeDeleteOpenResources,
+  type DeleteImpact,
+  type DeleteOpenResource,
+} from './delete-guard';
 export { summarizeDeletePreflight, type DeletePreflightSummary } from './delete-guard';
 export {
   authorizeSubjectAction,
@@ -29,6 +34,8 @@ export {
   workspaceSnapshotFromBrowserSnapshot,
 } from './workspace/useWorkspaceSnapshot';
 export {
+  getDeleteGuardWorkspace,
+  publishDeleteGuardWorkspace,
   requestDeleteGuard,
   subscribeDeleteGuard,
   resolveDeleteGuard,

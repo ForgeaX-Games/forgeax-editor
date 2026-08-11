@@ -55,6 +55,7 @@ export interface HierarchyStructureProjection {
 export interface HierarchyRuntimeProjection {
   readonly structure: HierarchyStructureProjection;
   readonly selectionIds: readonly EntityHandle[];
+  readonly mode: 'edit' | 'play';
 }
 
 export interface HierarchyStructureSelector {

@@ -9,13 +9,16 @@ import {
   fileFamilyOfWithAssets,
   fileKindLabel,
   fileSpecificMenuItems,
+  importDirectoryForViewItem,
   isAbsoluteHostPath,
   isAssetPlacementAvailable,
+  isPathInSelectionChain,
   menuIconForId,
   normalizeGameRelativePath,
   orderContextMenuEntries,
   registryEntryToCBAsset,
   resolveCopyPath,
+  sourcePathForViewItem,
   viewItemKey,
   viewItemPath,
   type CBContextMenuEntry,
@@ -113,6 +116,28 @@ describe('view-item projections', () => {
     expect(viewItemKey(asset as CBViewItem)).toBe('guid-1');
     expect(viewItemKey(folder as CBViewItem)).toBe('assets/models');
     expect(viewItemKey(file as CBViewItem)).toBe('assets/readme.md');
+  });
+
+  test('source paths keep the asset source location separate from its pack path', () => {
+    expect(sourcePathForViewItem(asset, 'assets/hello/hero.glb')).toBe('assets/hello/hero.glb');
+    expect(sourcePathForViewItem(asset)).toBe('assets/tex.pack.json');
+    expect(sourcePathForViewItem(folder)).toBe('assets/models');
+    expect(sourcePathForViewItem(file)).toBe('assets/readme.md');
+  });
+
+  test('selection paths include ancestors while excluding siblings', () => {
+    expect(isPathInSelectionChain('assets/hello/hero.glb', '')).toBe(true);
+    expect(isPathInSelectionChain('assets/hello/hero.glb', 'assets')).toBe(true);
+    expect(isPathInSelectionChain('assets/hello/hero.glb', 'assets/hello')).toBe(true);
+    expect(isPathInSelectionChain('assets/hello/hero.glb', 'assets/world')).toBe(false);
+  });
+
+  test('import destination uses the selected folder or the selected item parent', () => {
+    expect(importDirectoryForViewItem(folder)).toBe('assets/models');
+    expect(importDirectoryForViewItem(file)).toBe('assets');
+    expect(importDirectoryForViewItem(asset, 'assets/hello/hero.glb')).toBe('assets/hello');
+    expect(importDirectoryForViewItem(asset)).toBe('assets');
+    expect(importDirectoryForViewItem(null, null, 'assets/current')).toBe('assets/current');
   });
 });
 

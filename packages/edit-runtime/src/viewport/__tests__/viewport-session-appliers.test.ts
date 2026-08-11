@@ -32,6 +32,7 @@ function deps() {
       captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' }; },
       world,
       activeWorld: () => world,
+      gateway,
     },
   };
 }
@@ -53,6 +54,7 @@ describe('viewport session applier registrar (M3)', () => {
     });
     expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });
+    expect(gateway.dispatch({ kind: 'assignAssetToEntity', entity: -1, asset: { guid: 'x', kind: 'mesh', name: 'x' }, requestId: 'assign-invalid' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(d.calls).toEqual(['play:last-saved', 'stop', 'display:game', 'grant', 'release', 'replay:42', 'removeSystem']);
   });
 

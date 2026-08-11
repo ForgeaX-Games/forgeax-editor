@@ -21,6 +21,14 @@ const basePayload = {
   sentinel: 12,
   liveness: 'alive' as const,
   renderReadiness: 'ready' as const,
+  execution: {
+    schemaVersion: 1 as const,
+    requestedTier: 'main-serial' as const,
+    actualTier: 'main-serial' as const,
+    selectionReason: 'explicit-request' as const,
+    engine: { realm: 'host' as const, health: 'running' as const },
+    fault: null,
+  },
   failure: null,
 };
 
@@ -41,6 +49,7 @@ describe('carrier VAG protocol', () => {
       expect(result.data.payload.rendererGeneration).toBe(4);
       expect(result.data.payload.rendererIdentity).toBe('renderer-a');
       expect(result.data.payload.renderReadiness).toBe('ready');
+      expect(result.data.payload.execution?.actualTier).toBe('main-serial');
     }
   });
 

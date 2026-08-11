@@ -13,7 +13,7 @@ import {
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   type VfxGpuRuntime,
 } from '@forgeax/engine-vfx';
-import { registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
+import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type EditGateway, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
 
 export interface ViewportSessionApplierDeps {
   readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => DispatchResult;
@@ -28,6 +28,7 @@ export interface ViewportSessionApplierDeps {
   readonly world: World;
   /** Late-bound because Play swaps the Gateway active World. */
   readonly activeWorld: () => World;
+  readonly gateway?: EditGateway;
 }
 
 const DEFAULT_CAPTURE_TIMEOUT_MS = 60_000;
@@ -94,6 +95,77 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
   };
 
   try {
+    if (deps.gateway !== undefined) register('assignAssetToEntity', (op, ctx) => {
+      const request = op as {
+        entity?: unknown;
+        asset?: { guid?: unknown; kind?: unknown; name?: unknown };
+        requestId?: unknown;
+      };
+      if (typeof request.entity !== 'number' || !Number.isSafeInteger(request.entity) || request.entity < 0) {
+        return invalidArgs('entity must be a live non-negative EntityHandle');
+      }
+      if (typeof request.asset?.guid !== 'string' || request.asset.guid.length === 0
+        || typeof request.asset.kind !== 'string' || typeof request.asset.name !== 'string') {
+        return invalidArgs('asset requires non-empty guid, kind, and name');
+      }
+      if (!['material', 'mesh', 'texture', 'image'].includes(request.asset.kind)) {
+        return invalidArgs(`asset kind '${request.asset.kind}' cannot be assigned to an entity`);
+      }
+      if (typeof request.requestId !== 'string' || request.requestId.length === 0) {
+        return invalidArgs('requestId must be non-empty');
+      }
+
+      const origin = ctx?.origin ?? 'human';
+      const bind = async (component: string, field: string, assetType: string, guid: string) => {
+        const bindRequestId = `${request.requestId}:bind`;
+        const accepted = deps.gateway!.dispatch({
+          kind: 'bindAssetRef', entity: request.entity as number, component, field,
+          assetType, guids: [guid], requestId: bindRequestId,
+        }, origin);
+        if (!accepted.ok) return accepted;
+        const terminal = await deps.gateway!.waitOperationRun(bindRequestId);
+        if (!terminal.ok) return terminal;
+        if (terminal.value.status !== 'succeeded') {
+          return { ok: false as const, error: terminal.value.error ?? { code: 'operation-failed', hint: `bindAssetRef ended as ${terminal.value.status}` } };
+        }
+        return { ok: true as const };
+      };
+
+      const completion = (async () => {
+        const entity = request.entity as number;
+        const asset = request.asset as { guid: string; kind: string; name: string };
+        if (asset.kind === 'material') return bind('MeshRenderer', 'materials', 'MaterialAsset', asset.guid);
+        if (asset.kind === 'mesh') return bind('MeshFilter', 'assetHandle', 'MeshAsset', asset.guid);
+
+        if (!entComponent(deps.activeWorld(), entity as never, 'MeshRenderer').ok) {
+          const added = deps.gateway!.dispatch({
+            kind: 'addComponent', entity, component: 'MeshRenderer', value: { materials: [] },
+          }, origin);
+          if (!added.ok) return added;
+        }
+        const materialGuid = crypto.randomUUID();
+        const created = deps.gateway!.dispatch({
+          kind: 'createMaterial', guid: materialGuid, name: `mat_${asset.name}`,
+          baseColor: [1, 1, 1, 1], baseColorTexture: asset.guid,
+        }, origin);
+        if (!created.ok) return created;
+        const ready = await awaitAuthoredMaterialReady(materialGuid);
+        if (!ready.ok) {
+          return { ok: false as const, error: { code: 'asset-not-ready', hint: ready.hint } };
+        }
+        return bind('MeshRenderer', 'materials', 'MaterialAsset', materialGuid);
+      })();
+      return { ok: true as const, completion };
+    }, 'Assign Asset To Entity', {
+      type: 'object',
+      properties: {
+        entity: { type: 'number', minimum: 0 },
+        asset: { type: 'object' },
+        requestId: { type: 'string' },
+      },
+      required: ['entity', 'asset', 'requestId'],
+    });
+
     register('play', (op, ctx) => {
       const dirtyPolicy = (op as { dirtyPolicy?: unknown }).dirtyPolicy ?? 'last-saved';
       if (dirtyPolicy !== 'last-saved' && dirtyPolicy !== 'save-then-play' && dirtyPolicy !== 'cancel') {

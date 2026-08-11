@@ -269,8 +269,10 @@ describe('AC-01 export-surface snapshot', () => {
     // subscribePendingDiskSave / usePendingDiskSave (scene dirty projection) +
     // getSessionDirtyAssets / subscribeSessionDirtyAssets /
     // clearSessionDirtyAssets / clearAllSessionDirtyAssets /
-    // useSessionDirtyAssets / SessionDirtyAsset type → 74 + 8 = 82.
-    expect(entries.length).toBe(82);
+    // useSessionDirtyAssets / SessionDirtyAsset type → 74 + 8 = 82. Runtime
+    // isolation then publishes openEditorAssetPage as the one shell-owned effect
+    // consumed by the authenticated carrier bridge → 83.
+    expect(entries.length).toBe(83);
 
     // Every entry must be non-empty.
     for (const e of entries) {

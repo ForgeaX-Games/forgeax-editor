@@ -13,7 +13,7 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
-    "./delete-guard": {
+    "./delete-guard-entry": {
       "types": "./src/delete-guard-entry.ts",
       "import": "./src/delete-guard-entry.ts"
     },

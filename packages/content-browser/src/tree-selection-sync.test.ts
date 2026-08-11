@@ -10,7 +10,7 @@
 // Fix: tree clicks dispatch BOTH selection ops, mirroring the grid's
 // useMultiSelect.dispatchSet dual-dispatch:
 //   1. setAssetSelection { assets: [], primary: null }  — FIRST: clears any
-//      grid-selected asset so only one CB selection is active;
+//      grid-selected asset so the path-domain subject is active;
 //   2. setFolderSelection { items: [{ path, kind }] }   — LAST: the non-empty
 //      forward select derives lastSelectionDomain = 'folder' (empty dispatches
 //      are dedup-guarded and never advance the domain).
@@ -67,9 +67,11 @@ describe('tree selection sync — gateway → folder-selection store (grid read 
 
 describe('tree selection sync — CBSourceTree click wiring contract', () => {
   const tsx = readFileSync(resolve(import.meta.dir, 'CBSourceTree.tsx'), 'utf-8');
+  const contentBrowser = readFileSync(resolve(import.meta.dir, 'ContentBrowser.tsx'), 'utf-8');
+  const css = readFileSync(resolve(import.meta.dir, 'content-browser.css'), 'utf-8');
 
-  it('imports the gateway (the one dispatch door — no human-only path)', () => {
-    expect(tsx).toMatch(/import\s*\{\s*gateway\s*\}\s*from\s*'@forgeax\/editor-core'/);
+  it('imports the active Runtime dispatcher (the one dispatch door — no shell fallback)', () => {
+    expect(tsx).toMatch(/import\s*\{[^}]*dispatchActiveEditorOperation[^}]*\}\s*from\s*'@forgeax\/editor-core'/);
   });
 
   it('selectTreePath empties the asset domain FIRST, sets the path selection LAST', () => {
@@ -89,5 +91,64 @@ describe('tree selection sync — CBSourceTree click wiring contract', () => {
   it('tree clicks dispatch for BOTH branches (file + folder)', () => {
     expect(tsx).toContain("selectTreePath(file.path, 'file')");
     expect(tsx).toContain("selectTreePath(folder.path, 'dir')");
+  });
+
+  it('keeps the exact subject selection separate from its ancestor path chain', () => {
+    expect(tsx).toContain('selectedPath: string | null');
+    expect(tsx).toContain('isPathInSelectionChain(selectedPath, node.path)');
+    expect(tsx).toContain("' is-path'");
+    expect(tsx).toContain("' is-sel'");
+    expect(contentBrowser).toContain('selectedPath={selectedSourcePath}');
+    expect(css).toContain('.cb-source-row.is-path:not(.is-sel)');
+  });
+
+  it('single-click selects without changing disclosure, while double-click owns folder toggle', () => {
+    const clickStart = tsx.indexOf('const handleClick = () => {');
+    const doubleClickStart = tsx.indexOf('const handleDoubleClick = () => {');
+    expect(clickStart).toBeGreaterThan(-1);
+    expect(doubleClickStart).toBeGreaterThan(clickStart);
+
+    const clickBody = tsx.slice(clickStart, doubleClickStart);
+    expect(clickBody).not.toContain('setCollapsedSourceFolders');
+    expect(tsx).toContain('onDoubleClick={handleDoubleClick}');
+    expect(tsx).toContain('if (!expandable) return;');
+    expect(tsx).toContain('[node.path]: prev[node.path] === false');
+  });
+
+  it('keeps folders closed by default and only opens them after a double-click', () => {
+    expect(tsx).toContain('const open = expandable && collapsedSourceFolders[node.path] === false;');
+    expect(tsx).toContain('style={{ paddingLeft: `${depth * 14}px` }}');
+  });
+
+  it('does not expose disclosure UI or toggling for leaf folders', () => {
+    expect(tsx).toContain("const expandable = node.type === 'folder' && node.children.length > 0;");
+    expect(tsx).toContain('if (!expandable) return;');
+    expect(tsx).toContain("${expandable ? '' : ' hidden'}");
+    expect(tsx).toContain("expandable && open ? 'folder-open' : 'folder'");
+  });
+
+  it('shows the project root and a sibling favorites entry without counts', () => {
+    expect(tsx).toContain('cb-source-zone-head');
+    expect(tsx).toContain('cb-source-project-children');
+    expect(tsx).toContain('renderRows(sourceTree, 0');
+    expect(tsx).toContain('const [projectOpen, setProjectOpen] = useState(false);');
+    expect(tsx).toContain('onDoubleClick={handleProjectDoubleClick}');
+    expect(tsx).toContain('{projectOpen && <div className="cb-source-project-children">');
+    expect(tsx).toContain('cb-source-favorites-row');
+    expect(tsx).toContain('editor.contentBrowser.sourceTree.favorites');
+    expect(tsx).not.toContain('cb-source-count');
+    expect(tsx).not.toContain('assetCount');
+  });
+
+  it('keeps folder cards borderless until hover', () => {
+    expect(css).toContain('.cb-grid-folder { border-color: transparent; }');
+    expect(css).toContain('.cb-grid-folder:hover { border-color: var(--color-border-subtle');
+  });
+
+  it('gives top-level navigation rows a stronger visual hierarchy', () => {
+    expect(css).toContain('.cb-source-zone-head.collapsed .cb-source-chev');
+    expect(css).toContain('font-size: 13.5px;');
+    expect(css).toContain('background: var(--color-background-elevated');
+    expect(css).toContain('.cb-source-row.cb-source-favorites-row');
   });
 });

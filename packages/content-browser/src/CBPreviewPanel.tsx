@@ -1,5 +1,5 @@
-// CBPreviewPanel — the right-hand aside that previews the currently-selected
-// Content Browser item (folder / file / asset).
+// CBPreviewPanel — the right-hand panel below the action toolbar that previews
+// the currently-selected Content Browser item (folder / file / asset).
 //
 // Owns the small async fetch for on-disk file metadata (/api/files?path=…)
 // used to show text-file content inline. Everything else is derived from

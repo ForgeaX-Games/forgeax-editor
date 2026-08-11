@@ -6,15 +6,17 @@
 // exists on a mesh page and can never leak into the Level page).
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  ensureAssetCataloged,
   dispatchActiveEditorOperation,
   gateway,
   panelBridge,
+  queryViewportRuntimeProjection,
+  subscribeViewportRuntimeClient,
   useActiveEditorAsset,
+  type SelectedAsset,
 } from '@forgeax/editor-core';
-import type { SelectedAsset } from '@forgeax/editor-core';
 import { prompt as promptDialog } from '@forgeax/editor-ui';
 import { PREVIEW_COMPONENTS } from './asset-inspector';
+import InputMapEditor from './asset-inspector/InputMapEditor';
 import { getMaterialInstancePreview } from './mi-preview-slot';
 import './inspector.css';
 import './mi-preview.css';
@@ -23,19 +25,53 @@ const KIND_BADGE: Record<string, string> = {
   mesh: '◫', texture: '🖼', 'cube-texture': '🧊g', sampler: '⚙',
   material: '🎨', 'material-instance': '🎛', scene: '🗺', shader: '📜', skeleton: '🦴',
   skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱', 'particle-effect': '✨',
+  'render-pipeline': '🔧', tileset: '🧱', 'particle-effect': '✨', 'input-map': '🎮',
 };
 
-function useDocumentAsset(): SelectedAsset | null {
+interface RuntimeAssetPayloadProjection {
+  readonly guid: string;
+  readonly payload: Record<string, unknown>;
+}
+
+const documentPayloadCache = new Map<string, Record<string, unknown>>();
+const documentPayloadLoads = new Map<string, Promise<Record<string, unknown> | undefined>>();
+
+/** Resolve one document payload from the authoritative Viewport Runtime. The
+ * shell never grows a shadow AssetRegistry; it caches only this disposable,
+ * GUID-keyed projection for business panels and bounded preview mini-worlds. */
+export function loadDocumentAssetPayload(guid: string): Promise<Record<string, unknown> | undefined> {
+  const cached = documentPayloadCache.get(guid);
+  if (cached !== undefined) return Promise.resolve(cached);
+  const pending = documentPayloadLoads.get(guid);
+  if (pending !== undefined) return pending;
+  const load = queryViewportRuntimeProjection<RuntimeAssetPayloadProjection>({ kind: 'assets.payload', guid })
+    .then((envelope) => {
+      if (envelope.status !== 'ready' || envelope.value === null) return undefined;
+      const payload = envelope.value.payload;
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+      documentPayloadCache.set(guid, payload);
+      return payload;
+    })
+    .catch(() => undefined)
+    .finally(() => { documentPayloadLoads.delete(guid); });
+  documentPayloadLoads.set(guid, load);
+  return load;
+}
+
+export function useDocumentAsset(): SelectedAsset | null {
   const asset = useActiveEditorAsset();
   const [version, setVersion] = useState(0);
 
-  useEffect(() => panelBridge.on('assetsChanged', () => setVersion((value) => value + 1)), []);
+  useEffect(() => panelBridge.on('assetsChanged', () => {
+    if (asset) documentPayloadCache.delete(asset.guid);
+    setVersion((value) => value + 1);
+  }), [asset?.guid]);
+  useEffect(() => subscribeViewportRuntimeClient(() => setVersion((value) => value + 1)), []);
   useEffect(() => {
-    if (!asset || gateway.lookupAsset(asset.guid) !== undefined) return;
+    if (!asset || documentPayloadCache.has(asset.guid)) return;
     let cancelled = false;
-    void ensureAssetCataloged(gateway.doc.registry, asset.guid).then((loaded) => {
-      if (loaded && !cancelled) setVersion((value) => value + 1);
+    void loadDocumentAssetPayload(asset.guid).then((loaded) => {
+      if (loaded !== undefined && !cancelled) setVersion((value) => value + 1);
     });
     return () => { cancelled = true; };
   }, [asset?.guid, version]);
@@ -43,7 +79,7 @@ function useDocumentAsset(): SelectedAsset | null {
   return useMemo(() => {
     void version;
     if (!asset) return null;
-    const payload = gateway.lookupAsset(asset.guid) as Record<string, unknown> | undefined;
+    const payload = documentPayloadCache.get(asset.guid);
     return payload === undefined ? asset : { ...asset, payload };
   }, [asset, version]);
 }
@@ -194,6 +230,16 @@ export function MaterialInstancePropertiesPanel(): ReactElement {
 }
 
 const MaterialInstanceEditorLazy = lazy(() => import('./asset-inspector/MaterialInstanceEditor'));
+
+/** Input Map properties panel — eager import (avoid React.lazy Suspense hang after HMR). */
+export function InputMapPropertiesPanel(): ReactElement {
+  const asset = useDocumentAsset();
+  return (
+    <div className="panel" data-testid="panel-input-map-properties" data-subject-id={asset?.guid}>
+      {asset?.kind !== 'input-map' ? <EmptyAssetPage /> : <InputMapEditor />}
+    </div>
+  );
+}
 
 /** Mesh-only submesh/material-slot projection. The rows are derived from the
  * engine mesh payload; this panel does not invent a second material-binding

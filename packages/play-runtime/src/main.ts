@@ -203,6 +203,7 @@ async function resolveManagedCarrierScope(): Promise<void> {
 }
 
 const carrierScopeReady = resolveManagedCarrierScope();
+let carrierExecutionReport: ReturnType<import('@forgeax/engine-app').ExecutionControl['report']> | null = null;
 
 function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', failure: VagCarrierFailureDetail | null = carrierFailure) {
   const rendererUnavailable = carrierRendererGeneration === null;
@@ -219,6 +220,7 @@ function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', fa
     sentinel: carrierSentinel,
     liveness: 'alive' as const,
     renderReadiness: rendererUnavailable ? 'unavailable' as const : renderReadiness,
+    execution: carrierExecutionReport,
     failure: failure ?? (rendererUnavailable ? {
       code: 'renderer-generation-unavailable',
       stage: 'renderer' as const,
@@ -332,6 +334,7 @@ if (!app.ok) {
 }
 
 const { world, renderer } = app.value;
+carrierExecutionReport = app.value.execution.report();
 if (runtimeBinding !== undefined) {
   renderer.assets.configureRuntimeBinding(runtimeBinding);
 }
@@ -658,6 +661,7 @@ if (gamePluginLoad.plugins.some((plugin) => plugin.producer !== undefined)) {
 
 // ── Start the frame loop ──
 app.value.start();
+carrierExecutionReport = app.value.execution.report();
 
 try {
   await carrierScopeReady;

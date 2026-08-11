@@ -33,6 +33,7 @@ import {
   applyDestroyEntity,
   applyRename,
   applyReparent,
+  applyHierarchyGesture,
   applySetComponent,
   applySetSceneOverride,
   applyRemoveSceneOverride,
@@ -203,6 +204,7 @@ registerApplier('document', 'spawnEntity', applySpawnEntity as unknown as Applie
 registerApplier('document', 'destroyEntity', applyDestroyEntity as unknown as ApplierFn);
 registerApplier('document', 'rename', applyRename as unknown as ApplierFn);
 registerApplier('document', 'reparent', applyReparent as unknown as ApplierFn);
+registerApplier('document', 'hierarchyGesture', applyHierarchyGesture as unknown as ApplierFn);
 registerApplier('document', 'setComponent', applySetComponent as unknown as ApplierFn);
 registerApplier('document', 'setSceneOverride', applySetSceneOverride as unknown as ApplierFn);
 registerApplier('document', 'removeSceneOverride', applyRemoveSceneOverride as unknown as ApplierFn);

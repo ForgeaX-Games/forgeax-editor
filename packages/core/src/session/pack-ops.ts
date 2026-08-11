@@ -428,7 +428,7 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
     // post-load authored inline asset, the save baseline must drop it again
     // (a floor bump for a guid that no longer exists would refuse future saves).
     untrackAuthoredInlineAsset(guid);
-    broadcastAssetsChanged();
+    broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'deleted', guid });
   });
   trackPendingAssetWrite(
     guid,
@@ -483,6 +483,11 @@ function defaultPayloadFor(
       throw new Error(
         'material-instance assets must be created via the createMaterialInstance op, not createAsset — ' +
         'createMaterialInstance requires a parentGuid and builds the editor MI payload schema',
+      );
+    case 'input-map':
+      throw new Error(
+        'input-map assets must be created via the createInputMap op, not createAsset — ' +
+        'createInputMap builds the editor InputMap payload schema',
       );
     case 'particle-effect': {
       if (particleMaterialGuid === undefined) {
@@ -772,8 +777,12 @@ export function applyRenameAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
   // restore it synchronously. A .catch guards against an unhandled rejection —
   // the op already landed in undo/ledger (D-1: the gateway is the only door).
   void ctx.assetIO.renamePackEntry(packPath, guid, newName).then((r) => {
-    if (r.ok && r.oldName !== null) renamedNameCache.set(key, r.oldName);
-    broadcastAssetsChanged();
+    if (!r.ok) {
+      console.warn('[editor-core] renameAsset IO failed; pack entry was not renamed:', { packPath, guid, newName });
+      return;
+    }
+    if (r.oldName !== null) renamedNameCache.set(key, r.oldName);
+    broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'renamed', guid, name: newName });
   }).catch((e) => console.warn('[editor-core] renameAsset IO failed; old name not cached for undo:', e));
   // The inverse renames back. Its newName is resolved from renamedNameCache via
   // renameCacheKey; if the cache misses (IO not landed), it falls back to any

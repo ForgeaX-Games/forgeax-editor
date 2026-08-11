@@ -101,6 +101,42 @@ export function viewItemPath(item: CBViewItem | null): string | null {
   return item.path;
 }
 
+/** Return the game-relative source path represented by a selected view item.
+ * Assets use the derived author/source path when the catalog has one; the pack
+ * path is the stable fallback for registry-only entries. Folders and files are
+ * already source-tree paths. */
+export function sourcePathForViewItem(
+  item: CBViewItem | null,
+  assetSourcePath?: string | null,
+): string | null {
+  if (!item) return null;
+  if (item.type === 'asset') return assetSourcePath || item.packPath;
+  return item.path;
+}
+
+/** Whether a source-tree node belongs to the selected item's path chain.
+ * The empty node is the project root, so it is an ancestor of every selected
+ * item (including the project root itself). */
+export function isPathInSelectionChain(selectionPath: string | null, nodePath: string): boolean {
+  if (selectionPath === null) return false;
+  if (nodePath === '') return true;
+  return selectionPath === nodePath || selectionPath.startsWith(`${nodePath}/`);
+}
+
+/** Import destination for the current selected subject. A folder is itself the
+ * destination; an asset/file uses its parent directory. Keep the existing
+ * `assets` fallback for the project root and when there is no selection. */
+export function importDirectoryForViewItem(
+  item: CBViewItem | null,
+  assetSourcePath?: string | null,
+  fallback = 'assets',
+): string {
+  const sourcePath = sourcePathForViewItem(item, assetSourcePath);
+  if (!item || sourcePath === null) return fallback;
+  if (item.type === 'folder') return item.path || fallback;
+  return dirOfPath(sourcePath) || fallback;
+}
+
 export function viewItemKey(item: CBViewItem): string {
   if (item.type === 'asset') return item.guid;
   return item.path;

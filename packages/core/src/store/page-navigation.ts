@@ -60,6 +60,11 @@ export function getActiveEditorAsset(): SelectedAsset | null {
   return activeNavigation().getActiveAsset();
 }
 
+/** Execute the shell-owned page effect without promoting shell chrome to Runtime authority. */
+export function openEditorAssetPage(asset: SelectedAsset): Promise<void> {
+  return activeNavigation().openAsset(asset);
+}
+
 function subscribeActiveEditorAsset(listener: () => void): () => void {
   listeners.add(listener);
   return () => { listeners.delete(listener); };

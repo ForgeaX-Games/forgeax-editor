@@ -8,6 +8,7 @@ import {
 } from '@forgeax/editor-product';
 import {
   bindViewportRuntimeClient,
+  openEditorAssetPage,
   queryViewportRuntimeProjection,
   retryViewportRuntimeOperationRun,
 } from '@forgeax/editor-core';
@@ -19,6 +20,7 @@ import {
   VIEWPORT_RUNTIME_CONNECT,
   isViewportRuntimeConnectedMessage,
   isViewportRuntimeProjectionInvalidatedMessage,
+  isViewportRuntimeOpenAssetMessage,
   isViewportRuntimeReadyMessage,
   type ViewportRuntimeConnectMessage,
 } from './viewport-runtime-transport';
@@ -99,6 +101,14 @@ export function ViewportRuntimeFrame({
 
       if (isViewportRuntimeProjectionInvalidatedMessage(event.data)) {
         if (sameRuntime(runtime, event.data.runtime)) refreshOperationProjectionRef.current?.();
+        return;
+      }
+
+      if (isViewportRuntimeOpenAssetMessage(event.data)) {
+        if (!sameRuntime(runtime, event.data.runtime)) return;
+        void openEditorAssetPage({ ...event.data.asset }).catch((error) => {
+          console.error('[viewport-runtime] shell failed to open the requested asset page', error);
+        });
         return;
       }
 

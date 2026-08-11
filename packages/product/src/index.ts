@@ -316,6 +316,36 @@ export type {
   TransportMessageEvent,
   TransportMessagePort,
 } from './transport/message-port-carrier';
+export {
+  createBrowserPanelPopupController,
+  installPanelPopupClient,
+  PANEL_POPUP_PROTOCOL_VERSION,
+  readPanelPopupIdentity,
+} from './window/panel-popup';
+export { createTauriPanelTransportPort, createTauriPanelWindowController } from './window/tauri-panel-window';
+export type {
+  TauriPanelChannel,
+  TauriPanelWindowController,
+  TauriPanelWindowHost,
+  TauriPanelWindowSession,
+} from './window/tauri-panel-window';
+export { createViewportRelocationController } from './window/viewport-relocation';
+export type {
+  ActiveViewportCarrier,
+  PreparedViewportCarrier,
+  ViewportRelocationController,
+  ViewportRelocationResult,
+} from './window/viewport-relocation';
+export type {
+  BrowserPanelPopupController,
+  BrowserPanelPopupControllerDeps,
+  PanelPopupClientDeps,
+  PanelPopupEventTarget,
+  PanelPopupIdentity,
+  PanelPopupMessageEvent,
+  PanelPopupOpenResult,
+  PanelPopupWindow,
+} from './window/panel-popup';
 export { createHeadlessRuntime, headlessAvailability } from './runtime/headless-runtime';
 export {
   expandWorkflowRecipe,

@@ -6,6 +6,7 @@ import {
   type CapabilityDescriptor,
   type MessagePortTransportClient,
   type TransportActor,
+  type TransportRequest,
   type TransportResponse,
   type ViewportProjectionEnvelope,
   type ViewportRuntimeIdentity,
@@ -18,8 +19,28 @@ export interface ViewportRuntimeClientSnapshot {
   readonly runtime: ViewportRuntimeIdentity | null;
 }
 
+export interface ViewportRuntimeSelectionSnapshot {
+  readonly entityIds: readonly number[];
+  readonly assets: readonly {
+    readonly guid: string;
+    readonly kind: string;
+    readonly name: string;
+    readonly packPath: string;
+  }[];
+  readonly paths: readonly { readonly path: string; readonly kind: 'dir' | 'file' }[];
+  readonly lastDomain: 'entity' | 'asset' | 'folder' | null;
+}
+
+const EMPTY_SELECTION: ViewportRuntimeSelectionSnapshot = Object.freeze({
+  entityIds: Object.freeze([]),
+  assets: Object.freeze([]),
+  paths: Object.freeze([]),
+  lastDomain: null,
+});
+
 let active: { readonly runtime: ViewportRuntimeIdentity; readonly client: MessagePortTransportClient } | null = null;
 let snapshot: ViewportRuntimeClientSnapshot = Object.freeze({ status: 'disconnected', runtime: null });
+let selectionSnapshot = EMPTY_SELECTION;
 let requestSequence = 0;
 const listeners = new Set<() => void>();
 
@@ -29,6 +50,36 @@ function publish(): void {
 
 export function getViewportRuntimeClientSnapshot(): ViewportRuntimeClientSnapshot {
   return snapshot;
+}
+
+/** Disposable shell projection; the Runtime remains the only selection authority. */
+export function getViewportRuntimeSelectionSnapshot(): ViewportRuntimeSelectionSnapshot {
+  return selectionSnapshot;
+}
+
+function relayError(request: TransportRequest, code: string, hint: string): TransportResponse {
+  return {
+    jsonrpc: '2.0',
+    version: TRANSPORT_PROTOCOL_VERSION,
+    id: request.id,
+    correlationId: request.correlationId,
+    error: { code, hint, retryable: true, recoveryActions: ['transport.reconnect'] },
+  };
+}
+
+/** Relay one canonical request for a disposable panel window without creating a second Runtime client authority. */
+export async function forwardViewportRuntimeTransportRequest(request: TransportRequest): Promise<TransportResponse> {
+  const binding = active;
+  if (binding === null) return relayError(request, 'viewport-runtime-disconnected', 'The authoritative Viewport Runtime is disconnected.');
+  try {
+    const response = await binding.client.request(request);
+    if (active !== binding) {
+      return relayError(request, 'viewport-runtime-stale-generation', 'The Viewport Runtime changed while the panel request was in flight.');
+    }
+    return response;
+  } catch (error) {
+    return relayError(request, 'viewport-runtime-relay-failed', error instanceof Error ? error.message : String(error));
+  }
 }
 
 export function subscribeViewportRuntimeClient(listener: () => void): () => void {
@@ -44,11 +95,13 @@ export function bindViewportRuntimeClient(
   const binding = { runtime, client };
   active = binding;
   snapshot = Object.freeze({ status: 'ready', runtime });
+  selectionSnapshot = EMPTY_SELECTION;
   publish();
   return () => {
     if (active !== binding) return;
     active = null;
     snapshot = Object.freeze({ status: 'disconnected', runtime: null });
+    selectionSnapshot = EMPTY_SELECTION;
     publish();
   };
 }
@@ -73,11 +126,56 @@ export async function queryViewportRuntimeProjection<T = unknown>(
   const expected = active?.runtime;
   if (expected === undefined) throw new Error('viewport-runtime-disconnected');
   const response = await request('query', input);
+  const current = active?.runtime;
+  if (current === undefined
+    || !isCurrentViewportRuntime(expected, current)
+    || expected.carrierId !== current.carrierId
+    || expected.carrierKind !== current.carrierKind
+  ) throw new Error('viewport-runtime-stale-generation');
   if (response.error !== undefined) throw new Error(response.error.code);
   const envelope = response.result;
   if (!isViewportProjectionEnvelope(envelope)) throw new Error('viewport-projection-invalid');
   if (!isCurrentViewportRuntime(expected, envelope.runtime)) throw new Error('viewport-runtime-stale-generation');
   return envelope as ViewportProjectionEnvelope<T>;
+}
+
+function isSelectionSnapshot(value: unknown): value is ViewportRuntimeSelectionSnapshot {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<ViewportRuntimeSelectionSnapshot>;
+  return Array.isArray(candidate.entityIds)
+    && candidate.entityIds.every((id) => typeof id === 'number')
+    && Array.isArray(candidate.assets)
+    && candidate.assets.every((asset) => asset !== null
+      && typeof asset === 'object'
+      && typeof asset.guid === 'string'
+      && typeof asset.kind === 'string'
+      && typeof asset.name === 'string'
+      && typeof asset.packPath === 'string')
+    && Array.isArray(candidate.paths)
+    && candidate.paths.every((item) => item !== null
+      && typeof item === 'object'
+      && typeof item.path === 'string'
+      && (item.kind === 'dir' || item.kind === 'file'))
+    && (candidate.lastDomain === null
+      || candidate.lastDomain === 'entity'
+      || candidate.lastDomain === 'asset'
+      || candidate.lastDomain === 'folder');
+}
+
+/** Refresh the replaceable shell cache from the current Runtime generation. */
+export async function refreshViewportRuntimeSelectionSnapshot(): Promise<ViewportRuntimeSelectionSnapshot> {
+  const envelope = await queryViewportRuntimeProjection<ViewportRuntimeSelectionSnapshot>({ kind: 'selection.current' });
+  if (envelope.status !== 'ready' || !isSelectionSnapshot(envelope.value)) {
+    selectionSnapshot = EMPTY_SELECTION;
+    throw new Error('viewport-selection-projection-invalid');
+  }
+  selectionSnapshot = Object.freeze({
+    entityIds: Object.freeze([...envelope.value.entityIds]),
+    assets: Object.freeze(envelope.value.assets.map((asset) => Object.freeze({ ...asset }))),
+    paths: Object.freeze(envelope.value.paths.map((item) => Object.freeze({ ...item }))),
+    lastDomain: envelope.value.lastDomain,
+  });
+  return selectionSnapshot;
 }
 
 /** Discover the canonical Runtime capability manifest; the shell adds no ops. */
@@ -112,4 +210,19 @@ export function retryViewportRuntimeOperationRun(
   actor: TransportActor = { id: 'editor-panel', kind: 'human' },
 ): Promise<TransportResponse> {
   return request('run.retry', { requestId, retryRequestId, actor });
+}
+
+/** Read one Runtime-owned operation run without mirroring its journal in the shell. */
+export function getViewportRuntimeOperationRun(requestId: string): Promise<TransportResponse> {
+  return request('run.get', { requestId });
+}
+
+/** Wait for the Runtime-owned run's terminal state. */
+export function waitViewportRuntimeOperationRun(requestId: string): Promise<TransportResponse> {
+  return request('run.wait', { requestId });
+}
+
+/** Request cancellation from the Runtime owner. */
+export function cancelViewportRuntimeOperationRun(requestId: string): Promise<TransportResponse> {
+  return request('run.cancel', { requestId });
 }

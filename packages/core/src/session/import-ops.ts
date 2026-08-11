@@ -128,6 +128,10 @@ export interface AssetImportSpec {
   destPath: string;
   sourceName: string;
   base64?: string;
+  companionSources?: readonly {
+    destPath: string;
+    base64: string;
+  }[];
   skipUpload?: boolean;
   /** Reimport reads the existing sidecar and refuses to mint a replacement identity. */
   mode?: 'import' | 'reimport';
@@ -285,7 +289,7 @@ function existingImportMeta(value: unknown): ExistingImportMeta | undefined {
  * never throws (errors are captured into { status:'error', error }).
  */
 export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportFileResult> {
-  const { destPath, sourceName, base64, skipUpload, mode = 'import', onProgress, signal, onCancellationPolicy } = spec;
+  const { destPath, sourceName, base64, companionSources = [], skipUpload, mode = 'import', onProgress, signal, onCancellationPolicy } = spec;
   let cancellationPolicy: ImportCancellationPolicy = {
     cancellable: false,
     hint: 'Import is preparing; wait for the current write boundary to finish.',
@@ -323,7 +327,20 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
           destPath,
           uploaded.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
           uploaded.error.hint,
+          { retryable: false },
         );
+      }
+      for (const companion of companionSources) {
+        const uploadedCompanion = await assetIO.uploadSourceBytes(companion.destPath, companion.base64, signal);
+        if (!uploadedCompanion.ok) {
+          return failedImport(
+            sourceName,
+            companion.destPath,
+            uploadedCompanion.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
+            `Failed to upload companion source: ${uploadedCompanion.error.hint}`,
+            { retryable: false },
+          );
+        }
       }
     }
 
@@ -491,8 +508,13 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
 // source metadata (reimport).
 function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', mode: 'import' | 'reimport'): void {
   sessionAppliers.set(operationId, (op, ctx) => {
-    const { destPath, sourceName, skipUpload, requestId } = op as {
-      destPath: string; sourceName?: string; skipUpload?: boolean; requestId: string;
+    const { destPath, sourceName, base64, companionSources, skipUpload, requestId } = op as {
+      destPath: string;
+      sourceName?: string;
+      base64?: string;
+      companionSources?: readonly { destPath: string; base64: string }[];
+      skipUpload?: boolean;
+      requestId: string;
     };
     if (typeof destPath !== 'string' || destPath.trim() === '') {
       return { ok: false as const, error: { code: 'INVALID_ARGS', hint: `${operationId}.destPath must be a non-empty source path` } };
@@ -501,8 +523,20 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
       return { ok: false as const, error: { code: 'INVALID_ARGS', hint: `${operationId}.requestId must be a non-empty caller-minted id` } };
     }
     let resolved: string;
+    let resolvedCompanions: readonly { destPath: string; base64: string }[] | undefined;
     try {
       resolved = resolveGamePath(destPath);
+      if (companionSources !== undefined) {
+        if (companionSources.length > 1) {
+          return { ok: false as const, error: { code: 'INVALID_ARGS', hint: `${operationId}.companionSources accepts at most one bounded companion` } };
+        }
+        resolvedCompanions = companionSources.map((companion) => {
+          if (typeof companion.destPath !== 'string' || companion.destPath.trim() === '' || typeof companion.base64 !== 'string' || companion.base64 === '') {
+            throw new Error(`${operationId}.companionSources requires non-empty destPath and base64`);
+          }
+          return { destPath: resolveGamePath(companion.destPath), base64: companion.base64 };
+        });
+      }
     } catch (err) {
       return { ok: false as const, error: { code: 'INVALID_ARGS', hint: err instanceof Error ? err.message : String(err) } };
     }
@@ -530,6 +564,8 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
     const completion = executeAssetImport({
       destPath: resolved,
       sourceName: name,
+      base64,
+      companionSources: resolvedCompanions,
       skipUpload: mode === 'reimport' ? true : (skipUpload ?? true),
       mode,
       signal: cancellation.signal,

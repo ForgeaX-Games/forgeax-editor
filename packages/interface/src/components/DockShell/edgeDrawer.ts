@@ -40,7 +40,18 @@ const OPEN_CLASS = 'fx-edge-drawer-open';
 /** Toggled to (re)start the wipe-in animation — on first open AND on same-strip tab switch. */
 const ANIM_CLASS = 'fx-edge-drawer-animating';
 const EDGE_POSITIONS = ['left', 'right', 'top', 'bottom'] as const;
+const EDGE_DRAWER_INTERACTION_SURFACE_SELECTOR = '[data-fx-interaction-scope]';
 type EdgePosition = (typeof EDGE_POSITIONS)[number];
+
+/**
+ * Portalled controls do not participate in the drawer element's DOM subtree.
+ * They must opt into this interaction-surface contract when they belong to the
+ * active drawer; the app context menu keeps its legacy class for the same
+ * reason.
+ */
+export function isEdgeDrawerDismissExemptTarget(target: Element | null): boolean {
+  return target?.closest(`.forgeax-ctx-menu-panel, ${EDGE_DRAWER_INTERACTION_SURFACE_SELECTOR}`) != null;
+}
 /** Slots always registered so root-edge drop / "Move to Side" work even when
  *  the default layout keeps panels in the grid (no edgeGroups in JSON). */
 const ENSURED_EDGE_SLOTS = ['left', 'right', 'bottom'] as const;
@@ -65,6 +76,11 @@ function edgeGroupFromElement(api: DockviewApi, el: Element): DockviewGroupPanel
  */
 export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => void {
   let openGroup: DockviewGroupPanel | null = null;
+  let preserveNextActiveTabClick = false;
+
+  const hasOwnedInteractionSurface = (): boolean =>
+    typeof document !== 'undefined'
+      && document.querySelector(EDGE_DRAWER_INTERACTION_SURFACE_SELECTOR) !== null;
 
   // UE: pin is per-TAB, and at most ONE pin per edge group (mutual exclusion).
   // State lives in edgePinStore so DockTab can RENDER the toggle; this module
@@ -428,7 +444,10 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     if (!group) return;
     // Edge-group tab: block dockview's native expand/resize entirely.
     e.preventDefault();
-    e.stopPropagation();
+    // If a portalled control is open, let its own outside-click handler see
+    // this footer click and dismiss the control. Dockview already bails on a
+    // default-prevented tab event, so stopping propagation is unnecessary.
+    if (!hasOwnedInteractionSurface()) e.stopPropagation();
 
     // Pin toggle (rendered by DockTab in place of close): flip THIS tab's pin.
     const pinBtn = target?.closest(`.${EDGE_PIN_CLASS}`) as HTMLElement | null;
@@ -456,9 +475,18 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     }
     // Re-click active tab → soft dismiss (pin rules inside close()).
     // Same-strip switch → re-kick wipe-in. Else open the drawer.
-    if (openGroup === group && wasActive) close();
-    else if (openGroup === group && !wasActive) kickAnim(group);
-    else open(group);
+    if (openGroup === group && wasActive) {
+      const preserveOpen = preserveNextActiveTabClick;
+      preserveNextActiveTabClick = false;
+      if (preserveOpen) kickAnim(group);
+      else close();
+    } else if (openGroup === group && !wasActive) {
+      preserveNextActiveTabClick = false;
+      kickAnim(group);
+    } else {
+      preserveNextActiveTabClick = false;
+      open(group);
+    }
   };
 
   // Outside click → soft dismiss (pin rules inside close()).
@@ -466,11 +494,22 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     if (!openGroup) return;
     // Active pinned tab: never auto-dismiss on outside click.
     if (activeIsPinned(openGroup)) return;
+    preserveNextActiveTabClick = false;
     const target = e.target as Element | null;
     if (target && openGroup.element.contains(target)) return;
     // The relocated bottom strip lives in the footer (outside openGroup.element)
     // yet re-clicking it must route through onClickCapture, not auto-dismiss.
-    if (target && bottomStripEl && bottomStripEl.contains(target)) return;
+    if (target && bottomStripEl && bottomStripEl.contains(target)) {
+      // A footer re-click used to dismiss the drawer even when it was only the
+      // user's way back from a Content Browser popup. Let the popup consume the
+      // interaction first, then keep the active drawer open for that tab click.
+      preserveNextActiveTabClick = hasOwnedInteractionSurface();
+      return;
+    }
+    // Context menus are portalled to document.body, so they are physically
+    // outside the drawer even though the menu action belongs to it. Keep the
+    // drawer open until the user focuses a real editor surface elsewhere.
+    if (isEdgeDrawerDismissExemptTarget(target)) return;
     close();
   };
 

@@ -28,7 +28,7 @@ import type { AssetSourceMutationScope } from '@forgeax/editor-product';
  *  kinds can be blank-created, SSOT in `packages/content-browser/src/creatable-asset-kinds.ts`.
  *
  *  To extend: add one literal, its spec row, and the applier switch case. */
-export type CreatableAssetKind = 'scene' | 'material' | 'material-instance' | 'particle-effect';
+export type CreatableAssetKind = 'scene' | 'material' | 'material-instance' | 'particle-effect' | 'input-map';
 // Future examples: 'shader' | 'render-pipeline' | 'tileset' | 'prefab'
 
 /** Builtin editor ops — the closed discriminated union of all 25 editor primitives.
@@ -46,6 +46,13 @@ export type BuiltinEditorOp =
     _name?: string }
   | { kind: 'rename'; entity: EntityId; name: string }
   | { kind: 'reparent'; entity: EntityId; parent: EntityId | null }
+  | {
+    kind: 'hierarchyGesture';
+    action: 'reparent' | 'delete' | 'visibility' | 'group' | 'ungroup' | 'duplicate';
+    entities: EntityId[];
+    parent?: EntityId | null;
+    state?: VisibilityState;
+  }
   | { kind: 'setComponent'; entity: EntityId; component: string; patch: Record<string, unknown> }
   | { kind: 'setSceneOverride'; root: EntityId; member: EntityId; component: string; field: string; value: unknown; /** Gateway-filled prior state for undo. */ _beforeHadOverride?: boolean; _beforeOverride?: unknown }
   | { kind: 'removeSceneOverride'; root: EntityId; member: EntityId; component: string; field: string }
@@ -103,6 +110,8 @@ export type BuiltinEditorOp =
   // saveMaterialInstance: replace the whole MI payload (staging flush). Gateway
   // fills `_oldEntry` for undo.
   | { kind: 'saveMaterialInstance'; packPath: string; guid: string; payload: Record<string, unknown>; _oldEntry?: unknown }
+  | { kind: 'createInputMap'; guid: string; name: string; actions?: readonly { action: string; bindings: readonly unknown[]; deadzone?: number }[]; packPath?: string }
+  | { kind: 'saveInputMap'; packPath: string; guid: string; payload: Record<string, unknown>; _oldEntry?: unknown }
   | { kind: 'setMaterialInstanceParent'; packPath: string; guid: string; parentGuid: string; _oldEntry?: unknown; _catalogEntries?: unknown[] }
   | { kind: 'setMaterialInstanceOverride'; packPath: string; guid: string; paramKey: string; enabled: boolean; value?: unknown; bucket?: 'overrides' | 'propertyOverrides'; _oldEntry?: unknown }
   | { kind: 'setMaterialInstanceLightmass'; packPath: string; guid: string; lightmassPatch: { castShadowsAsMasked?: boolean; emissiveBoost?: number; diffuseBoost?: number; exportResolutionScale?: number }; _oldEntry?: unknown }
@@ -111,6 +120,7 @@ export type BuiltinEditorOp =
   | { kind: 'toggleSelection'; id: EntityId }
   | { kind: 'setSelectionMany'; ids: EntityId[] }
   | { kind: 'setAssetSelection'; assets: SelectedAsset[]; primary: SelectedAsset | null }
+  | { kind: 'assignAssetToEntity'; entity: EntityId; asset: { guid: string; kind: string; name: string }; requestId: string }
   | { kind: 'openAssetEditor'; asset: SelectedAsset }
   | { kind: 'setGizmoMode'; mode: 'translate' | 'rotate' | 'scale' }
   | { kind: 'setGizmoPivot'; pivot: 'center' | 'lastSelected' }
@@ -186,12 +196,19 @@ export type BuiltinEditorOp =
   // game-relative source file through the asset IO write gate. Dispatch is
   // synchronous acceptance; callers poll the terminal status by requestId.
   | { kind: 'deleteSourceFile'; path: string; requestId: string }
-  // importAsset (Invariant 7 convergence): "the source at destPath is on disk;
-  // import it" — ledger-only (no undo; cook produces derived artefacts + refs, not
-  // cleanly reversible). Human callers upload bytes through the assetIO gate first
-  // then dispatch with skipUpload; AI passes an on-disk path. destPath may be
-  // game-relative (the applier resolves it via resolveGamePath).
-  | { kind: 'importAsset'; destPath: string; sourceName?: string; skipUpload?: boolean; requestId: string }
+  // importAsset (Invariant 7 convergence): Runtime receives optional source bytes,
+  // writes them through assetIO, then imports the same path. Path-only AI/startup
+  // callers keep skipUpload=true. UI CSS is a bounded companion of one UI import,
+  // not an independently authored asset.
+  | {
+    kind: 'importAsset';
+    destPath: string;
+    sourceName?: string;
+    base64?: string;
+    companionSources?: readonly { destPath: string; base64: string }[];
+    skipUpload?: boolean;
+    requestId: string;
+  }
   // Catalog reconciliation is a read-only recovery projection. It invokes the
   // existing replica seam and therefore never enters the authored ledger.
   | { kind: 'catalog.reconcile'; requestId: string; retryOfRequestId?: string }

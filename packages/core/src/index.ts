@@ -175,17 +175,23 @@ export type {
 export type { RuntimeReadinessDiagnostic } from './public/gateway';
 export {
   bindViewportRuntimeClient,
+  cancelViewportRuntimeOperationRun,
   discoverViewportRuntimeCapabilities,
   dispatchViewportRuntimeOperation,
+  forwardViewportRuntimeTransportRequest,
+  getViewportRuntimeOperationRun,
   getViewportRuntimeClientSnapshot,
+  getViewportRuntimeSelectionSnapshot,
   queryViewportRuntimeProjection,
   retryViewportRuntimeOperationRun,
   subscribeViewportRuntimeClient,
+  waitViewportRuntimeOperationRun,
 } from './io/viewport-runtime-client';
 export { dispatchActiveEditorOperation } from './store/active-operation';
 export type {
   ViewportRuntimeClientSnapshot,
   ViewportRuntimeClientStatus,
+  ViewportRuntimeSelectionSnapshot,
 } from './io/viewport-runtime-client';
 
 // Runtime UI diagnostics are the typed read-only Gateway contract. The graph
@@ -381,6 +387,9 @@ import './session/source-file-ops';
 import './session/material-ops';
 // Material Instance ops (create/save/setParent/setOverride/setLightmass).
 import './session/material-instance-ops-register';
+// Input Map ops (create/save).
+import './session/input-map-ops-register';
+export { awaitAssetWriteCompletion } from './session/authored-asset-write';
 
 export {
   MATERIAL_INSTANCE_KIND,
@@ -392,6 +401,51 @@ export {
   isMaterialInstancePayload,
   isGuid as isMaterialInstanceGuid,
 } from './assets/material-instance-schema';
+export {
+  INPUT_MAP_KIND,
+  INPUT_MAP_SCHEMA_VERSION,
+  createDefaultInputMapPayload,
+  deleteInputMapMappings,
+  diagnoseInputMap,
+  filterInputMapActions,
+  pasteInputMapMappings,
+  repairInputMapErrors,
+  reorderInputMapActions,
+  isInputMapPayload,
+  isGuid as isInputMapGuid,
+  toActionConfigs,
+} from './assets/input-map-schema';
+export type {
+  InputMapPayload,
+  InputMapAction,
+  InputMapActionRow,
+  InputMapBinding,
+  InputMapDiagnostic,
+  InputMapDiagnosticLocation,
+  InputMapMappingSelection,
+} from './assets/input-map-schema';
+export {
+  inputMapLoader,
+  loadInputMapAsset,
+  registerInputMapLoader,
+} from './assets/input-map-loader';
+export {
+  subscribeInputMapStaging,
+  getInputMapStaging,
+  isInputMapStagingDirty,
+  hasInputMapExternalChange,
+  renameInputMapStaging,
+  setInputMapSaveStatus,
+  openInputMapStaging,
+  refreshInputMapStaging,
+  reloadInputMapStaging,
+  keepInputMapStaging,
+  updateInputMapStaging,
+  commitInputMapStaging,
+  discardInputMapStaging,
+  closeInputMapStaging,
+} from './assets/input-map-staging';
+export type { InputMapStagingEntry } from './assets/input-map-staging';
 export type {
   MaterialInstancePayload,
   MaterialInstanceOverride,
@@ -547,6 +601,7 @@ export {
   useMeshStats,
   configureEditorPageNavigation,
   getActiveEditorAsset,
+  openEditorAssetPage,
   useActiveEditorAsset,
 } from './store/store';
 export type { EditorPageNavigation } from './store/page-navigation';
@@ -569,8 +624,14 @@ export {
 } from './store/folder-selection';
 export type { PathSelectionItem } from './store/folder-selection';
 
-// AssetsChangedHint — hint type for broadcastAssetsChanged optimization.
-export type { AssetsChangedHint } from './store/assets-changed';
+// Asset change observation remains notification-only; authored writes still use gateway ops.
+export { subscribeAssetsChanged } from './store/assets-changed';
+export type {
+  AssetsChangedEvent,
+  AssetsChangedHint,
+  AssetsChangedSource,
+  AssetLifecycleMutation,
+} from './store/assets-changed';
 
 // broadcastAssetsError — companion to broadcastAssetsChanged: fire-and-forget
 // asset IO that failed AFTER the applier returned ok. Panels subscribe via

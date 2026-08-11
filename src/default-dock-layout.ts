@@ -139,6 +139,60 @@ export const DEFAULT_ASSET_EDITOR_DOCK_LAYOUT: SerializedDockview = {
   activeGroup: 'g-asset-properties',
 };
 
+/** VFX authoring workbench: system composition and details frame a large
+ * isolated preview, while time and runtime truth stay adjacent below it. */
+export const DEFAULT_VFX_EDITOR_DOCK_LAYOUT: SerializedDockview = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as Orientation,
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf', size: 255,
+          data: { views: ['ep:vfx-system'], activeView: 'ep:vfx-system', id: 'g-vfx-system' },
+        },
+        {
+          type: 'branch', size: 650,
+          data: [
+            {
+              type: 'leaf', size: 555,
+              data: { views: ['ep:vfx-preview'], activeView: 'ep:vfx-preview', id: 'g-vfx-preview' },
+            },
+            {
+              type: 'leaf', size: 257,
+              data: {
+                views: ['ep:vfx-timeline', 'ep:vfx-diagnostics'],
+                activeView: 'ep:vfx-timeline',
+                id: 'g-vfx-bottom',
+              },
+            },
+          ],
+        },
+        {
+          type: 'leaf', size: 295,
+          data: {
+            views: ['ep:vfx-details', 'ep:asset-overview'],
+            activeView: 'ep:vfx-details',
+            id: 'g-vfx-details',
+          },
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:vfx-system': { id: 'ep:vfx-system', contentComponent: 'ep:vfx-system', title: 'System Outline' },
+    'ep:vfx-preview': { id: 'ep:vfx-preview', contentComponent: 'ep:vfx-preview', title: 'Preview' },
+    'ep:vfx-timeline': { id: 'ep:vfx-timeline', contentComponent: 'ep:vfx-timeline', title: 'Timeline' },
+    'ep:vfx-details': { id: 'ep:vfx-details', contentComponent: 'ep:vfx-details', title: 'Details' },
+    'ep:vfx-diagnostics': { id: 'ep:vfx-diagnostics', contentComponent: 'ep:vfx-diagnostics', title: 'Diagnostics' },
+    'ep:asset-overview': { id: 'ep:asset-overview', contentComponent: 'ep:asset-overview', title: 'Asset Overview' },
+  },
+  activeGroup: 'g-vfx-preview',
+};
+
 /** Mesh document family. It shares the asset overview/property vocabulary but
  * owns an additional material-slot panel that no other page can restore. */
 export const DEFAULT_MESH_EDITOR_DOCK_LAYOUT: SerializedDockview = {
@@ -318,4 +372,36 @@ export const DEFAULT_MI_EDITOR_DOCK_LAYOUT: SerializedDockview = {
     },
   },
   activeGroup: 'g-mi-properties',
+};
+
+/** Input Map editor: properties-only (no 3D preview in P0). */
+export const DEFAULT_INPUT_MAP_EDITOR_DOCK_LAYOUT: SerializedDockview = {
+  grid: {
+    height: 812,
+    width: 1200,
+    orientation: 'HORIZONTAL' as unknown as Orientation,
+    root: {
+      type: 'branch',
+      size: 812,
+      data: [
+        {
+          type: 'leaf',
+          size: 1200,
+          data: {
+            views: ['ep:input-map-properties'],
+            activeView: 'ep:input-map-properties',
+            id: 'g-input-map-properties',
+          },
+        },
+      ],
+    },
+  },
+  panels: {
+    'ep:input-map-properties': {
+      id: 'ep:input-map-properties',
+      contentComponent: 'ep:input-map-properties',
+      title: 'Input Map',
+    },
+  },
+  activeGroup: 'g-input-map-properties',
 };

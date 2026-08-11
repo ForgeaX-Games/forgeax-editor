@@ -302,6 +302,9 @@
         "forward": "Forward",
         "all": "All"
       },
+      "sourceTree": {
+        "favorites": "Favorites"
+      },
       "sort": {
         "name": "Name",
         "kind": "Kind",
@@ -425,6 +428,7 @@
         "loading": "Loading assets...",
         "noMatching": "No matching assets",
         "noAssets": "No assets found",
+        "emptyFolder": "Place files here, or right-click to create content",
         "dropFiles": "Drop files to import"
       },
       "importProgress": {
@@ -436,10 +440,6 @@
         "cancel": "Cancel",
         "retry": "Retry {{name}}",
         "dismiss": "Dismiss"
-      },
-      "sourceTree": {
-        "gameAssets": "Game Assets",
-        "assetCount": "{{count}} assets"
       },
       "tooltip": {
         "kind": "Kind: {{kind}}",

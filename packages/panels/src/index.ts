@@ -17,6 +17,7 @@ export {
   registerMaterialInstancePreview,
   getMaterialInstancePreview,
 } from './mi-preview-slot';
+export { registerVfxPreview, getVfxPreview } from './vfx-preview-slot';
 
 // ── Panel components ──
 export { AssetsPanel } from './Assets';
@@ -38,7 +39,19 @@ export type { AssetPickerProps } from './AssetPicker';
 // MatGraph/Anim equivalent). See plan-strategy S2 D-3, requirements AC-13.
 export { LauncherPanel } from './Launcher';
 export { SettingsPanel } from './Settings';
-export { AssetOverviewPanel, AssetPropertiesPanel, MeshSlotsPanel } from './AssetEditors';
+export {
+  AssetOverviewPanel,
+  AssetPropertiesPanel,
+  MeshSlotsPanel,
+  loadDocumentAssetPayload,
+} from './AssetEditors';
+export {
+  VfxDetailsPanel,
+  VfxDiagnosticsPanel,
+  VfxPreviewPanel,
+  VfxSystemPanel,
+  VfxTimelinePanel,
+} from './VfxEditor';
 export {
   buildDiagnosticsRows,
   filterDiagnosticsRows,

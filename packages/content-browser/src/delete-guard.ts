@@ -17,6 +17,24 @@ export interface DeleteImpact {
   externalReferencerCount: number;
 }
 
+/** One open resource page whose canonical resource identity is a delete target. */
+export interface DeleteOpenResource {
+  readonly guid: string;
+  readonly encodedKey: string;
+  readonly title: string;
+  readonly dirty: boolean;
+}
+
+interface DeleteResourcePage {
+  readonly encodedKey: string;
+  readonly typeId: string;
+  readonly title?: string;
+  readonly resource?: {
+    readonly canonicalId: string;
+    readonly displayPath?: string;
+  };
+}
+
 export interface DeletePreflightSummary {
   readonly currentRevision: string;
   readonly recoveryActions: readonly string[];
@@ -90,4 +108,23 @@ export function computeDeleteImpact(
     hasExternalReferencers: externalReferencers.size > 0,
     externalReferencerCount: distinctExternal.size,
   };
+}
+
+/** Project open page-session resources into the delete confirmation surface. */
+export function computeDeleteOpenResources<Page extends DeleteResourcePage>(
+  targetGuids: readonly string[],
+  pages: readonly Page[],
+  isDirty: (page: Page) => boolean,
+): DeleteOpenResource[] {
+  const targets = new Set(targetGuids.map((guid) => guid.toLowerCase()));
+  return pages.flatMap((page) => {
+    const guid = page.resource?.canonicalId;
+    if (guid === undefined || !targets.has(guid.toLowerCase())) return [];
+    return [{
+      guid,
+      encodedKey: page.encodedKey,
+      title: page.title ?? page.resource?.displayPath ?? guid,
+      dirty: isDirty(page),
+    }];
+  });
 }

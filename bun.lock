@@ -1069,6 +1069,7 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-vfx": "workspace:*",
         "@tanstack/react-virtual": "^3.14.3",
         "lucide-react": "^0.460.0",
         "react": "^19.0.0",

@@ -115,6 +115,14 @@ const VagCarrierPayloadSchema = z.object({
   sentinel: z.number().int().nonnegative(),
   liveness: z.enum(['alive', 'unreachable', 'terminated']),
   renderReadiness: z.enum(['pending', 'ready', 'unavailable']),
+  execution: z.object({
+    schemaVersion: z.literal(1),
+    requestedTier: z.enum(['auto', 'main-serial', 'engine-worker', 'shared']),
+    actualTier: z.enum(['main-serial', 'engine-worker', 'shared']).nullable(),
+    selectionReason: z.enum(['explicit-request', 'auto-shared', 'auto-engine-worker', 'auto-main-serial']).nullable(),
+    engine: z.object({ realm: z.enum(['host', 'worker']), health: z.enum(['idle', 'starting', 'running', 'stopped', 'faulted']) }),
+    fault: z.object({ code: z.string(), hint: z.string() }).nullable(),
+  }).nullable().optional(),
   failure: VagCarrierFailureDetailSchema.nullable(),
 });
 export type VagCarrierPayload = z.infer<typeof VagCarrierPayloadSchema>;

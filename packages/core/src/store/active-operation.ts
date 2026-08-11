@@ -11,22 +11,48 @@ import type { CommandOrigin } from '../io/gateway-history';
 import {
   dispatchViewportRuntimeOperation,
   getViewportRuntimeClientSnapshot,
+  refreshViewportRuntimeSelectionSnapshot,
 } from '../io/viewport-runtime-client';
-import { gateway } from './gateway';
+
+const SELECTION_OPERATIONS = new Set([
+  'setSelection',
+  'toggleSelection',
+  'setSelectionMany',
+  'setAssetSelection',
+  'setAssetSelectionOne',
+  'setFolderSelection',
+]);
+
+async function refreshSelectionAfterSuccess(kind: string, result: DispatchResult): Promise<DispatchResult> {
+  if (!result.ok || !SELECTION_OPERATIONS.has(kind)) return result;
+  try {
+    await refreshViewportRuntimeSelectionSnapshot();
+  } catch {
+    // The operation already succeeded at the authority. A missing disposable
+    // projection must fail later reads closed, not rewrite that fact as failure.
+  }
+  return result;
+}
 
 /**
  * Dispatch a UI operation to the active authority.
  *
- * Runtime-local callers retain the synchronous Gateway door. Shell callers send
- * the same operation through the connected Runtime capability. Gateway internals
- * that require an immediate inverse continue to use `gateway.dispatch` directly.
+ * This seam is for projection clients. Runtime-local code already owns a Gateway
+ * and calls it directly. A disconnected client fails closed instead of mutating
+ * the shell singleton, which must never become a shadow authoring authority.
  */
 export async function dispatchActiveEditorOperation(
   operation: EditorOp,
   origin: CommandOrigin = 'human',
 ): Promise<DispatchResult> {
   if (getViewportRuntimeClientSnapshot().status !== 'ready') {
-    return gateway.dispatch(operation, origin);
+    return {
+      ok: false,
+      error: {
+        code: 'operation-failed',
+        hint: 'Viewport Runtime is disconnected; reconnect before retrying the operation.',
+      },
+    };
   }
   const { kind, ...input } = operation;
   try {
@@ -57,9 +83,9 @@ export async function dispatchActiveEditorOperation(
       && typeof result === 'object'
       && typeof (result as { ok?: unknown }).ok === 'boolean'
     ) {
-      return result as DispatchResult;
+      return refreshSelectionAfterSuccess(kind, result as DispatchResult);
     }
-    return { ok: true };
+    return refreshSelectionAfterSuccess(kind, { ok: true });
   } catch (cause) {
     return {
       ok: false,

@@ -1,0 +1,9 @@
+.vfx-preview { display: grid; grid-template-rows: 34px minmax(0, 1fr); height: 100%; min-height: 220px; background: #080b12; }
+.vfx-preview-toolbar { z-index: 2; display: flex; align-items: center; gap: 6px; padding: 4px 7px; color: #9eabbd; font-size: 11px; background: #111620; border-bottom: 1px solid #2a3240; }
+.vfx-preview-toolbar button { padding: 3px 10px; color: #dbe5f5; background: #1d2633; border: 1px solid #3b485a; border-radius: 3px; }
+.vfx-preview-toolbar button:hover:not(:disabled) { background: #2a3b52; }
+.vfx-preview-toolbar button:disabled { opacity: .45; }
+.vfx-preview-toolbar span { margin-left: auto; font-variant-numeric: tabular-nums; }
+.vfx-preview-host { position: relative; min-height: 0; }
+.vfx-preview-canvas { display: block; width: 100%; height: 100%; }
+.vfx-preview-status { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: #8491a4; text-align: center; background: #080b12; }

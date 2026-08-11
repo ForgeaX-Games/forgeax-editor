@@ -74,8 +74,10 @@ import {
   registerPostAssetWriteCatalogSync,
   createAuthoredAssetCatalogBarrier,
   registerMaterialInstanceLoader,
+  registerInputMapLoader,
   getActiveRuntimeUiGraph,
   bindViewportRuntimeClient,
+  configureEditorPageNavigation,
 } from '@forgeax/editor-core';
 import type { MessagePortTransportClient } from '@forgeax/editor-product';
 import { createSourceAuthoringRuntime, installCatalogReconcileProvider } from '../runtime/source-authoring-runtime';
@@ -97,6 +99,7 @@ import {
   createInProcessViewportRuntimeClient,
   installViewportRuntimeConnectionHost,
   VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+  VIEWPORT_RUNTIME_OPEN_ASSET,
   readViewportRuntimeHostOrigin,
   readViewportRuntimeIdentity,
   type ViewportRuntimeMessageSource,
@@ -606,6 +609,11 @@ async function bootViewport(
   if (gameSession.runtimeBinding !== undefined) {
     renderer.assets.configureRuntimeBinding(gameSession.runtimeBinding);
   }
+  // Editor-owned host kinds must be registered before the first Catalog
+  // enumeration. Otherwise existing Input Map / Material Instance rows are
+  // projected as ordinary source files and can only be reopened as JSON.
+  registerMaterialInstanceLoader(renderer.assets);
+  registerInputMapLoader(renderer.assets);
 
   // solo P7 round-31: selected collider chrome reuses the engine's existing
   // immediate-mode DebugDraw overlay. It reads the active scene-world SSOT each
@@ -672,11 +680,6 @@ async function bootViewport(
   // shape that D-7 replaces with structural registration-surface removal.
   gateway.doc.world = world;
   gateway.doc.registry = renderer.assets;
-  // `material-instance` is an editor kind the engine's default loader table
-  // does not know, and Pack v2 loadByGuid hard-fails on an unregistered kind.
-  // Without this the post-write catalog barrier below can never reach its LOAD
-  // phase for a new MI, and no MI parent chain can be cataloged for resolve.
-  registerMaterialInstanceLoader(renderer.assets);
   registerTeardown(installCatalogReconcileProvider(renderer.assets));
   registerTeardown(installSourcePublicationObserver());
   registerTeardown(installSourceAuthoringOps(createSourceAuthoringRuntime()));
@@ -979,6 +982,13 @@ async function bootViewport(
       vfxRuntimeHost: vfxBridge.host,
       onVfxDiagnosticsChanged: vfxBridge.notifyDiagnosticsChanged,
       ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
+      ...(gameSession.slug ? {
+        playChildUrl: (generation: number) => {
+          const params = new URLSearchParams({ game: gameSession.slug!, playGeneration: String(generation) });
+          if (gameSession.selectedSceneGuid) params.set('sceneGuid', gameSession.selectedSceneGuid);
+          return `/preview/?${params.toString()}`;
+        },
+      } : {}),
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
@@ -996,6 +1006,14 @@ async function bootViewport(
         livePlayWorld = playWorld as World;
         canvas.focus({ preventScroll: true });
         canvasInput.grantGame();
+        setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
+      },
+      onRemotePlayStarted: () => {
+        setFps(0);
+        onFps(0);
+        vfxBridge.notifyDiagnosticsChanged();
+        livePlayWorld = undefined;
+        canvasInput.revokeGame();
         setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
       },
       onPlayFailed: () => {
@@ -1126,6 +1144,7 @@ async function bootViewport(
     },
     world,
     activeWorld: () => gateway.activeWorld,
+    gateway,
   }));
 
   // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
@@ -1202,6 +1221,17 @@ async function bootViewport(
   const runtimeUiGraph = getActiveRuntimeUiGraph();
   if (runtimeOwner !== null && runtimeUiGraph !== null) {
     const runtimeHostOrigin = readViewportRuntimeHostOrigin(window.location.search, window.location.origin);
+    registerTeardown(configureEditorPageNavigation({
+      openAsset: async (asset) => {
+        runtimeOwner.postMessage({
+          type: VIEWPORT_RUNTIME_OPEN_ASSET,
+          runtime: runtimeIdentity,
+          asset,
+        }, runtimeHostOrigin);
+      },
+      getActiveAsset: () => null,
+      subscribe: () => () => {},
+    }));
     const service = createViewportRuntimeTransportService({
       runtime: runtimeIdentity,
       graph: runtimeUiGraph,

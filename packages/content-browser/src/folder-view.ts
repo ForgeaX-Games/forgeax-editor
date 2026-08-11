@@ -15,10 +15,20 @@ export function isMetaSidecarFile(name: string): boolean {
 export type FileActivateAction =
   | { type: 'open-asset'; asset: CBAsset }
   | { type: 'toggle-expand' }
+  | { type: 'open-file' }
   | { type: 'preview' };
 
+// Asset-less files that read as editable/viewable documents open in the shared
+// file editor (the @forgeax/files resource-editor Page) on double-click — the
+// same path the Files sidebar and Agents workspace use. Media families keep the
+// Content Browser's own rich inline preview (image/audio/font aside, model
+// thumbnail): the generic file editor has nothing better to offer them.
+const OPEN_IN_FILE_EDITOR: ReadonlySet<CBFileFamily> = new Set<CBFileFamily>([
+  'code', 'config', 'doc', 'data',
+]);
+
 export function resolveFileActivateAction(
-  file: Pick<CBFile, 'assets'>,
+  file: Pick<CBFile, 'assets'> & { family?: CBFileFamily },
   viewMode: CBViewMode2,
 ): FileActivateAction {
   // Scene first — the same rule as the context menu's setCurrentScene and
@@ -29,6 +39,7 @@ export function resolveFileActivateAction(
   if (sceneAsset) return { type: 'open-asset', asset: sceneAsset };
   if (viewMode === 'file' && file.assets.length > 0) return { type: 'toggle-expand' };
   if (file.assets[0]) return { type: 'open-asset', asset: file.assets[0] };
+  if (file.family && OPEN_IN_FILE_EDITOR.has(file.family)) return { type: 'open-file' };
   return { type: 'preview' };
 }
 

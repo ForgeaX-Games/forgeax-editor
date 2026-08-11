@@ -22,8 +22,15 @@ export interface PanelBridgeEvents {
   dragAssetStart: DragAssetRef;
   dragAssetEnd: void;
   addAssetToScene: DragAssetRef;
-  /** Asset file/catalog changed; directory-only skips pack-catalog refresh. */
-  assetsChanged: { hint?: 'directory-only' | 'pack-changed'; source?: 'local-op' | 'disk-watch' };
+  /** Asset file/catalog changed; directory-only skips pack-catalog refresh.
+   * `mutation` is present only after a known local asset lifecycle write lands. */
+  assetsChanged: {
+    hint?: 'directory-only' | 'pack-changed';
+    source?: 'local-op' | 'disk-watch';
+    mutation?:
+      | { kind: 'renamed'; guid: string; name: string }
+      | { kind: 'deleted'; guid: string };
+  };
   /**
    * Asset filesystem/write operation FAILED asynchronously (after the applier
    * already returned `ok:true` and control has left the gateway). This is the

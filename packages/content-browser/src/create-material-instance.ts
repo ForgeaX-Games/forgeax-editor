@@ -7,12 +7,12 @@
 
 import {
   createDefaultMaterialInstancePayload,
-  gateway,
+  dispatchActiveEditorOperation,
   generateAssetGuid,
 } from '@forgeax/editor-core';
 import { t } from '@forgeax/editor-core/i18n';
 import { toast } from '@forgeax/editor-ui';
-import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
+import { contentBrowserPrompt } from './interaction-surface';
 
 /** Prompt for the parent material, dispatch the create, then open the MI tab.
  *  Returns without opening anything when the parent prompt is cancelled or the
@@ -20,7 +20,7 @@ import { prompt as promptDialog } from '@forgeax/editor-ui/prompt';
  *
  *  `packDir` must stay GAME-RELATIVE — the applier calls resolveGamePath. */
 export async function createMaterialInstanceAndOpen(name: string, packDir: string): Promise<void> {
-  const parentGuid = (await promptDialog({
+  const parentGuid = (await contentBrowserPrompt({
     title: t('editor.contentBrowser.actions.createAsset', { label: 'Material Instance Parent' }),
     label: 'Parent Material GUID',
     defaultValue: '',
@@ -31,7 +31,7 @@ export async function createMaterialInstanceAndOpen(name: string, packDir: strin
 
   const guid = generateAssetGuid();
   const packPath = `${packDir}/Materials.pack.json`;
-  const created = gateway.dispatch({
+  const created = await dispatchActiveEditorOperation({
     kind: 'createMaterialInstance',
     guid,
     name,
@@ -46,7 +46,7 @@ export async function createMaterialInstanceAndOpen(name: string, packDir: strin
   // The pack write is fire-and-forget, but the tab opens by GUID and the page
   // controller seeds staging from this payload — the same defaults the applier
   // just wrote — so the editor is usable before the disk write lands.
-  const opened = gateway.dispatch({
+  const opened = await dispatchActiveEditorOperation({
     kind: 'openAssetEditor',
     asset: {
       guid,

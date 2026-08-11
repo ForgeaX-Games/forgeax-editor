@@ -104,6 +104,7 @@ export interface EditorAppHandle {
 /** The gateway single-pointer surface (M1 D-3). Structural mirror of EditGateway. */
 export interface RunGateway {
   enterPlay(playWorld: unknown): void;
+  enterRemotePlay?(): void;
   exitPlay(): void;
   // Play-attempt observability (solo round-8 #3). Optional so the headless test's
   // fake gateway (and any older caller) stays compatible — the real EditGateway
@@ -113,6 +114,11 @@ export interface RunGateway {
   // state instead of a mode flip that never comes.
   beginPlayAttempt?(): void;
   failPlayAttempt?(error: { code: string; hint?: string }): void;
+}
+
+export interface RemotePlayCarrier {
+  start(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
+  stop(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
 }
 
 /** Optional OperationRun projection supplied by the product host. */
@@ -150,6 +156,8 @@ export interface RunLifecycleDeps {
    * instead of leaving the editor wedged in a half-play state.
    */
   readonly assemble: () => Promise<AssembleResult>;
+  /** When present, PlayWorld lives in a disposable child realm instead of this realm. */
+  readonly remoteCarrier?: RemotePlayCarrier;
   /**
    * Optional: called after a successful play assembly so the host can pick up a
    * camera the game spawned + re-derive the active camera. Omitted in headless.
@@ -173,6 +181,7 @@ export interface RunLifecycleDeps {
   readonly onPlayFrame?: () => void;
   /** Called only after the active-world pointer has changed to the live play world. */
   readonly onPlayStarted?: (playWorld: unknown) => void;
+  readonly onRemotePlayStarted?: () => void;
   /** Called after a failed assembly has thawed the edit App and recorded its error. */
   readonly onPlayFailed?: () => void;
 }
@@ -180,7 +189,7 @@ export interface RunLifecycleDeps {
 /** The ▶/■ pair + a play-world accessor (GC-reachability assertions in tests). */
 export interface RunLifecycle {
   playSimulation(): Promise<void>;
-  stopSimulation(): void;
+  stopSimulation(): void | Promise<void>;
   /** Terminal teardown for viewport realm reset: cancel in-flight play assembly
    *  and stop the live play App before the shared renderer is disposed. */
   dispose(): void;
@@ -211,6 +220,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   let generation = 0;
   let editorPaused = false;
   let playRunId: string | null = null;
+  let remoteActive = false;
 
   function resumeEditorIfLive(): void {
     if (!editorPaused || disposed) return;
@@ -280,6 +290,27 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // D-10: if the doc has unsaved edits, hint that play uses the last-saved
     // scene (disk re-instantiate does not see in-memory edits).
     deps.onDirtyPlayHint?.();
+
+    if (deps.remoteCarrier !== undefined) {
+      const remote = await deps.remoteCarrier.start();
+      starting = false;
+      if (disposed || token !== generation) {
+        if (remote.ok) await deps.remoteCarrier.stop();
+        return;
+      }
+      if (!remote.ok) {
+        reportPlayFailure(remote.error);
+        return;
+      }
+      remoteActive = true;
+      deps.gateway.enterRemotePlay?.();
+      deps.onRemotePlayStarted?.();
+      if (playRunId !== null) {
+        deps.runProjection?.succeeded(playRunId, { phase: 'play', carrier: 'iframe' });
+        playRunId = null;
+      }
+      return;
+    }
 
     // D-2 / AC-07: freeze the edit world FIRST (pause its frame loop → zero tick).
     // Do this before assembling so the edit world is already still while the play
@@ -365,7 +396,15 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     deps.onAfterPlay?.(active.playWorld);
   }
 
-  function stopSimulation(): void {
+  async function stopSimulation(): Promise<void> {
+    if (remoteActive && deps.remoteCarrier !== undefined) {
+      remoteActive = false;
+      await deps.remoteCarrier.stop();
+      deps.gateway.exitPlay();
+      playRunId = null;
+      deps.onPlayFailed?.();
+      return;
+    }
     if (starting) {
       generation++;
       starting = false;
@@ -407,7 +446,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
 
   function dispose(): void {
     if (disposed) return;
-    const wasPlaying = active !== null || starting;
+    const wasPlaying = active !== null || starting || remoteActive;
     const wasStarting = starting;
     disposed = true;
     generation++;
@@ -422,6 +461,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     } else if (wasStarting) {
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
       if (playRunId !== null) deps.runProjection?.cancelled(playRunId);
+    }
+    if (remoteActive && deps.remoteCarrier !== undefined) {
+      remoteActive = false;
+      void deps.remoteCarrier.stop();
+      try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
     }
     playRunId = null;
     editorPaused = false;

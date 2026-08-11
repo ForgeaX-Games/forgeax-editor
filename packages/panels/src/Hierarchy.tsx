@@ -19,7 +19,6 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
-import { deleteEntityCascade as deleteEntity, deleteManyCascade, duplicateEntity, groupSelected, reparentEntity as reparent, reparentMany, reparentAt, setVisibilityMany, showAllHidden, ungroupEntity } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-6): all state mutations go through the one
 // gateway door — `gateway.dispatch({ kind, … })` — instead of the old direct store
 // setters (setSelection/setHoverEntity/toggleSelection) or the origin-less
@@ -154,13 +153,33 @@ function computeDropPos(clientY: number, el: HTMLElement, flat: boolean): DropPo
 
 // The nodes a drop should move: the whole selection when the dragged node is
 // part of it (multi-drag), else just the dragged node (P0-3).
-function draggedIds(): EntityHandle[] {
+function draggedIds(remote: RemoteHierarchyContextValue | null = null): EntityHandle[] {
   if (draggingId === null) return [];
-  const sel = getSelectionList();
+  const sel = remote?.selectionIds ?? getSelectionList();
   return sel.has(draggingId) ? [...sel] : [draggingId];
 }
 
-function collectEntitySubtree(ids: readonly EntityHandle[]): EntityHandle[] {
+function projectedParent(structure: HierarchyStructureProjection, id: EntityHandle): EntityHandle | null {
+  return structure.rows.find((row) => row.childIds.includes(id))?.id ?? null;
+}
+
+function collectEntitySubtree(
+  ids: readonly EntityHandle[],
+  projection?: HierarchyStructureProjection,
+): EntityHandle[] {
+  if (projection !== undefined) {
+    const children = new Map(projection.rows.map((row) => [row.id, row.childIds] as const));
+    const result: EntityHandle[] = [];
+    const seen = new Set<EntityHandle>();
+    const visit = (id: EntityHandle) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      result.push(id);
+      for (const child of children.get(id) ?? EMPTY_IDS) visit(child);
+    };
+    for (const id of ids) visit(id);
+    return result;
+  }
   const world = gateway.activeWorld;
   if (!world) return [];
   const result: EntityHandle[] = [];
@@ -181,16 +200,16 @@ function collectEntitySubtree(ids: readonly EntityHandle[]): EntityHandle[] {
 // which is the root level when `target` is a root — P0-5). Nodes are appended
 // under that parent (precise sibling index is deferred, see reparentAt / plan
 // P0-6). `before` is forwarded so a future engine-ordered insert can honor it.
-function applyDrop(target: EntityHandle, pos: DropPos): void {
-  const ids = draggedIds();
+function applyDrop(target: EntityHandle, pos: DropPos, remote: RemoteHierarchyContextValue | null): void {
+  const ids = draggedIds(remote);
   if (ids.length === 0) return;
-  const parent = pos === 'inside' ? target : entParent(gateway.activeWorld, target);
+  const parent = pos === 'inside'
+    ? target
+    : remote === null
+      ? entParent(gateway.activeWorld, target)
+      : projectedParent(remote.structure, target);
   if (parent === null) moveRootDisplayOrder(ids, target, pos === 'before' ? 'before' : pos === 'after' ? 'after' : 'end');
-  if (ids.length > 1) {
-    reparentMany(ids, parent);
-    return;
-  }
-  reparentAt(ids[0]!, parent, pos === 'before' ? target : null);
+  void dispatchActiveEditorOperation({ kind: 'hierarchyGesture', action: 'reparent', entities: ids, parent });
 }
 
 // Shift+range selection anchor — the last explicitly clicked node (plain click
@@ -464,6 +483,7 @@ function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined 
         else if (envelope.status === 'empty') setProjection({
           structure: { structureEpoch: envelope.revision, rows: [] },
           selectionIds: [],
+          mode: 'edit',
         });
         else setProjection(undefined);
       } catch {
@@ -555,12 +575,12 @@ const Row = memo(function Row({
   projection?: HierarchyStructureProjection | undefined;
 }) {
   const { t } = useTranslation();
+  const remote = useContext(RemoteHierarchyContext);
   // Per-row subscriptions: each source (structural VM / selection / hover /
   // collapse) re-renders ONLY the rows whose own value actually flips
   // (useSyncExternalStore bails on Object.is), so a doc churn or a hover move
   // no longer repaints the whole tree.
   const vm = useHierarchyRowVM(id, projection);
-  const remote = useContext(RemoteHierarchyContext);
   const localIsSelected = useIsSelected(id);
   const isSelected = remote?.selectionIds.has(id) ?? localIsSelected;
   const isHovered = useIsHoverEntity(id);
@@ -628,7 +648,7 @@ const Row = memo(function Row({
         onDragOver={(e) => {
           if (draggingId === null || readOnly) return;
           // Don't allow dropping a node onto itself (into/around itself).
-          const dragging = draggedIds();
+          const dragging = draggedIds(remote);
           if (dragging.includes(id) && dragging.length === 1) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
@@ -641,7 +661,7 @@ const Row = memo(function Row({
           e.stopPropagation();
           const pos = computeDropPos(e.clientY, e.currentTarget, !!flat);
           setDropPos(null);
-          if (draggingId !== null && !readOnly) applyDrop(id, pos);
+          if (draggingId !== null && !readOnly) applyDrop(id, pos, remote);
           draggingId = null;
         }}
         onDragEnd={() => {
@@ -661,11 +681,20 @@ const Row = memo(function Row({
             const newHidden = !nodeHidden;
             // Same-state selected siblings follow the click as ONE transaction
             // (one undo step) via the shared core op (north-star §3.2).
-            const sel = getSelectionList();
+            const sel = remote?.selectionIds ?? getSelectionList();
             const ids = sel.has(id)
-              ? [id, ...[...sel].filter((sid) => sid !== id && (readVisibilityIntent(gateway.activeWorld, sid) === 'hidden') === nodeHidden)]
+              ? [id, ...[...sel].filter((sid) => sid !== id && (
+                remote === null
+                  ? (readVisibilityIntent(gateway.activeWorld, sid) === 'hidden') === nodeHidden
+                  : (remote.structure.rows.find((row) => row.id === sid)?.hidden ?? false) === nodeHidden
+              ))]
               : [id];
-            setVisibilityMany(ids, newHidden ? 'hidden' : 'visible');
+            void dispatchActiveEditorOperation({
+              kind: 'hierarchyGesture',
+              action: 'visibility',
+              entities: ids,
+              state: newHidden ? 'hidden' : 'visible',
+            });
           }}
         >
           {nodeHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
@@ -770,17 +799,25 @@ const SceneFolderRow = memo(function SceneFolderRow({
   projection?: HierarchyStructureProjection | undefined;
 }) {
   const { t } = useTranslation();
+  const remote = useContext(RemoteHierarchyContext);
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
   const sceneCollapsed = useIsHierarchyCollapsed(HIERARCHY_SCENE_FOLDER_ID);
   const isCollapsed = !filtered && sceneCollapsed;
   const sceneLabel = t('editor.hierarchy.sceneRoot');
   const folderTypeLabel = t('editor.hierarchy.types.folder');
-  const visibilityTargets = collectEntitySubtree(visibilityIds ?? childrenIds);
+  const visibilityTargets = collectEntitySubtree(visibilityIds ?? childrenIds, remote?.structure);
   const folderHidden = visibilityTargets.length > 0
-    && visibilityTargets.every((id) => readVisibilityIntent(gateway.activeWorld, id) === 'hidden');
+    && visibilityTargets.every((id) => remote === null
+      ? readVisibilityIntent(gateway.activeWorld, id) === 'hidden'
+      : remote.structure.rows.find((row) => row.id === id)?.hidden === true);
   const setFolderHidden = (hidden: boolean) => {
     if (readOnly) return;
-    setVisibilityMany(visibilityTargets, hidden ? 'hidden' : 'visible');
+    void dispatchActiveEditorOperation({
+      kind: 'hierarchyGesture',
+      action: 'visibility',
+      entities: visibilityTargets,
+      state: hidden ? 'hidden' : 'visible',
+    });
   };
   return (
     <>
@@ -809,10 +846,9 @@ const SceneFolderRow = memo(function SceneFolderRow({
           e.stopPropagation();
           setDropPos(null);
           if (draggingId !== null && !readOnly) {
-            const ids = draggedIds();
+            const ids = draggedIds(remote);
             moveRootDisplayOrder(ids, null, 'end');
-            if (ids.length > 1) reparentMany(ids, null);
-            else if (ids[0] !== undefined) reparent(ids[0], null);
+            void dispatchActiveEditorOperation({ kind: 'hierarchyGesture', action: 'reparent', entities: ids, parent: null });
           }
           draggingId = null;
         }}
@@ -985,7 +1021,7 @@ export function HierarchyPanel() {
 
   const activeWorld = gateway.activeWorld;
   const remoteProjection = remoteContext !== null;
-  const readOnly = gateway.mode === 'play' || remoteProjection;
+  const readOnly = remoteProjectionState?.mode === 'play' || (!remoteProjection && gateway.mode === 'play');
   const worldReady = activeWorld != null || projection !== undefined;
   const hierarchyBodyRef = useRef<HTMLDivElement>(null);
   const worldEntityIds = remoteProjection
@@ -1048,6 +1084,14 @@ export function HierarchyPanel() {
       components: buildPresetComponents(preset),
     });
   };
+  const selectedEntities = (): EntityHandle[] => remoteContext === null
+    ? [...getSelectionList()]
+    : [...remoteContext.selectionIds];
+  const hierarchyGesture = (
+    action: Extract<HierarchyOperation, { kind: 'hierarchyGesture' }>['action'],
+    entities: readonly EntityHandle[],
+    extra: Pick<Extract<HierarchyOperation, { kind: 'hierarchyGesture' }>, 'parent' | 'state'> = {},
+  ) => dispatchActiveEditorOperation({ kind: 'hierarchyGesture', action, entities: [...entities], ...extra });
   const selectAll = () => {
     const ids = remoteContext
       ? remoteContext.structure.rows.map((row) => row.id)
@@ -1055,9 +1099,11 @@ export function HierarchyPanel() {
     dispatchHierarchyOperation({ kind: 'setSelectionMany', ids: [...ids] });
   };
   const showAll = () => {
-    if (!gateway.activeWorld || readOnly) return;
-    // Same shared core op as Ctrl+H (one transaction, one undo step).
-    showAllHidden();
+    if (readOnly) return;
+    const hidden = remoteContext === null
+      ? worldEntityHandles(gateway.activeWorld).filter((id) => readVisibilityIntent(gateway.activeWorld, id) === 'hidden')
+      : remoteContext.structure.rows.filter((row) => row.hidden).map((row) => row.id);
+    if (hidden.length > 0) void hierarchyGesture('visibility', hidden, { state: 'visible' });
   };
   const clearViewFilters = () => {
     clearHierarchySearchQuery();
@@ -1079,39 +1125,44 @@ export function HierarchyPanel() {
     {
       label: t('editor.hierarchy.menu.newGroup'),
       icon: 'layers',
-      onClick: () => groupSelected([...getSelectionList()]),
-      disabled: readOnly || getSelectionList().size < 2,
+      onClick: () => { void hierarchyGesture('group', selectedEntities()); },
+      disabled: readOnly || selectedEntities().length < 2,
     },
   ];
   // Build the right-click menu items and hand them to the shared service, which
   // renders at the top layer of the whole window (or posts to the interface
   // parent when embedded in an iframe) — never clipped by this panel's bounds.
   const openMenu = useEvent((m: Menu) => {
-    if (!activeWorld) return;
-    // M7 / AC-15: entity name/components read from world (SSOT); doc.entities +
-    // EntityNode.source deleted, so the edit-source menu item is dropped.
-    const snapshot = [...getSelectionList()];
+    if (!activeWorld && remoteContext === null) return;
+    const snapshot = selectedEntities();
     const multi = snapshot.length > 1;
+    const projectedRow = remoteContext?.structure.rows.find((row) => row.id === m.id);
     const items: MenuItemDef[] = [];
     items.push({ label: t('editor.hierarchy.menu.create'), icon: 'folder-plus', children: createMenuItems() });
     items.push({ sep: true });
     if (multi) {
-      items.push({ label: t('editor.hierarchy.menu.group', { n: snapshot.length }), icon: 'layers', onClick: () => groupSelected(snapshot) });
-      items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: snapshot.length }), icon: 'trash-2', onClick: () => deleteManyCascade(snapshot) });
+      items.push({ label: t('editor.hierarchy.menu.group', { n: snapshot.length }), icon: 'layers', onClick: () => { void hierarchyGesture('group', snapshot); } });
+      items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: snapshot.length }), icon: 'trash-2', onClick: () => { void hierarchyGesture('delete', snapshot); } });
       items.push({ sep: true });
     }
     items.push({ label: t('editor.hierarchy.menu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => { void dispatchActiveEditorOperation({ kind: 'requestRename', entity: m.id }); }, disabled: readOnly });
-    items.push({ label: t('editor.hierarchy.menu.duplicate'), icon: 'copy', shortcut: 'Ctrl+D', onClick: () => duplicateEntity(m.id) });
-    items.push({ label: t('editor.hierarchy.menu.copyJson'), icon: 'braces', onClick: () => { if (entExists(gateway.activeWorld, m.id)) void navigator.clipboard?.writeText(JSON.stringify({ id: m.id, name: entName(gateway.activeWorld, m.id), components: entComponents(gateway.activeWorld, m.id) }, null, 2)); } });
+    items.push({ label: t('editor.hierarchy.menu.duplicate'), icon: 'copy', shortcut: 'Ctrl+D', onClick: () => { void hierarchyGesture('duplicate', [m.id]); } });
+    items.push({ label: t('editor.hierarchy.menu.copyJson'), icon: 'braces', onClick: () => {
+      const value = projectedRow ?? (entExists(gateway.activeWorld, m.id)
+        ? { id: m.id, name: entName(gateway.activeWorld, m.id), components: entComponents(gateway.activeWorld, m.id) }
+        : null);
+      if (value !== null) void navigator.clipboard?.writeText(JSON.stringify(value, null, 2));
+    } });
     items.push({ label: t('editor.hierarchy.menu.refToChat'), icon: 'spark', forge: true, shortcut: 'Ctrl+K', onClick: () => requestRefEntity(m.id) });
-    if (childrenOf(gateway.activeWorld, m.id).length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), icon: 'layers', onClick: () => ungroupEntity(m.id) });
-    const hidden = readVisibilityIntent(gateway.activeWorld, m.id) === 'hidden';
+    const childIds = projectedRow?.childIds ?? childrenOf(gateway.activeWorld, m.id);
+    if (childIds.length > 0) items.push({ label: t('editor.hierarchy.menu.ungroup'), icon: 'layers', onClick: () => { void hierarchyGesture('ungroup', [m.id]); } });
+    const hidden = projectedRow?.hidden ?? (readVisibilityIntent(gateway.activeWorld, m.id) === 'hidden');
     items.push({ sep: true });
-    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', shortcut: 'H', onClick: () => gateway.dispatch({ kind: 'setVisibility', entity: m.id, state: hidden ? 'visible' : 'hidden' }), disabled: readOnly });
+    items.push({ label: hidden ? t('editor.hierarchy.menu.show') : t('editor.hierarchy.menu.hide'), icon: 'eye', shortcut: 'H', onClick: () => { void hierarchyGesture('visibility', [m.id], { state: hidden ? 'visible' : 'hidden' }); }, disabled: readOnly });
     items.push({ label: t('editor.hierarchy.menu.focusViewport'), icon: 'crosshair', shortcut: 'F', onClick: focusSelectionInViewport });
     items.push({ label: t('editor.hierarchy.menu.moveTo'), icon: 'folder', disabled: true });
     items.push({ sep: true });
-    items.push({ label: t('editor.hierarchy.menu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => { multi ? deleteManyCascade(snapshot) : deleteEntity(m.id); } });
+    items.push({ label: t('editor.hierarchy.menu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => { void hierarchyGesture('delete', multi ? snapshot : [m.id]); } });
     showContextMenu({ clientX: m.x, clientY: m.y, preventDefault: () => {} }, items);
   });
   const openBlankMenu = useEvent((x: number, y: number) => {
@@ -1172,11 +1223,10 @@ export function HierarchyPanel() {
         if (e.key !== 'Delete' && e.key !== 'Backspace') return;
         const tgt = e.target as HTMLElement;
         if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable) return;
-        const cur = [...getSelectionList()];
+        const cur = selectedEntities();
         if (cur.length === 0) return;
         e.preventDefault();
-        if (cur.length > 1) deleteManyCascade(cur);
-        else deleteEntity(cur[0]!);
+        void hierarchyGesture('delete', cur);
       }}
     >
       <div className="ol-colhead" data-testid="hier-colhead">
@@ -1249,10 +1299,9 @@ export function HierarchyPanel() {
             e.preventDefault();
             // Empty area below the rows = move to root (parent = null).
             if (draggingId !== null && !readOnly) {
-              const ids = draggedIds();
+              const ids = draggedIds(remoteContext);
               moveRootDisplayOrder(ids, null, 'end');
-              if (ids.length > 1) reparentMany(ids, null);
-              else if (ids[0] !== undefined) reparent(ids[0], null);
+              void hierarchyGesture('reparent', ids, { parent: null });
             }
             draggingId = null;
           }}

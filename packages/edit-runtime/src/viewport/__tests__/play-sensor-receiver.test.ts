@@ -77,7 +77,7 @@ describe('solo round-20 — editor ▶ Play injects CollidingEntities on sensors
       spawn(...cd: unknown[]): { ok: boolean; value: number };
       get(e: number, c: unknown): { ok: boolean };
       inspect(): { systems: ReadonlyArray<{ name: string }> };
-      update(): void;
+      update(deltaSeconds: number): { unwrap(): void };
     };
     const sensor = w.spawn(
       { component: Transform, data: { pos: [0, 0, 0] } },
@@ -96,8 +96,8 @@ describe('solo round-20 — editor ▶ Play injects CollidingEntities on sensors
     expect(names).toContain('sensor-colliding-entities-receiver');
 
     // Behavioral half: run the full schedule once (the receiver system runs before
-    // physicsSyncBackend each frame, adding the receiver to sensors lacking it).
-    w.update();
+    // physicsSyncBackend each fixed tick, adding the receiver to sensors lacking it).
+    w.update(1 / 60).unwrap();
 
     // The sensor gained CollidingEntities; the non-sensor did not.
     expect(w.get(sensor.value, CollidingEntities).ok).toBe(true);

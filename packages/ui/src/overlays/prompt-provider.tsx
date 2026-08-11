@@ -84,7 +84,7 @@ export function PromptProvider({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <Dialog open={active !== null} onOpenChange={(open) => { if (!open) finish(null); }}>
-        <DialogContent>
+        <DialogContent interactionScope={active?.options.interactionScope}>
           <form
             onSubmit={(event) => {
               event.preventDefault();
