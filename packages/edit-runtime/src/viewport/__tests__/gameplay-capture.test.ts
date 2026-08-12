@@ -85,6 +85,16 @@ class FakeCanvas extends FakeElement {
   }
 }
 
+class FakeIframe extends FakeElement {
+  contentDocument: FakeDocument | null = null;
+
+  constructor(ownerDocument: FakeDocument) {
+    super('iframe', ownerDocument);
+    this.setAttribute('class', 'viewport-play-child');
+    this.setAttribute('data-play-generation', '1');
+  }
+}
+
 class FakeImage extends FakeElement {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -357,6 +367,37 @@ describe('gameplay viewport capture budgets', () => {
     expect(readBlobs.map((blob) => blob.type)).toEqual(['image/svg+xml', 'image/png']);
     expect(doc.imageSources[0]).toStartWith('data:image/svg+xml;base64,');
     expect(output.draws).toHaveLength(2);
+  });
+
+  test('captures the active same-origin Play iframe surface instead of the edit canvas', async () => {
+    const parentDoc = new FakeDocument();
+    const childDoc = new FakeDocument();
+    const childHud = makeHud(childDoc, 4);
+    const childContainer = new FakeContainer(childDoc, 1_280, 720, childHud);
+    const childCanvas = new FakeCanvas(childDoc);
+    childCanvas.samplePixel = [19, 63, 121, 255];
+    childContainer.append(childCanvas);
+    (childDoc as unknown as { body: FakeContainer }).body = childContainer;
+
+    const frame = new FakeIframe(parentDoc);
+    frame.contentDocument = childDoc;
+    const parentContainer = new FakeContainer(parentDoc, 1_280, 720, null);
+    parentContainer.append(frame);
+    const staleEditCanvas = new FakeCanvas(parentDoc);
+    staleEditCanvas.samplePixel = [0, 0, 0, 255];
+    installRasterFakes(() => {});
+
+    await captureGameplayViewport(
+      parentContainer as unknown as HTMLElement,
+      staleEditCanvas as unknown as HTMLCanvasElement,
+    );
+
+    const output = childDoc.canvases.at(-1)!;
+    expect(output.draws[0]?.source).toBe(childCanvas);
+    expect(output.draws[0]?.source).not.toBe(staleEditCanvas);
+    expect(output.samplePixel).toEqual([220, 80, 30, 192]);
+    expect(parentDoc.canvases).toHaveLength(0);
+    expect(readBlobs.map((blob) => blob.type)).toEqual(['image/svg+xml', 'image/png']);
   });
 
   test('copies non-black pixels from the presented WebGPU canvas instead of an async canvas bitmap', async () => {
