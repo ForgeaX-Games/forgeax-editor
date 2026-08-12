@@ -139,7 +139,7 @@ function renderedChildren(source: Element): Iterable<Node> {
   return source.shadowRoot?.childNodes ?? source.childNodes;
 }
 
-function findComposedElement(root: Element, predicate: (element: Element) => boolean): Element | null {
+function findComposedElementById(root: Element, id: string): Element | null {
   const queue: Array<{ readonly node: Node; readonly depth: number }> = [{ node: root, depth: 0 }];
   let cursor = 0;
   while (cursor < queue.length) {
@@ -147,7 +147,7 @@ function findComposedElement(root: Element, predicate: (element: Element) => boo
     const current = queue[cursor++];
     if (!current || current.node.nodeType !== 1) continue;
     const element = current.node as Element;
-    if (predicate(element)) return element;
+    if (element.getAttribute('id') === id) return element;
     for (const child of renderedChildren(element)) {
       if (current.depth >= HUD_SEARCH_MAX_DEPTH) throw new HudBudgetExceeded();
       if (queue.length >= HUD_SEARCH_MAX_NODES) throw new HudBudgetExceeded();
@@ -155,67 +155,6 @@ function findComposedElement(root: Element, predicate: (element: Element) => boo
     }
   }
   return null;
-}
-
-function findComposedElementById(root: Element, id: string): Element | null {
-  return findComposedElement(root, (element) => element.getAttribute('id') === id);
-}
-
-type CaptureSurface = {
-  readonly container: HTMLElement;
-  readonly renderCanvas: HTMLCanvasElement;
-};
-
-function isViewportPlayFrame(element: Element): boolean {
-  if (element.localName !== 'iframe') return false;
-  const classes = element.getAttribute('class')?.split(/\s+/u) ?? [];
-  return classes.includes('viewport-play-child') || element.getAttribute('data-play-generation') !== null;
-}
-
-/**
- * Resolve the currently active render surface before capture starts.
- *
- * Studio's gameplay carrier is normally an iframe: the editor keeps the
- * parent viewport container, while the live Play canvas and its authoritative
- * `#game-ui-root` belong to the same-origin child document. Capturing the
- * parent canvas consequently produces an edit surface and searching the parent
- * DOM can never find the live HUD. Enter the child document only through the
- * viewport-owned frame; ordinary in-process and Shadow-DOM-hosted surfaces keep
- * the existing container/canvas pair.
- */
-function resolveCaptureSurface(
-  container: HTMLElement,
-  renderCanvas: HTMLCanvasElement,
-): CaptureSurface {
-  let frame: Element | null;
-  try {
-    frame = findComposedElement(container, isViewportPlayFrame);
-  } catch (error) {
-    // Let cloneHud own the existing bounded-HUD diagnostic when the ordinary
-    // in-process surface is larger than the composed search budget. A frame
-    // hidden beyond that budget cannot be a valid authoritative capture target
-    // either, so the local surface remains the only safe path.
-    if (error instanceof HudBudgetExceeded) return { container, renderCanvas };
-    throw error;
-  }
-  if (!frame) return { container, renderCanvas };
-
-  const childDocument = (frame as HTMLIFrameElement).contentDocument;
-  if (!childDocument?.body) {
-    throw captureError('viewport gameplay surface is unavailable');
-  }
-  const childContainer = childDocument.body;
-  const childCanvas = findComposedElement(childContainer, (element) => element.localName === 'canvas');
-  if (!childCanvas) {
-    throw captureError('viewport render canvas is unavailable');
-  }
-  if (!findComposedElementById(childContainer, 'game-ui-root')) {
-    throw captureError('viewport HUD root is unavailable');
-  }
-  return {
-    container: childContainer,
-    renderCanvas: childCanvas as HTMLCanvasElement,
-  };
 }
 
 function cloneHudNode(
@@ -378,14 +317,7 @@ export function captureGameplayViewport(
   container: HTMLElement,
   renderCanvas: HTMLCanvasElement,
 ): Promise<string> {
-  let surface: CaptureSurface;
-  try {
-    surface = resolveCaptureSurface(container, renderCanvas);
-  } catch (error) {
-    return Promise.reject(error);
-  }
-
-  const active = capturesInFlight.get(surface.renderCanvas);
+  const active = capturesInFlight.get(renderCanvas);
   if (active) return active;
 
   const controller = new AbortController();
@@ -393,12 +325,12 @@ export function captureGameplayViewport(
     () => controller.abort(captureError('viewport capture timed out')),
     CAPTURE_TIMEOUT_MS,
   );
-  const capture = performCapture(surface.container, surface.renderCanvas, controller.signal)
+  const capture = performCapture(container, renderCanvas, controller.signal)
     .finally(() => globalThis.clearTimeout(timer));
-  capturesInFlight.set(surface.renderCanvas, capture);
+  capturesInFlight.set(renderCanvas, capture);
   void capture.then(
-    () => { if (capturesInFlight.get(surface.renderCanvas) === capture) capturesInFlight.delete(surface.renderCanvas); },
-    () => { if (capturesInFlight.get(surface.renderCanvas) === capture) capturesInFlight.delete(surface.renderCanvas); },
+    () => { if (capturesInFlight.get(renderCanvas) === capture) capturesInFlight.delete(renderCanvas); },
+    () => { if (capturesInFlight.get(renderCanvas) === capture) capturesInFlight.delete(renderCanvas); },
   );
   return capture;
 }
