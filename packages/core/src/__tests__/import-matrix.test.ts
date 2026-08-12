@@ -13,12 +13,12 @@ const TS_IMPORT_REGISTRY_CONSUMERS = [
   [CORE_ROOT, 'src/index.ts'],
   [CORE_ROOT, 'src/__tests__/import-matrix.test.ts'],
   [CONTENT_BROWSER_ROOT, 'src/import-registry.ts'],
-  [CONTENT_BROWSER_ROOT, 'src/import-registry-parity.test.ts'],
+  [CONTENT_BROWSER_ROOT, 'src/__tests__/import-registry-parity.test.ts'],
   [CONTENT_BROWSER_ROOT, 'src/import-pipeline.ts'],
   [CONTENT_BROWSER_ROOT, 'src/import-debug.ts'],
   [CONTENT_BROWSER_ROOT, 'src/ContentBrowser.tsx'],
   [CONTENT_BROWSER_ROOT, 'src/CBToolbar.tsx'],
-  [CONTENT_BROWSER_ROOT, 'src/ui-asset-support.test.ts'],
+  [CONTENT_BROWSER_ROOT, 'src/__tests__/ui-asset-support.test.ts'],
 ] as const;
 
 function readConsumer(root: string, relativePath: string): string {

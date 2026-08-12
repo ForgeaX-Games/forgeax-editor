@@ -36,7 +36,7 @@ assert_status() {
 
 # --- start game-backend ---
 echo "[w10] Starting game-backend on port ${PORT} with GAME_DIR=${GAME_DIR}..."
-FORGEAX_GAME_DIR="${GAME_DIR}" bun run standalone/game-backend.ts &
+FORGEAX_GAME_DIR="${GAME_DIR}" bun apps/standalone/game-backend.ts &
 BACKEND_PID=$!
 sleep 2  # give it time to bind
 

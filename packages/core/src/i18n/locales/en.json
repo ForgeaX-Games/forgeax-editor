@@ -303,13 +303,18 @@
         "all": "All"
       },
       "sourceTree": {
-        "favorites": "Favorites"
+        "favorites": "Favorites",
+        "favoritesEmpty": "No favorited folders yet"
       },
       "sort": {
         "name": "Name",
         "kind": "Kind",
         "modified": "Modified",
-        "size": "Size"
+        "size": "Size",
+        "by": "Sort by",
+        "order": "Order",
+        "asc": "Ascending",
+        "desc": "Descending"
       },
       "fileKinds": {
         "dir": "Folder",
@@ -392,22 +397,25 @@
           "cancel": "Cancel",
           "untitledScene": "Untitled scene",
           "nothingToSave": "No unsaved changes",
-          "readOnly": "Imported previews are read-only; source editing awaits Engine support.",
-          "assetKinds": {
-            "scene": "Scene",
-            "mesh": "Mesh",
-            "texture": "Texture",
-            "image": "Image",
-            "cube-texture": "Cube Texture",
-            "material": "Material",
-            "skeleton": "Skeleton",
-            "animation-clip": "Animation",
-            "audio": "Audio",
-            "font": "Font",
-            "ui": "UI",
-            "default": "Asset"
-          }
+          "readOnly": "Imported previews are read-only; source editing awaits Engine support."
         }
+      },
+      "assetKinds": {
+        "scene": "Scene",
+        "mesh": "Mesh",
+        "texture": "Texture",
+        "image": "Image",
+        "cube-texture": "Cube Texture",
+        "material": "Material",
+        "material-instance": "Material Instance",
+        "particle-effect": "Particle Effect",
+        "input-map": "Input Map",
+        "skeleton": "Skeleton",
+        "animation-clip": "Animation",
+        "audio": "Audio",
+        "font": "Font",
+        "ui": "UI",
+        "default": "Asset"
       },
       "preview": {
         "folderMeta": "Folder · {{path}}",

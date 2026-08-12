@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-export const CI_ENVIRONMENT_CONTRACT = 'forgeax-editor-linux-x64-v1';
+export const CI_ENVIRONMENT_CONTRACT = 'forgeax-editor-linux-x64-v2';
 export const DEFAULT_BUN_VERSION = '1.3.14';
 
 function valueOrUnknown(value) {
@@ -22,14 +22,17 @@ export function buildEnvironmentRecord(overrides = {}) {
     pool: overrides.pool ?? valueOrUnknown(process.env.CI_RUNNER_POOL),
     runnerOs: overrides.runnerOs ?? valueOrUnknown(process.env.RUNNER_OS),
     runnerArch: overrides.runnerArch ?? valueOrUnknown(process.env.RUNNER_ARCH),
+    osRelease: overrides.osRelease ?? valueOrUnknown(process.env.CI_OS_RELEASE),
     platform: overrides.platform ?? `${platform()} ${release()}`,
     arch: overrides.arch ?? process.arch,
     bun: overrides.bun ?? (globalThis.Bun?.version ?? valueOrUnknown(process.env.BUN_VERSION)),
+    bunRevision: overrides.bunRevision ?? valueOrUnknown(process.env.CI_BUN_REVISION),
     node: overrides.node ?? process.versions.node,
     configuredNode: overrides.configuredNode ?? valueOrUnknown(process.env.CI_NODE_VERSION),
     configuredPnpm: overrides.configuredPnpm ?? valueOrUnknown(process.env.CI_PNPM_VERSION),
     configuredRust: overrides.configuredRust ?? valueOrUnknown(process.env.CI_RUST_TOOLCHAIN),
     configuredWasmPack: overrides.configuredWasmPack ?? valueOrUnknown(process.env.CI_WASM_PACK_VERSION),
+    compilerCommand: overrides.compilerCommand ?? valueOrUnknown(process.env.CI_COMPILER_COMMAND),
     compiler: overrides.compiler ?? valueOrUnknown(process.env.CI_COMPILER_VERSION),
     cpuModel: overrides.cpuModel ?? valueOrUnknown(cpu?.model),
     cpuCount: overrides.cpuCount ?? cpus().length,
@@ -46,14 +49,17 @@ function cacheIdentity(record) {
     runner: record.runner,
     runnerOs: record.runnerOs,
     runnerArch: record.runnerArch,
+    osRelease: record.osRelease,
     platform: record.platform,
     arch: record.arch,
     bun: record.bun,
+    bunRevision: record.bunRevision,
     node: record.node,
     configuredNode: record.configuredNode,
     configuredPnpm: record.configuredPnpm,
     configuredRust: record.configuredRust,
     configuredWasmPack: record.configuredWasmPack,
+    compilerCommand: record.compilerCommand,
     compiler: record.compiler,
     cpuModel: record.cpuModel,
     cpuCount: record.cpuCount,
@@ -109,11 +115,11 @@ function appendSummary(record, fingerprint) {
     `- contract: \`${record.contract}\``,
     `- pool: \`${record.pool}\``,
     `- runner: \`${record.runner}\``,
-    `- platform: \`${record.platform}\` (${record.runnerOs}/${record.runnerArch})`,
-    `- Bun: \`${record.bun}\``,
+    `- platform: \`${record.platform}\` (${record.runnerOs}/${record.runnerArch}); OS: \`${record.osRelease}\``,
+    `- Bun: \`${record.bun}\` (revision \`${record.bunRevision}\`)`,
     `- Node ABI: \`${record.node}\`; configured Node: \`${record.configuredNode}\``,
     `- configured pnpm/Rust/wasm-pack: \`${record.configuredPnpm}\` / \`${record.configuredRust}\` / \`${record.configuredWasmPack}\``,
-    `- C compiler: \`${record.compiler}\``,
+    `- C compiler: \`${record.compilerCommand}\` — \`${record.compiler}\``,
     `- CPU: \`${record.cpuModel}\` x ${record.cpuCount}`,
     `- memory: \`${record.memoryBytes}\` bytes`,
     `- fingerprint: \`${fingerprint}\``,
@@ -134,6 +140,9 @@ export function runEnvironmentCheck({ env = process.env } = {}) {
     pool: env.CI_RUNNER_POOL,
     runnerOs: env.RUNNER_OS,
     runnerArch: env.RUNNER_ARCH,
+    osRelease: env.CI_OS_RELEASE,
+    bunRevision: env.CI_BUN_REVISION,
+    compilerCommand: env.CI_COMPILER_COMMAND,
     targetSha: env.GITHUB_SHA,
     event: env.GITHUB_EVENT_NAME,
   });

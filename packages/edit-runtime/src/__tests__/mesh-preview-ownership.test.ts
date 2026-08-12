@@ -74,5 +74,20 @@ describe('STD-01 preview runtime ownership', () => {
     expect(service).toContain('generation !== this.generation');
     expect(service).toContain('if (this.disposed) return;');
   });
-});
 
+  it('keeps Mesh, Material, and VFX previews on the shared preview profile', () => {
+    const viewport = read('viewport/viewport.ts');
+    expect(viewport).toContain("interaction?: 'full' | 'preview'");
+    expect(viewport).toContain("canvas.dataset.fxKeyboardSurface = 'viewport-preview'");
+    expect(viewport).toContain("canvas.addEventListener('keydown', onFlyKeyDown)");
+    expect(viewport).toContain('if (!previewOnly) viewportBootInput.install(handleViewportKeyDown)');
+
+    for (const owner of [
+      'preview-world/preview-world-service.ts',
+      'viewport/MaterialPreviewViewport.tsx',
+      'viewport/VfxPreviewViewport.tsx',
+    ]) {
+      expect(read(owner), owner).toContain("interaction: 'preview'");
+    }
+  });
+});

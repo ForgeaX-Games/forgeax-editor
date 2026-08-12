@@ -154,6 +154,9 @@ export type BuiltinEditorOp =
   // recorder lives in edit-runtime/engine; the gateway owns the invocation
   // door and the OperationRun result channel.
   | { kind: 'captureFrame'; frames?: number; requestId: string; retryOfRequestId?: string }
+  // captureCpuProfile is the bounded Engine-owned CPU observation operation;
+  // the Editor only provides the Gateway/applier projection.
+  | { kind: 'captureCpuProfile'; frames?: number; eventLimit?: number; requestId: string; retryOfRequestId?: string }
   // Session-only VFX preview control. The runtime owner replays the selected
   // live player at the next fixed-tick boundary; authored scene data is unchanged.
   | { kind: 'replayParticleEffect'; entity: EntityId }
@@ -475,6 +478,15 @@ export interface CommandError extends CommandErrorContext {
     // instead of leaking a raw promise rejection to the caller.
     | 'rhi-debug-unavailable'
     | 'rhi-capture-failed'
+    // Engine-owned bounded CPU profile capture. The Editor preserves the
+    // profiler's unavailable/busy/validation facts without owning its schema.
+    | 'profiler-unavailable'
+    | 'profiler-busy'
+    | 'profile-capture-timeout'
+    | 'profile-capture-missing'
+    | 'profile-capture-invalid'
+    | 'profile-capture-empty'
+    | 'profile-capture-failed'
     // Engine-owned VFX Runtime Host control lease failures. Preserve these
     // codes through Gateway dispatch so callers can reacquire after a Runtime
     // generation change instead of parsing an INVALID_ARGS hint.

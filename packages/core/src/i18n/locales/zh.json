@@ -303,13 +303,18 @@
         "all": "全部"
       },
       "sourceTree": {
-        "favorites": "收藏夹"
+        "favorites": "收藏夹",
+        "favoritesEmpty": "还没有收藏的目录"
       },
       "sort": {
         "name": "名称",
         "kind": "类型",
         "modified": "修改时间",
-        "size": "大小"
+        "size": "大小",
+        "by": "排序方式",
+        "order": "顺序",
+        "asc": "升序",
+        "desc": "降序"
       },
       "fileKinds": {
         "dir": "文件夹",
@@ -392,22 +397,25 @@
           "cancel": "取消",
           "untitledScene": "未命名场景",
           "nothingToSave": "没有未保存的改动",
-          "readOnly": "导入预览为只读，源编辑尚待引擎支持。",
-          "assetKinds": {
-            "scene": "场景",
-            "mesh": "网格",
-            "texture": "贴图",
-            "image": "图片",
-            "cube-texture": "立方体贴图",
-            "material": "材质",
-            "skeleton": "骨骼",
-            "animation-clip": "动画",
-            "audio": "音频",
-            "font": "字体",
-            "ui": "界面",
-            "default": "资产"
-          }
+          "readOnly": "导入预览为只读，源编辑尚待引擎支持。"
         }
+      },
+      "assetKinds": {
+        "scene": "场景",
+        "mesh": "网格",
+        "texture": "贴图",
+        "image": "图片",
+        "cube-texture": "立方体贴图",
+        "material": "材质",
+        "material-instance": "材质实例",
+        "particle-effect": "粒子特效",
+        "input-map": "输入映射",
+        "skeleton": "骨骼",
+        "animation-clip": "动画",
+        "audio": "音频",
+        "font": "字体",
+        "ui": "界面",
+        "default": "资产"
       },
       "preview": {
         "folderMeta": "文件夹 · {{path}}",

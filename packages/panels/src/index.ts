@@ -27,6 +27,10 @@ export { registerVfxPreview, getVfxPreview } from './vfx-preview-slot';
 export { AssetsPanel } from './Assets';
 export { CapabilitiesPanel } from './Capabilities';
 export { HierarchyPanel } from './Hierarchy';
+export {
+  createHierarchyPanelContributionsExtension,
+  registerHierarchyScopedCommands,
+} from './HierarchyContributions';
 export { createHierarchyStructureSelector } from './hierarchy-state';
 export type { HierarchyRuntimeProjection } from './hierarchy-state';
 export type {

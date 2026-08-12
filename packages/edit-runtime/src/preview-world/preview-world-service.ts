@@ -30,7 +30,6 @@ export interface MeshPreviewSnapshot {
   readonly bounds?: MeshPreviewBounds;
   readonly error?: string;
 }
-
 export type MeshPreviewStateListener = (snapshot: MeshPreviewSnapshot) => void;
 
 export interface PreviewWorldServiceDependencies {
@@ -328,7 +327,7 @@ export class PreviewWorldService {
         editorEngine: facade,
         camera: this.assembly.camera,
         initialOrbit: { target: orbit.target, dist: orbit.dist, yaw: 0.55, pitch: -0.35 },
-        interaction: 'orbit-only',
+        interaction: 'preview',
       });
 
       const syncSize = () => {
@@ -358,4 +357,3 @@ export class PreviewWorldService {
     }
   }
 }
-

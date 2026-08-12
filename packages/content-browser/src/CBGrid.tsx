@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import type { CBViewItem } from './types';
 import type { CBViewMode2 } from './view-mode';
@@ -63,7 +63,12 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
     : items[0]?.type === 'asset' ? items[0].guid : items[0]?.path;
 
   return (
-    <div ref={rootRef} className="cb-grid-view cb-fe-grid" onClick={handleBlankClick}>
+    <div
+      ref={rootRef}
+      className="cb-grid-view cb-fe-grid"
+      style={{ '--cb-thumb': `${thumbnailSize}px` } as CSSProperties}
+      onClick={handleBlankClick}
+    >
       {items.map((item, index) => {
         const selected = isSelected(item);
         const itemKey = item.type === 'asset' ? item.guid : item.path;

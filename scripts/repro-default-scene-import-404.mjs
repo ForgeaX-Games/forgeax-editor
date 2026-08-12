@@ -26,6 +26,7 @@ import net from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
+import { BUN_EXECUTABLE } from './ci/bun-runtime.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -108,7 +109,7 @@ async function waitForRuntimeEvalChannel(page) {
 
 async function main() {
   const child = spawn(
-    'bun',
+    BUN_EXECUTABLE,
     ['fx', 'start', `--game=${GAME_DIR}`, '--rhi-debug'],
     {
       cwd: ROOT,
@@ -136,7 +137,7 @@ async function main() {
     ]);
     // fx owns the precise port cleanup; this is only a backstop if the parent
     // died before its SIGTERM handler ran.
-      spawnSync('bun', ['fx', 'stop'], {
+      spawnSync(BUN_EXECUTABLE, ['fx', 'stop'], {
         cwd: ROOT,
         stdio: 'ignore',
         env: {

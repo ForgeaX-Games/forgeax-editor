@@ -10,7 +10,7 @@
 // The ONE convention it mirrors — `materials[i] <-> submeshes[i]` positional
 // pairing — is anchored to its engine SSOT below (see the prims.map).
 //
-// Design: docs/design/editor-mesh-drag-original-materials.md §3.2/§3.3.
+// Design: .forgeax-harness/docs/design/editor-mesh-drag-original-materials.md §3.2/§3.3.
 
 import { parseGlb } from '@forgeax/engine-gltf';
 

@@ -13,7 +13,7 @@ import type {
   ErrorObjectRefs,
   ErrorSubjectRef,
 } from '@forgeax/editor-core';
-import { queryDiagnosticsSnapshot } from '@forgeax/editor-core';
+import { queryDiagnosticsSnapshot } from '@forgeax/editor-core/diagnostics';
 
 export type DiagnosticsPanelSource = DiagnosticsSource;
 export type DiagnosticsPanelSeverity = DiagnosticsSeverity;

@@ -14,7 +14,7 @@ import { defineConfig } from 'vite';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from '../../engine-vite-preset';
+import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from '../../scripts/vite/engine-vite-preset';
 import { readWorktreePorts, resolveWorktreePorts } from '../../scripts/lib/worktree-ports';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 

@@ -1,5 +1,5 @@
-// Vite config for the standalone editor chrome (`packages/editor/standalone/`).
-// Serves :15290 with the React + DockShell shell from standalone/main.tsx, which
+// Vite config for the standalone editor chrome (`apps/standalone/`).
+// Serves :15290 with the React + DockShell shell from apps/standalone/main.tsx, which
 // (post-M2) boots the forgeax engine IN-PROCESS in this host window and renders
 // the viewport + ep:* panels as in-process components — no edit-runtime iframe.
 //
@@ -26,7 +26,7 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename, join } from 'node:path';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
-import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from './engine-vite-preset';
+import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from './scripts/vite/engine-vite-preset';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolveWorktreePorts } from './scripts/lib/worktree-ports.ts';
 import tailwindcss from 'tailwindcss';
@@ -46,7 +46,7 @@ const WORKTREE_PORTS = resolveWorktreePorts(PACKAGE_DIR);
 //
 // Before R3 this shipped a SECOND, hand-written READ-ONLY file backend inline in
 // this config (a §5 violation: "为启动自写一个独立后端"). Now `bun fx start --game`
-// starts standalone/game-backend.ts — a tiny bun process mounting the REAL
+// starts apps/standalone/game-backend.ts — a tiny bun process mounting the REAL
 // @forgeax/platform-io createFilesRouter (the exact 后L1 router cli/server use),
 // confined to one game via singleGameFileBackend — and this config simply PROXIES
 // /api → that process. (It can't be a vite middleware: vite 8 loads its config
@@ -201,7 +201,7 @@ if (HAS_STUDIO_LAYER && existsSync(TYPES_SRC)) {
 // Keep the standalone host's optimizer boundary limited to dependencies that
 // are installed from this checkout's root. Interface dependencies are owned by
 // the vendored interface submodule and resolve from their importing source
-// files; listing them here makes Vite resolve from standalone/ and fails on a
+// files; listing them here makes Vite resolve from apps/standalone/ and fails on a
 // fresh clone before the host can bind its port.
 const STANDALONE_OPTIMIZE_DEPS = [
   'react',
@@ -214,7 +214,7 @@ const STANDALONE_OPTIMIZE_DEPS = [
 ] as const;
 
 export default defineConfig({
-  root: resolve(PACKAGE_DIR, 'standalone'),
+  root: resolve(PACKAGE_DIR, 'apps/standalone'),
   base: '/',
   // The standalone host shares this repository with other Vite entry points
   // (notably play-runtime). Keep its optimizer output separate so an update in
@@ -264,6 +264,11 @@ export default defineConfig({
       // directory so vite resolves any subpath, .ts/.tsx/.css alike.
       '@forgeax/interface/styles/global.css': resolve(INTERFACE_DIR, 'src/styles/global.css'),
       '@forgeax/interface/components': resolve(INTERFACE_DIR, 'src/components'),
+      // The editor-family root aliases below intentionally bypass package
+      // exports to keep one Vite module identity. Keep this concrete runtime
+      // subpath ahead of the root alias so the diagnostics projection remains
+      // resolvable in the standalone host as well as in Bun's package loader.
+      '@forgeax/editor-core/diagnostics': resolve(PACKAGE_DIR, 'packages/core/src/io/diagnostics.ts'),
       // Keep every editor package on the same source URL in the standalone
       // host. Workspace symlinks are realpath-deduped, but a package self-import
       // can still resolve through a second Vite module key; that splits the
@@ -292,7 +297,7 @@ export default defineConfig({
     exclude: enginePreset.optimizeDeps.exclude,
     // Pre-bundle react so the single-instance dedupe holds. dockview /
     // @forgeax/interface are NOT listed: optimizeDeps.include resolves from the
-    // vite ROOT (standalone/), but those packages live in the vendored
+    // vite ROOT (apps/standalone/), but those packages live in the vendored
     // interface's own node_modules (resolvable from DockShell.tsx's location,
     // not from the root). Vite auto-discovers and optimizes them on first
     // crawl from the actual import sites, so listing them here only produced a
@@ -379,7 +384,7 @@ export default defineConfig({
               },
             },
             content: [
-              resolve(PACKAGE_DIR, 'standalone/**/*.{ts,tsx}'),
+              resolve(PACKAGE_DIR, 'apps/standalone/**/*.{ts,tsx}'),
               resolve(PACKAGE_DIR, 'packages/ui/src/components/breadcrumb.tsx'),
               resolve(PACKAGE_DIR, 'packages/ui/src/components/button.tsx'),
               resolve(PACKAGE_DIR, 'packages/content-browser/src/**/*.{ts,tsx}'),

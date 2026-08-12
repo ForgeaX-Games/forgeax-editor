@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { createProfiler } from '@forgeax/engine-profiler';
 import { gateway, type PlayDirtyPolicy } from '@forgeax/editor-core';
 import { registerViewportSessionAppliers } from '../viewport-session-appliers';
 
@@ -76,6 +77,62 @@ describe('viewport session applier registrar (M3)', () => {
       },
     });
     expect(d.calls).toContain('capture:1');
+  });
+
+  it('captures a validated non-empty Engine ProfileCapture through the Gateway', async () => {
+    const d = deps();
+    const profiler = createProfiler();
+    profiler.registerPhaseCatalog('app', ['frame-total']);
+    registered.push(registerViewportSessionAppliers({ ...d.value, profiler, captureTimeoutMs: 100 }));
+    const requestId = 'profile-session-test';
+    const accepted = gateway.dispatch({ kind: 'captureCpuProfile', frames: 1, eventLimit: 8, requestId }, 'ai');
+    expect(accepted).toMatchObject({
+      ok: true,
+      result: { operationRun: { requestId, operationId: 'captureCpuProfile', status: 'running' } },
+    });
+    const session = profiler.activeSession();
+    session?.beginFrame(1);
+    session?.beginPhase({ source: 'app', phase: 'frame-total' });
+    session?.endPhase();
+    session?.endFrame();
+
+    const terminal = await gateway.waitOperationRun(requestId);
+    expect(terminal).toMatchObject({
+      ok: true,
+      value: {
+        status: 'succeeded',
+        result: {
+          schemaVersion: '1.0',
+          timeUnit: 'microseconds',
+          completeness: { status: 'complete' },
+        },
+      },
+    });
+    if (terminal.ok && terminal.value.status === 'succeeded') {
+      expect((terminal.value.result as { records: unknown[] }).records.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('reports unavailable and busy CPU profiler states structurally', async () => {
+    const unavailable = deps();
+    registered.push(registerViewportSessionAppliers({ ...unavailable.value, profiler: undefined }));
+    expect(gateway.dispatch({ kind: 'captureCpuProfile', requestId: 'profile-unavailable' }, 'ai')).toMatchObject({
+      ok: false,
+      error: { code: 'profiler-unavailable', retryable: true },
+    });
+    for (const dispose of registered.splice(0)) dispose();
+
+    const busy = deps();
+    const profiler = createProfiler();
+    profiler.registerPhaseCatalog('app', ['frame-total']);
+    profiler.startCapture({ frameLimit: 2, eventLimit: 8 });
+    registered.push(registerViewportSessionAppliers({ ...busy.value, profiler, captureTimeoutMs: 100 }));
+    expect(gateway.dispatch({ kind: 'captureCpuProfile', requestId: 'profile-busy' }, 'ai')).toMatchObject({ ok: true });
+    expect(await gateway.waitOperationRun('profile-busy')).toMatchObject({
+      ok: true,
+      value: { status: 'failed', error: { code: 'profiler-busy' } },
+    });
+    profiler.activeSession()?.finish();
   });
 
   it('reports missing RHI debug as a structured gateway error', () => {

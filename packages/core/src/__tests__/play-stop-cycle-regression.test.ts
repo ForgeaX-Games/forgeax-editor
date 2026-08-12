@@ -1,7 +1,7 @@
 // R0-06E — repeated Play/Stop world-fork regression.
 //
 // This is the headless owner test for the public lifecycle contract exercised by
-// e2e/play-stop-world-fork.spec.ts. A single successful fork is not enough: the
+// apps/standalone/e2e/__tests__/play-stop-world-fork.spec.ts. A single successful fork is not enough: the
 // dangerous regressions are cumulative (edit-world entity creep, a stale play
 // handle resolving to a newly-created edit entity, or a listener retained per
 // cycle). Keep the fixture deliberately non-trivial: authored hierarchy + a

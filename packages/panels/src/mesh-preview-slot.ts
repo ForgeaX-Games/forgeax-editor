@@ -14,4 +14,3 @@ export function registerMeshPreview(component: ComponentType | null): void {
 export function getMeshPreview(): ComponentType | null {
   return PreviewViewport;
 }
-

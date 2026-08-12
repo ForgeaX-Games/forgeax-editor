@@ -59,19 +59,19 @@ export const MILESTONE_EVIDENCE: readonly EvidenceDefinition[] = Object.freeze([
   { milestone: 'M3', command: 'bun -F @forgeax/editor-core test', artifact: 'M3-commit-collar.json', acAnchors: ['AC-09', 'AC-10', 'AC-18'], roadmapAnchors: ['M3'], journeyAnchors: ['save', 'undo', 'reopen'] },
   { milestone: 'M4', command: 'bun run test:product-conformance', artifact: 'M4-asset-workspace.json', acAnchors: ['AC-11', 'AC-12', 'AC-13'], roadmapAnchors: ['M4'], journeyAnchors: ['observe', 'reconcile'] },
   { milestone: 'M5', command: 'bun run test:product-conformance', artifact: 'M5-asset-lifecycle.json', acAnchors: ['AC-14', 'AC-15', 'AC-16', 'AC-17'], roadmapAnchors: ['M5'], journeyAnchors: ['preflight', 'mutate', 'restore'] },
-  { milestone: 'M6', command: 'bun run test:e2e e2e/unified-editor-product.spec.ts e2e/operation-center.spec.ts', artifact: 'M6-shared-projection.json', acAnchors: ['AC-19', 'AC-20', 'AC-21'], roadmapAnchors: ['M6'], journeyAnchors: ['human-projection', 'query'] },
+  { milestone: 'M6', command: 'bun run test:e2e apps/standalone/e2e/__tests__/unified-editor-product.spec.ts apps/standalone/e2e/__tests__/operation-center.spec.ts', artifact: 'M6-shared-projection.json', acAnchors: ['AC-19', 'AC-20', 'AC-21'], roadmapAnchors: ['M6'], journeyAnchors: ['human-projection', 'query'] },
   { milestone: 'M7', command: 'bun run test:product-headless', artifact: 'M7-production-transport.json', acAnchors: ['AC-22', 'AC-23', 'AC-24'], roadmapAnchors: ['M7'], journeyAnchors: ['transport', 'play', 'stop'] },
   { milestone: 'M8', command: 'bun run test:product-conformance', artifact: 'M8-workflow-recovery.json', acAnchors: ['AC-02', 'AC-25', 'AC-26'], roadmapAnchors: ['M8'], journeyAnchors: ['workflow', 'restart-reconcile', 'recover'] },
 ]);
 
 export const U1_U8: readonly UEvidenceDefinition[] = Object.freeze([
-  { id: 'U1', command: 'bun test packages/product/src/kernel/workflow-conformance.test.ts', artifact: 'U1-import-mount.json', description: 'Import and mount a scene asset.' },
-  { id: 'U2', command: 'bun test packages/product/src/kernel/workflow-roundtrip.test.ts', artifact: 'U2-material-roundtrip.json', description: 'Create and bind a material, save, reopen, and Play.' },
-  { id: 'U3', command: 'bun test packages/product/src/kernel/workflow-conformance.test.ts', artifact: 'U3-batch-move.json', description: 'Preflight and move a batch while preserving conflict facts.' },
-  { id: 'U4', command: 'bun test packages/product/src/kernel/workflow-policy.test.ts', artifact: 'U4-failure-recovery.json', description: 'Locate a child failure and expose recovery actions.' },
-  { id: 'U5', command: 'bun test packages/product/src/kernel/workflow-coordinator.test.ts', artifact: 'U5-idempotent-retry.json', description: 'Retry with a new attempt without repeating an equivalent effect.' },
-  { id: 'U6', command: 'bun test packages/product/src/kernel/workflow-restart-reconciliation.test.ts', artifact: 'U6-restart-reconcile.json', description: 'Reconcile detached runs after process restart.' },
-  { id: 'U7', command: 'bun test packages/product/src/kernel/run-journal-recovery.test.ts', artifact: 'U7-unknown-expired.json', description: 'Recover from unknown, expired, and malformed run records.' },
+  { id: 'U1', command: 'bun test packages/product/src/kernel/__tests__/workflow-conformance.test.ts', artifact: 'U1-import-mount.json', description: 'Import and mount a scene asset.' },
+  { id: 'U2', command: 'bun test packages/product/src/kernel/__tests__/workflow-roundtrip.test.ts', artifact: 'U2-material-roundtrip.json', description: 'Create and bind a material, save, reopen, and Play.' },
+  { id: 'U3', command: 'bun test packages/product/src/kernel/__tests__/workflow-conformance.test.ts', artifact: 'U3-batch-move.json', description: 'Preflight and move a batch while preserving conflict facts.' },
+  { id: 'U4', command: 'bun test packages/product/src/kernel/__tests__/workflow-policy.test.ts', artifact: 'U4-failure-recovery.json', description: 'Locate a child failure and expose recovery actions.' },
+  { id: 'U5', command: 'bun test packages/product/src/kernel/__tests__/workflow-coordinator.test.ts', artifact: 'U5-idempotent-retry.json', description: 'Retry with a new attempt without repeating an equivalent effect.' },
+  { id: 'U6', command: 'bun test packages/product/src/kernel/__tests__/workflow-restart-reconciliation.test.ts', artifact: 'U6-restart-reconcile.json', description: 'Reconcile detached runs after process restart.' },
+  { id: 'U7', command: 'bun test packages/product/src/kernel/__tests__/run-journal-recovery.test.ts', artifact: 'U7-unknown-expired.json', description: 'Recover from unknown, expired, and malformed run records.' },
   { id: 'U8', command: 'bun run test:product-conformance', artifact: 'U8-evidence-report.json', description: 'Produce the final auditable evidence report.' },
 ]);
 

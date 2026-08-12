@@ -56,7 +56,7 @@ describe('editor component meta overlay', () => {
     // (AnimationPlayer bespoke+animation keys); the HIDDEN set stays the
     // internal components plus the derived engine `Disabled` marker (synced by
     // Visibility is the authored engine contract and remains inspectable.
-    // directly; docs 2026-08-04-editor-hide-ue-parity-plan).
+    // directly; .forgeax-harness/docs/2026-08-04-editor-hide-ue-parity-plan).
     const hidden = Object.entries(EDITOR_COMPONENT_META)
       .filter(([, meta]) => meta.hidden === true)
       .map(([name]) => name)

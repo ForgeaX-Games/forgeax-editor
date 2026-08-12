@@ -513,6 +513,46 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     close();
   };
 
+  // ── Dismiss when focus leaves into an iframe ─────────────────────────────
+  // A click landing inside an iframe (a Page's `<iframe>`, an editor preview)
+  // never surfaces a `pointerdown` in the PARENT document — the iframe's own
+  // document swallows it — so onPointerDownCapture above can't see it. Two
+  // parent-side signals CAN reach us; we honour both because which one fires on
+  // an iframe click is browser/embedding dependent (notably an Electron webview
+  // often emits only the window `blur`, no `focusin`):
+  //
+  //   1. `focusin` on the parent whose target is the `<iframe>` element as it
+  //      takes DOM focus (this is what Radix's DismissableLayer relies on).
+  //   2. `window` `blur` + `document.activeElement` now being that `<iframe>`.
+  //      Plain window blur is targetless (alt-tab / devtools / another window
+  //      all fire it), which is why it's unreliable ALONE — but gating on
+  //      "activeElement is an <iframe> outside the drawer" makes it precise:
+  //      none of those cases make an iframe the activeElement.
+  //
+  // Both funnel through the SAME containment / pin / exempt gates as the
+  // pointer path; close() is idempotent, so whichever fires first wins and the
+  // other no-ops.
+  const dismissIfFocusEscapedTo = (target: Element | null): void => {
+    if (!openGroup) return;
+    if (activeIsPinned(openGroup)) return;
+    if (target && openGroup.element.contains(target)) return;
+    if (target && bottomStripEl && bottomStripEl.contains(target)) return;
+    if (isEdgeDrawerDismissExemptTarget(target)) return;
+    close();
+  };
+  const onFocusInCapture = (e: FocusEvent): void => {
+    dismissIfFocusEscapedTo(e.target as Element | null);
+  };
+  const onWindowBlur = (): void => {
+    if (!openGroup) return;
+    // activeElement isn't the iframe yet at blur dispatch time — defer a frame.
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (!active || active.tagName !== 'IFRAME') return;
+      dismissIfFocusEscapedTo(active);
+    });
+  };
+
   const reposition = (): void => { if (openGroup) position(openGroup); };
 
   // Hide edge strips with zero tabs. Dropping back uses the root's narrow
@@ -764,6 +804,8 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
   document.addEventListener('pointerdown', onStripChromePointerDown, true);
   document.addEventListener('click', onClickCapture, true);
   document.addEventListener('pointerdown', onPointerDownCapture, true);
+  document.addEventListener('focusin', onFocusInCapture);
+  window.addEventListener('blur', onWindowBlur);
   window.addEventListener('resize', reposition);
 
   // Reveal the footer drop zone ONLY during a real HTML5 tab drag. We can't
@@ -912,6 +954,8 @@ export function installEdgeDrawer(api: DockviewApi, root: HTMLElement): () => vo
     document.removeEventListener('pointerdown', onStripChromePointerDown, true);
     document.removeEventListener('click', onClickCapture, true);
     document.removeEventListener('pointerdown', onPointerDownCapture, true);
+    document.removeEventListener('focusin', onFocusInCapture);
+    window.removeEventListener('blur', onWindowBlur);
     window.removeEventListener('resize', reposition);
     window.removeEventListener('dragstart', onAnyDragStart, true);
     window.removeEventListener('dragover', onAnyDragOver, true);

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createAdapter } from '../src/compatibility-adapter';
+import { createAdapter } from '../packages/edit-runtime/src/public/compatibility-adapter';
 import {
   blockingAvailability,
   createEditorProduct,

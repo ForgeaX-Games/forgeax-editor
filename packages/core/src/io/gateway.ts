@@ -1515,7 +1515,7 @@ export class EditGateway {
     const isRequestCorrelatedSceneCreate = kind === 'createSceneFile' && typeof requestId === 'string';
     const isRequestCorrelatedDefaultScene = kind === 'setDefaultScene' && typeof requestId === 'string';
     const isRequestCorrelatedSceneDelete = kind === 'deleteScene' && typeof requestId === 'string';
-    const isRequestCorrelatedCapture = kind === 'captureFrame' && typeof requestId === 'string';
+    const isRequestCorrelatedCapture = (kind === 'captureFrame' || kind === 'captureCpuProfile') && typeof requestId === 'string';
     const isRequestCorrelatedValidation = kind === 'validateGameProject' && typeof requestId === 'string';
     const isRequestCorrelatedSource = (kind === 'asset.preflight' || kind === 'previewAssetSourceMutation' || kind === 'saveAssetSourceOverride' || kind === 'discardSourceOverridesAndReimport') && typeof requestId === 'string';
     let acceptedRun: OperationRunReadResult | null = null;

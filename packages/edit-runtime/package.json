@@ -86,7 +86,10 @@
   "dependencies": {
     "@forgeax/editor-game-plugins": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
+    "@forgeax/editor-product": "workspace:*",
+    "@forgeax/interface": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-audio": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",

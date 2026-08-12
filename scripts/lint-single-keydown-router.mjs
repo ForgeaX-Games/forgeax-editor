@@ -17,7 +17,7 @@ const allowed = new Set([
 ]);
 const globalKeydown = /\b(?:window|document)\s*\.addEventListener\(\s*['"]keydown['"]/;
 const files = (await new Promise((resolveFiles) => {
-  import('node:child_process').then(({ execFile }) => execFile('rg', ['--files', 'packages', 'standalone'], { cwd: root, encoding: 'utf8' }, (_error, stdout) => resolveFiles(stdout.split('\n').filter(Boolean))));
+  import('node:child_process').then(({ execFile }) => execFile('rg', ['--files', 'packages', 'apps/standalone'], { cwd: root, encoding: 'utf8' }, (_error, stdout) => resolveFiles(stdout.split('\n').filter(Boolean))));
 }));
 const offenders = [];
 

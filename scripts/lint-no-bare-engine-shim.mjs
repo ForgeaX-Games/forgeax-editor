@@ -17,7 +17,7 @@
 // `.d.ts` (runtime / ecs / types / gltf / pack / math …) the shim entry should
 // simply be deleted so the real types take over.
 //
-// SCANS  types/forgeax-engine-shims.d.ts (the shared SSOT surface) AND any
+// SCANS  scripts/types/forgeax-engine-shims.d.ts (the shared SSOT surface) AND any
 //        stray packages/{core,panels,edit-runtime,
 //        play-runtime}/src/forgeax-engine.d.ts (defense-in-depth: catches a
 //        re-added per-package bare shim even though the shared file is canonical).
@@ -56,21 +56,11 @@ const BARE_ENGINE_SHIM =
 // The shared SSOT surface + any stray per-package shim files, if present.
 function findShimFiles() {
   const out = [];
-  const shared = resolve(EDITOR_ROOT, 'types', 'forgeax-engine-shims.d.ts');
+  const shared = resolve(EDITOR_ROOT, 'scripts', 'types', 'forgeax-engine-shims.d.ts');
   try {
     if (statSync(shared).isFile()) out.push(shared);
   } catch {
     // shared shim absent — fine (engine may ship all .d.ts)
-  }
-  // The repo-root program's shim slot. It was DELETED (the root tsconfig now
-  // includes the shared SSOT shim and resolves engine-ecs/types/… to real
-  // dist), but scan it anyway as defense-in-depth: a re-added bare shim here
-  // would re-erase the engine surface to `any` for the root typecheck program.
-  const rootShim = resolve(EDITOR_ROOT, 'src', 'forgeax-engine.d.ts');
-  try {
-    if (statSync(rootShim).isFile()) out.push(rootShim);
-  } catch {
-    // no root shim — the intended steady state.
   }
   for (const pkg of SCAN_PACKAGES) {
     const candidate = join(PACKAGES_DIR, pkg, 'src', 'forgeax-engine.d.ts');

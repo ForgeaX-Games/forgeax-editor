@@ -234,7 +234,7 @@ export function VfxPreviewViewport(): ReactElement {
               yaw: 0.55,
               pitch: -0.24,
             },
-        interaction: 'orbit-only',
+        interaction: 'preview',
       });
       viewport = previewViewport;
       if (previewBounds !== undefined) previewViewport.frameBounds(previewBounds);

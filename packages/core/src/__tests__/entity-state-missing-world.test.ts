@@ -3,7 +3,7 @@
 // Studio single-realm teardown clears gateway.doc.world before the next createApp
 // injects. Hierarchy Rows that still hold stale fiber props must not throw on
 // `undefined.get(...)`. See:
-//   docs/superpowers/specs/2026-07-14-hierarchy-cross-game-switch-crash-design.md
+//   .forgeax-harness/docs/superpowers/specs/2026-07-14-hierarchy-cross-game-switch-crash-design.md
 import { describe, it, expect } from 'bun:test';
 import {
   childrenOf,

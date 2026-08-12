@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'bun:test';
 
-// Regression guard for docs/2026-08-06-hierarchy-remove-lock-plan.md (M4):
+// Regression guard for .forgeax-harness/docs/2026-08-06-hierarchy-remove-lock-plan.md (M4):
 // the Hierarchy lock affordance was never-wired dead UI and is removed
 // outright (D-1, no feature flag). These assertions keep the placeholder
 // from being resurrected — if a real lock capability is ever built, it must

@@ -24,7 +24,7 @@ export interface CreatableAssetSpec {
 export const CREATABLE_ASSET_KINDS: readonly CreatableAssetSpec[] = [
   { kind: 'scene', label: 'Scene', icon: 'clapperboard', defaultNamePrefix: 'NewScene' },
   { kind: 'material', label: 'Material', icon: 'paintbrush', defaultNamePrefix: 'NewMaterial' },
-  { kind: 'material-instance', label: 'Material Instance（材质实例）', icon: 'layers', defaultNamePrefix: 'MI_' },
+  { kind: 'material-instance', label: 'Material Instance', icon: 'layers', defaultNamePrefix: 'MI_' },
   { kind: 'particle-effect', label: 'Particle Effect', icon: 'star', defaultNamePrefix: 'NewParticle' },
   { kind: 'input-map', label: 'Input Map', icon: 'gamepad-2', defaultNamePrefix: 'IM_' },
 ] as const;

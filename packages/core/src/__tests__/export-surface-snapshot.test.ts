@@ -103,7 +103,7 @@ function createProgram(): { program: ts.Program; checker: ts.TypeChecker } {
   });
 
   // Known-shim modules: engine-project / engine-fbx ship no .d.ts; the editor
-  // provides ambient shims (types/forgeax-engine-shims.d.ts) that tsc's program
+  // provides ambient shims (scripts/types/forgeax-engine-shims.d.ts) that tsc's program
   // creation resolves via the tsconfig `include`.  Should a shim be missing or
   // tsc can't pick it up, these specific module-not-found diagnostics are NOT
   // fatal to signature extraction — the checker can still resolve re-exported

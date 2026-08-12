@@ -51,7 +51,7 @@ const fr = section('FAILED REQUESTS (>=400 / net fail)', failedRequests);
 
 // Allowlist: headless chromium has no GPU → WebGPU render loop throws (documented).
 // Also tolerate Vite cold-start `504 (Outdated Optimize Dep)` when nested deps are
-// discovered after the first page load (same filter as e2e/games-smoke-helpers.ts).
+// discovered after the first page load (same filter as apps/standalone/e2e/games-smoke-helpers.ts).
 const allowed = (e) =>
   /RhiError|webgpu|WebGPU|GPUDevice|createBindGroup|requestAdapter|GPUAdapter|Outdated Optimize Dep/i.test(e);
 // Dev-only noise: React StrictMode double-mounts every effect, so iframe/HMR

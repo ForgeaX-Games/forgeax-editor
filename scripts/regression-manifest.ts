@@ -55,7 +55,7 @@ const profileNames: Readonly<Record<RegressionProfile, string>> = {
 };
 
 const contractPath = resolve(
-  fileURLToPath(new URL('../ci/editor-ci-contract.json', import.meta.url)),
+  fileURLToPath(new URL('./ci/editor-ci-contract.json', import.meta.url)),
 );
 
 function loadContract(): ContractDocument {

@@ -85,4 +85,3 @@ export function MeshPreviewViewport(): ReactElement {
 }
 
 export default MeshPreviewViewport;
-

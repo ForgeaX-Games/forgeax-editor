@@ -16,7 +16,7 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": ["src", "../../types/forgeax-engine-shims.d.ts"],
+  "include": ["src", "../../scripts/types/forgeax-engine-shims.d.ts"],
   // broken-syntax.ts is an INTENTIONALLY malformed fixture loaded as raw text by
   // the discoverer test (discoverer.test.ts) to prove error handling — it must
   // never be typechecked (it would trip TS1005). Everything else under

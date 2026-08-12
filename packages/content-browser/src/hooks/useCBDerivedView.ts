@@ -263,6 +263,11 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     [scopedAssets, packDirs, nav.currentPath, favorites.isFavorite],
   );
 
+  // Folders carry only a name (kind/time/size are asset concepts), so every sort
+  // key collapses to a name compare for them; the direction still flips the whole
+  // view so asc/desc visibly reorders folders too.
+  const sortDir = sort.sortState.dir;
+  const sortKey = sort.sortState.key;
   const visibleFoldersInPath = useMemo(
     () => {
       const q = filter.searchQuery.trim().toLowerCase();
@@ -286,13 +291,16 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
               asset.kind.toLowerCase().includes(q)
             ))
           );
+        })
+        .sort((a, b) => {
+          const r = a.name.localeCompare(b.name);
+          return sortDir === 'desc' ? -r : r;
         });
     },
-    [diskFiles, favoritesOnly, filter.matchesFolder, filter.searchQuery, foldersInPath, scopedAssets],
+    [diskFiles, favoritesOnly, filter.matchesFolder, filter.searchQuery, foldersInPath, scopedAssets, sortDir],
   );
 
-  // Filter + sort apply to assets only; folders always render first (UE-style),
-  // sorted by name (deriveContentView already sorts them).
+  // Folders always render first (UE-style); assets flow through sortItems below.
   const favoriteFilteredAssets = useMemo(
     () => assetsInPath.filter(asset => !favoritesOnly || favorites.isFavorite({ kind: 'asset', guid: asset.guid })),
     [assetsInPath, favorites.isFavorite, favoritesOnly],
@@ -315,8 +323,15 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
       .filter(file => filter.matchesFile(file))
       .filter(file => !favoritesOnly || file.isFavorite || holdsFavoriteAsset(file))
       .filter(file => !q || file.name.toLowerCase().includes(q) || file.assets.some(asset => asset.name.toLowerCase().includes(q)))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, holdsFavoriteAsset, nav.currentPath]);
+      .sort((a, b) => {
+        // Files expose name + kind; time/size are asset-only, so those keys fall
+        // back to a name compare. Direction always applies so asc/desc reorders.
+        const r = sortKey === 'kind'
+          ? ((a.kindLabel || a.family).localeCompare(b.kindLabel || b.family) || a.name.localeCompare(b.name))
+          : a.name.localeCompare(b.name);
+        return sortDir === 'desc' ? -r : r;
+      });
+  }, [diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, holdsFavoriteAsset, nav.currentPath, sortKey, sortDir]);
 
   // A file kept only for its contents lists just the favorited ones; a file that
   // is ITSELF the favorite lists all of them (the pack is what was starred).

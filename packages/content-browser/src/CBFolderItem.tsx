@@ -60,7 +60,9 @@ function CBFolderItemImpl({
         <span className="cb-grid-icon cb-folder-icon"><ContentBrowserIcon name="folder" /></span>
       </div>
       <div className="cb-grid-label cb-fe-name" title={folder.name}>{folder.name}</div>
-      <div className="cb-card-meta">{t('editor.contentBrowser.preview.items', { count: folder.childCount })}</div>
+      {/* Folders have no type; keep the type row's height so the name stays
+        * vertically aligned with file/asset cards (no collapse). */}
+      <div className="cb-card-meta cb-card-kind" aria-hidden="true">&nbsp;</div>
     </div>
   );
 }

@@ -135,7 +135,7 @@
       "id": "smoke-play",
       "name": "smoke-play",
       "command": "bun",
-      "args": ["run", "test:e2e", "--", "e2e/smoke-boot-play.spec.ts", "e2e/hierarchy-ui-layout.spec.ts"],
+      "args": ["run", "test:e2e", "--", "apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts", "apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts"],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",

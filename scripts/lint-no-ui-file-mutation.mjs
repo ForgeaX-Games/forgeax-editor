@@ -16,6 +16,10 @@ const allowed = new Set(['packages/edit-runtime/src/writeback-chain.ts']);
 function sourceFiles() {
   const files = [];
   function walk(relDir) {
+    // E2E fixtures deliberately exercise the public file API to seed browser
+    // journeys. They are test producers, not standalone UI producers, so keep
+    // them outside this product-source mutation boundary.
+    if (relDir === 'apps/standalone/e2e') return;
     const absDir = resolve(root, relDir);
     let entries;
     try { entries = readdirSync(absDir); } catch { return; }
@@ -30,12 +34,12 @@ function sourceFiles() {
     }
   }
   walk('packages');
-  walk('standalone');
+  walk('apps/standalone');
   return files;
 }
 
 const files = sourceFiles();
-const uiPrefix = /^(?:packages\/(?:content-browser|panels|edit-runtime|ui)\/src\/|standalone\/)/;
+const uiPrefix = /^(?:packages\/(?:content-browser|panels|edit-runtime|ui)\/src\/|apps\/standalone\/)/;
 const fileApiFetch = /fetch\s*(?:<[^>]*>)?\s*\(\s*['"`][^'"`]*\/api\/files(?:[/?][^'"`]*)?['"`][\s\S]{0,1200}?\)/g;
 const mutation = /\bmethod\s*:\s*['"](?:DELETE|POST|PUT|PATCH)['"]/i;
 const offenders = [];

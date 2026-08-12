@@ -26,7 +26,7 @@
 // beyond the dev-stack helpers) — runs on Windows too.
 //
 // Ports (see README "Run"):
-//   :15290  standalone chrome host (vite, root=standalone/) — the page you open
+//   :15290  standalone chrome host (vite, root=apps/standalone/) — the page you open
 //   :15280  edit-runtime (panel + viewport iframe source); host proxies /editor → it
 //   :15273  play-runtime (pure engine preview) — with `start --play`, or
 //           automatically when `--game` is supplied (NOT 15173 — see
@@ -73,6 +73,7 @@ import {
   EDITOR_CI_REPORT_SCHEMA_VERSION,
   validateEditorCiReport,
 } from './ci/editor-ci-report.mjs';
+import { resolveBunExecutable } from './ci/bun-runtime.mjs';
 import {
   WORKTREE_CONFIG_FILE,
   portEnvironment,
@@ -154,22 +155,24 @@ type ShOptions = { cwd?: string; env?: NodeJS.ProcessEnv; failureMessage?: strin
 
 /** Run a command synchronously with inherited stdio; die on non-zero exit. */
 function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
-  const r = spawnSync(cmd, args, {
+  const env = opts.env ?? process.env;
+  const r = spawnSync(resolveBunExecutable(cmd, env), args, {
     stdio: 'inherit',
     shell: IS_WIN,
     cwd: opts.cwd ?? ROOT,
-    env: opts.env ?? process.env,
+    env,
   });
   if (r.status !== 0) die(opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`);
 }
 
 /** Run a command synchronously with inherited stdio; return false on failure. */
 function trySh(cmd: string, args: string[], opts: ShOptions = {}): boolean {
-  const r = spawnSync(cmd, args, {
+  const env = opts.env ?? process.env;
+  const r = spawnSync(resolveBunExecutable(cmd, env), args, {
     stdio: 'inherit',
     shell: IS_WIN,
     cwd: opts.cwd ?? ROOT,
-    env: opts.env ?? process.env,
+    env,
   });
   return r.status === 0;
 }
@@ -688,7 +691,7 @@ async function run(argv: string[]): Promise<void> {
   // flag so the editor page dials the relay — mirrors dev-standalone.ts. Opt out
   // with FORGEAX_BRIDGE=0. CRITICAL: the two Vite vars must reach the HOST vite
   // (`bun run dev`, :15290) — the standalone shell imports ViewportComponent
-  // IN-PROCESS (standalone/main.tsx, no iframe / no /editor proxy), so the host
+  // IN-PROCESS (apps/standalone/main.tsx, no iframe / no /editor proxy), so the host
   // vite is what inlines `import.meta.env.VITE_FORGEAX_BRIDGE` into the page's
   // bridge-dial code. Giving it only to edit-runtime (:15280) leaves the page's
   // bridgeEnabled=false and connectBridge() never runs. So they go into the base
@@ -757,7 +760,7 @@ async function run(argv: string[]): Promise<void> {
     const log = (name: string): number => openSync(join(logDir, `forgeax-editor-${name}.log`), 'a');
     step(`starting stack in background (logs → ${join(logDir, 'forgeax-editor-*.log')}) ...`);
     if (gameDir)
-      spawnService('bun', [join(ROOT, 'standalone', 'game-backend.ts')], {
+      spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], {
         cwd: ROOT,
         env,
         detach: true,
@@ -805,7 +808,7 @@ async function run(argv: string[]): Promise<void> {
 
   if (gameDir) {
     step(`starting game-backend :${GAME_API_PORT} (platform-io reuse, R3) ...`);
-    children.push(spawnService('bun', [join(ROOT, 'standalone', 'game-backend.ts')], { cwd: ROOT, env }));
+    children.push(spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], { cwd: ROOT, env }));
   }
 
   step(`starting edit-runtime :${EDIT_RUNTIME_PORT} (HMR→${STANDALONE_PORT}) ...`);
@@ -1094,7 +1097,7 @@ function writeAdmissionReport(
 
 function discoverContract(): void {
   const validation = spawnSync(
-    'bun',
+    resolveBunExecutable('bun'),
     [
       'scripts/ci/editor-ci-contract.mjs',
       '--workflows-dir',
@@ -1107,7 +1110,7 @@ function discoverContract(): void {
   if (validation.status !== 0) {
     die(`contract discovery admission failed: ${validation.stderr || validation.stdout}`);
   }
-  const contract = JSON.parse(readFileSync(join(ROOT, 'ci', 'editor-ci-contract.json'), 'utf8')) as {
+  const contract = JSON.parse(readFileSync(join(ROOT, 'scripts', 'ci', 'editor-ci-contract.json'), 'utf8')) as {
     readonly version: string;
     readonly checks: readonly {
       readonly checkId: string;

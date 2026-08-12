@@ -14,7 +14,7 @@
 // is false, so the backend cannot import engine-gltf. The editor (frontend L2)
 // already depends on engine-gltf, and parse-gltf.ts is browser-clean (no
 // `node:` imports), so the cook belongs here.
-// Design: docs/design/gltf-import-meta-ssot-via-toassetpack.md.
+// Design: .forgeax-harness/docs/design/gltf-import-meta-ssot-via-toassetpack.md.
 
 import { parseGlb, parseGltf, serializeMetaJson, toAssetPack } from '@forgeax/engine-gltf';
 

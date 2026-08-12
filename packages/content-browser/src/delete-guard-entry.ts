@@ -1,6 +1,6 @@
 // Slim entry — only the delete-guard bus + host adapter (no ContentBrowser).
 //
-// Hosts (standalone/main.tsx, studio host) that need to wire the keyboard
+// Hosts (apps/standalone/main.tsx, studio host) that need to wire the keyboard
 // router's confirm-delete gate at BOOT must not eagerly import the full
 // content-browser barrel, because that barrel re-exports ContentBrowser, which
 // side-effect imports content-browser.css and pulls in the whole CB module

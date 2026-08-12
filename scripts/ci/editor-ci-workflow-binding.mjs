@@ -142,7 +142,7 @@ function workflowSources(workflowsDir) {
 function main(argv = process.argv.slice(2)) {
   const workflowsDir = resolve(argumentValue(argv, '--workflows-dir', '.github/workflows'));
   const rulesetPath = resolve(argumentValue(argv, '--ruleset-file', 'scripts/ci/fixtures/ruleset.json'));
-  const contract = JSON.parse(readFileSync(resolve('ci/editor-ci-contract.json'), 'utf8'));
+  const contract = JSON.parse(readFileSync(resolve('scripts/ci/editor-ci-contract.json'), 'utf8'));
   const ruleset = JSON.parse(readFileSync(rulesetPath, 'utf8'));
   let result;
   try {

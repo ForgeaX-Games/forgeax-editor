@@ -4,7 +4,7 @@
 // This module resolves the editor MI model ({enabled,value} overrides) into a
 // flat MaterialAsset.values map for preview / hot-patch / bake.
 //
-// Anchors: docs/2026-08-05-material-instance-editor-tech-plan.md §A2
+// Anchors: .forgeax-harness/docs/2026-08-05-material-instance-editor-tech-plan.md §A2
 
 import {
   MATERIAL_INSTANCE_KIND,

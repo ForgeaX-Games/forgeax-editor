@@ -11,7 +11,7 @@
 //   plan-strategy §2 D-2: cluster 13 (store.ts:1316-1338)
 //   research F-2: useSyncExternalStore getter+hook kept in one file
 //   requirements AC-09: pure structural migration.
-//   Design: docs/design/editor-mesh-panel.md §4.3.
+//   Design: .forgeax-harness/docs/design/editor-mesh-panel.md §4.3.
 import { useSyncExternalStore } from 'react';
 import type { MeshStatsWire } from '../io/cross-panel-types';
 
@@ -21,7 +21,7 @@ import type { MeshStatsWire } from '../io/cross-panel-types';
 // engine asset registry, so it loads the selected mesh via loadByGuid, derives
 // geometry-free stats, and publishes them here; the Mesh panel (a registry-less
 // iframe) renders them. Mirrors the asset-selection channel above.
-// Design: docs/design/editor-mesh-panel.md §4.3.
+// Design: .forgeax-harness/docs/design/editor-mesh-panel.md §4.3.
 
 export type MeshStats = MeshStatsWire;
 

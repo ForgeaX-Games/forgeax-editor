@@ -1,0 +1,142 @@
+{
+  "$schema": "forgeax-editor-ci-contract/v1",
+  "version": "forgeax-editor-ci-contract/v1",
+  "checks": [
+    {
+      "checkId": "b2-self-boot",
+      "owner": "editor-ci",
+      "command": "bun scripts/selfcheck-standalone-b2.mjs",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "typecheck",
+      "owner": "editor-ci",
+      "command": "bun run typecheck",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "r0-hierarchy-ui-editability",
+      "owner": "editor-ci",
+      "command": "bun -F @forgeax/editor-panels test src/__tests__/hierarchy-runtime-access.test.ts",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "r0-sample-vfx-skill",
+      "owner": "editor-ci",
+      "command": "bun scripts/lint-sample-vfx-skill.mjs",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "r0-engine-dogfood-diagnostics",
+      "owner": "editor-ci",
+      "command": "pnpm -C packages/engine exec vitest run --project=@forgeax/engine-animation packages/animation/src/__tests__/animation-diagnostic.unit.test.ts --project=@forgeax/engine-vite-plugin-rhi-debug packages/vite-plugin-rhi-debug/src/__tests__/trigger.test.ts",
+      "executionHome": {
+        "local-fast": true,
+        "local-full": true,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "submodule-pin",
+      "owner": "editor-ci",
+      "command": "node scripts/check-submodule-pins.mjs",
+      "executionHome": {
+        "local-fast": false,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "smoke-play",
+      "owner": "editor-ci",
+      "command": "bun run test:e2e -- apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts",
+      "executionHome": {
+        "local-fast": false,
+        "local-full": true,
+        "PR": true,
+        "main": true,
+        "nightly/scheduled": true,
+        "post-merge": true
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    }
+  ],
+  "profiles": {
+    "local-fast": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
+    "local-full": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"],
+    "PR": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+    "main": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+    "nightly/scheduled": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+    "post-merge": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"]
+  },
+  "requiredContexts": [
+    {"context": "b2-self-boot", "checkId": "b2-self-boot"},
+    {"context": "typecheck", "checkId": "typecheck"},
+    {"context": "submodule-pin", "checkId": "submodule-pin"},
+    {"context": "smoke-play", "checkId": "smoke-play"}
+  ],
+  "packageQuality": {
+    "ownershipClasses": [
+      "Editor-owned",
+      "consumed-submodule-contract",
+      "intentionally non-tested host"
+    ],
+    "coveragePolicy": {
+      "requiredDimensions": ["lines", "functions"],
+      "range": [0, 100],
+      "source": "package-producer"
+    }
+  },
+  "provenance": {
+    "local": {"kind": "local", "timingDomain": "local-execution"},
+    "cloud": {"kind": "cloud", "timingDomain": "workflow-execution"},
+    "post-merge": {"kind": "cloud", "timingDomain": "workflow-execution"}
+  },
+  "failurePolicy": {
+    "failureClasses": ["admission", "environment", "source", "external-transport"],
+    "retryableClass": "external-transport",
+    "requiresTransientEvidence": true,
+    "maxAutomaticRetries": 1,
+    "sloClaim": null
+  }
+}

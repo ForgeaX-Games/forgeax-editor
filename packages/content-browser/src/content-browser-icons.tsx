@@ -11,6 +11,7 @@ import {
   Film,
   Folder,
   FolderOpen,
+  Gamepad2,
   Globe,
   Image,
   Layers,
@@ -98,6 +99,7 @@ const ICONS: Record<string, LucideIcon> = {
   film: Film,
   folder: Folder,
   'folder-open': FolderOpen,
+  'gamepad-2': Gamepad2,
   globe: Globe,
   image: Image,
   layers: Layers,
@@ -124,6 +126,16 @@ export function colorForFileFamily(family: CBFileFamily): string {
 
 export function colorForAssetKind(kind: string): string {
   return ASSET_KIND_COLORS[kind] ?? 'var(--text-mute, rgba(255, 255, 255, 0.30))';
+}
+
+/** Shared SSOT for kind → localized label (also used by the Save dialog). Falls
+ * back to the raw kind string when a translation key is missing. */
+export const ASSET_KINDS_I18N_KEY = 'editor.contentBrowser.assetKinds';
+
+export function labelForAssetKind(kind: string, t: (key: string) => string): string {
+  const key = `${ASSET_KINDS_I18N_KEY}.${kind || 'default'}`;
+  const label = t(key);
+  return label === key ? (kind || t(`${ASSET_KINDS_I18N_KEY}.default`)) : label;
 }
 
 export function ContentBrowserIcon({ name, className }: { name: string; className?: string }) {

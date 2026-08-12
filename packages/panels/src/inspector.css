@@ -243,7 +243,7 @@
    editor-ui <DropdownMenu>/<Select> content is portaled to <body> (outside
    .fx-inspector), so these live at the top level. They give the shared menu
    panel the same look as the Hierarchy right-click menu (mirrors
-   editor/src/hierarchy-panel.css .hierarchy-header-menu). Plain (unlayered) CSS
+   panels/src/hierarchy-contributions.css .hierarchy-header-menu). Plain (unlayered) CSS
    intentionally overrides the components' @layer utilities skin. */
 .fx-insp-menu { min-width: 200px; border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-background-floating); padding: 6px; color: var(--color-text-secondary); box-shadow: 0 16px 44px rgba(0, 0, 0, 0.6); }
 .fx-insp-menu-title { padding: 5px 8px 6px; color: var(--color-text-tertiary); font-family: var(--prim-font-mono, ui-monospace, monospace); font-size: 9.5px; font-weight: 400; letter-spacing: 0.07em; line-height: 1.2; text-transform: uppercase; }

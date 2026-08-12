@@ -3,7 +3,7 @@
 //
 // R3 (ideal-clean-architecture.md §6): the standalone game backend is
 // @forgeax/platform-io's createFilesRouter confined to one --game dir, run as a
-// bun process (standalone/game-backend.ts) that the :15290 host vite proxies
+// bun process (apps/standalone/game-backend.ts) that the :15290 host vite proxies
 // /api → . This script boots BOTH (backend bun process + host vite, NO studio
 // server, NO edit-runtime) and exercises the /api/files wire end to end:
 //   1. GET /api/files/tree?root=<slug>      → tree rooted at slug (client space)
@@ -26,6 +26,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve, basename, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BUN_EXECUTABLE } from './ci/bun-runtime.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EDITOR_DIR = resolve(HERE, '..');
@@ -90,10 +91,11 @@ async function main() {
     FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
     FORGEAX_STANDALONE_PORT: String(port),
   };
-  const backend = spawn('bun', ['standalone/game-backend.ts'], {
+  console.log(`[selfcheck] Bun executable: ${BUN_EXECUTABLE}`);
+  const backend = spawn(BUN_EXECUTABLE, ['apps/standalone/game-backend.ts'], {
     cwd: EDITOR_DIR, env, stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const child = spawn('bun', ['run', 'dev'], {
+  const child = spawn(BUN_EXECUTABLE, ['run', 'dev'], {
     cwd: EDITOR_DIR, env, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';

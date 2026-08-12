@@ -14,7 +14,7 @@
 //   asset is INVISIBLE until a later watcher tick or a page reload. Awaiting the
 //   host hook before broadcasting is what makes "created" mean "visible".
 //
-// Anchors: docs/2026-08-05-material-instance-editor-tech-plan.md §A3,
+// Anchors: .forgeax-harness/docs/2026-08-05-material-instance-editor-tech-plan.md §A3,
 //   AGENTS.md invariant 7 (one door), architecture-principles #1 (SSOT).
 
 import { broadcastAssetsChanged } from '../store/assets-changed';

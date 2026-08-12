@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { World } from '@forgeax/engine-ecs';
 import { Name } from '@forgeax/engine-scene';
 import { gateway } from '@forgeax/editor-core';
-import { registerHierarchyScopedCommands } from '../../../../src/hierarchy-panel';
+import { registerHierarchyScopedCommands } from '../HierarchyContributions';
 import {
   createHierarchyCommandActions,
   HierarchyPanel,

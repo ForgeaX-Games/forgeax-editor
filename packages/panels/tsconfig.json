@@ -16,5 +16,5 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": ["src", "../../types/forgeax-engine-shims.d.ts"]
+  "include": ["src", "../../scripts/types/forgeax-engine-shims.d.ts"]
 }

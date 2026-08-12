@@ -121,7 +121,7 @@ function emitSelection(): void {
     if (++_emitCount > 32 && !_emitWarned) {
       _emitWarned = true;
       // eslint-disable-next-line no-console
-      console.warn(`[sel-sync] runaway selection propagation: ${_emitCount} emits within 1s — likely a cross-window echo loop (see docs/design/editor-cross-window-selection-sync-loop.md)`);
+      console.warn(`[sel-sync] runaway selection propagation: ${_emitCount} emits within 1s — likely a cross-window echo loop (see .forgeax-harness/docs/design/editor-cross-window-selection-sync-loop.md)`);
     }
   }
   for (const fn of selectionListeners) fn();

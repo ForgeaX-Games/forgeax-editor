@@ -23,7 +23,6 @@ export interface MeshPreviewBounds {
   readonly center: readonly [number, number, number];
   readonly radius: number;
 }
-
 export interface MeshPreviewAssembly {
   readonly camera: EntityHandle;
   readonly subject: EntityHandle;
@@ -141,4 +140,3 @@ export function assembleMeshPreviewWorld(facade: EngineFacade): MeshPreviewAssem
     replaceSubject: setSubject,
   };
 }
-

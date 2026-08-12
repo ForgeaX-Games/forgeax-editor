@@ -21,7 +21,7 @@ function interactionSurfaceAttrs(scope: string | undefined): Record<string, stri
 }
 
 const menuItemVariants = cva(
-  'relative flex cursor-pointer select-none items-center gap-2 rounded-sm outline-none transition-colors focus:bg-[var(--color-interaction-hover)] focus:text-foreground data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+  'relative flex cursor-pointer select-none items-center gap-2 rounded-sm outline-none transition-colors text-[var(--color-text-secondary)] focus:bg-white/[0.10] focus:text-[var(--color-text-primary)] data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       size: {

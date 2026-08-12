@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { BUN_EXECUTABLE } from './bun-runtime.mjs';
 import { packageCensusFromRoot } from './package-census.mjs';
 import { classifyOwnership, validatePackageQuality } from './package-census-ownership.mjs';
 
@@ -170,7 +171,7 @@ function runPackageProducer(rootDir, surface, evidenceRoot, excludedRoots) {
   const packageEvidence = join(evidenceRoot, surface.path.replaceAll('/', '__'));
   const command = packageCoverageProducerArgs(quality.test, packageEvidence);
   if (!command.ok) return command;
-  const processResult = spawnSync('bun', ['test', ...command.args], { cwd: packagePath, encoding: 'utf8' });
+  const processResult = spawnSync(BUN_EXECUTABLE, ['test', ...command.args], { cwd: packagePath, encoding: 'utf8' });
   if (processResult.status !== 0) {
     return fail('package-test-failed', 'package test entry exits successfully', { packageName: surface.packageJson.name, status: processResult.status, stderr: processResult.stderr.slice(-4000) }, 'Fix the package test failure before publishing coverage evidence.');
   }

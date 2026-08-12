@@ -2,7 +2,7 @@
 // Instance and opens its editor tab (toolbar `+` menu and blank-area context
 // menu both route here, so the two entry points cannot drift).
 //
-// Anchors: docs/2026-08-05-material-instance-editor-tech-plan.md §D4 (create →
+// Anchors: .forgeax-harness/docs/2026-08-05-material-instance-editor-tech-plan.md §D4 (create →
 // `openAssetEditor`), mirroring MaterialInstanceEditor's Save Sibling/Child.
 
 import {

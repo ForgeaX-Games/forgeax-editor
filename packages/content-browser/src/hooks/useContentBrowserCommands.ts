@@ -10,6 +10,7 @@ import { useEffect, type Dispatch, type SetStateAction } from 'react';
 import type { AppHost } from '@forgeax/interface/core/app-shell';
 import type { TFunction } from '@forgeax/editor-core/i18n';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from '../creatable-asset-kinds';
+import { labelForAssetKind } from '../content-browser-icons';
 import type { CBViewMode2 } from '../view-mode';
 import type { FilterAPI } from './useFilter';
 import type { SortAPI } from './useSort';
@@ -200,7 +201,7 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
       }),
       ...CREATABLE_ASSET_KINDS.map((spec) => host.commands.register({
         id: `contentBrowser.createAsset.${spec.kind}`,
-        title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
+        title: t('editor.contentBrowser.actions.createAsset', { label: labelForAssetKind(spec.kind, t) }),
         execute: () => { createAssetInCurrentPath(spec); return { status: 'completed' as const }; },
       })),
       host.commands.register({

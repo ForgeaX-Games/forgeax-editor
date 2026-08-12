@@ -39,7 +39,7 @@ const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
 const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
-// New-game template journey (docs/2026-08-06-new-game-template-journey-e2e-plan
+// New-game template journey (.forgeax-harness/docs/2026-08-06-new-game-template-journey-e2e-plan
 // D-1): a FRESH copy of the engine's canonical template, initialized into the
 // same isolated temp root — the editor-side equivalent of "user clicks New
 // Game" in studio. Copied at config time because webServers capture the game
@@ -62,7 +62,7 @@ process.env.FORGEAX_E2E_GAME_DIR = e2eGameDir;
 process.once('exit', () => rmSync(e2eTempRoot, { recursive: true, force: true }));
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: './apps/standalone/e2e',
   // Keep Bun evidence/unit files in this folder out of Playwright's Node ESM
   // loader. Browser journeys are the explicit *.spec.ts surface.
   testMatch: '**/*.spec.ts',
@@ -170,7 +170,7 @@ export default defineConfig({
       // webServer #1 proxies /api -> here when FORGEAX_GAME_DIR is set.
       // Readiness probe = /api/health (AC-09 endpoint, doubles as playwright
       // health check — this is why M3 precedes M5 in the milestone graph).
-      command: 'bun standalone/game-backend.ts',
+      command: 'bun apps/standalone/game-backend.ts',
       cwd: '.',
       env: { ...process.env, FORGEAX_GAME_DIR: e2eGameDir, FORGEAX_GAME_API_PORT: e2eApiPort },
       url: `http://127.0.0.1:${e2eApiPort}/api/health`,
@@ -178,11 +178,11 @@ export default defineConfig({
       timeout: 90_000,
     },
     {
-      // New-game template journey (docs/2026-08-06-new-game-template-journey-e2e-plan
+      // New-game template journey (.forgeax-harness/docs/2026-08-06-new-game-template-journey-e2e-plan
       // D-2): a SECOND standalone host on :15490 booted against the fresh
       // canonical-template copy — same `bun run dev` shape as webServer #1 with
       // its own port pair, so the template journey never perturbs the sample
-      // host's specs. Only e2e/new-game-template-journey.spec.ts loads it.
+      // host's specs. Only apps/standalone/e2e/__tests__/new-game-template-journey.spec.ts loads it.
       command: 'bun run dev',
       cwd: '.',
       env: {
@@ -252,7 +252,7 @@ export default defineConfig({
       // webServer #3, confined to the template copy) — without it the host's
       // /api proxy fails at boot and the spec's L1 clean-console assertion
       // would red on proxy noise instead of product errors.
-      command: 'bun standalone/game-backend.ts',
+      command: 'bun apps/standalone/game-backend.ts',
       cwd: '.',
       env: { ...process.env, FORGEAX_GAME_DIR: e2eTemplateGameDir, FORGEAX_GAME_API_PORT: e2eTemplateApiPort },
       url: `http://127.0.0.1:${e2eTemplateApiPort}/api/health`,

@@ -7,9 +7,9 @@
 // carries only the not-yet-migrated edit/viewport shortcuts.
 //
 // This builder is the SSOT for that dep object. BOTH hosts call it:
-//   - editor standalone (packages/editor/standalone/main.tsx)
+//   - editor standalone (apps/standalone/main.tsx)
 //   - studio (packages/studio/src/panels/editorRenderers.tsx)
-// Previously it lived only in standalone/main.tsx; studio's editorRenderers.tsx
+// Previously it lived only in apps/standalone/main.tsx; studio's editorRenderers.tsx
 // (which "mirrors" standalone) silently omitted it, so in the studio host the G /
 // Esc display-toggle keyboard path was dead — the only pop-out-to-edit path left
 // was the GameOverlay hover button. Extracting here removes that divergence.
@@ -104,7 +104,7 @@ export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
     getInputTarget: () => getInputTarget(),
     deleteEntities: (ids: number[]) => deleteManyCascade(ids as never),
     duplicateEntities: (ids: number[]) => ids.forEach((id) => duplicateEntity(id as never)),
-    // UE-parity editor hide (docs 2026-08-04-editor-hide-ue-parity-plan M2) —
+    // UE-parity editor hide (.forgeax-harness/docs/2026-08-04-editor-hide-ue-parity-plan M2) —
     // the shared core ops dispatch the same setVisibility op a panel or AI would,
     // multi-entity gestures wrapped as ONE transaction (one undo step).
     hideEntities: (ids: number[]) => hideMany(ids as never),

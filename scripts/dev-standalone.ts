@@ -2,7 +2,7 @@
 // dev-standalone.ts — one-command standalone editor dev stack.
 //
 // Starts the two servers the standalone editor needs, wired correctly:
-//   :15290  standalone chrome host (vite, root=standalone/) — proxies /editor → :15280
+//   :15290  standalone chrome host (vite, root=apps/standalone/) — proxies /editor → :15280
 //   :15280  edit-runtime (panel + viewport iframe source)
 //
 // The crucial bit is FORGEAX_INTERFACE_PORT=15290: edit-runtime's vite HMR

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const presetPath = resolve(import.meta.dir, '../../../../../engine-vite-preset.ts');
+const presetPath = resolve(import.meta.dir, '../../../../../scripts/vite/engine-vite-preset.ts');
 const source = readFileSync(presetPath, 'utf8');
 
 describe('Edit particle Pack registration', () => {

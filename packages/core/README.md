@@ -86,6 +86,7 @@ import {
 | 入口 | 说明 |
 |:--|:--|
 | `.` | 所有核心类型与函数（见上方 import 示例） |
+| `./diagnostics` | Diagnostics snapshot/query types and the pure bounded query projection |
 | `./package.json` | 包元信息 |
 
 ## Asset source workflow

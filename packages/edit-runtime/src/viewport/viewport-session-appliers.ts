@@ -7,8 +7,10 @@
 // every operation is registered into core's session-applier table.
 
 import { getRegisteredSystems, Update } from '@forgeax/engine-ecs';
+import type { Profiler } from '@forgeax/engine-profiler';
 import type { World } from '@forgeax/engine-ecs';
 import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type EditGateway, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
+import { captureCpuProfile } from './frame-phase-profiler';
 
 export interface ViewportSessionApplierDeps {
   readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => DispatchResult;
@@ -20,6 +22,8 @@ export interface ViewportSessionApplierDeps {
   readonly replayParticleEffect: (entity: number) => DispatchResult;
   /** Optional engine RHI debug capture, injected by the runtime owner. */
   readonly captureFrame?: (frames: number) => Promise<unknown>;
+  /** Engine-owned bounded CPU profiler, exposed only through the Gateway operation. */
+  readonly profiler?: Profiler;
   /** Outer lifecycle deadline; injectable so the terminal-state contract is deterministic in tests. */
   readonly captureTimeoutMs?: number;
   readonly world: World;
@@ -29,6 +33,9 @@ export interface ViewportSessionApplierDeps {
 }
 
 const DEFAULT_CAPTURE_TIMEOUT_MS = 60_000;
+const DEFAULT_PROFILE_FRAME_LIMIT = 2;
+const DEFAULT_PROFILE_EVENT_LIMIT = 512;
+const MAX_PROFILE_EVENT_LIMIT = 4096;
 
 const invalidArgs = (hint: string) => ({ ok: false as const, error: { code: 'INVALID_ARGS' as const, hint } });
 
@@ -83,6 +90,43 @@ function captureWithDeadline(capture: () => Promise<unknown>, timeoutMs: number)
   });
   return Promise.race([Promise.resolve().then(capture), deadline])
     .finally(() => { if (timer !== undefined) clearTimeout(timer); });
+}
+
+function cpuProfileFailure(error: unknown) {
+  const candidate = error !== null && typeof error === 'object'
+    ? error as { code?: unknown; expected?: unknown; detail?: unknown; hint?: unknown }
+    : undefined;
+  const sourceCode = typeof candidate?.code === 'string' ? candidate.code : 'profile-capture-failed';
+  const code = sourceCode === 'capture-already-active'
+    ? 'profiler-busy'
+    : sourceCode === 'profiler-not-enabled'
+      ? 'profiler-unavailable'
+      : sourceCode === 'profile-artifact-invalid' || sourceCode === 'profile-artifact-incompatible'
+        ? 'profile-capture-invalid'
+        : sourceCode === 'profile-capture-timeout' || sourceCode === 'profile-capture-missing' || sourceCode === 'profile-capture-empty'
+          ? sourceCode
+          : 'profile-capture-failed';
+  const hint = typeof candidate?.hint === 'string'
+    ? candidate.hint
+    : error instanceof Error ? error.message : 'The Engine CPU profile capture failed.';
+  return {
+    ok: false as const,
+    error: {
+      code,
+      owner: 'engine',
+      category: 'runtime',
+      hint,
+      retryable: true,
+      recoveryActions: [code === 'profiler-busy' ? 'captureCpuProfile.wait' : 'captureCpuProfile.retry'],
+      cause: {
+        code: sourceCode,
+        owner: 'engine',
+        hint,
+        ...(candidate?.expected === undefined ? {} : { expected: candidate.expected }),
+        ...(candidate?.detail === undefined ? {} : { details: candidate.detail }),
+      },
+    },
+  };
 }
 
 function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
@@ -214,6 +258,44 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
     }, 'Capture RHI Frame', {
       type: 'object',
       properties: { frames: { type: 'number', minimum: 1, maximum: 8 } },
+    });
+    register('captureCpuProfile', (op, ctx) => {
+      const request = op as { frames?: unknown; eventLimit?: unknown };
+      const frames = request.frames === undefined ? DEFAULT_PROFILE_FRAME_LIMIT : request.frames;
+      const eventLimit = request.eventLimit === undefined ? DEFAULT_PROFILE_EVENT_LIMIT : request.eventLimit;
+      if (typeof frames !== 'number' || !Number.isSafeInteger(frames) || frames < 1 || frames > 8) {
+        return invalidArgs('frames must be an integer between 1 and 8');
+      }
+      if (typeof eventLimit !== 'number' || !Number.isSafeInteger(eventLimit) || eventLimit < 1 || eventLimit > MAX_PROFILE_EVENT_LIMIT) {
+        return invalidArgs(`eventLimit must be an integer between 1 and ${MAX_PROFILE_EVENT_LIMIT}`);
+      }
+      if (deps.profiler === undefined) {
+        return {
+          ok: false as const,
+          error: {
+            code: 'profiler-unavailable',
+            hint: 'The Engine CPU profiler is not installed for this runtime.',
+            retryable: true,
+            recoveryActions: ['captureCpuProfile.retry'],
+          },
+        };
+      }
+      const timeoutMs = deps.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
+      ctx?.operationRun?.reportProgress({ fraction: 0.05, stage: 'capturing' });
+      const completion = captureCpuProfile(deps.profiler, {
+        frameLimit: frames,
+        eventLimit,
+        timeoutMs,
+      }).then((result) => result.ok
+        ? { ok: true as const, result: result.value }
+        : cpuProfileFailure(result.error));
+      return { ok: true as const, completion };
+    }, 'Capture CPU Profile', {
+      type: 'object',
+      properties: {
+        frames: { type: 'number', minimum: 1, maximum: 8, description: 'Number of consecutive Engine frames to record. Defaults to 2.' },
+        eventLimit: { type: 'number', minimum: 1, maximum: MAX_PROFILE_EVENT_LIMIT, description: 'Maximum phase records retained by the Engine profiler. Defaults to 512.' },
+      },
     });
     register('replayParticleEffect', (op) => {
       const entity = (op as { entity?: unknown }).entity;

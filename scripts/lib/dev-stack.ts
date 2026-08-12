@@ -6,6 +6,7 @@
 // identically on Linux, macOS, and a Windows dev box (no Git-Bash needed).
 
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { resolveBunExecutable } from '../ci/bun-runtime.mjs';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -113,12 +114,13 @@ export type SpawnServiceOptions = {
  * is ignored (or redirected to `opts.logFd` when given).
  */
 export function spawnService(cmd: string, args: string[], opts: SpawnServiceOptions = {}): ChildProcess {
-  const child = spawn(cmd, args, {
+  const env = opts.env ?? process.env;
+  const child = spawn(resolveBunExecutable(cmd, env), args, {
     stdio: opts.detach ? ['ignore', opts.logFd ?? 'ignore', opts.logFd ?? 'ignore'] : 'inherit',
     shell: IS_WIN, // resolve `bun`/`bun.exe` via PATHEXT on Windows
     detached: opts.detach || !IS_WIN, // bg: detach everywhere; fg POSIX: own group
     cwd: opts.cwd,
-    env: opts.env ?? process.env,
+    env,
   });
   if (opts.detach) child.unref(); // let this process exit without waiting
   return child;

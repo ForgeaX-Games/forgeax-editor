@@ -2,10 +2,10 @@
 // disk files). Recursive row rendering extracted from ContentBrowser.tsx so
 // the component file focuses on state + wiring.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import { useTranslation, type TFunction } from '@forgeax/editor-core/i18n';
-import { dispatchActiveEditorOperation, gateway } from '@forgeax/editor-core';
+import { dispatchActiveEditorOperation } from '@forgeax/editor-core';
 import { ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
 import {
   dirOfPath,
@@ -39,9 +39,19 @@ function selectTreePath(path: string, kind: 'dir' | 'file'): void {
   void dispatchActiveEditorOperation({ kind: 'setFolderSelection', items: [{ path, kind }] });
 }
 
-function clearTreeSelection(): void {
-  gateway.dispatch({ kind: 'setAssetSelection', assets: [], primary: null });
-  gateway.dispatch({ kind: 'setFolderSelection', items: [] });
+interface FavoriteDir {
+  path: string;
+  name: string;
+}
+
+/** Only directories are favoritable, so the Favorites group is a flat list of
+ * every favorited folder found anywhere in the source tree (order = tree order). */
+function collectFavoriteDirs(nodes: SourceTreeNode[], acc: FavoriteDir[] = []): FavoriteDir[] {
+  for (const node of nodes) {
+    if (node.type === 'folder' && node.isFavorite) acc.push({ path: node.path, name: node.name });
+    if (node.children.length > 0) collectFavoriteDirs(node.children, acc);
+  }
+  return acc;
 }
 
 export interface CBSourceTreeProps {
@@ -79,11 +89,12 @@ function renderRows(
 ): ReactNode {
   const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, onFocusItem, nav, openFolderContextMenu, openFileContextMenu } = ctx;
   return nodes.map((node) => {
-    // Disclosure is opt-in: folders stay closed until a double-click explicitly opens them.
-    // Leaf folders have no tree children, so they are selectable/navigation
-    // targets only and must not look or behave like expandable folders.
+    // Folders are expanded by default; the store records only the folders a
+    // double-click has explicitly COLLAPSED (`=== true`). Leaf folders have no
+    // tree children, so they are selectable/navigation targets only and must not
+    // look or behave like expandable folders.
     const expandable = node.type === 'folder' && node.children.length > 0;
-    const open = expandable && collapsedSourceFolders[node.path] === false;
+    const open = expandable && collapsedSourceFolders[node.path] !== true;
     const inSelectionPath = isPathInSelectionChain(selectedPath, node.path);
     const selected = selectedPath === node.path;
     const folder: CBFolder = {
@@ -119,7 +130,7 @@ function renderRows(
     };
     const handleDoubleClick = () => {
       if (!expandable) return;
-      setCollapsedSourceFolders(prev => ({ ...prev, [node.path]: prev[node.path] === false }));
+      setCollapsedSourceFolders(prev => ({ ...prev, [node.path]: prev[node.path] !== true }));
     };
     const handleRowContextMenu = (e: React.MouseEvent) => {
       e.preventDefault();
@@ -142,7 +153,7 @@ function renderRows(
         <button
           type="button"
           className={`no-motion-lift cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}`}
-          style={{ paddingLeft: `${depth * 14}px` }}
+          style={{ paddingLeft: `${16 + depth * 14}px` }}
           title={node.path}
           tabIndex={selected ? 0 : -1}
           onFocus={() => onFocusItem(file ?? folder)}
@@ -150,7 +161,10 @@ function renderRows(
           onDoubleClick={handleDoubleClick}
           onContextMenu={handleRowContextMenu}
         >
-          <span className={`cb-source-chev${expandable ? '' : ' hidden'}`}><ContentBrowserIcon name="chevron-down" /></span>
+          <span
+            className={`cb-source-chev${expandable ? '' : ' hidden'}`}
+            onClick={expandable ? (e) => { e.stopPropagation(); handleDoubleClick(); } : undefined}
+          ><ContentBrowserIcon name="chevron-down" /></span>
           <span className={`cb-source-icon${node.type === 'file' ? ` is-${node.family ?? 'other'}` : ''}`}>
             {node.type === 'folder' ? <ContentBrowserIcon name={expandable && open ? 'folder-open' : 'folder'} /> : <FileFamilyIcon family={node.family ?? 'other'} />}
           </span>
@@ -165,7 +179,6 @@ function renderRows(
 export function CBSourceTree({
   sourceTree,
   projectName,
-  favoritesOnly,
   setFavoritesOnly,
   collapsedSourceFolders,
   setCollapsedSourceFolders,
@@ -180,8 +193,10 @@ export function CBSourceTree({
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   useKeybindingScope(rootRef, 'editor.contentBrowser.sourceTree');
-  const [projectOpen, setProjectOpen] = useState(false);
-  const projectExpandable = sourceTree.length > 0;
+  // Two independent accordion groups — both may be open at once.
+  const [favoritesGroupOpen, setFavoritesGroupOpen] = useState(true);
+  const [projectOpen, setProjectOpen] = useState(true);
+  const favoriteDirs = useMemo(() => collectFavoriteDirs(sourceTree), [sourceTree]);
 
   // A grid selection can originate below a collapsed root. Reveal the
   // selected subject's path chain so the two selection layers remain visible;
@@ -215,74 +230,99 @@ export function CBSourceTree({
     });
   }, [selectedPath, setCollapsedSourceFolders, sourceTree]);
 
-  const selectProjectRoot = () => {
+  // Clicking a favorited directory jumps the content view to it AND lights its
+  // row in the project tree (the reveal effect above expands the ancestor chain
+  // from the resulting selectedPath).
+  const revealFavoriteDir = (dir: FavoriteDir) => {
     setFavoritesOnly(false);
-    nav.navigate('');
-    setSelectedItem(null);
-    setPreviewItem(null);
-    clearTreeSelection();
+    const folder: CBFolder = { type: 'folder', path: dir.path, name: dir.name, childCount: 0, isFavorite: true };
+    nav.navigate(dir.path);
+    setSelectedItem(folder);
+    setPreviewItem(folder);
+    selectTreePath(dir.path, 'dir');
+    setProjectOpen(true);
   };
-
-  const selectFavorites = () => {
-    setFavoritesOnly(true);
-    nav.navigate('');
-    setSelectedItem(null);
-    setPreviewItem(null);
-    clearTreeSelection();
-  };
-
-  const handleProjectDoubleClick = () => {
-    if (!projectExpandable) return;
-    setProjectOpen(previous => !previous);
-  };
-
-  const projectSelected = !favoritesOnly && selectedPath === null && nav.currentPath === '';
-  const projectInSelectionPath = isPathInSelectionChain(selectedPath, '');
 
   return (
     <div ref={rootRef} className="cb-source-panel">
       <div className="cb-source-tree">
-        <div className="cb-source-rows">
+        {/* ── Favorites accordion ── */}
+        <div className="cb-source-group">
           <button
             type="button"
-            className={`no-motion-lift cb-source-zone-head${projectInSelectionPath ? ' is-path' : ''}${projectSelected ? ' is-sel' : ''}${projectExpandable && !projectOpen ? ' collapsed' : ''}`}
-            title={projectName}
-            tabIndex={projectSelected ? 0 : -1}
-            onFocus={() => onFocusItem(null)}
-            onClick={selectProjectRoot}
-            onDoubleClick={handleProjectDoubleClick}
-          >
-            <span className={`cb-source-chev${projectExpandable ? '' : ' hidden'}`}><ContentBrowserIcon name="chevron-down" /></span>
-            <span className="cb-source-zone-icon"><ContentBrowserIcon name="package" /></span>
-            <span className="cb-source-zone-name">{projectName}</span>
-          </button>
-          {projectOpen && <div className="cb-source-project-children">
-            {renderRows(sourceTree, 0, {
-              t,
-              collapsedSourceFolders,
-              setCollapsedSourceFolders,
-              setFavoritesOnly,
-              selectedPath,
-              setSelectedItem,
-              setPreviewItem,
-              onFocusItem,
-              nav,
-              openFolderContextMenu,
-              openFileContextMenu,
-            })}
-          </div>}
-          <button
-            type="button"
-            className={`no-motion-lift cb-source-row cb-source-favorites-row${favoritesOnly ? ' is-sel' : ''}`}
+            className={`no-motion-lift cb-source-group-head${favoritesGroupOpen ? '' : ' collapsed'}`}
             title={t('editor.contentBrowser.sourceTree.favorites')}
-            tabIndex={favoritesOnly ? 0 : -1}
-            onFocus={() => onFocusItem(null)}
-            onClick={selectFavorites}
+            onClick={() => setFavoritesGroupOpen(open => !open)}
           >
-            <span className="cb-source-chev hidden"><ContentBrowserIcon name="chevron-down" /></span>
-            <span className="cb-source-icon"><ContentBrowserIcon name="star" /></span>
-            <span className="cb-source-name">{t('editor.contentBrowser.sourceTree.favorites')}</span>
+            <span className="cb-source-chev"><ContentBrowserIcon name="chevron-down" /></span>
+            <span className="cb-source-group-icon"><ContentBrowserIcon name="star" /></span>
+            <span className="cb-source-group-name">{t('editor.contentBrowser.sourceTree.favorites')}</span>
           </button>
+          {favoritesGroupOpen && (
+            <div className="cb-source-group-body">
+              {favoriteDirs.length === 0 ? (
+                <div className="cb-source-empty">{t('editor.contentBrowser.sourceTree.favoritesEmpty')}</div>
+              ) : (
+                favoriteDirs.map(dir => {
+                  const folder: CBFolder = { type: 'folder', path: dir.path, name: dir.name, childCount: 0, isFavorite: true };
+                  const selected = selectedPath === dir.path;
+                  return (
+                    <button
+                      key={dir.path}
+                      type="button"
+                      className={`no-motion-lift cb-source-row${selected ? ' is-sel' : ''}`}
+                      style={{ paddingLeft: '16px' }}
+                      title={dir.path}
+                      tabIndex={selected ? 0 : -1}
+                      onFocus={() => onFocusItem(folder)}
+                      onClick={() => revealFavoriteDir(dir)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        revealFavoriteDir(dir);
+                        openFolderContextMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} }, folder);
+                      }}
+                    >
+                      <span className="cb-source-chev hidden"><ContentBrowserIcon name="chevron-down" /></span>
+                      <span className="cb-source-icon"><ContentBrowserIcon name="folder" /></span>
+                      <span className="cb-source-name">{dir.name}</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Project accordion ── */}
+        <div className="cb-source-group">
+          <button
+            type="button"
+            className={`no-motion-lift cb-source-group-head${projectOpen ? '' : ' collapsed'}`}
+            title={projectName}
+            onClick={() => setProjectOpen(open => !open)}
+          >
+            <span className="cb-source-chev"><ContentBrowserIcon name="chevron-down" /></span>
+            <span className="cb-source-group-icon"><ContentBrowserIcon name="package" /></span>
+            <span className="cb-source-group-name">{projectName}</span>
+          </button>
+          {projectOpen && (
+            <div className="cb-source-group-body">
+              {renderRows(sourceTree, 0, {
+                t,
+                collapsedSourceFolders,
+                setCollapsedSourceFolders,
+                setFavoritesOnly,
+                selectedPath,
+                setSelectedItem,
+                setPreviewItem,
+                onFocusItem,
+                nav,
+                openFolderContextMenu,
+                openFileContextMenu,
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -356,6 +356,10 @@ export function createGatewayCapabilityAdapter(
     }
     const accepted = acceptRun(operationId, input, request);
     if (!accepted.ok) return accepted;
+    // A request/idempotency replay may resolve to an already-terminal run.
+    // Replaying that intent must return the retained terminal fact; attempting
+    // to append a new progress event would turn a safe replay into run-terminal.
+    if (accepted.reused) return accepted;
     const journal = journalFor(request.scope);
     const progress = journal.updateProgress(accepted.runId, { fraction: 1, stage: 'complete' });
     if (!progress.ok) return { ok: false, error: progress.error };

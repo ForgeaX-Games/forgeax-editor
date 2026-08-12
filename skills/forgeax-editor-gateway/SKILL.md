@@ -132,7 +132,7 @@ If discovery lacks semantic intent, add it to the Gateway rather than creating a
 
 Use [references/field-notes.md](references/field-notes.md) only for accumulated edge cases, not
 as contract. Read [DESIGN.md](DESIGN.md) for architectural rationale and
-[world-fork semantics](../../docs/skills/forgeax-editor-gateway.md) for Play/Stop identity rules.
+[world-fork semantics](../../.forgeax-harness/docs/skills/forgeax-editor-gateway.md) for Play/Stop identity rules.
 When the runtime catalog and reference disagree, fix the catalog/descriptor first.
 
 After changing this skill or CLI, run:

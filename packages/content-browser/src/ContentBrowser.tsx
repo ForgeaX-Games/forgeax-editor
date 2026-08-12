@@ -5,6 +5,7 @@ import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-she
 import { isPageDirty } from '@forgeax/interface/core/page-platform';
 import { publish } from '@forgeax/interface/lib/bus';
 import { useTranslation } from '@forgeax/editor-core/i18n';
+import { Download, FolderPlus, Plus, Save } from 'lucide-react';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
 import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, getViewportRuntimeClientSnapshot, requestAddAssetsToChat, resolveGamePath, showContextMenu, subscribeViewportRuntimeClient, waitViewportRuntimeOperationRun,
@@ -48,7 +49,7 @@ import { CBGrid } from './CBGrid';
 import { CBPreviewPanel } from './CBPreviewPanel';
 import { CBSourceTree } from './CBSourceTree';
 import { CONTENT_BROWSER_INTERACTION_SCOPE, contentBrowserInteractionAttrs, contentBrowserPrompt } from './interaction-surface';
-import { iconNameForAssetKind, iconNameForFileFamily } from './content-browser-icons';
+import { ContentBrowserIcon, iconNameForAssetKind, iconNameForFileFamily, labelForAssetKind } from './content-browser-icons';
 import { importFiles, isRetryableImportRun, retryImportRun, type ImportProgress, type ImportRunRecord } from './import-pipeline';
 import { isImportable, buildAcceptString, logImport } from './import-registry';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
@@ -138,10 +139,11 @@ function ContentBrowserActionBar({
       <div className="cb-toolbar-group">
         <DropdownMenu modal={false} open={createMenuOpen} onOpenChange={setCreateMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button size="sm" variant="subtle">+ {t('editor.contentBrowser.actions.create')}</Button>
+            <Button size="sm" variant="subtle"><Plus />{t('editor.contentBrowser.actions.create')}</Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
             <DropdownMenuItem size="sm" onClick={() => executeCommand('contentBrowser.createFolder')}>
+              <FolderPlus />
               {t('editor.contentBrowser.actions.createFolder')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -151,15 +153,18 @@ function ContentBrowserActionBar({
                 size="sm"
                 onClick={() => executeCommand(`contentBrowser.createAsset.${spec.kind}`)}
               >
-                {spec.label}
+                <ContentBrowserIcon name={spec.icon} />
+                {labelForAssetKind(spec.kind, t)}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
         <Button size="sm" variant="subtle" onClick={() => executeCommand('contentBrowser.import')}>
+          <Download />
           {t('editor.contentBrowser.actions.import')}
         </Button>
         <Button size="sm" variant="subtle" onClick={() => executeCommand('contentBrowser.saveAll')}>
+          <Save />
           {t('editor.contentBrowser.actions.saveAll')}
         </Button>
       </div>
@@ -859,7 +864,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
     void (async () => {
       const name = (await contentBrowserPrompt({
-        title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
+        title: t('editor.contentBrowser.actions.createAsset', { label: labelForAssetKind(spec.kind, t) }),
         label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
         defaultValue: spec.defaultNamePrefix,
         confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
@@ -976,7 +981,6 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     }
     if (item.type === 'file') {
       return [
-        { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
         { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(item.diskPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
@@ -996,7 +1000,6 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => deleteItem(item) },
       ];
     }
-    const favRef = favoriteRef(item);
     const relPath = relByAssetGuid.get(item.guid) ?? catalogPathToRoot(item.packPath, gameSlug, catalogAssetRoots) ?? item.packPath;
     const fullPath = resolveCopyPath(relPath);
     const importedActions = item.activation?.provenance === 'imported-output'
@@ -1035,7 +1038,6 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       : [];
     return [
       ...importedActions,
-      { label: favorites.isFavorite(favRef) ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favRef) },
       { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
       { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
       { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(relPath) },
@@ -1319,11 +1321,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       },
       CREATABLE_ASSET_KINDS.map((spec) => ({
         id: `new-${spec.kind}`,
-        label: spec.kind === 'material'
-          ? t('editor.contentBrowser.contextMenu.newMaterial')
-          : spec.kind === 'scene'
-            ? t('editor.contentBrowser.fileKinds.scene')
-            : spec.label,
+        label: labelForAssetKind(spec.kind, t),
         action: () => createAssetInCurrentPath(spec),
       })),
     );

@@ -4,7 +4,7 @@
 //
 // WHAT THIS IS (post-M4 shape)
 //   D8 physically split the 1652-line main.tsx bootEditor() closure along the q2
-//   boundary into two edit-runtime modules that standalone/main.tsx can import:
+//   boundary into two edit-runtime modules that apps/standalone/main.tsx can import:
 //     - ViewportComponent.tsx — canvas + createApp + renderer + camera + viewport
 //       interaction (the ENGINE SURFACE).
 //     - host-boot.ts (this file) — the pre-boot session config + the COMPOSITION

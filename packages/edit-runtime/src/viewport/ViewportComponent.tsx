@@ -1188,6 +1188,7 @@ async function bootViewport(
       }
       return capture(frames);
     },
+    profiler,
     world,
     activeWorld: () => gateway.activeWorld,
     gateway,

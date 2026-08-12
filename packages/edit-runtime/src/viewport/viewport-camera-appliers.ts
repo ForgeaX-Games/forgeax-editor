@@ -103,7 +103,7 @@ export interface CameraAppliersDeps {
   /** Abort an in-progress pointer gesture (fly/orbit/pan) before an op whose
    *  semantics conflict with it — e.g. cameraSetView switching to orthographic
    *  while RMB-fly is live would leave flyTick writing a forbidden ortho fly.
-   *  Optional: the orbit-only preview viewport has no gesture loop to cancel. */
+   *  Optional: the preview viewport has no gesture loop to cancel. */
   cancelNavigation?(): void;
   getBookmark(slot: number): CameraBookmark | undefined;
   setBookmark(slot: number, bookmark: CameraBookmark | null): void;

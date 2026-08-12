@@ -87,6 +87,7 @@ describe('listOps builtin full coverage (m4-w1, RED)', () => {
   const SESSION_OPS = [
     'setSelection', 'toggleSelection', 'setSelectionMany',
     'setGizmoMode', 'requestFrame', 'requestRename',
+    'captureCpuProfile',
     'setSceneId', 'switchSceneFile', 'createSceneFile',
     'saveDocToDisk', 'loadDocFromDisk',
     'previewImportedScene', 'promoteImportedScene',
@@ -287,11 +288,15 @@ describe('save OperationRun manifest (M1-T5, RED)', () => {
   it('does not add run metadata or change the domain of unrelated operations', () => {
     const save = gw.listOps().find((op) => op.id === 'saveDocToDisk');
     for (const op of gw.listOps()) {
-      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'asset.preflight' || op.id === 'previewAssetSourceMutation' || op.id === 'saveAssetSourceOverride' || op.id === 'discardSourceOverridesAndReimport' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame' || op.id === 'catalog.reconcile' || op.id === 'validateGameProject' || op.id === 'assignAssetToEntity') continue;
+      if (op.id === 'saveDocToDisk' || op.id === 'promoteImportedScene' || op.id === 'deleteSourceFile' || op.id === 'importAsset' || op.id === 'reimportAsset' || op.id === 'asset.preflight' || op.id === 'previewAssetSourceMutation' || op.id === 'saveAssetSourceOverride' || op.id === 'discardSourceOverridesAndReimport' || op.id === 'addSceneAssetToScene' || op.id === 'previewImportedScene' || op.id === 'bindAssetRef' || op.id === 'switchSceneFile' || op.id === 'createSceneFile' || op.id === 'setDefaultScene' || op.id === 'deleteScene' || op.id === 'captureFrame' || op.id === 'captureCpuProfile' || op.id === 'catalog.reconcile' || op.id === 'validateGameProject' || op.id === 'assignAssetToEntity') continue;
       expect(op.domain).toBe(op.id === 'setHoverEntity' || op.id === 'setFieldPreview' ? 'transient' : op.domain);
       expect((op as OpDescriptor & { operationRun?: unknown }).operationRun).toBeUndefined();
     }
     expect(save?.domain).toBe('session');
+    expect(gw.listOps().find((op) => op.id === 'captureCpuProfile')).toMatchObject({
+      domain: 'session',
+      operationRun: { read: { wait: 'waitOperationRun' } },
+    });
   });
 
   it('exposes the same request-correlated terminal read policy for deleteSourceFile', () => {

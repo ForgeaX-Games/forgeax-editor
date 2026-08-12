@@ -7,7 +7,7 @@ import {
   ENGINE_EXECUTION_ISOLATION_HEADERS,
   resolveGameEngineEntry as resolveSharedGameEngineEntry,
   type EngineVitePreset,
-} from '../../engine-vite-preset';
+} from '../../scripts/vite/engine-vite-preset';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
 import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots';

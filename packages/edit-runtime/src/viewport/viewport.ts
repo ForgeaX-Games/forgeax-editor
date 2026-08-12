@@ -146,11 +146,11 @@ export interface ViewportDeps {
   /** Optional host-provided cursor adapter; browser pointer-lock/capture is the default. */
   cursorCapture?: ViewportCursorCapture;
   /**
-   * Interaction profile (M5 MI preview).
+   * Interaction profile.
    * - `full` (default): orbit + pick + gizmo + selection
-   * - `orbit-only`: camera navigation only — no pick/gizmo/selection side effects
+   * - `preview`: private camera navigation only — no pick/gizmo/selection side effects
    */
-  interaction?: 'full' | 'orbit-only';
+  interaction?: 'full' | 'preview';
 }
 
 export interface Viewport {
@@ -197,7 +197,13 @@ export function createViewport({
   // game owns input, so every editor handler bails before doing orbit/pick/gizmo
   // work — by EARLY-RETURN (not stopPropagation), so the same DOM event still
   // bubbles to the canvas → game InputBackend (AC-10 hard constraint).
-  const orbitOnly = interaction === 'orbit-only';
+  const previewOnly = interaction === 'preview';
+  if (previewOnly) {
+    // Preview canvases are created outside the main viewport JSX. Make the
+    // canvas itself the keyboard boundary so a pointerdown can focus it.
+    if (canvas.tabIndex < 0) canvas.tabIndex = 0;
+    canvas.dataset.fxKeyboardSurface = 'viewport-preview';
+  }
   const inputToGame = (): boolean => (getInputTarget?.() ?? 'editor') === 'game';
   // Live binding to the preferences store SSOT: setViewportPreferences op
   // patches land here via the subscription below, so event handlers always read
@@ -217,6 +223,9 @@ export function createViewport({
   let flySpeed = viewportPreferences.flySpeed;
 
   function persistViewportState(): void {
+    // Preview camera state is chrome-local. Do not let a private preview
+    // gesture overwrite the main editor viewport's shared preferences.
+    if (previewOnly) return;
     const persistedBookmarks: Partial<Record<CameraBookmarkSlot, CameraBookmark>> = {};
     for (const [slot, bookmark] of bookmarks) {
       if (slot >= 1 && slot <= 9) {
@@ -349,12 +358,12 @@ export function createViewport({
   });
   // Only the scene viewport claims the camera op kinds — they are process-global
   // (a second registration throws OP_ID_CONFLICT) and their ledger record means
-  // "the shared scene camera turned". A secondary orbit-only viewport (the MI
+  // "the shared scene camera turned". A secondary preview viewport
   // preview) drives a PRIVATE camera that is chrome, not authored state, so it
   // runs the same op bodies against its own table and dispatches nothing.
-  const unregCameraAppliers = orbitOnly ? () => {} : registerCameraAppliers(cameraOps);
+  const unregCameraAppliers = previewOnly ? () => {} : registerCameraAppliers(cameraOps);
   const dispatchCameraOp = (op: EditorOp & { kind: string }): void => {
-    if (orbitOnly) { cameraOps.run(op); return; }
+    if (previewOnly) { cameraOps.run(op); return; }
     gateway.dispatch(op, 'human');
   };
 
@@ -429,12 +438,12 @@ export function createViewport({
     getAspect: aspect,
   });
   const updateGizmo = (): void => {
-    if (orbitOnly) return;
+    if (previewOnly) return;
     gizmoPool.update();
     selectionOutline.update();
   };
-  const updateParamGizmo = (): void => { if (!orbitOnly) paramGizmo.update(); };
-  const hitGizmo = (origin: Vec3, dir: Vec3): number | null => (orbitOnly ? null : gizmoPool.hit(origin, dir));
+  const updateParamGizmo = (): void => { if (!previewOnly) paramGizmo.update(); };
+  const hitGizmo = (origin: Vec3, dir: Vec3): number | null => (previewOnly ? null : gizmoPool.hit(origin, dir));
 
   // ── animation scrub preview (Timeline) ──────────────────────────────────────
   function rayAt(clientX: number, clientY: number): { origin: Vec3; dir: Vec3 } {
@@ -488,7 +497,7 @@ export function createViewport({
    *  (e.g. because the engine hasn't populated .aabb yet — see engine feedback
    *  2026-07-06), falls back to the editor's Transform-scale AABB sweep. */
   function pick(clientX: number, clientY: number): EntityHandle | null {
-    if (orbitOnly) return null;
+    if (previewOnly) return null;
     const r = canvas.getBoundingClientRect();
     const sx = clientX - r.left, sy = clientY - r.top;
     // merge origin/main: enginePick needs the raw engine World (read-only,
@@ -742,6 +751,7 @@ export function createViewport({
       e.preventDefault();
       return;
     }
+    if (previewOnly) return;
     const { origin, dir } = rayAt(e.clientX, e.clientY);
     // gizmo handles take priority over entity/orbit picking.
     const sel = getSelection();
@@ -1011,7 +1021,7 @@ export function createViewport({
       flyRAF = 0;
     }
     // Stop the Inspector preview (transient op); the panel now reads the committed doc.
-    if (!orbitOnly) gateway.dispatch({ kind: 'setFieldPreview', id: null });
+    if (!previewOnly) gateway.dispatch({ kind: 'setFieldPreview', id: null });
     updateGizmo();
   }
 
@@ -1243,6 +1253,7 @@ export function createViewport({
   function onDblClick(e: MouseEvent): void {
     if (!inCanvas(e.target)) return;
     if (inputToGame()) return;
+    if (previewOnly) return;
     const hit = pick(e.clientX, e.clientY);
     if (hit !== null) { gateway.dispatch({ kind: 'setSelection', id: hit }); gateway.dispatch({ kind: 'requestFrame' }); }
   }
@@ -1256,7 +1267,7 @@ export function createViewport({
   canvas.addEventListener('contextmenu', onContext);
   // T2b: sample fly keys on the focused canvas; discrete editor commands remain
   // owned by the injected global keyboard router.
-  if (!orbitOnly) canvas.addEventListener('keydown', onFlyKeyDown);
+  canvas.addEventListener('keydown', onFlyKeyDown);
   // keyup/blur release fly keys tracked by the canvas sampler / router.
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
@@ -1264,7 +1275,7 @@ export function createViewport({
   canvas.addEventListener('dblclick', onDblClick);
   // install() also flushes any discrete modified-key commands buffered during
   // the async engine boot (see viewport-boot-input.ts).
-  if (!orbitOnly) viewportBootInput.install(handleViewportKeyDown);
+  if (!previewOnly) viewportBootInput.install(handleViewportKeyDown);
   // the gizmo follows the selection (Hierarchy click, viewport pick, AI, …) and
   // re-tints when the mode changes; param gizmos also track doc edits (e.g. the
   // Inspector changing a light's range or a camera's fov).
@@ -1272,13 +1283,13 @@ export function createViewport({
 
 // Display visibility bus (w23, D-5): re-gate gizmos when display toggles so
 // display='game' immediately hides / 'scene' immediately restores visual aides.
-  const unsubDisplay = orbitOnly ? () => {} : onDisplayModeChange(() => refreshGizmos());
+  const unsubDisplay = previewOnly ? () => {} : onDisplayModeChange(() => refreshGizmos());
   // The gizmos depend ONLY on the selected entity's own components (updateGizmo
   // reads its local Transform; updateParamGizmo reads its Light/Camera). So an
   // edit to any OTHER entity can't move them — skip the refresh by tracking a
   // signature of just the selected entity (cheap: one entity, not the whole doc).
   const selSig = (): string | null => {
-    if (orbitOnly) return null;
+    if (previewOnly) return null;
     const sel = getSelection();
     if (sel === null) return null;
     // M7-a: signature the selected entity's components read from the world (SSOT)
@@ -1287,11 +1298,11 @@ export function createViewport({
     return Object.keys(comps).length > 0 ? JSON.stringify(comps) : '\u2205'; // '∅' = selected entity gone
   };
   let lastSelSig = selSig();
-  const unsubSel = orbitOnly ? () => {} : onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
-  const unsubMode = orbitOnly ? () => {} : onGizmoModeChange(updateGizmo);
-  const unsubSpace = orbitOnly ? () => {} : onGizmoSpaceChange(updateGizmo);
-  const unsubPivot = orbitOnly ? () => {} : onGizmoPivotChange(updateGizmo);
-  const unsubDoc = orbitOnly ? () => {} : gateway.subscribe(() => {
+  const unsubSel = previewOnly ? () => {} : onSelectionChange(() => { lastSelSig = selSig(); refreshGizmos(); });
+  const unsubMode = previewOnly ? () => {} : onGizmoModeChange(updateGizmo);
+  const unsubSpace = previewOnly ? () => {} : onGizmoSpaceChange(updateGizmo);
+  const unsubPivot = previewOnly ? () => {} : onGizmoPivotChange(updateGizmo);
+  const unsubDoc = previewOnly ? () => {} : gateway.subscribe(() => {
     const sig = selSig();
     if (sig === lastSelSig) return; // selected entity unchanged → gizmos unaffected
     lastSelSig = sig;
@@ -1303,7 +1314,7 @@ export function createViewport({
   // writes (gesture zoom, cameraAdjustFov) round-trip through
   // persistViewportState and arrive here with values already equal — the
   // comparisons below make that a no-op, so there is no feedback loop.
-  const unsubPrefs = onViewportPreferencesChange(() => {
+  const unsubPrefs = previewOnly ? () => {} : onViewportPreferencesChange(() => {
     const next = getViewportPreferences();
     viewportPreferences = next;
     flySpeed = next.flySpeed;
@@ -1324,12 +1335,15 @@ export function createViewport({
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContext);
-      if (!orbitOnly) canvas.removeEventListener('keydown', onFlyKeyDown);
+      canvas.removeEventListener('keydown', onFlyKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       canvas.removeEventListener('dblclick', onDblClick);
-      if (!orbitOnly) viewportBootInput.uninstall(handleViewportKeyDown);
+      if (!previewOnly) viewportBootInput.uninstall(handleViewportKeyDown);
+      if (previewOnly && canvas.dataset.fxKeyboardSurface === 'viewport-preview') {
+        delete canvas.dataset.fxKeyboardSurface;
+      }
       if (flyRAF !== 0) { cancelAnimationFrame(flyRAF); flyRAF = 0; }
       cursorCapture?.dispose();
       cursorCapture = null;

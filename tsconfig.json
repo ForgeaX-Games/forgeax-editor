@@ -13,6 +13,6 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "types/forgeax-engine-shims.d.ts"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+  "include": ["packages/edit-runtime/src/public/**/*.ts", "scripts/types/forgeax-engine-shims.d.ts"],
+  "exclude": ["packages/edit-runtime/src/public/**/*.test.ts", "packages/edit-runtime/src/public/**/*.test.tsx"]
 }

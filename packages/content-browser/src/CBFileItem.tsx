@@ -59,9 +59,6 @@ function CBFileItemImpl({
 }: Props) {
   const { t } = useTranslation();
   const fav = favorite ?? file.isFavorite;
-  const hasAssets = file.assets.length > 0;
-  const metaLabel = hasAssets ? t('editor.contentBrowser.preview.assetCount', { count: file.assets.length }) : file.kindLabel;
-  const metaColor = hasAssets ? 'var(--accent-mint, #63eacf)' : colorForFileFamily(file.family);
 
   const handleClick = useCallback((e: MouseEvent) => {
     onSelect(file);
@@ -105,9 +102,7 @@ function CBFileItemImpl({
         <span className="cb-file-icon"><FileFamilyIcon family={file.family} /></span>
       </div>
       <div className="cb-grid-label cb-fe-name" title={file.name}>{file.name}</div>
-      <div className={`cb-card-meta${hasAssets ? ' cb-card-asset-count' : ' cb-card-kind'}`} style={{ color: metaColor }}>
-        {metaLabel}
-      </div>
+      <div className="cb-card-meta cb-card-kind" style={{ color: colorForFileFamily(file.family) }}>{file.kindLabel}</div>
     </div>
   );
 }

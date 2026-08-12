@@ -110,7 +110,7 @@ export function MaterialPreviewViewport(): ReactElement {
         editorEngine: facade,
         camera: assembly.camera,
         initialOrbit: { target: [0, 1, 0], dist: 3, yaw: 0.55, pitch: -0.35 },
-        interaction: 'orbit-only',
+        interaction: 'preview',
       });
 
       const syncSize = () => {

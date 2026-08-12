@@ -2,7 +2,7 @@ import { memo, useState, useCallback, useRef, useEffect, type KeyboardEvent } fr
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { colorForAssetKind, ContentBrowserIcon, iconNameForAssetKind } from './content-browser-icons';
+import { colorForAssetKind, ContentBrowserIcon, iconNameForAssetKind, labelForAssetKind } from './content-browser-icons';
 import { isAssetPlacementAvailable } from './content-browser-format';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
@@ -174,14 +174,10 @@ function CBAssetItemImpl({
             <ContentBrowserIcon name={iconNameForAssetKind(asset.kind)} />
           </span>
         )}
-        {thumb.badge && <span className="cb-thumb-badge">{thumb.badge}</span>}
         {Boolean(asset.payload?.cookError) && <span className="cb-thumb-warn" title={String(asset.payload?.cookError)}>⚠</span>}
       </div>
       <div className="cb-grid-label cb-fe-name" title={asset.name}>{asset.name}</div>
-      <div className="cb-card-meta cb-card-kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
-      {asset.activation?.mode === 'preview-imported' && (
-        <div className="cb-card-meta" data-testid="cb-imported-preview-badge">Imported Preview · Read-only</div>
-      )}
+      <div className="cb-card-meta cb-card-kind" style={{ color: colorForAssetKind(asset.kind) }}>{labelForAssetKind(asset.kind, t)}</div>
 
       {hovered && tipXY && createPortal(
         <div className="cb-rich-tooltip" style={{ position: 'fixed', left: tipXY.left, top: tipXY.top }}>

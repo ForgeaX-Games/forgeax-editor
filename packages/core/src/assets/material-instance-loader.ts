@@ -24,7 +24,7 @@
 //   refs[], which means the registry's generic ref recursion loads the whole
 //   parent chain as a side effect of loading the MI.
 //
-// Anchors: docs/2026-08-05-material-instance-editor-tech-plan.md §A3,
+// Anchors: .forgeax-harness/docs/2026-08-05-material-instance-editor-tech-plan.md §A3,
 //   architecture-principles #1 (SSOT) — one registration point, called by the
 //   host that owns the registry.
 

@@ -5,7 +5,7 @@
 // as an editor kind. Runtime rendering always consumes a resolved MaterialAsset
 // values map (see material-instance-resolve.ts) — never a raw MI payload.
 //
-// Anchors: docs/2026-08-05-material-instance-editor-tech-plan.md §A1
+// Anchors: .forgeax-harness/docs/2026-08-05-material-instance-editor-tech-plan.md §A1
 
 export const MATERIAL_INSTANCE_KIND = 'material-instance' as const;
 

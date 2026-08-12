@@ -10,11 +10,11 @@
 
 > [!IMPORTANT]
 > This file is the call surface. The gateway-specific rationale lives in `DESIGN.md`; play/stop
-> world-fork semantics live in `docs/skills/forgeax-editor-gateway.md`.
+> world-fork semantics live in `.forgeax-harness/docs/skills/forgeax-editor-gateway.md`.
 >
 > [!CAUTION]
 > **Reading/writing entities across a play/stop (`▶`/`■`) boundary?** First read
-> [`docs/skills/forgeax-editor-gateway.md`](../../docs/skills/forgeax-editor-gateway.md) —
+> [`.forgeax-harness/docs/skills/forgeax-editor-gateway.md`](../../../.forgeax-harness/docs/skills/forgeax-editor-gateway.md) —
 > `gateway.activeWorld` / `mode` and the world-fork rule that an `EntityHandle` is
 > **stale** the moment you cross a play/stop boundary. Re-query after every `▶`/`■`.
 

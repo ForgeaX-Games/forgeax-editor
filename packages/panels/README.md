@@ -37,7 +37,7 @@ toast 视为 visible-ready。
 ## 导入示例
 
 ```ts
-// 面板 manifest（SSOT 在 @forgeax/editor-shared，此处 re-export）
+// 面板 manifest（SSOT 在 @forgeax/editor-core，此处 re-export）
 import { EDITOR_PANELS, type EditorPanelId } from '@forgeax/editor-panels';
 
 // 面板组件
@@ -52,7 +52,7 @@ import { EDITOR_PANEL_COMPONENTS } from '@forgeax/editor-panels';
 | 入口 | 导出 | 说明 |
 |:--|:--|:--|
 | `.` | `HierarchyPanel`, `InspectorPanel`, `AssetsPanel`, `HistoryPanel`, `CapabilitiesPanel`, `EDITOR_PANELS`, `EditorPanelId`, `EDITOR_PANEL_COMPONENTS` | 面板组件 + manifest re-export + 组件查找表 |
-| `./panels` | `EDITOR_PANELS`（常量数组）, `EditorPanelId`（联合类型） | 面板 manifest（re-export from `@forgeax/editor-shared`） |
+| `./panels` | `EDITOR_PANELS`（常量数组）, `EditorPanelId`（联合类型） | 面板 manifest（re-export from `@forgeax/editor-core`） |
 
 ### `EDITOR_PANELS` 常量
 
@@ -65,7 +65,7 @@ export const EDITOR_PANELS = [
   'capabilities',
   'timeline',
   'matgraph',
-] as const;  // SSOT in @forgeax/editor-shared, re-exported here
+] as const;  // SSOT in @forgeax/editor-core, re-exported here
 ```
 
 ### `EditorPanelId` 类型
@@ -80,8 +80,8 @@ export type EditorPanelId = (typeof EDITOR_PANELS)[number];
 
 | 症状 | 原因 | 解决 |
 |:--|:--|:--|
-| `Module '"@forgeax/editor-panels/panels"' has no exported member 'EDITOR_PANELS'` | `src/manifest.ts` 未从 shared re-export | 检查 `manifest.ts` 是否 `export { EDITOR_PANELS } from '@forgeax/editor-shared'` |
-| 面板 ID 列表与 `sync-channel` 不一致 | core 的 sync-channel.ts 内联了复制 | sync-channel.ts 内联了面板列表以断 core↔shared 环——新增面板时需同时更新 `@forgeax/editor-shared/src/manifest.ts` 与 `editor-core/src/sync-channel.ts` |
+| `Module '"@forgeax/editor-panels/panels"' has no exported member 'EDITOR_PANELS'` | `src/manifest.ts` 未从 editor-core re-export | 检查 `manifest.ts` 是否 `export { EDITOR_PANELS } from '@forgeax/editor-core'` |
+| 面板 ID 列表与 `manifest.ts` 不一致 | 读取了错误的 owner 或保留了旧复制 | `packages/core/src/manifest.ts` 是唯一 SSOT；新增面板时只更新该文件，并让此包继续 re-export |
 
 ## Diagnostics projection
 

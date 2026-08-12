@@ -17,7 +17,7 @@ import {
   clearSessionDirtyAssets,
 } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { ContentBrowserIcon, iconNameForAssetKind } from './content-browser-icons';
+import { ASSET_KINDS_I18N_KEY, ContentBrowserIcon, iconNameForAssetKind, labelForAssetKind } from './content-browser-icons';
 
 const SCENE_ROW_ID = '__scene__';
 const DIALOG_KEY = 'editor.contentBrowser.dialogs.saveAllDialog';
@@ -63,7 +63,7 @@ function useRows(): readonly Row[] {
         id: SCENE_ROW_ID,
         name: current?.name ?? sceneModel.currentScene?.id ?? t(`${DIALOG_KEY}.untitledScene`),
         packPath: prettifyPackPath(current?.pack ?? ''),
-        kindLabel: t(`${DIALOG_KEY}.assetKinds.scene`),
+        kindLabel: t(`${ASSET_KINDS_I18N_KEY}.scene`),
         iconName: 'clapperboard',
         isScene: true,
       });
@@ -79,15 +79,11 @@ function useRows(): readonly Row[] {
         }
       }
       const resolvedKind = kind ?? '';
-      const kindKey = `${DIALOG_KEY}.assetKinds.${resolvedKind || 'default'}`;
-      const kindLabel = t(kindKey);
       rows.push({
         id: asset.guid,
         name: name ?? asset.guid,
         packPath: prettifyPackPath(asset.packPath ?? ''),
-        kindLabel: kindLabel === kindKey
-          ? (resolvedKind || t(`${DIALOG_KEY}.assetKinds.default`))
-          : kindLabel,
+        kindLabel: labelForAssetKind(resolvedKind, t),
         iconName: iconNameForAssetKind(resolvedKind),
         isScene: false,
       });

@@ -687,6 +687,69 @@
     "title": "Zoom camera"
   },
   {
+    "id": "captureCpuProfile",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Number of consecutive Engine frames to record. Defaults to 2."
+        },
+        "eventLimit": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 4096,
+          "description": "Maximum phase records retained by the Engine profiler. Defaults to 512."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id used to read the Engine-validated ProfileCapture result."
+        },
+        "retryOfRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Optional failed CPU profile run being retried; the new requestId remains the public identity of the new attempt."
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "title": "Capture CPU Profile",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
+  },
+  {
     "id": "captureFrame",
     "domain": "session",
     "source": "builtin",

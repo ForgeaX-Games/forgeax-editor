@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { createFramePhaseProfiler } from "../frame-phase-profiler";
+import { captureCpuProfile, createFramePhaseProfiler } from "../frame-phase-profiler";
 
 const originalPerformance = Object.getOwnPropertyDescriptor(
 	globalThis,
@@ -68,7 +68,39 @@ describe("createFramePhaseProfiler", () => {
 		]);
 	});
 
-	it("finishes without keeping the diagnostic session active", () => {
+	it("delegates bounded captures to the Engine and publishes real records", async () => {
+		Object.defineProperty(globalThis, "performance", {
+			configurable: true,
+			value: { mark: () => undefined, now: () => 1 },
+		});
+		diagnosticGlobal.__forgeaxFramePhaseDiagnostics = { enabled: true };
+
+		const profiler = createFramePhaseProfiler();
+		expect(profiler).toBeDefined();
+		profiler?.registerPhaseCatalog("app", ["frame-total"]);
+		const capture = captureCpuProfile(profiler!, {
+			frameLimit: 1,
+			eventLimit: 8,
+			timeoutMs: 100,
+			pollIntervalMs: 1,
+		});
+		const session = profiler?.activeSession();
+		session?.beginFrame(1);
+		session?.beginPhase({ source: "app", phase: "frame-total" });
+		session?.endPhase();
+		session?.endFrame();
+
+		const result = await capture;
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.value.schemaVersion).toBe("1.0");
+		expect(result.value.timeUnit).toBe("microseconds");
+		expect(result.value.records.length).toBeGreaterThan(0);
+		expect(result.value.completeness.status).toBe("complete");
+		expect(profiler?.latestCapture()?.captureId).toBe(result.value.captureId);
+	});
+
+	it("keeps the observer session non-recording when no CPU capture is active", () => {
 		Object.defineProperty(globalThis, "performance", {
 			configurable: true,
 			value: { mark: () => undefined },
@@ -78,8 +110,7 @@ describe("createFramePhaseProfiler", () => {
 		const profiler = createFramePhaseProfiler();
 		const result = profiler?.activeSession()?.finish();
 
-		expect(result?.ok).toBe(true);
-		expect(profiler?.activeSession()).toBeUndefined();
-		expect(profiler?.latestCapture()?.completeness.status).toBe("partial");
+		expect(result?.ok).toBe(false);
+		expect(profiler?.latestCapture()).toBeUndefined();
 	});
 });

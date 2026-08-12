@@ -7,7 +7,7 @@
   "extends": "./tsconfig.json",
   "include": [
     "src/__tests__/fixtures/ctx-world-negative.ts",
-    "../../types/forgeax-engine-shims.d.ts"
+    "../../scripts/types/forgeax-engine-shims.d.ts"
   ],
   "exclude": []
 }

@@ -5,7 +5,7 @@
 // are not `kind:'material'`, so patchLiveMaterialParams would no-op. Preview
 // wiring (C4) maintains a resolved runtime material GUID separately.
 //
-// Anchors: docs/2026-08-05-material-instance-editor-tech-plan.md §A3
+// Anchors: .forgeax-harness/docs/2026-08-05-material-instance-editor-tech-plan.md §A3
 
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { broadcastAssetsError } from '../store/assets-error-bus';

@@ -45,7 +45,7 @@ const tempRoot = inheritedCreateGameDir === undefined
 const gameDir = inheritedCreateGameDir ?? join(tempRoot, gameId);
 if (createGameMode && inheritedCreateGameDir === undefined) {
   // Create mode starts with an empty slot. The browser smoke then submits
-  // File → New Game with template=game-default; standalone/game-backend.ts
+  // File → New Game with template=game-default; apps/standalone/game-backend.ts
   // copies the selected engine template into this slot before the host reloads.
   // Keep the asset root and package metadata present-but-empty so the running
   // Vite pack watcher is attached before New Game materializes the files.
@@ -98,7 +98,7 @@ const hostEnv = {
 };
 
 export default defineConfig({
-  testDir: resolve(root, 'e2e'),
+  testDir: resolve(root, 'apps/standalone/e2e'),
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -165,7 +165,7 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: 'bun standalone/game-backend.ts',
+      command: 'bun apps/standalone/game-backend.ts',
       cwd: root,
       env: {
         ...process.env,

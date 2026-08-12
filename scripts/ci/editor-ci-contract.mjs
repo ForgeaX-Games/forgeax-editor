@@ -312,7 +312,7 @@ export function projectContract(contract) {
         code: 'projection-drift',
         expected: 'contract projection matches producer SSOT',
         observed: 'static candidate projection',
-        hint: 'Regenerate the projection from ci/editor-ci-contract.json.',
+        hint: 'Regenerate the projection from scripts/ci/editor-ci-contract.json.',
       },
     },
   };
@@ -381,7 +381,7 @@ function optionValue(args, name) {
 }
 
 export function runCli(args = process.argv.slice(2)) {
-  const contractPath = resolve('ci/editor-ci-contract.json');
+  const contractPath = resolve('scripts/ci/editor-ci-contract.json');
   const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
   const contractResult = validateContract(contract);
   if (!contractResult.ok) return contractResult;

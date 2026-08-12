@@ -26,7 +26,7 @@
 // engine-runtime — the existing editor-core suites prove that's side-effect
 // free in bun test). No consumer module is loaded (avoids panel DOM globals).
 //
-// Style anchor: packages/editor/src/index.test.ts + the feat's w1 export grep
+// Style anchor: src/__tests__/index.test.ts + the feat's w1 export grep
 // contract. Lowest maintenance: consumer set is glob-discovered, surfaces are
 // parsed — adding a consumer file or a barrel export needs no edit here.
 

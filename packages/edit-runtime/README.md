@@ -3,7 +3,7 @@
 > ForgeaX 编辑模式权威 Runtime：在一个可替换 carrier realm 中启动 Gateway、Edit/Play World、AssetRegistry、GPU canvas、相机与引擎拥有的 VFX Runtime。carrier 可以是 iframe、browser page 或 Tauri WebView；外层 panel 只消费 projection 并派发 Runtime operation。
 
 > [!IMPORTANT]
-> Runtime 服务（zustand store、实体操作、右键菜单、dock 桥接、面板 manifest）已迁移至 `@forgeax/editor-shared`。如需使用 `bus`、`dispatch`、`useSelection` 等，应从 `@forgeax/editor-shared` 导入。
+> Runtime 服务（zustand store、实体操作、右键菜单、dock 桥接、面板 manifest）由 `@forgeax/editor-core` 持有。如需使用 `bus`、`dispatch`、`useSelection` 等，应从 `@forgeax/editor-core` 导入。
 
 ## 导入示例
 
@@ -20,8 +20,8 @@ import {
 import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
 import { initHostSession, configureHostSession } from '@forgeax/editor-edit-runtime/host-boot';
 
-// Runtime 服务从 shared 导入
-import { bus, dispatch, useSelection } from '@forgeax/editor-shared';
+// Runtime 服务从 editor-core 导入
+import { bus, dispatch, useSelection } from '@forgeax/editor-core';
 ```
 
 ## exports 子入口
@@ -167,8 +167,8 @@ messages.
 
 | 症状 | 原因 | 解决 |
 |:--|:--|:--|
-| `useDocVersion` 返回不更新 | store listener 未注册到 bus | 确认调用了 `onSelectionChange` / `onGizmoModeChange` 等注册函数；这些函数均来自 `@forgeax/editor-shared` |
-| `Cannot find module 'bus' from '@forgeax/editor-edit-runtime'` | Runtime 服务已迁移至 shared | 改为从 `@forgeax/editor-shared` 导入 `bus` |
+| `useDocVersion` 返回不更新 | store listener 未注册到 bus | 确认调用了 `onSelectionChange` / `onGizmoModeChange` 等注册函数；这些函数均来自 `@forgeax/editor-core` |
+| `Cannot find module 'bus' from '@forgeax/editor-edit-runtime'` | Runtime 服务由 editor-core 持有 | 改为从 `@forgeax/editor-core` 导入 `bus` |
 | VFX readiness 显示不可用 | host 没有绑定当前 World，或 renderer assets 尚未就绪 | 检查 `createApp(features)`、Edit `attachWorld` 和 Play `attachWorld` 的诊断结果；不要在 UI 侧创建第二个 host |
 | Stop 后出现 stale/cross-world handle | 代码保存了旧的 Play handle | 重新查询 `gateway.activeWorld` / selection；不要尝试把数字 handle 转换成另一个 World 的实体 |
 | 剪贴板操作报错 `undefined` | `copySelected` 依赖 DOM `navigator.clipboard` | 确保在安全上下文（HTTPS 或 localhost）中运行 |
