@@ -2,8 +2,8 @@
 //
 // TDD anchor for the "很多报错" regression: launches the standalone shell in
 // headless chromium, classifies every console/page error, and asserts ZERO of
-// the real-bug categories. WebGPU RhiError is the documented headless-no-GPU
-// limitation and is explicitly allowlisted (not a refactor defect).
+// the real-bug categories. RhiError is always a runtime failure, including
+// when it originates from headless WebGPU setup.
 //
 // Run from the editor package dir so `@playwright/test` resolves:
 //   node apps/standalone/__tests__/repro-console.test.mjs
@@ -36,9 +36,10 @@ await browser.close();
 
 const all = [...pageErrors, ...consoleErrors];
 
-// Allowlist: headless chromium has no GPU, so the WebGPU render loop throws.
-// Not a refactor defect — see apps/standalone/main.tsx header.
-const isAllowed = (e) => /RhiError|webgpu|WebGPU|GPUDevice|createBindGroup/.test(e);
+// Only generic WebGPU setup tokens are tolerated. RhiError is always fatal,
+// even if its message contains one of those tokens.
+const RHI_ERROR = /\bRhiError\b/i;
+const isAllowed = (e) => !RHI_ERROR.test(e) && /webgpu|WebGPU|GPUDevice|createBindGroup/.test(e);
 
 const bugs = {
   'JSON-parse-of-HTML (#1/#2: missing /api handling)':
@@ -60,6 +61,7 @@ for (const [name, list] of Object.entries(bugs)) {
 }
 console.log(`${other.length === 0 ? '✅' : '⚠️ '} other (non-allowlisted): ${other.length}`);
 [...new Set(other)].slice(0, 8).forEach((e) => console.log('     • ' + e.split('\n')[0]));
+if (other.length > 0) failed = true;
 
 console.log(`${ghostCount === 0 ? '✅' : '❌'} no cross-origin body>iframe ghost (#5): count=${ghostCount}${ghostSrc ? ' src=' + ghostSrc : ''}`);
 if (ghostCount > 0) failed = true;

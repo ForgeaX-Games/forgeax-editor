@@ -1,0 +1,135 @@
+{
+  "approvedInput": {
+    "landedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "remoteMain": {
+      "sha": "dddddddddddddddddddddddddddddddddddddddd",
+      "ancestorSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ancestor": true,
+      "method": "git-merge-base-is-ancestor",
+      "source": "remote-main",
+      "repository": "origin"
+    },
+    "contexts": [
+      {
+        "context": "b2-self-boot",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "conclusion": "success",
+        "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"},
+        "source": "required-context"
+      },
+      {
+        "context": "typecheck",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "conclusion": "success",
+        "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"},
+        "source": "required-context"
+      },
+      {
+        "context": "submodule-pin",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "conclusion": "success",
+        "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"},
+        "source": "required-context"
+      },
+      {
+        "context": "smoke-play",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "conclusion": "success",
+        "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"},
+        "source": "required-context"
+      }
+    ],
+    "admission": {
+      "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "remoteMainSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "generation": 7,
+      "admissionDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "contractDigest": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "cases": [
+    {
+      "name": "open-pr-is-not-landed",
+      "input": {"remoteMain": null, "contexts": [], "prStatus": "OPEN"},
+      "expectedStatus": "pending",
+      "expectedCode": "landed-remote-main-evidence-missing"
+    },
+    {
+      "name": "pr-checks-do-not-substitute-for-landed-contexts",
+      "input": {
+        "remoteMain": {"sha": "dddddddddddddddddddddddddddddddddddddddd", "ancestorSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ancestor": true, "method": "git-merge-base-is-ancestor", "source": "remote-main", "repository": "origin"},
+        "contexts": [],
+        "prChecks": [{"context": "b2-self-boot", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success"}]
+      },
+      "expectedStatus": "pending",
+      "expectedCode": "landed-required-contexts-missing"
+    },
+    {
+      "name": "local-green-does-not-substitute-for-cloud-contexts",
+      "input": {
+        "remoteMain": {"sha": "dddddddddddddddddddddddddddddddddddddddd", "ancestorSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ancestor": true, "method": "git-merge-base-is-ancestor", "source": "remote-main", "repository": "origin"},
+        "contexts": [
+          {"context": "b2-self-boot", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "local", "timingDomain": "local-execution"}},
+          {"context": "typecheck", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "local", "timingDomain": "local-execution"}},
+          {"context": "submodule-pin", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "local", "timingDomain": "local-execution"}},
+          {"context": "smoke-play", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "local", "timingDomain": "local-execution"}}
+        ]
+      },
+      "expectedStatus": "nonpass",
+      "expectedCode": "landed-context-provenance-invalid"
+    },
+    {
+      "name": "duplicate-context-is-nonpass",
+      "input": {
+        "remoteMain": {"sha": "dddddddddddddddddddddddddddddddddddddddd", "ancestorSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ancestor": true, "method": "git-merge-base-is-ancestor", "source": "remote-main", "repository": "origin"},
+        "contexts": [
+          {"context": "b2-self-boot", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "b2-self-boot", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "typecheck", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "submodule-pin", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "smoke-play", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}}
+        ]
+      },
+      "expectedStatus": "nonpass",
+      "expectedCode": "landed-required-context-duplicate"
+    },
+    {
+      "name": "wrong-context-sha-is-nonpass",
+      "input": {
+        "remoteMain": {"sha": "dddddddddddddddddddddddddddddddddddddddd", "ancestorSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ancestor": true, "method": "git-merge-base-is-ancestor", "source": "remote-main", "repository": "origin"},
+        "contexts": [
+          {"context": "b2-self-boot", "sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "typecheck", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "submodule-pin", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "smoke-play", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}}
+        ]
+      },
+      "expectedStatus": "nonpass",
+      "expectedCode": "landed-context-sha-mismatch"
+    },
+    {
+      "name": "moving-main-is-accepted-by-ancestry",
+      "input": {
+        "remoteMain": {"sha": "ffffffffffffffffffffffffffffffffffffffff", "ancestorSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ancestor": true, "method": "git-merge-base-is-ancestor", "source": "remote-main", "repository": "origin"},
+        "contexts": [
+          {"context": "b2-self-boot", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "typecheck", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "submodule-pin", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+          {"context": "smoke-play", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}}
+        ]
+      },
+      "expectedStatus": "pass"
+    },
+    {
+      "name": "wrong-merge-sha-is-pending",
+      "input": {
+        "landedSha": "9999999999999999999999999999999999999999",
+        "remoteMain": {"sha": "dddddddddddddddddddddddddddddddddddddddd", "ancestorSha": "9999999999999999999999999999999999999999", "ancestor": true, "method": "git-merge-base-is-ancestor", "source": "remote-main", "repository": "origin"},
+        "contexts": [],
+        "prStatus": "MERGED"
+      },
+      "expectedStatus": "pending",
+      "expectedCode": "landed-required-contexts-missing"
+    }
+  ]
+}

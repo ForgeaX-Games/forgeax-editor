@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "forgeax-engine-prior-art-transfer-cases/v1",
+  "cases": [
+    {"name": "source report reachability", "operation": "reachability", "expectedCode": "prior-art-reachability-invalid"},
+    {"name": "mutation digest", "operation": "mutation-digest", "expectedCode": "prior-art-falsifier-invalid"},
+    {"name": "admission equality", "operation": "admission", "expectedCode": "prior-art-admission-drift"},
+    {"name": "measurement digest", "operation": "measurement-digest", "expectedCode": "prior-art-measurement-mismatch"},
+    {"name": "focused only input", "operation": "focused-only", "expectedCode": "prior-art-measurement-mismatch"},
+    {"name": "current admission drift", "operation": "current-admission", "expectedCode": "prior-art-current-admission-drift"}
+  ]
+}

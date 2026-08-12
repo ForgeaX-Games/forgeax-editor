@@ -43,3 +43,43 @@ test('a valid static projection has a stable roster and first failure shape', ()
   assert.ok(projection.roster.length > 0);
   assert.equal(typeof projection.resultEnvelope.firstFailure.code, 'string');
 });
+
+test('portfolio projection has one smoke-play parent and four required contexts', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const projection = projectContract(contract);
+  const portfolio = projection.browserReleasePortfolio;
+
+  assert.ok(portfolio, 'projection must include the nested portfolio');
+  assert.equal(portfolio.parentCheckId, 'smoke-play');
+  assert.equal(portfolio.requiredContextsRef, 'requiredContexts');
+  assert.equal(portfolio.measurement.required, false);
+  assert.equal(new Set(contract.requiredContexts.map((entry) => entry.context)).size, 4);
+});
+
+test('parent projection mutations are structured and fail closed', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const cases = [
+    ['parent-drift', 'portfolio-parent-invalid'],
+    ['measurement-required', 'portfolio-measurement-required'],
+    ['missing-required-context', 'required-context-missing'],
+    ['measurement-promoted-context', 'required-context-invalid'],
+  ];
+
+  for (const [operation, expectedCode] of cases) {
+    const candidate = structuredClone(contract);
+    candidate.browserReleasePortfolio ??= {
+      parentCheckId: 'smoke-play',
+      requiredContextsRef: 'requiredContexts',
+      measurement: { required: false },
+    };
+    if (operation === 'parent-drift') candidate.browserReleasePortfolio.parentCheckId = 'other-parent';
+    if (operation === 'measurement-required') candidate.browserReleasePortfolio.measurement.required = true;
+    if (operation === 'missing-required-context') candidate.requiredContexts = candidate.requiredContexts.slice(1);
+    if (operation === 'measurement-promoted-context') candidate.requiredContexts.push({ context: 'measurement', checkId: 'smoke-play' });
+
+    const result = validateContract(candidate);
+    assert.equal(result.ok, false, operation);
+    assert.equal(result.errors[0].code, expectedCode, operation);
+    assert.equal(typeof result.errors[0].hint, 'string', operation);
+  }
+});

@@ -3,7 +3,7 @@
 // The :15290 host owns chrome and in-process panels. The :15280 Edit Runtime is
 // served through the same-origin /editor proxy and owns Gateway, Edit World,
 // AssetRegistry and canvas. Servers used here:
-//   - :15290 — standalone shell host (`bun run dev`, cwd '.')
+//   - :15290 — standalone shell host (`bun run dev:standalone`, cwd '.')
 //   - :15280 — replaceable Edit Runtime (`bun run dev:edit-runtime`)
 //   - :15173 — play-runtime preview. Kept for e2e that open
 //              `/preview/?game=<slug>` (fullscreen play path).
@@ -30,6 +30,14 @@ const e2eTemplateHostPort = process.env.FORGEAX_E2E_TEMPLATE_PORT ?? '15490';
 const e2eTemplateEditPort = process.env.FORGEAX_E2E_TEMPLATE_EDIT_PORT ?? '15480';
 const e2eTemplateApiPort = process.env.FORGEAX_E2E_TEMPLATE_API_PORT ?? '15481';
 const e2eTemplateEnginePort = process.env.FORGEAX_E2E_TEMPLATE_ENGINE_PORT ?? '15473';
+function deriveBridgePort(hostPort: string, fallback: string): string {
+  const numeric = Number(hostPort);
+  return Number.isInteger(numeric) ? String(numeric + 6) : fallback;
+}
+const e2eBridgePort = process.env.FORGEAX_E2E_BRIDGE_PORT
+  ?? deriveBridgePort(e2eHostPort, '15296');
+const e2eTemplateBridgePort = process.env.FORGEAX_E2E_TEMPLATE_BRIDGE_PORT
+  ?? deriveBridgePort(e2eTemplateHostPort, '15496');
 const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
 const e2eRuntimeScopeId = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'standalone-sample';
 const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
@@ -38,8 +46,17 @@ const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
 // process exit; the browser still addresses it as the game slug "sample".
 const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
 const e2eGameDir = join(e2eTempRoot, 'sample');
-cpSync(resolve('games/sample'), e2eGameDir, { recursive: true });
-// New-game template journey (.forgeax-harness/docs/2026-08-06-new-game-template-journey-e2e-plan
+cpSync(resolve('games/sample'), e2eGameDir, {
+  recursive: true,
+  // Keep diagnostics accidentally left in the tracked sample checkout from
+  // poisoning the isolated catalog. Tests create their own uniquely named
+  // fixtures in the temp game and must start from a schema-valid baseline.
+  filter: (source) => {
+    const name = basename(source);
+    return !name.startsWith('diag') && !name.startsWith('_diag');
+  },
+});
+// New-game template journey (docs/2026-08-06-new-game-template-journey-e2e-plan
 // D-1): a FRESH copy of the engine's canonical template, initialized into the
 // same isolated temp root — the editor-side equivalent of "user clicks New
 // Game" in studio. Copied at config time because webServers capture the game
@@ -66,10 +83,10 @@ export default defineConfig({
   // Keep Bun evidence/unit files in this folder out of Playwright's Node ESM
   // loader. Browser journeys are the explicit *.spec.ts surface.
   testMatch: '**/*.spec.ts',
-  // Single chromium project — headless CI default. fullyParallel off
-  // because the two webServers share singleton ports; tests within the
-  // file are sequential by design (idempotent-mount AC-09 reads global
-  // iframe state).
+  // Single chromium project — local runs default to headless, while the CI
+  // smoke job selects headed Chromium under Xvfb. fullyParallel stays off
+  // because the webServers share singleton ports; tests within the file are
+  // sequential by design (idempotent-mount AC-09 reads global iframe state).
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -87,29 +104,29 @@ export default defineConfig({
     // 120s test timeout retrying actionability (see H-02~H-05, P-02/P-05/P-14).
     actionTimeout: 15_000,
     baseURL: `http://127.0.0.1:${e2eHostPort}`,
-    headless: true,
+    headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
     trace: 'off',
   },
   webServer: [
     {
       // Editor shell host on :15290 — renders <DockShell hideChatAndForge /> and
-      // proxies its one /editor carrier to the separately started Edit Runtime.
-      // Started via `bun run dev` so the root vite.config.ts applies.
+      // starts the same host + Edit Runtime + Gateway bridge as standalone.
       //
       // Injects FORGEAX_GAME_DIR so shell metadata and the /api proxy use the
       // same game identity as the authoritative Runtime.
       // FORGEAX_INTERFACE_PORT=15290 prevents edit-runtime HMR from hammering the
       // non-existent studio port :18920 (AGENTS.md port map).
-      command: 'bun run dev',
+      command: 'bun run dev:standalone',
       cwd: '.',
       env: {
         ...process.env as Record<string, string>,
         FORGEAX_GAME_DIR: e2eGameDir,
         FORGEAX_ENGINE_PORT: e2eEnginePort,
-        FORGEAX_INTERFACE_PORT: e2eHostPort,
+        FORGEAX_PLAY_RUNTIME_PORT: e2eEnginePort,
         FORGEAX_STANDALONE_PORT: e2eHostPort,
         FORGEAX_EDIT_RUNTIME_PORT: e2eEditPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
+        FORGEAX_BRIDGE_PORT: e2eBridgePort,
         FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
         FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
@@ -117,45 +134,25 @@ export default defineConfig({
       url: `http://127.0.0.1:${e2eHostPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
+      // Let dev-standalone run its own process-group cleanup before Playwright
+      // falls back to SIGKILL. Its child Vite/bridge processes are detached.
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       stdout: 'pipe',
       stderr: 'pipe',
     },
     {
-      // The host owns chrome/panels; this separately reloadable realm owns the
-      // one Edit World, Gateway, AssetRegistry and GPU canvas behind /editor/.
-      command: 'bun run dev:edit-runtime',
+      // Play Runtime uses the same package command as standalone `fx start`.
+      command: 'bun -F @forgeax/editor-play-runtime dev',
       cwd: '.',
-      env: {
-        ...process.env as Record<string, string>,
-        FORGEAX_GAME_DIR: e2eGameDir,
-        FORGEAX_EDITOR_PORT: e2eEditPort,
-        FORGEAX_INTERFACE_PORT: e2eHostPort,
-        FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
-        FORGEAX_GAME_API_PORT: e2eApiPort,
-        FORGEAX_SERVER_PORT: e2eApiPort,
-        FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
-        FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
-      },
-      url: `http://127.0.0.1:${e2eEditPort}/editor/`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      // engine vite dev server on :15173 — serves play-runtime preview at
-      // /preview/?game=<slug> (fullscreen play path). OOS-4: play-runtime is
-      // untouched by M2. Port 15173 is the play-runtime vite.config.ts default.
-      command: `npx vite --port ${e2eEnginePort} --strictPort`,
-      cwd: './packages/play-runtime',
       env: {
         ...process.env,
         FORGEAX_ENGINE_PORT: e2eEnginePort,
+        FORGEAX_PLAY_RUNTIME_PORT: e2eEnginePort,
         FORGEAX_GAME_DIR: e2eGameDir,
         FORGEAX_GAME_ID: 'sample',
         FORGEAX_RUNTIME_SCOPE_ID: 'e2e-sample',
         FORGEAX_RUNTIME_GENERATION: '1',
-        FORGEAX_GAMES_URL_PREFIX: 'e2e-games',
+        FORGEAX_GAMES_URL_PREFIX: 'host-games',
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
       },
@@ -180,19 +177,20 @@ export default defineConfig({
     {
       // New-game template journey (.forgeax-harness/docs/2026-08-06-new-game-template-journey-e2e-plan
       // D-2): a SECOND standalone host on :15490 booted against the fresh
-      // canonical-template copy — same `bun run dev` shape as webServer #1 with
+      // canonical-template copy — same `bun run dev:standalone` shape as webServer #1 with
       // its own port pair, so the template journey never perturbs the sample
       // host's specs. Only apps/standalone/e2e/__tests__/new-game-template-journey.spec.ts loads it.
-      command: 'bun run dev',
+      command: 'bun run dev:standalone',
       cwd: '.',
       env: {
         ...process.env as Record<string, string>,
         FORGEAX_GAME_DIR: e2eTemplateGameDir,
         FORGEAX_ENGINE_PORT: e2eTemplateEnginePort,
-        FORGEAX_INTERFACE_PORT: e2eTemplateHostPort,
+        FORGEAX_PLAY_RUNTIME_PORT: e2eTemplateEnginePort,
         FORGEAX_STANDALONE_PORT: e2eTemplateHostPort,
         FORGEAX_EDIT_RUNTIME_PORT: e2eTemplateEditPort,
         FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
+        FORGEAX_BRIDGE_PORT: e2eTemplateBridgePort,
         FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
         FORGEAX_RUNTIME_GENERATION: '1',
         FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
@@ -200,6 +198,7 @@ export default defineConfig({
       url: `http://127.0.0.1:${e2eTemplateHostPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -207,45 +206,23 @@ export default defineConfig({
       // Disposable Play is now a real child realm. The fresh-template host
       // therefore needs a game-scoped Play producer too; sharing the sample
       // producer would correctly fail the runtime binding identity check.
-      command: `npx vite --port ${e2eTemplateEnginePort} --strictPort`,
-      cwd: './packages/play-runtime',
+      command: 'bun -F @forgeax/editor-play-runtime dev',
+      cwd: '.',
       env: {
         ...process.env,
         FORGEAX_ENGINE_PORT: e2eTemplateEnginePort,
+        FORGEAX_PLAY_RUNTIME_PORT: e2eTemplateEnginePort,
         FORGEAX_GAME_DIR: e2eTemplateGameDir,
         FORGEAX_GAME_ID: 'new-game-template',
         FORGEAX_RUNTIME_SCOPE_ID: 'e2e-new-game-template',
         FORGEAX_RUNTIME_GENERATION: '1',
-        FORGEAX_GAMES_URL_PREFIX: 'e2e-template-games',
+        FORGEAX_GAMES_URL_PREFIX: 'host-games',
         FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
         FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
       },
       url: `http://127.0.0.1:${e2eTemplateEnginePort}/preview/`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
-    },
-    {
-      // The template shell uses the same carrier architecture as the primary
-      // standalone host, so it needs its own authoritative Runtime realm rather
-      // than falling through to the primary game's Edit Runtime port.
-      command: 'bun run dev:edit-runtime',
-      cwd: '.',
-      env: {
-        ...process.env as Record<string, string>,
-        FORGEAX_GAME_DIR: e2eTemplateGameDir,
-        FORGEAX_EDITOR_PORT: e2eTemplateEditPort,
-        FORGEAX_INTERFACE_PORT: e2eTemplateHostPort,
-        FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
-        FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
-        FORGEAX_SERVER_PORT: e2eTemplateApiPort,
-        FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
-        FORGEAX_RUNTIME_GENERATION: '1',
-      },
-      url: `http://127.0.0.1:${e2eTemplateEditPort}/editor/`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-      stdout: 'pipe',
-      stderr: 'pipe',
     },
     {
       // The template host's /api backend pair (same game-backend.ts shape as
@@ -267,11 +244,19 @@ export default defineConfig({
         browserName: 'chromium',
         ...(e2eBrowserChannel ? { channel: e2eBrowserChannel } : {}),
         launchOptions: {
+          // Keep the broad smoke on the same software-Vulkan contract as the
+          // strict editor smoke. ANGLE SwiftShader can destroy the WebGPU
+          // device during this multi-server browser journey; RhiError is a
+          // fatal smoke signal and must not be allowlisted.
           args: [
             '--enable-unsafe-webgpu',
-            '--enable-webgpu-developer-features',
-            '--use-gl=angle',
-            '--use-angle=swiftshader',
+            '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+            '--use-vulkan=swiftshader',
+            '--disable-vulkan-surface',
+            '--ignore-gpu-blocklist',
+            '--disable-gpu-driver-bug-workarounds',
+            '--disable-dawn-features=disallow_unsafe_apis',
+            '--autoplay-policy=no-user-gesture-required',
           ],
         },
       },

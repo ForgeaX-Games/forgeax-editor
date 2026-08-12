@@ -17,6 +17,13 @@ import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
 import { listOps, hasOp, getOp } from '../io/catalog';
 import { domainOf } from '../io/appliers';
+import { setPathResolver } from '../util/path-resolver';
+import { bindViewportRuntimeClient } from '../io/viewport-runtime-client';
+import {
+  VIEWPORT_RUNTIME_CONTRACT_VERSION,
+  type MessagePortTransportClient,
+  type ViewportRuntimeIdentity,
+} from '@forgeax/editor-product';
 import type { EditSession } from '../types';
 
 const PACK = 'assets/x.pack.json';
@@ -82,6 +89,97 @@ describe('destroyAsset / restoreAsset op contract (M2)', () => {
     expect(da?.domain).toBe('document');
     expect(da?.argsSchema?.required).toEqual(['guid']);
     expect(da?.completion).toEqual({ kind: 'asset-write', guidField: 'guid' });
+  });
+});
+
+// Regression (Studio ContentBrowser delete → GET /api/files 400): the producer
+// catalog reports sourcePath in the play-runtime serve-mount space
+// (host-games/<slug>/...), which the server safe-path whitelist rejects. The
+// gateway must project the row through the runtime-bound catalog roots and the
+// host-installed path resolver, so _resolvedPackPath lands on the on-disk
+// layout (.forgeax/games/<slug>/...).
+describe('destroyAsset storage-path projection (catalog serve-mount → host disk)', () => {
+  const SLUG = 'testgame0812';
+  const META_SOURCE = `host-games/${SLUG}/assets/bed.glb`;
+  const RESOLVED_META = `.forgeax/games/${SLUG}/assets/bed.glb.meta.json`;
+  const identity: ViewportRuntimeIdentity = {
+    version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
+    runtimeId: 'edit-runtime',
+    runtimeGeneration: 1,
+    carrierId: 'frame-1',
+    carrierKind: 'iframe',
+  };
+  const noopClient: MessagePortTransportClient = {
+    request: () => Promise.reject(new Error('unused')),
+    dispose() {},
+  };
+
+  let unbind: (() => void) | null = null;
+  let requestedPaths: string[];
+  let gw: EditGateway;
+
+  beforeEach(() => {
+    requestedPaths = [];
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
+      const path = new URL(url, 'http://test.local').searchParams.get('path');
+      if (path) requestedPaths.push(path);
+      if (opts && (opts.method === 'POST' || opts.method === 'DELETE')) {
+        return Promise.resolve(new Response('', { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({
+        content: JSON.stringify({
+          importer: 'gltf',
+          source: 'bed.glb',
+          subAssets: [{ guid: 'g1', kind: 'material', sourceIndex: 2, sourceKey: 'material:wood' }],
+        }),
+      }), { status: 200 }));
+    }) as unknown as typeof fetch;
+    setPathResolver((rel) => (rel ? `.forgeax/games/${SLUG}/${rel}` : `.forgeax/games/${SLUG}`));
+    unbind = bindViewportRuntimeClient(identity, noopClient, [
+      { root: 'assets', catalogPrefix: `host-games/${SLUG}/assets` },
+    ]);
+    const session: EditSession = createEditSession();
+    session.world = {} as never;
+    session.registry = {
+      listCatalog: () => [{
+        guid: 'g1', kind: 'material', packageUrl: '/__forgeax-ddc/mesh.pack.json', sourcePath: META_SOURCE,
+      }],
+    } as never;
+    gw = new EditGateway(session);
+  });
+
+  afterEach(() => {
+    unbind?.();
+    unbind = null;
+    setPathResolver(null);
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('resolves the sidecar through catalog roots + host resolver, not the serve mount', () => {
+    const r = gw.dispatch({ kind: 'destroyAsset', guid: 'g1' });
+    expect(r.ok).toBe(true);
+    const inverse = gw.peekUndoInverse();
+    expect(inverse).toMatchObject({ kind: 'restoreAsset', _resolvedPackPath: RESOLVED_META, guid: 'g1' });
+  });
+
+  it('the async delete IO reads the resolved on-disk meta path', async () => {
+    const r = gw.dispatch({ kind: 'destroyAsset', guid: 'g1' });
+    expect(r.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requestedPaths.length).toBeGreaterThan(0);
+    expect(requestedPaths.every((p) => !p.startsWith('host-games/'))).toBe(true);
+    expect(requestedPaths[0]).toBe(RESOLVED_META);
+  });
+
+  it('keeps the catalog-space fallback when no catalog roots are bound', () => {
+    unbind?.();
+    unbind = null;
+    const r = gw.dispatch({ kind: 'destroyAsset', guid: 'g1' });
+    expect(r.ok).toBe(true);
+    expect(gw.peekUndoInverse()).toMatchObject({
+      kind: 'restoreAsset',
+      _resolvedPackPath: `${META_SOURCE}.meta.json`,
+    });
   });
 });
 

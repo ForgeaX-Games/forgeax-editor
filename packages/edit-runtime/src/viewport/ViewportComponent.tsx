@@ -95,6 +95,11 @@ import {
 import { WorldManager } from '../world-manager';
 import { createViewport, type Viewport } from './viewport';
 import {
+  createEditorAppTeardown,
+  createPagehideTeardown,
+  teardownIfStale,
+} from './editor-app-teardown';
+import {
   createViewportRuntimeTransportService,
   createInProcessViewportRuntimeClient,
   installViewportRuntimeConnectionHost,
@@ -143,6 +148,8 @@ import { configureHostSession, resolveEditPhysics, initHostSession, type HostSes
 import { registerViewportSessionAppliers } from './viewport-session-appliers';
 import { createEditVfxRuntimeBridge, createParticleCameraSource } from './vfx-runtime-bridge';
 import { supportsVfxRenderFeature } from './vfx-render-capability';
+import { createBootLease } from './boot-lease';
+import { resolveViewportShaderManifestUrl } from './shader-manifest-url';
 import { createAnimationDiagnosticsProvider } from './animation-diagnostics-provider';
 import { createEngineExecutionDiagnostics } from './execution-diagnostics-provider';
 import '../theme.css';
@@ -160,8 +167,10 @@ let bootStarted = false;
 // the latch so the next mount re-boots. Everything a boot installs GLOBALLY and
 // engine-scoped must register here or it leaks/duplicates across a switch.
 const teardownFns: Array<() => void> = [];
+const bootLease = createBootLease();
 let currentResetOptions: ResetEditRealmOptions = {};
-function registerTeardown(fn: () => void): void {
+let activeRealmTeardown: (() => void) | undefined;
+function registerRealmTeardown(fn: () => void): void {
   teardownFns.push(fn);
 }
 
@@ -317,12 +326,16 @@ export interface ResetEditRealmOptions {
  * host never calls this (its teardown is a full page navigation, AC-04).
  */
 export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
+  bootLease.invalidate();
   const previousResetOptions = currentResetOptions;
   currentResetOptions = options;
+  const leadTeardown = activeRealmTeardown;
+  activeRealmTeardown = undefined;
   // Run per-boot teardown LIFO (reverse install order) so late-installed handles
   // that depend on earlier ones unwind first. Swallow individual failures so one
   // bad teardown can't strand the rest (a half-torn realm wedges the next boot).
   try {
+    try { leadTeardown?.(); } catch (e) { console.warn('[editor] active realm teardown failed:', e); }
     for (let i = teardownFns.length - 1; i >= 0; i--) {
       try { teardownFns[i]!(); } catch (e) { console.warn('[editor] resetEditRealm teardown step failed:', e); }
     }
@@ -336,6 +349,21 @@ export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
     try { delete (window.parent as unknown as Record<string, unknown>).__forgeax_editor; } catch { /* cross-origin */ }
   }
   bootStarted = false;
+}
+
+// The document can be reloaded while the asynchronous viewport boot is still
+// in flight (Vite dependency optimization is the common trigger). Install the
+// page lifecycle boundary at module load, not at the end of the boot tail, so a
+// browser-destroyed GPU device cannot report into a half-torn editor App.
+const onRuntimePageHide = createPagehideTeardown(() => resetEditRealm());
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', onRuntimePageHide);
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      resetEditRealm();
+      window.removeEventListener('pagehide', onRuntimePageHide);
+    });
+  }
 }
 
 // ── boot breadcrumb + dead-boot watchdog (was main.tsx :56-108) ───────────────
@@ -389,6 +417,8 @@ export function ViewportComponent({
   useEffect(() => {
     if (bootStarted) return;
     bootStarted = true;
+    const bootId = bootLease.begin();
+    const isCurrentBoot = () => bootLease.isCurrent(bootId);
     const container = containerRef.current;
     if (!container) return;
 
@@ -397,7 +427,8 @@ export function ViewportComponent({
       gameRoot,
       runtimeBinding,
       selectedSceneGuid,
-    }).catch((error: unknown) => {
+    }, isCurrentBoot).catch((error: unknown) => {
+      if (!isCurrentBoot()) return;
       // A rejected boot must converge to a visible terminal state. Without a
       // catch here, the overlay remains on "Starting engine…" forever while
       // the browser only reports an unhandled rejection.
@@ -454,7 +485,18 @@ async function bootViewport(
   actionsRef: React.MutableRefObject<BootFns>,
   onFps: (fps: number) => void,
   gameSession: HostGameSession,
+  isCurrentBoot: () => boolean,
 ): Promise<Viewport | null> {
+  if (!isCurrentBoot()) return null;
+  const registerTeardown = (fn: () => void): void => {
+    if (isCurrentBoot()) {
+      registerRealmTeardown(fn);
+      return;
+    }
+    try { fn(); } catch (error) {
+      console.warn('[editor] stale viewport boot cleanup failed:', error);
+    }
+  };
   const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
   const runtimeIdentity = readViewportRuntimeIdentity(window.location.search);
 
@@ -471,6 +513,7 @@ async function bootViewport(
   // main.tsx so the two hosts can't drift. Without this the Assets panel's
   // ContentBrowser throws PATH_RESOLVER_NOT_SET.
   await configureHostSession(gameSession);
+  if (!isCurrentBoot()) return null;
 
   // canvas (was :185-191) — owned by this component, full-size, behind the overlay.
   // single-realm (feat-20260703): id="app" so a game's bootstrap (which does
@@ -495,6 +538,7 @@ async function bootViewport(
 
   // physics gate (host-boot.resolveEditPhysics — must precede createApp).
   const editPhysics = await resolveEditPhysics();
+  if (!isCurrentBoot()) return null;
 
   // ── M4 (w18/w19/w21): world-manager — the super coordination layer ──────────
   // Created BEFORE createApp so its composite drawSource can be handed to the
@@ -583,15 +627,29 @@ async function bootViewport(
   const devImportTransport = gameSession.runtimeBinding === undefined
     ? undefined
     : createDevImportTransport(gameSession.runtimeBinding);
+  // A late-bound Studio game owns its shader packages in the Play runtime. The
+  // local edit manifest is intentionally builtin-only, so use the scoped Play
+  // manifest for the same runtime binding that supplies its asset catalog.
+  const shaderManifestUrl = resolveViewportShaderManifestUrl(
+    BASE,
+    gameSession.runtimeBinding !== undefined,
+    typeof __FORGEAX_GAME_DIR_ABS__ === 'string' ? __FORGEAX_GAME_DIR_ABS__ : null,
+  );
   const createAppResult = await createApp(canvas, {
     input: canvasInput.editor,
     pointerLockAllowed: () => false,
     drawSource: worldManager.createDrawSource(),
     profiler,
   }, {
-    shaderManifestUrl: `${BASE}/shaders/manifest.json`,
+    shaderManifestUrl,
     ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
   });
+  if (!isCurrentBoot()) {
+    if (createAppResult.ok) {
+      try { createAppResult.value.stop(); } catch { /* stale app is already unwinding */ }
+    }
+    return null;
+  }
 
   let app = createAppResult;
   if (!app.ok) {
@@ -609,10 +667,16 @@ async function bootViewport(
         profiler,
         rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
       }, {
-        shaderManifestUrl: `${BASE}/shaders/manifest.json`,
+        shaderManifestUrl,
         ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
       });
     }
+  }
+  if (!isCurrentBoot()) {
+    if (app.ok) {
+      try { app.value.stop(); } catch { /* stale app is already unwinding */ }
+    }
+    return null;
   }
 
   if (!app.ok) {
@@ -622,6 +686,25 @@ async function bootViewport(
   }
   const editorApp = app.value;
   const { world, renderer } = editorApp;
+  let session: HostSession | undefined;
+  const unregisterEditorErrorListener = editorApp.onError((error) => {
+    // App.onError is the engine's structured runtime/render failure channel.
+    // Surface it as console.error so the browser smoke cannot pass over a
+    // renderer failure that only reached the in-process error overlay.
+    console.error('[editor] runtime error:', error);
+  });
+  const closeEditorRealm = createEditorAppTeardown({
+    unregisterErrorListener: unregisterEditorErrorListener,
+    disposeSession: () => session?.dispose({ flushPendingSave: currentResetOptions.flushPendingSave }),
+    stopApp: () => {
+      try { editorApp.stop(); } catch (e) { console.warn('[editor] editorApp.stop() failed:', e); }
+    },
+    removeCanvas: () => {
+      try { canvas.remove(); } catch { /* already detached */ }
+    },
+  });
+  activeRealmTeardown = closeEditorRealm;
+  registerTeardown(closeEditorRealm);
   let vfxRenderFeatureEnabled = false;
   if (supportsVfxRenderFeature(renderer.device.caps)) {
     try {
@@ -636,6 +719,10 @@ async function bootViewport(
     }
   } else {
     console.warn('[editor] VFX render feature disabled: active RHI lacks compute or indirect-drawing capability');
+  }
+  if (!isCurrentBoot()) {
+    teardownIfStale(isCurrentBoot, closeEditorRealm);
+    return null;
   }
   const executionDiagnostics = createEngineExecutionDiagnostics(editorApp.execution);
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(executionDiagnostics.provider));
@@ -685,6 +772,10 @@ async function bootViewport(
     if (!catalogResult.ok) {
       console.warn('[editor] scoped catalog unavailable:', catalogResult.error);
     }
+    if (!isCurrentBoot()) {
+      teardownIfStale(isCurrentBoot, closeEditorRealm);
+      return null;
+    }
   }
 
   // VFX preparation can resolve authored program and mesh assets on the first
@@ -692,6 +783,11 @@ async function bootViewport(
   // its initial enumeration, so the isolated viewport runtime never observes a
   // partially populated AssetRegistry while resolving the first effect frame.
   const vfxAttached = await vfxBridge.attachWorld(world, renderer.assets);
+  if (!isCurrentBoot()) {
+    if (vfxAttached.ok) vfxBridge.detachWorld(world);
+    teardownIfStale(isCurrentBoot, closeEditorRealm);
+    return null;
+  }
   if (!vfxAttached.ok) {
     console.error('[editor] Edit VFX host attach failed:', vfxAttached.error);
     paintDiagnosticMessage(container, vfxAttached.error);
@@ -993,7 +1089,6 @@ async function bootViewport(
   registerTeardown(onViewportQuadrantChange((q) => _syncDisplayMode(q.display)));
 
   // ── run the application session tail on this world (host-boot, D8) ──────────
-  let session: HostSession;
   try {
     session = await initHostSession({
       app: editorApp as never,
@@ -1065,6 +1160,10 @@ async function bootViewport(
       },
     });
   } catch (err) {
+    if (!isCurrentBoot()) {
+      teardownIfStale(isCurrentBoot, closeEditorRealm);
+      return null;
+    }
     console.error('[editor] host session init failed:', err);
     session = {
       playSimulation: () => ({ ok: true }),
@@ -1074,6 +1173,10 @@ async function bootViewport(
       currentPlayRunId: () => null,
       getPlayPauseHandle: () => null,
     };
+  }
+  if (!isCurrentBoot()) {
+    teardownIfStale(isCurrentBoot, closeEditorRealm);
+    return null;
   }
   const revokeGameControl = (): void => {
     canvasInput.revokeGame();
@@ -1142,11 +1245,11 @@ async function bootViewport(
       canvasInput.revokeGame();
       // `session.playSimulation()` assembles asynchronously. Its lifecycle
       // callback publishes play·game only after gateway.activeWorld is live.
-      return session.playSimulation(policy, origin);
+      return session!.playSimulation(policy, origin);
     },
     stopSimulation: () => {
       revokeGameControl();
-      session.stopSimulation();
+      session!.stopSimulation();
       setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
     },
   };
@@ -1225,10 +1328,10 @@ async function bootViewport(
     app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
     playSimulation: (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human') => actionsRef.current.playSimulation(policy, origin),
     stopSimulation: () => actionsRef.current.stopSimulation(),
-    dispose: () => session.dispose(),
-    currentPlayWorld: () => session.currentPlayWorld(),
-    currentPlayRunId: () => session.currentPlayRunId(),
-    getPlayPauseHandle: () => session.getPlayPauseHandle(),
+    dispose: () => session!.dispose(),
+    currentPlayWorld: () => session!.currentPlayWorld(),
+    currentPlayRunId: () => session!.currentPlayRunId(),
+    getPlayPauseHandle: () => session!.getPlayPauseHandle(),
     readActiveWorld: () => gateway.activeWorld.inspect(),
     // Read-only diagnostic seam for runtime acceptance tests. Writes still use
     // gateway.dispatch; this helper exposes the same structured stale-handle
@@ -1259,13 +1362,9 @@ async function bootViewport(
     getActiveCameraEntity: deriveActiveCameraEntity,
   }));
 
-  // start the live render loop + reporters (was :895).
-  registerTeardown(editorApp.onError((error) => {
-    // App.onError is the engine's structured runtime/render failure channel.
-    // Surface it as console.error so the browser smoke cannot pass over a
-    // renderer failure that only reached the in-process error overlay.
-    console.error('[editor] runtime error:', error);
-  }));
+  // start the live render loop + reporters (was :895). The host error listener
+  // is installed immediately after createApp so an in-flight HMR/page reload
+  // cannot leave a live renderer without its structured error owner.
   editorApp.start();
   // Cross-realm M1 boundary: the Runtime owns Gateway/World/Registry and serves
   // their typed operation/projection surface over one transferred MessagePort.
@@ -1410,25 +1509,12 @@ async function bootViewport(
       });
     })
     .catch((error) => console.warn('[editor] managed carrier health unavailable:', error));
-  // Cross-game teardown: stop the rAF loop + release the WebGPU device (app.stop()
-  // chains into renderer.dispose()'s GPU-lifecycle cascade, feat-20260612-rhi-
-  // destroy-renderer-dispose-gpu-lifecycle) and drop the canvas so the next boot
-  // starts from a clean container. Registered LAST so it runs FIRST on teardown
-  // (LIFO) — freeze the engine before unwinding the listeners it drove.
-  registerTeardown(() => {
-    try { editorApp.stop(); } catch (e) { console.warn('[editor] editorApp.stop() failed:', e); }
-    try { canvas.remove(); } catch { /* already detached */ }
-  });
-  // Tear the host session down before editorApp.stop() disposes the shared
-  // renderer. In Play, this stops the live playApp first; otherwise its rAF would
-  // keep drawing the renderer after the edit App releases it.
-  registerTeardown(() => session.dispose({ flushPendingSave: currentResetOptions.flushPendingSave }));
   installFpsReport(world, onFps);
   registerTeardown(installAssetSpawnBridge());
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
   // container (drop → gateway spawn; visibility → editorApp.pause/resume).
   registerTeardown(installViewportDropZone(container));
-  registerTeardown(installVisibilityPause(container, editorApp, () => session.getPlayPauseHandle()));
+  registerTeardown(installVisibilityPause(container, editorApp, () => session?.getPlayPauseHandle() ?? null));
   registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');

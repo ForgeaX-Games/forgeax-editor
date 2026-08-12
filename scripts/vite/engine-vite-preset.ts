@@ -677,6 +677,8 @@ export interface EngineVitePresetOptions {
     readonly cleanOrphanMetas?: boolean;
    readonly runtimeBinding?: RuntimeAssetBinding;
   };
+  /** Resolve authored shader packages for the currently active game. */
+  materialPackagesProvider?: () => readonly string[];
   /** Importer classification for game source modules. */
   gameSource?: Omit<GameSourceResolutionOptions, 'gameDirAbs'>;
 }
@@ -792,6 +794,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     silenceShaderEmitInServe(
       forgeaxShader({
         materialPackages: gameDirAbs === null ? [] : discoverGameMaterialPackages(gameDirAbs),
+        materialPackagesProvider: opts.materialPackagesProvider,
       }) as unknown as Record<string, unknown>,
     ),
   );

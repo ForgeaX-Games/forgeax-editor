@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createOperationRun, type OperationRunRequest } from '@forgeax/editor-product';
 import { buildOperationCenterRows, projectRunFacts } from '../run-view-model';
+import { operationRunFilename, serializeOperationRun } from '../run-export';
 
 const source = readFileSync(resolve(import.meta.dir, '../OperationCenter.tsx'), 'utf8');
 
@@ -33,11 +34,19 @@ describe('Operation Center component contract', () => {
     expect(source).toContain('data-field="result"');
     expect(source).toContain('recoveryActions');
     expect(source).toContain('onAction');
+    expect(source).toContain('Export JSON');
+    expect(source).toContain('getSnapshot().runs');
   });
 
   it('does not map accepted to success in the component-facing rows', () => {
     const row = buildOperationCenterRows([projectRunFacts({ run: run() })])[0];
     expect(row?.status).toBe('accepted');
     expect(row?.isSuccess).toBe(false);
+  });
+
+  it('serializes the complete OperationRun snapshot with a generic filename', () => {
+    const value = run();
+    expect(JSON.parse(serializeOperationRun(value))).toEqual(value);
+    expect(operationRunFilename('operation-run:42/profile')).toBe('operation-run-operation-run-42-profile.json');
   });
 });

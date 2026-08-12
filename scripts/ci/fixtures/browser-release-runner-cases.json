@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {"name": "missing carrier", "capability": {"authorized": false}, "expectedCode": "heavy-carrier-unavailable"},
+    {"name": "wrong operating system", "capability": {"os": "darwin", "arch": "x64", "authorized": true}, "expectedCode": "heavy-carrier-unavailable"},
+    {"name": "wrong architecture", "capability": {"os": "linux", "arch": "arm64", "authorized": true}, "expectedCode": "heavy-carrier-unavailable"},
+    {"name": "missing xvfb", "capability": {"os": "linux", "arch": "x64", "authorized": true, "xvfb": false}, "expectedCode": "heavy-carrier-unavailable"},
+    {"name": "missing gpu", "capability": {"os": "linux", "arch": "x64", "authorized": true, "gpuVulkan": false}, "expectedCode": "heavy-carrier-unavailable"},
+    {"name": "missing rhi", "capability": {"os": "linux", "arch": "x64", "authorized": true, "rhi": false}, "expectedCode": "heavy-carrier-unavailable"}
+  ]
+}

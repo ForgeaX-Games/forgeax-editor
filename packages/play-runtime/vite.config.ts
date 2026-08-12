@@ -5,6 +5,7 @@ import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, readFileSy
 import {
   engineVitePreset,
   ENGINE_EXECUTION_ISOLATION_HEADERS,
+  discoverGameMaterialPackages,
   resolveGameEngineEntry as resolveSharedGameEngineEntry,
   type EngineVitePreset,
 } from '../../scripts/vite/engine-vite-preset';
@@ -460,6 +461,8 @@ const enginePreset = engineVitePreset({
     rootsProvider: resolveActivePackRoots,
     cleanOrphanMetas: false,
   },
+  materialPackagesProvider: () =>
+    activeGameDir ? discoverGameMaterialPackages(activeGameDir) : [],
 });
 const playPackPlugin = enginePreset.pack;
 if (!playPackPlugin) throw new Error('Play Runtime must own a Pack producer');

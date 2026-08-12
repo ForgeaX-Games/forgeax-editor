@@ -35,5 +35,78 @@
       "expectedRetry": false,
       "expectedMaxAttempts": 1
     }
+  ],
+  "approvedInput": {
+    "generation": 7,
+    "remoteMainSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidateSourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "submodulePins": [
+      {"path": "packages/engine", "sha": "1111111111111111111111111111111111111111"},
+      {"path": "packages/interface", "sha": "2222222222222222222222222222222222222222"}
+    ],
+    "contractDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "workflowDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sourceBaseline": {
+      "status": "approved",
+      "owner": "human",
+      "decisionId": "human-source-baseline-1",
+      "selectedSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "requiredEvidence": ["narrow CI-only reconstruction decision"]
+    },
+    "producerOwnership": {
+      "status": "approved",
+      "owner": "human",
+      "decisionId": "human-producer-ownership-1",
+      "contractPath": "scripts/ci/editor-ci-contract.json",
+      "requiredEvidence": ["current producer-owned contract path"]
+    },
+    "provenance": {
+      "historicalBranches": [
+        {
+          "ref": "codex/feat-20260810-ci-browser-release-portfolio",
+          "sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "role": "provenance-only"
+        }
+      ]
+    }
+  },
+  "admissionCases": [
+    {
+      "name": "remote main moved after admission",
+      "path": "remoteMainSha",
+      "observed": "ffffffffffffffffffffffffffffffffffffffff",
+      "expectedCode": "remote-main-drift"
+    },
+    {
+      "name": "candidate source changed after admission",
+      "path": "candidateSourceSha",
+      "observed": "9999999999999999999999999999999999999999",
+      "expectedCode": "candidate-source-drift"
+    },
+    {
+      "name": "recursive submodule pin changed after admission",
+      "path": "submodulePins.0.sha",
+      "observed": "8888888888888888888888888888888888888888",
+      "expectedCode": "submodule-pin-drift"
+    },
+    {
+      "name": "contract content changed after admission",
+      "path": "contractDigest",
+      "observed": "7777777777777777777777777777777777777777777777777777777777777777",
+      "expectedCode": "contract-digest-drift"
+    },
+    {
+      "name": "workflow content changed after admission",
+      "path": "workflowDigest",
+      "observed": "6666666666666666666666666666666666666666666666666666666666666666",
+      "expectedCode": "workflow-digest-drift"
+    },
+    {
+      "name": "generation changed after admission",
+      "path": "generation",
+      "observed": 8,
+      "expectedCode": "admission-generation-drift"
+    }
   ]
 }

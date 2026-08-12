@@ -1,0 +1,17 @@
+{
+  "expectations": {
+    "freshPage": true,
+    "diskFacts": true,
+    "playStop": true,
+    "content": true,
+    "staticArtifact": true,
+    "noDevServer": true,
+    "goldenSmoke": true
+  },
+  "cases": [
+    {"name": "missing unit", "operation": "missing-unit", "expectedCode": "journey-unit-set-mismatch"},
+    {"name": "failed unit", "operation": "failed-unit", "expectedCode": "journey-child-not-pass"},
+    {"name": "missing evidence", "operation": "missing-evidence", "expectedCode": "journey-evidence-missing"},
+    {"name": "journey expectation drift", "operation": "expectation-drift", "expectedCode": "journey-expectation-failed"}
+  ]
+}

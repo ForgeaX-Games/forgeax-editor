@@ -59,6 +59,7 @@
     "./ui/confirm": "./packages/ui/src/lib/confirm.ts",
     "./ui/prompt": "./packages/ui/src/lib/prompt.ts",
     "./viewport": "./packages/edit-runtime/src/viewport/ViewportComponent.tsx",
+    "./previews": "./packages/edit-runtime/src/viewport/preview-registrations.ts",
     "./viewport-runtime": "./packages/edit-runtime/src/runtime/viewport-runtime-broadcast.ts",
     "./visual-source": "./packages/edit-runtime/src/viewport/visual-source.ts",
     "./package.json": "./package.json"
@@ -90,6 +91,9 @@
     "ci:fast": "bun fx ci --fast",
     "ci:full": "bun fx ci --full",
     "ci:contract": "bun scripts/ci/editor-ci-contract.mjs",
+    "ci:delivery": "bun scripts/ci/editor-ci-contract.mjs --delivery",
+    "ci:browser-release": "bun scripts/ci/browser-release-measurement.mjs",
+    "ci:engine-prior-art-transfer": "bun scripts/ci/engine-prior-art-transfer.mjs",
     "ci:package-coverage": "bun scripts/ci/package-coverage.mjs",
     "bootstrap-worktree": "node scripts/bootstrap-worktree.mjs",
     "test:layout": "node scripts/check-test-layout.mjs && node scripts/check-repo-layout.mjs",

@@ -34,5 +34,11 @@
     "doc-only": "doc-only-evidence-insufficient",
     "context-drift": "required-context-missing",
     "runner-capacity": "runner-capacity-drift"
+  },
+  "portfolioAssertions": {
+    "parentCheckId": "smoke-play",
+    "requiredContextsRef": "requiredContexts",
+    "requiredContexts": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+    "measurementRequired": false
   }
 }

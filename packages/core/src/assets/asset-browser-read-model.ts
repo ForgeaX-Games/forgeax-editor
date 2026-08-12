@@ -24,10 +24,9 @@ import type {
 
 export type { AssetAuthoringCapability } from '@forgeax/engine-types';
 
-export interface AssetBrowserCatalogRoot {
-  readonly root: string;
-  readonly catalogPrefix: string;
-}
+import { projectCatalogPathToRoots, type CatalogRootProjection } from './catalog-storage-path';
+
+export type AssetBrowserCatalogRoot = CatalogRootProjection;
 
 export type AssetBrowserRelationKind = 'depends-on' | 'referenced-by' | 'contains' | 'derived-from';
 
@@ -232,17 +231,11 @@ function joinPath(dir: string, name: string): string {
   return dir ? `${dir}/${name}` : name;
 }
 
+// SSOT: the prefix projection itself lives in catalog-storage-path.ts (shared
+// with the destroyAsset storage-path derivation); this wrapper keeps the read
+// model's "unmatched rows pass through normalized" behaviour.
 function projectCatalogPath(path: string, roots: readonly AssetBrowserCatalogRoot[]): string {
-  const normalized = normalize(path);
-  for (const root of roots) {
-    const prefix = normalize(root.catalogPrefix).replace(/\/+$/, '');
-    if (!prefix) continue;
-    if (normalized === prefix) return normalize(root.root);
-    if (normalized.startsWith(`${prefix}/`)) {
-      return `${normalize(root.root)}/${normalized.slice(prefix.length + 1)}`;
-    }
-  }
-  return normalized;
+  return projectCatalogPathToRoots(path, roots) ?? normalize(path);
 }
 
 function relativeToGamePath(path: string, resolvedRoot: string): string {

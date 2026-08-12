@@ -100,21 +100,18 @@ function ringBox(anchor: Rect): Rect {
 }
 
 /** Choose a coach position (below → above → right → left → centered) that fits
- *  the viewport, then clamp inside it. `coachH` is the MEASURED card height (see
- *  the caller's layout effect) — using the real height, not a fixed estimate, is
- *  what makes a tall card flip cleanly ABOVE a bottom-edge anchor (e.g. the
- *  footer) instead of overflowing off-screen. */
-function coachPosition(anchor: Rect | null, coachH: number): { top: number; left: number } {
+ *  the viewport, then clamp inside it. */
+function coachPosition(anchor: Rect | null): { top: number; left: number } {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   if (!anchor) {
-    return { top: Math.max(VIEWPORT_PAD, vh / 2 - coachH / 2), left: vw / 2 - COACH_W / 2 };
+    return { top: Math.max(VIEWPORT_PAD, vh / 2 - COACH_H_EST / 2), left: vw / 2 - COACH_W / 2 };
   }
   const belowTop = anchor.top + anchor.height + COACH_GAP;
-  const aboveTop = anchor.top - coachH - COACH_GAP;
+  const aboveTop = anchor.top - COACH_H_EST - COACH_GAP;
   let top: number;
   let left: number;
-  if (belowTop + coachH <= vh - VIEWPORT_PAD) {
+  if (belowTop + COACH_H_EST <= vh - VIEWPORT_PAD) {
     top = belowTop;
     left = anchor.left + anchor.width / 2 - COACH_W / 2;
   } else if (aboveTop >= VIEWPORT_PAD) {
@@ -127,7 +124,7 @@ function coachPosition(anchor: Rect | null, coachH: number): { top: number; left
     top = anchor.top;
     left = anchor.left - COACH_W - COACH_GAP;
   }
-  top = Math.min(Math.max(VIEWPORT_PAD, top), vh - coachH - VIEWPORT_PAD);
+  top = Math.min(Math.max(VIEWPORT_PAD, top), vh - COACH_H_EST - VIEWPORT_PAD);
   left = Math.min(Math.max(VIEWPORT_PAD, left), vw - COACH_W - VIEWPORT_PAD);
   return { top, left };
 }
@@ -145,10 +142,6 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
     ? step.anchorId.join('|')
     : (step?.anchorId ?? '');
   const [anchorRect, setAnchorRect] = useState<Rect | null>(null);
-  // Measured coach-card height. Body copy varies per step (short "chat" vs long
-  // "footer"), so a fixed estimate mis-clamps a tall card at a bottom-edge
-  // anchor. Seed with the estimate, then correct to the real height below.
-  const [coachH, setCoachH] = useState(COACH_H_EST);
   const coachRef = useRef<HTMLDivElement>(null);
   const isLast = stepIndex >= steps.length - 1;
   const isFirst = stepIndex <= 0;
@@ -179,14 +172,6 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
     return () => clearTimeout(timer);
   }, [anchorKey]);
 
-  // Measure the card's real height after it renders (before paint), so the next
-  // layout pass positions/clamps it with the true height. Only sets on change →
-  // converges in one extra pass (position doesn't affect the card's height).
-  useLayoutEffect(() => {
-    const h = coachRef.current?.offsetHeight ?? 0;
-    if (h > 0 && h !== coachH) setCoachH(h);
-  }, [stepIndex, anchorRect, step?.body, coachH]);
-
   useEffect(() => {
     const onWin = () => recompute();
     window.addEventListener('resize', onWin);
@@ -213,7 +198,7 @@ export function TourOverlay({ steps, stepIndex, onStepChange, onClose, labels }:
   }, [stepIndex]);
 
   if (!step) return null;
-  const coach = coachPosition(anchorRect, coachH);
+  const coach = coachPosition(anchorRect);
   const ring = anchorRect ? ringBox(anchorRect) : null;
   // evenodd polygon: full viewport minus the ring rect → dim everywhere except
   // the highlighted panel (which stays undimmed).

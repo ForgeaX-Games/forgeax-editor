@@ -5,6 +5,7 @@ import {
   getOperationProjectionSource,
   subscribeOperationProjection,
 } from './run-view-model';
+import { downloadOperationRun } from './run-export';
 
 export interface OperationCenterProps {
   readonly onAction?: (action: OperationCenterAction, runId: string, row: OperationCenterRow) => void;
@@ -65,6 +66,13 @@ function formatResult(value: unknown): string {
   }
 }
 
+function exportRun(runId: string): void {
+  const source = getOperationProjectionSource();
+  const run = source.getSnapshot().runs.find((candidate) => candidate.runId === runId);
+  if (run === undefined) return;
+  downloadOperationRun(run);
+}
+
 export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
   const subscribedRows = useRows();
   const visibleRows = subscribedRows;
@@ -121,6 +129,16 @@ export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
                 {row.actions.map((action) => (
                   <ActionButton key={action} action={action} runId={row.runId} row={row} onAction={dispatchAction} />
                 ))}
+                {row.isTerminal && (
+                  <button
+                    type="button"
+                    data-action="export"
+                    data-testid={`operation-run-export-${row.runId}`}
+                    onClick={() => exportRun(row.runId)}
+                  >
+                    Export JSON
+                  </button>
+                )}
               </div>
             </article>
           ))}

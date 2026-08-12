@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "forgeax-browser-release-topology-cases/v1",
+  "cases": [
+    {"name": "one unit failure", "operation": "unit-failure", "expectedCode": "aggregate-unit-not-pass"},
+    {"name": "unknown unit", "operation": "unknown-unit", "expectedCode": "aggregate-unit-unknown"},
+    {"name": "duplicate unit", "operation": "duplicate-unit", "expectedCode": "aggregate-unit-duplicate"},
+    {"name": "missing unit", "operation": "missing-unit", "expectedCode": "aggregate-unit-missing"},
+    {"name": "premature final home", "operation": "premature-final-home", "expectedCode": "topology-phase-invalid"},
+    {"name": "prepopulated old snapshot", "operation": "old-snapshot", "expectedCode": "topology-snapshot-stale"},
+    {"name": "index before projection", "operation": "index-not-pass", "expectedCode": "topology-index-not-pass"}
+  ]
+}

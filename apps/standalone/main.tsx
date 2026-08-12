@@ -10,6 +10,8 @@
 import { StrictMode, useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
+import { applyTheme } from '@forgeax/design/theme';
+import { initI18n } from '@forgeax/interface/i18n';
 import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
 // ADR 0025 M1: the shell is assembled through AppExtension manifests passed to
 // <App overrides={{ extensions }}/> — the panelRenderers escape-hatch prop was
@@ -27,22 +29,17 @@ import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
 // remain lightweight in-process components in the shell.
 import { ViewportRuntimeFrame } from '@forgeax/editor-edit-runtime/runtime-frame';
 import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
-import { MaterialPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/material-preview';
-import { MeshPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/mesh-preview';
-import { VfxPreviewViewport } from '@forgeax/editor-edit-runtime/viewport/vfx-preview';
+// Preview-slot wiring is SSOT'd behind the ./previews facade subpath so every
+// host (standalone, Studio) registers the same three preview viewports.
+import { registerEditorPreviewViewports } from '@forgeax/editor/previews';
 // editor-panels is not a direct root dependency (zero-transitive src/ design,
 // AGENTS.md) — reach EDITOR_PANEL_COMPONENTS through the root package's own
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
 import {
   EDITOR_PANEL_COMPONENTS,
-  registerMaterialInstancePreview,
-  registerMeshPreview,
-  registerVfxPreview,
 } from '@forgeax/editor/panels';
-registerMaterialInstancePreview(MaterialPreviewViewport);
-registerMeshPreview(MeshPreviewViewport);
-registerVfxPreview(VfxPreviewViewport);
+registerEditorPreviewViewports();
 // EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
 // + the panels registry keys, same source studio's editorRenderers uses.
 import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
@@ -97,6 +94,12 @@ import { setPathResolver } from '@forgeax/editor-core';
 import { isPanelVisible } from '@forgeax/interface/components/DockShell/DockRegion';
 import { installSettingsPanelRedirect, SETTINGS_PANEL_ID } from './settings-redirect';
 import { createStandaloneGameClient } from './game-service-client';
+
+// Keep the standalone shell's first paint and runtime theme/i18n bootstrap
+// aligned with the Studio entry. Standalone intentionally omits Studio-only
+// product surfaces, but it must not omit the shared visual foundation.
+applyTheme('dark');
+initI18n();
 
 // Contextual F2/Delete/Mod+A have moved to focused widget scopes. This bridge
 // remains only for shortcuts that have not yet migrated.
@@ -204,12 +207,13 @@ function EditorPanelBody({ id }: { id: string }): ReactNode {
 // Tab labels for the dock panels. The id list remains EDITOR_PANELS; this map
 // is host-owned display metadata used to fill PanelDescriptor.title.
 const EDITOR_PANEL_TITLES: Record<string, string> = {
-  hierarchy: 'Hierarchy', assets: 'Assets', inspector: 'Inspector',
+  hierarchy: 'Hierarchy', assets: 'Content Browser', inspector: 'Inspector',
   history: 'History', capabilities: 'Capabilities',
   launcher: 'Launcher', 'asset-overview': 'Asset Overview',
   'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
   'mesh-preview': 'Preview',
   'mat-preview': 'Preview', 'mi-preview': 'Preview', 'mi-properties': 'Properties',
+  'input-map-properties': 'Input Map Properties',
   'vfx-system': 'System Outline', 'vfx-preview': 'Preview', 'vfx-timeline': 'Timeline',
   'vfx-details': 'Details', 'vfx-diagnostics': 'Diagnostics',
   settings: 'Settings',
@@ -439,10 +443,18 @@ function boot(): void {
   // ContextMenu (plan-strategy D-1: diff-set empty). The extension set injects
   // standalone's isolated Viewport Runtime + in-process editor panel slots;
   // chat/Forge never mount because nothing contributes them (AC-09, structural).
+  //
+  // EditorOverlayProvider (Prompt/Confirm/Toast) wraps <App> in the SAME React
+  // root so that module-level singleton dispatchers (e.g. prompt.ts `dispatcher`)
+  // share the exact same module instance as panels like ContentBrowser that
+  // consume them. Previously a separate createRoot caused Vite to resolve
+  // barrel vs subpath imports to distinct module instances, breaking prompts.
   try {
     createRoot(rootEl).render(
       <StrictMode>
-        <App overrides={STANDALONE_OVERRIDES} />
+        <EditorOverlayProvider>
+          <App overrides={STANDALONE_OVERRIDES} />
+        </EditorOverlayProvider>
       </StrictMode>,
     );
   } catch (err) {
@@ -465,7 +477,6 @@ function boot(): void {
   } catch (err) {
     console.error('[standalone] DeleteGuardDialog mount failed:', err);
   }
-
   try {
     const overlayEl = document.createElement('div');
     overlayEl.id = 'editor-overlay-root';

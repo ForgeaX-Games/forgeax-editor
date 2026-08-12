@@ -32,5 +32,32 @@
       "value": 7,
       "expectedCode": "schema-field-type"
     }
+  ],
+  "portfolioCases": [
+    {
+      "name": "missing portfolio owner",
+      "operation": "missing-owner",
+      "expectedCode": "portfolio-owner-missing"
+    },
+    {
+      "name": "duplicate portfolio source",
+      "operation": "duplicate-source",
+      "expectedCode": "portfolio-source-duplicate"
+    },
+    {
+      "name": "portfolio parent drift",
+      "operation": "parent-drift",
+      "expectedCode": "portfolio-parent-invalid"
+    },
+    {
+      "name": "measurement cannot become required",
+      "operation": "measurement-required",
+      "expectedCode": "portfolio-measurement-required"
+    },
+    {
+      "name": "portfolio schema drift",
+      "operation": "schema-drift",
+      "expectedCode": "portfolio-schema-version"
+    }
   ]
 }

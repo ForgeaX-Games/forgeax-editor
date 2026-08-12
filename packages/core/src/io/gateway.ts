@@ -51,7 +51,9 @@ import {
   queryCompatibleAssetCatalog,
   type CompatibleAssetCatalogResult,
 } from '../assets/compatible-asset-catalog';
-import { catalogStoragePath } from '../assets/catalog-storage-path';
+import { catalogStoragePath, catalogGameStoragePath } from '../assets/catalog-storage-path';
+import { resolveGamePathOnce } from '../util/path-resolver';
+import { getViewportRuntimeClientSnapshot } from './viewport-runtime-client';
 // gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
 // reader binding). None of them route a command or decide a domain.
@@ -1051,7 +1053,7 @@ export class EditGateway {
       const row = this.assetCatalog().find(
         (entry) => entry.guid.toLowerCase() === destroy.guid.toLowerCase(),
       );
-      const storagePath = row === undefined ? null : catalogStoragePath(row);
+      const storagePath = row === undefined ? null : this._catalogStoragePathFor(row);
       if (storagePath === null) {
         return {
           ok: false,
@@ -1086,6 +1088,25 @@ export class EditGateway {
     if (duplicate.name === undefined) duplicate.name = `${sourceName} copy`;
     if (duplicate.label === undefined) duplicate.label = `duplicate ${sourceName}`;
     return { ok: true };
+  }
+
+  /**
+   * Derive a catalog row's writable storage in the HOST's `/api/files`
+   * coordinate space. The producer catalog reports sourcePath in the runtime's
+   * serve-mount space (Studio: `host-games/<slug>/...`), which the server's
+   * safe-path whitelist rejects (400) — so project through the runtime-bound
+   * catalog roots into game-internal form, then through the host-installed
+   * path resolver. When no catalog roots are bound (headless/pre-runtime) or
+   * the row matches no declared root, keep the catalog-space path unchanged
+   * (legacy standalone behaviour).
+   */
+  private _catalogStoragePathFor(row: ReturnType<AssetRegistry['listCatalog']>[number]): string | null {
+    const fallback = catalogStoragePath(row);
+    const roots = getViewportRuntimeClientSnapshot().catalogRoots;
+    if (roots === null) return fallback;
+    const gamePath = catalogGameStoragePath(row, roots);
+    if (gamePath === null) return fallback;
+    return resolveGamePathOnce(gamePath);
   }
 
   /** Project ordinary component writes onto the engine-owned mount override

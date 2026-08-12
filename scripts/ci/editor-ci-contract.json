@@ -138,5 +138,62 @@
     "requiresTransientEvidence": true,
     "maxAutomaticRetries": 1,
     "sloClaim": null
+  },
+  "delivery": {
+    "verifier": {
+      "entrypoint": "scripts/ci/editor-ci-contract.mjs",
+      "command": "bun run ci:delivery"
+    },
+    "requiredContextsRef": "requiredContexts",
+    "measurementRequired": false,
+    "sourceRepository": "editor",
+    "harnessRepository": "floating-harness"
+  },
+  "browserReleasePortfolio": {
+    "schemaVersion": "forgeax-browser-release-portfolio/v1",
+    "owner": "editor-ci",
+    "parentCheckId": "smoke-play",
+    "requiredContextsRef": "requiredContexts",
+    "measurement": {
+      "required": false,
+      "phase": "pre-topology",
+      "indexStatus": null
+    },
+    "evidence": {
+      "schemaVersion": "forgeax-browser-release-evidence/v1",
+      "requiredFields": [
+        "sourceSha",
+        "contractDigest",
+        "admissionGeneration",
+        "terminalStatus",
+        "expected",
+        "observed"
+      ],
+      "failureFields": ["code", "hint", "expected", "observed"]
+    },
+    "discovery": {
+      "roots": ["apps/standalone/e2e", "scripts", "package.json", ".github/workflows"],
+      "ownedSources": [
+        "apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts",
+        "apps/standalone/e2e/__tests__/editor-browser-smoke.spec.ts",
+        "apps/standalone/e2e/__tests__/create-game-browser-smoke.spec.ts",
+        "scripts/repro-default-scene-import-404.mjs",
+        "apps/standalone/e2e/__tests__/j4-runner.spec.ts",
+        "scripts/static-build-smoke.mjs"
+      ],
+      "unmatchedDisposition": "structured-exclusion",
+      "exclusionClass": "not-release-owned",
+      "exclusionOwner": "editor-ci"
+    },
+    "profiles": {
+      "browser-journey": {
+        "kind": "playwright",
+        "requiredUnitFields": ["unitId", "source", "parentCheckId", "owner", "profile", "evidence"]
+      },
+      "release-script": {
+        "kind": "script",
+        "requiredUnitFields": ["unitId", "source", "parentCheckId", "owner", "profile", "evidence"]
+      }
+    }
   }
 }

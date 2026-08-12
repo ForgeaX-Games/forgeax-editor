@@ -16,6 +16,7 @@ const carrierPath = resolve('.github/workflows/runner-pool-contract.yml');
 const ciWorkflowPath = resolve('.github/workflows/ci.yml');
 const malformedFixture = resolve('scripts/ci/fixtures/malformed-actions.yml');
 const admissionFixture = resolve('scripts/ci/fixtures/workflow-admission-contract.yml');
+const measurementWorkflowPath = resolve('.github/workflows/browser-release-measurement.yml');
 
 test('enumerates every supported workflow suffix in stable order', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-workflow-enumeration-'));
@@ -137,4 +138,21 @@ test('trusted admission assertions reject an unsafe PR-head execution boundary',
   assert.match(text, /sparse-checkout:\s*\|\s*\n\s+\.github\/workflows/);
   assert.doesNotMatch(text, /working-directory:\s*pr-head/);
   assert.doesNotMatch(text, /working-directory:\s*pr-head|pr-head\/(?:scripts|package\.json|node_modules)/);
+});
+
+test('measurement workflow binds every shell variable before invoking the CLI', () => {
+  const text = readFileSync(measurementWorkflowPath, 'utf8');
+  assert.match(text, /Require trusted immutable admission[\s\S]*admission\.json[\s\S]*measurement-admission-missing/);
+  assert.match(text, /Upload immutable admission snapshot/);
+  assert.equal((text.match(/token:\s*\$\{\{ secrets\.GHA \}\}/g) ?? []).length, 4);
+  assert.equal((text.match(/git config --global --unset-all 'http\.https:\/\/github\.com\/.extraheader'/g) ?? []).length, 4);
+  const firstMeasure = text.slice(text.indexOf('name: Measure one dynamic canonical unit'), text.indexOf('name: Upload raw terminal evidence'));
+  const comparablePlan = text.slice(text.indexOf('name: Select comparable sample'), text.indexOf('comparable-measure:'));
+  const secondMeasure = text.slice(text.indexOf('name: Measure comparable second sample, not a retry'), text.indexOf('name: Upload comparable raw evidence'));
+  assert.match(firstMeasure, /run: \|[\s\S]*set -euo pipefail[\s\S]*unit='\$\{\{ matrix\.unit \}\}'[\s\S]*raw="[^"]*\$\{unit\}[^"]*"[\s\S]*--unit "\$\{unit\}"[\s\S]*--output "\$\{raw\}"/);
+  assert.match(firstMeasure, /--admission admission\.json/);
+  assert.match(comparablePlan, /run: \|[\s\S]*set -euo pipefail[\s\S]*raw_dir='browser-release-measurements'[\s\S]*--input "\$\{raw_dir\}"/);
+  assert.match(comparablePlan, /--admission admission\.json/);
+  assert.match(secondMeasure, /run: \|[\s\S]*set -euo pipefail[\s\S]*unit='\$\{\{ matrix\.unit\.unitId \}\}'[\s\S]*digest='\$\{\{ matrix\.unit\.sample1Digest \}\}'[\s\S]*raw="[^"]*\$\{unit\}[^"]*"[\s\S]*--unit "\$\{unit\}"[\s\S]*--comparable-to "\$\{digest\}"[\s\S]*--output "\$\{raw\}"/);
+  assert.match(secondMeasure, /--admission admission\.json/);
 });

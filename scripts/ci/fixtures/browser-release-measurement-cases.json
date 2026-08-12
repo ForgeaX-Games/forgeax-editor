@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {"name": "missing raw", "operation": "missing-raw", "expectedCode": "measurement-raw-missing"},
+    {"name": "non terminal raw", "operation": "non-terminal", "expectedCode": "measurement-not-terminal"},
+    {"name": "source drift", "operation": "source-drift", "expectedCode": "measurement-provenance-drift"},
+    {"name": "contract drift", "operation": "contract-drift", "expectedCode": "measurement-provenance-drift"},
+    {"name": "workflow drift", "operation": "workflow-drift", "expectedCode": "measurement-provenance-drift"},
+    {"name": "admitted pin drift", "operation": "admitted-drift", "expectedCode": "measurement-admission-drift"},
+    {"name": "generation drift", "operation": "generation-drift", "expectedCode": "measurement-generation-drift"},
+    {"name": "cleanup failure", "operation": "cleanup-failure", "expectedCode": "measurement-cleanup-failed"}
+  ]
+}

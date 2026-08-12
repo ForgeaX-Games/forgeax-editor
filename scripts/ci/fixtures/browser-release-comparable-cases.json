@@ -1,0 +1,10 @@
+{
+  "cases": [
+    {"name": "historical sample", "operation": "generation-drift", "expectedCode": "comparable-provenance-drift"},
+    {"name": "different runner", "operation": "runner-drift", "expectedCode": "comparable-provenance-drift"},
+    {"name": "different source", "operation": "source-drift", "expectedCode": "comparable-provenance-drift"},
+    {"name": "different unit", "operation": "unit-drift", "expectedCode": "comparable-unit-mismatch"},
+    {"name": "non terminal sample", "operation": "non-terminal", "expectedCode": "comparable-not-terminal"},
+    {"name": "wrong digest", "operation": "digest-drift", "expectedCode": "comparable-digest-drift"}
+  ]
+}

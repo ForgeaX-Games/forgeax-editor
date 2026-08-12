@@ -1,0 +1,79 @@
+{
+  "approvedInput": {
+    "featureId": "feat-20260812-browser-release-portfolio-recovery",
+    "featureDir": "forgeax-loop/feat-20260812-browser-release-portfolio-recovery",
+    "sourceDelivery": {
+      "repository": "editor",
+      "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "changedPaths": [
+        "scripts/ci/editor-ci-contract-envelope.mjs",
+        "scripts/ci/editor-ci-contract.mjs"
+      ]
+    },
+    "harnessDelivery": {
+      "repository": "harness",
+      "commitSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "selectedPaths": [
+        "forgeax-loop/feat-20260812-browser-release-portfolio-recovery/admission.json",
+        "forgeax-loop/feat-20260812-browser-release-portfolio-recovery/implement-progress.jsonl",
+        "forgeax-loop/feat-20260812-browser-release-portfolio-recovery/plan-strategy.md"
+      ],
+      "dirtyPaths": [],
+      "untrackedPaths": [],
+      "remote": {
+        "name": "origin",
+        "ref": "main",
+        "reachable": true,
+        "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "remote-harness-commit-delivers-feature-only-artifacts",
+      "expectedStatus": "delivered"
+    },
+    {
+      "name": "unrelated-dirty-content-is-not-selected",
+      "mutate": {"harnessDelivery.dirtyPaths": ["forgeax-loop/other-feature/ci-reports/latest.json"]},
+      "expectedStatus": "pending",
+      "expectedCode": "harness-unrelated-dirty-content"
+    },
+    {
+      "name": "unrelated-untracked-content-is-not-selected",
+      "mutate": {"harnessDelivery.untrackedPaths": ["forgeax-loop/other-feature/tmp.json"]},
+      "expectedStatus": "pending",
+      "expectedCode": "harness-unrelated-untracked-content"
+    },
+    {
+      "name": "old-four-gate-state-is-not-selected",
+      "mutate": {"harnessDelivery.selectedPaths": ["old-four-gate/loop-state.json"]},
+      "expectedStatus": "nonpass",
+      "expectedCode": "harness-feature-path-mismatch"
+    },
+    {
+      "name": "local-harness-commit-without-remote-push-is-pending",
+      "mutate": {"harnessDelivery.remote": {"name": "origin", "ref": "main", "reachable": false, "sha": null}},
+      "expectedStatus": "pending",
+      "expectedCode": "harness-remote-push-missing"
+    },
+    {
+      "name": "remote-sha-must-identify-the-selected-harness-commit",
+      "mutate": {"harnessDelivery.remote.sha": "cccccccccccccccccccccccccccccccccccccccc"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "harness-remote-sha-mismatch"
+    },
+    {
+      "name": "editor-source-and-harness-artifacts-cannot-share-delivery",
+      "mutate": {"harnessDelivery.selectedPaths": ["forgeax-loop/feat-20260812-browser-release-portfolio-recovery/admission.json", "scripts/ci/editor-ci-contract.mjs"]},
+      "expectedStatus": "nonpass",
+      "expectedCode": "delivery-boundary-mixed"
+    },
+    {
+      "name": "feature-id-must-own-every-selected-harness-path",
+      "mutate": {"harnessDelivery.selectedPaths": ["forgeax-loop/feat-20260812-browser-release-portfolio-recovery/admission.json", "forgeax-loop/another-feature/plan.md"]},
+      "expectedStatus": "nonpass",
+      "expectedCode": "harness-feature-path-mismatch"
+    }
+  ]
+}

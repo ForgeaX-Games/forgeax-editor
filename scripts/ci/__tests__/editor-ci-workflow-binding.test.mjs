@@ -33,6 +33,14 @@ test('baseline workflow graph binds every contract identity exactly once', () =>
   );
 });
 
+test('portfolio fixture keeps measurement outside the four required contexts', () => {
+  const expected = fixture.portfolioAssertions;
+  assert.equal(contract.browserReleasePortfolio?.requiredContextsRef, expected.requiredContextsRef);
+  assert.deepEqual(contract.requiredContexts.map((entry) => entry.context), expected.requiredContexts);
+  assert.equal(contract.browserReleasePortfolio?.parentCheckId, expected.parentCheckId);
+  assert.equal(contract.browserReleasePortfolio?.measurement?.required, expected.measurementRequired);
+});
+
 for (const [name, expectedCode] of Object.entries(fixture.expectedErrors)) {
   test(`workflow binding rejects ${name}`, () => {
     const options = name === 'doc-only' ? { docOnly: true } : {};

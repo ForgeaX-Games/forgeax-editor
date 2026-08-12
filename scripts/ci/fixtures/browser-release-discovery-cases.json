@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "name": "missing owned candidate",
+      "operation": "missing-unit",
+      "expectedCode": "unit-set-mismatch"
+    },
+    {
+      "name": "duplicate census candidate",
+      "operation": "duplicate-candidate",
+      "expectedCode": "candidate-id-duplicate"
+    },
+    {
+      "name": "stale source exclusion",
+      "operation": "stale-exclusion",
+      "expectedCode": "discovery-exclusion-stale"
+    },
+    {
+      "name": "candidate identity drift",
+      "operation": "candidate-id-drift",
+      "expectedCode": "candidate-id-drift"
+    },
+    {
+      "name": "missing type script channel record",
+      "operation": "channel-record-missing",
+      "expectedCode": "discovery-channel-record-missing"
+    },
+    {
+      "name": "owned source disposition drift",
+      "operation": "source-disposition-drift",
+      "expectedCode": "candidate-disposition-drift"
+    }
+  ]
+}

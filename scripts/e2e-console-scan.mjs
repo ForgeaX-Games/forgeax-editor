@@ -49,11 +49,13 @@ const pe = section('PAGE ERRORS (uncaught)', pageErrors);
 const ce = section('CONSOLE ERRORS', consoleErrors);
 const fr = section('FAILED REQUESTS (>=400 / net fail)', failedRequests);
 
-// Allowlist: headless chromium has no GPU → WebGPU render loop throws (documented).
-// Also tolerate Vite cold-start `504 (Outdated Optimize Dep)` when nested deps are
-// discovered after the first page load (same filter as apps/standalone/e2e/games-smoke-helpers.ts).
+// Tolerate generic headless-WebGPU setup tokens and Vite cold-start
+// `504 (Outdated Optimize Dep)`. RhiError is a real runtime error and remains
+// fatal even when its text also contains one of those generic tokens.
+const RHI_ERROR = /\bRhiError\b/i;
 const allowed = (e) =>
-  /RhiError|webgpu|WebGPU|GPUDevice|createBindGroup|requestAdapter|GPUAdapter|Outdated Optimize Dep/i.test(e);
+  !RHI_ERROR.test(e) &&
+  /webgpu|WebGPU|GPUDevice|createBindGroup|requestAdapter|GPUAdapter|Outdated Optimize Dep/i.test(e);
 // Dev-only noise: React StrictMode double-mounts every effect, so iframe/HMR
 // loads are torn down (net::ERR_ABORTED) and immediately re-issued. An aborted
 // request whose SAME url also succeeded (2xx/304) elsewhere in the session is
@@ -64,7 +66,7 @@ const realConsole = ce.filter((e) => !allowed(e));
 const realReq = fr.filter((e) => !allowed(e) && !devAbortRetried(e));
 
 console.log(`\n${'#'.repeat(60)}`);
-console.log(`SUMMARY (excluding WebGPU-headless allowlist):`);
+console.log(`SUMMARY (excluding generic WebGPU/Vite setup noise):`);
 console.log(`  page errors:     ${realPage.length}`);
 console.log(`  console errors:  ${realConsole.length}`);
 console.log(`  failed requests: ${realReq.length}`);

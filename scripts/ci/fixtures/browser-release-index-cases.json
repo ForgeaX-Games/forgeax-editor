@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "forgeax-browser-release-index-cases/v1",
+  "provenance": {
+    "sourceSha": "a000000000000000000000000000000000000000",
+    "contractDigest": "b0000000000000000000000000000000000000000000000000000000000000000",
+    "workflowDigest": "c0000000000000000000000000000000000000000000000000000000000000000",
+    "admissionDigest": "d0000000000000000000000000000000000000000000000000000000000000000",
+    "admissionGeneration": 2,
+    "runner": {"os": "linux", "arch": "x64", "class": "self-hosted-linux-x64-heavy"}
+  },
+  "cases": [
+    {"name": "missing raw artifact", "operation": "missing-raw", "expectedCode": "measurement-raw-missing"},
+    {"name": "duplicate canonical unit", "operation": "duplicate-unit", "expectedCode": "measurement-unit-duplicate"},
+    {"name": "nonterminal raw", "operation": "nonterminal", "expectedCode": "measurement-not-terminal"},
+    {"name": "mixed admission generation", "operation": "mixed-generation", "expectedCode": "measurement-generation-drift"},
+    {"name": "missing attestor", "operation": "missing-attestor", "expectedCode": "measurement-attestation-missing"},
+    {"name": "source provenance drift", "operation": "source-drift", "expectedCode": "measurement-provenance-drift"},
+    {"name": "canonical order drift", "operation": "order-drift", "expectedCode": "measurement-canonical-order-invalid"}
+  ]
+}

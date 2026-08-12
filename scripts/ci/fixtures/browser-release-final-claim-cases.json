@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "forgeax-browser-release-final-claim-cases/v1",
+  "cases": [
+    {"name": "old topology snapshot", "operation": "old-snapshot", "expectedCode": "final-topology-provenance-drift"},
+    {"name": "provisional home", "operation": "provisional-home", "expectedCode": "final-topology-provisional-home"},
+    {"name": "mixed digest", "operation": "mixed-digest", "expectedCode": "final-topology-digest-drift"},
+    {"name": "missing execution group", "operation": "missing-execution-group", "expectedCode": "final-topology-execution-group-missing"},
+    {"name": "focused-only transfer", "operation": "focused-only", "expectedCode": "final-claim-index-not-pass"},
+    {"name": "index not pass", "operation": "index-not-pass", "expectedCode": "final-claim-index-not-pass"}
+  ]
+}
