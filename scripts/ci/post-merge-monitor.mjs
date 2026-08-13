@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { CONTRACT_SCHEMA_VERSION, validateRuntimeProjection } from './editor-ci-contract.mjs';
+import { CONTRACT_SCHEMA_VERSION } from './editor-ci-contract.mjs';
 import {
   createDeliveryEnvelope,
   LANDED_REQUIRED_CONTEXTS,
 } from './editor-ci-contract-envelope.mjs';
-import { discoverLiveRuleset, requiredContextNamesFromRuleset } from './live-ruleset-admission.mjs';
 
 const MAX_EVIDENCE = 4;
 const MAX_DETAIL_LENGTH = 220;
@@ -584,8 +582,6 @@ export function classifyPostMergeAdmission({
   liveEvidence = true,
   requiredContexts = [],
   monitorSha = null,
-  workflowAdmission,
-  liveAdmissionError,
 } = {}) {
   if (!liveEvidence) {
     return admissionFailure({
@@ -596,17 +592,6 @@ export function classifyPostMergeAdmission({
       code: 'live-evidence-unavailable',
       observed: 'static fixture only',
       hint: 'Obtain live ruleset or cloud packet evidence before claiming equality.',
-    });
-  }
-  if (liveAdmissionError) {
-    return admissionFailure({
-      workflowRun,
-      targetSha,
-      monitorSha,
-      failureClass: 'external-transport',
-      code: liveAdmissionError.code ?? 'live-ruleset-unavailable',
-      observed: liveAdmissionError.observed ?? liveAdmissionError,
-      hint: liveAdmissionError.hint ?? 'Provide readable live ruleset list/detail evidence before classifying success.',
     });
   }
   if (!liveRuleset) {
@@ -620,34 +605,7 @@ export function classifyPostMergeAdmission({
       hint: 'Provide readable live ruleset evidence; static fixtures cannot prove current equality.',
     });
   }
-  let actualContexts;
-  try {
-    actualContexts = requiredContextNamesFromRuleset(liveRuleset);
-  } catch {
-    actualContexts = [];
-  }
-  if (actualContexts.length === 0) {
-    return admissionFailure({
-      workflowRun,
-      targetSha,
-      monitorSha,
-      failureClass: 'admission',
-      code: 'admission-ruleset-empty',
-      observed: liveRuleset,
-      hint: 'The selected live ruleset must contain a non-empty required-status-check rule.',
-    });
-  }
-  if (new Set(actualContexts).size !== actualContexts.length) {
-    return admissionFailure({
-      workflowRun,
-      targetSha,
-      monitorSha,
-      failureClass: 'admission',
-      code: 'required-context-shadowed',
-      observed: actualContexts,
-      hint: 'Reject duplicate live required contexts instead of selecting one shadowed record.',
-    });
-  }
+  const actualContexts = Array.isArray(liveRuleset.requiredContexts) ? liveRuleset.requiredContexts : [];
   if (JSON.stringify([...actualContexts].sort()) !== JSON.stringify([...requiredContexts].sort())) {
     return admissionFailure({
       workflowRun,
@@ -659,18 +617,6 @@ export function classifyPostMergeAdmission({
       hint: 'Align live required contexts with the producer-owned contract.',
     });
   }
-  if (workflowAdmission && workflowAdmission.ok !== true) {
-    const error = workflowAdmission.errors?.[0] ?? {};
-    return admissionFailure({
-      workflowRun,
-      targetSha,
-      monitorSha,
-      failureClass: 'admission',
-      code: error.code ?? 'workflow-admission',
-      observed: error.observed ?? workflowAdmission,
-      hint: error.hint ?? 'The trusted workflow graph, runner capability, or permission policy did not admit.',
-    });
-  }
   if (!Array.isArray(jobs) || jobs.length === 0) {
     return admissionFailure({
       workflowRun,
@@ -680,43 +626,6 @@ export function classifyPostMergeAdmission({
       code: 'zero-job',
       observed: 0,
       hint: 'Fetch the target workflow attempt jobs before evaluating terminal status.',
-    });
-  }
-  for (const context of requiredContexts) {
-    const matches = jobs.filter((job) => String(job?.id ?? '') === context || job?.name === context);
-    if (matches.length === 0) {
-      return admissionFailure({
-        workflowRun,
-        targetSha,
-        monitorSha,
-        failureClass: 'admission',
-        code: 'required-context-job-missing',
-        observed: {context, jobs: jobs.map((job) => job?.name ?? job?.id)},
-        hint: `The target workflow attempt must contain exactly one job for ${context}.`,
-      });
-    }
-    if (matches.length !== 1) {
-      return admissionFailure({
-        workflowRun,
-        targetSha,
-        monitorSha,
-        failureClass: 'admission',
-        code: 'required-context-job-ambiguous',
-        observed: {context, matches: matches.map((job) => ({id: job?.id, name: job?.name}))},
-        hint: `The target workflow attempt must not shadow ${context} with multiple jobs.`,
-      });
-    }
-  }
-  const observedAttempts = jobs.map((job) => job?.run_attempt).filter((attempt) => attempt !== undefined && attempt !== null);
-  if (observedAttempts.length > 0 && observedAttempts.length !== jobs.length) {
-    return admissionFailure({
-      workflowRun,
-      targetSha,
-      monitorSha,
-      failureClass: 'admission',
-      code: 'run-attempt-missing',
-      observed: jobs.map((job) => ({id: job?.id, runAttempt: job?.run_attempt})),
-      hint: 'Every observed target job must carry the run attempt when attempt evidence is available.',
     });
   }
   const mismatchedJob = jobs.find(
@@ -734,7 +643,7 @@ export function classifyPostMergeAdmission({
       hint: 'Query jobs for the exact workflow run and attempt; do not mix packets.',
     });
   }
-  return { ok: true, envelope: { terminalStatus: 'pass', failureClass: null, attempts: jobs, requiredContexts: actualContexts } };
+  return { ok: true, envelope: { terminalStatus: 'pass', failureClass: null, attempts: jobs } };
 }
 
 function replacementRun(run, relatedRuns) {
@@ -841,11 +750,8 @@ function decode(bytes) {
   return new TextDecoder().decode(bytes ?? new Uint8Array());
 }
 
-async function githubJsonPage(path, token) {
-  const requestUrl = path.startsWith('http://') || path.startsWith('https://')
-    ? path
-    : `https://api.github.com/${path}`;
-  const response = await fetch(requestUrl, {
+async function githubJson(path, token) {
+  const response = await fetch(`https://api.github.com/${path}`, {
     headers: {
       accept: 'application/vnd.github+json',
       authorization: `Bearer ${token}`,
@@ -853,27 +759,7 @@ async function githubJsonPage(path, token) {
     },
   });
   if (!response.ok) throw new Error(`GitHub API ${response.status} for ${path}`);
-  const link = response.headers.get('link') ?? '';
-  const next = link.split(',').map((entry) => entry.trim()).find((entry) => entry.endsWith('rel="next"'));
-  return {
-    value: await response.json(),
-    next: next ? next.slice(1, next.indexOf('>')) : null,
-  };
-}
-
-async function githubJson(path, token) {
-  return (await githubJsonPage(path, token)).value;
-}
-
-async function githubJsonPages(path, token) {
-  const pages = [];
-  let next = path;
-  while (next) {
-    const page = await githubJsonPage(next, token);
-    pages.push(page.value);
-    next = page.next;
-  }
-  return pages;
+  return response.json();
 }
 
 function failedLogFromGh(run, repository, token) {
@@ -916,9 +802,12 @@ function readDeliveryManifest(path) {
 function deliveryInputFromWorkflow({workflowRun, jobs, producer, remoteMainSha, ancestor}) {
   const contexts = LANDED_REQUIRED_CONTEXTS
     .map((context) => {
-      const matches = jobs.filter((candidate) => String(candidate?.id ?? '') === context || candidate?.name === context);
-      if (matches.length !== 1) return null;
-      const job = matches[0];
+      const job = jobs.find((candidate) => (
+        candidate?.id === context
+        || candidate?.name === context
+        || String(candidate?.name ?? '').toLowerCase().includes(context)
+      ));
+      if (!job) return null;
       return {
         context,
         sha: job.head_sha ?? null,
@@ -962,25 +851,6 @@ function deliveryFinding(result, workflowRun) {
   };
 }
 
-function admissionFinding(result, workflowRun) {
-  const error = result.envelope?.firstFailure ?? {};
-  return {
-    classification: 'post-merge-admission-failure',
-    red: true,
-    actionable: true,
-    failureClass: result.envelope?.failureClass ?? 'admission',
-    terminalStatus: 'failure',
-    code: error.code ?? 'post-merge-admission-failure',
-    evidence: [{
-      code: error.code ?? 'post-merge-admission-failure',
-      detail: error.hint ?? 'post-merge success was blocked by live policy admission',
-    }],
-    head_sha: workflowRun.head_sha,
-    html_url: workflowRun.html_url,
-    admission: result,
-  };
-}
-
 async function main() {
   const token = nonEmptyString(process.env.GITHUB_TOKEN);
   const repository = nonEmptyString(process.env.GITHUB_REPOSITORY);
@@ -1007,23 +877,6 @@ async function main() {
   }
 
   const workflowRun = event;
-  let producerContract;
-  try {
-    producerContract = JSON.parse(readFileSync(new URL('./editor-ci-contract.json', import.meta.url), 'utf8'));
-  } catch (error) {
-    const envelope = admissionEnvelope({
-      workflowRun,
-      targetSha: workflowRun.head_sha,
-      failureClass: 'admission',
-      code: 'producer-contract-unavailable',
-      observed: error.message ?? String(error),
-      hint: 'Load the producer-owned contract from the trusted monitor checkout before classifying success.',
-    });
-    if (reportPath) writeFileSync(reportPath, `${JSON.stringify({ contractVersion: POST_MERGE_CONTRACT_VERSION, ...envelope }, null, 2)}\n`);
-    process.stdout.write(`${JSON.stringify(envelope)}\n`);
-    process.exitCode = 1;
-    return;
-  }
   let relatedRuns = [];
   let jobs = [];
   let externalTransportUnavailable = false;
@@ -1040,43 +893,11 @@ async function main() {
     console.error(`Could not read related workflow runs: ${error.message}`);
   }
   try {
-    const jobPages = await githubJsonPages(`repos/${repository}/actions/runs/${workflowRun.id}/jobs?per_page=100`, token);
-    jobs = jobPages.flatMap((page) => page.jobs ?? []);
+    const jobPage = await githubJson(`repos/${repository}/actions/runs/${workflowRun.id}/jobs?per_page=100`, token);
+    jobs = jobPage.jobs ?? [];
   } catch (error) {
     externalTransportUnavailable = true;
     console.error(`Could not read workflow jobs: ${error.message}`);
-  }
-
-  let liveRuleset = null;
-  let workflowAdmission = null;
-  let liveAdmissionError = null;
-  const liveDiscovery = await discoverLiveRuleset({
-    readRepository: () => githubJson(`repos/${repository}`, token),
-    readRulesets: () => githubJsonPages(`repos/${repository}/rulesets?per_page=100`, token),
-    readDetail: (id) => githubJson(`repos/${repository}/rulesets/${id}`, token),
-  });
-  if (!liveDiscovery.ok) {
-    liveAdmissionError = liveDiscovery.errors?.[0] ?? {
-      code: 'live-ruleset-unavailable',
-      hint: 'Read the active default-branch ruleset before classifying success.',
-    };
-  } else {
-    try {
-      const selectedContexts = requiredContextNamesFromRuleset(liveDiscovery.ruleset);
-      liveRuleset = {...liveDiscovery.ruleset, requiredContexts: selectedContexts};
-      workflowAdmission = validateRuntimeProjection(
-        producerContract,
-        resolve('.github/workflows'),
-        liveDiscovery.ruleset,
-        {includePortfolio: false},
-      );
-    } catch (error) {
-      liveAdmissionError = {
-        code: 'admission-ruleset-empty',
-        observed: error.message ?? String(error),
-        hint: 'The selected live ruleset must contain a readable required-status-check rule.',
-      };
-    }
   }
 
   let logText = '';
@@ -1088,24 +909,11 @@ async function main() {
     }
   }
 
-  const admission = classifyPostMergeAdmission({
-    workflowRun,
-    targetSha: workflowRun.head_sha,
-    jobs,
-    liveRuleset,
-    liveEvidence: true,
-    requiredContexts: producerContract.requiredContexts.map((entry) => entry.context),
-    monitorSha: nonEmptyString(process.env.GITHUB_SHA),
-    workflowAdmission,
-    liveAdmissionError,
-  });
-  const finding = admission.ok
-    ? classifyWorkflowRun({ run: workflowRun, relatedRuns, jobs, logText })
-    : admissionFinding(admission, workflowRun);
+  const finding = classifyWorkflowRun({ run: workflowRun, relatedRuns, jobs, logText });
   const producerManifest = readDeliveryManifest(process.env.PREREQUISITE_RELEASE_MANIFEST);
   const deliveryMode = Boolean(process.env.PREREQUISITE_RELEASE_MANIFEST);
   let finalFinding = finding;
-  if (deliveryMode && admission.ok) {
+  if (deliveryMode) {
     const deliveryInput = deliveryInputFromWorkflow({
       workflowRun,
       jobs,

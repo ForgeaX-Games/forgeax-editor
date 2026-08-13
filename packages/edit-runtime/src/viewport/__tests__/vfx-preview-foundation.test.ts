@@ -27,12 +27,6 @@ describe('VFX asset preview foundation', () => {
     expect(sessionAppliers).not.toContain('VfxGpuRuntime');
   });
 
-  it('uses the active scoped runtime producer for authored shader packages', () => {
-    expect(source).toContain('createPreviewBundlerOptions()');
-    expect(readFileSync(new URL('../preview-bundler-options.ts', import.meta.url), 'utf8'))
-      .toContain('createDevImportTransport(binding)');
-  });
-
   it('copies renderer dependencies and exposes keyed runtime inspection', () => {
     expect(source).toContain('loadDocumentAssetPayload');
     expect(source).toContain('renderer.material');

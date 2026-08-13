@@ -1,26 +1,50 @@
 import {
   buildProfileModel,
-  compareProfileCaptures,
-  type ProfileComparisonError as EngineProfileComparisonError,
-  type ProfileComparisonPhaseDelta as EngineProfileComparisonPhaseDelta,
-  type ProfileComparisonPhaseFact as EngineProfileComparisonPhaseFact,
-  type ProfileComparisonPhaseIdentity as EngineProfileComparisonPhaseIdentity,
-  type ProfileComparisonPhaseRow as EngineProfileComparisonPhaseRow,
-  type ProfileComparisonSide as EngineProfileComparisonSide,
-  type ProfileSummaryModel,
+  type ProfileCapture,
+  type ProfileModel,
+  type ProfilePhaseModel,
 } from '@forgeax/engine-profiler';
 import { OperationRunSchema, type OperationRun } from '@forgeax/editor-product';
 
-export type ProfileComparisonPhaseIdentity = EngineProfileComparisonPhaseIdentity;
-export type ProfileComparisonPhaseFact = EngineProfileComparisonPhaseFact;
-export type ProfileComparisonPhaseDelta = EngineProfileComparisonPhaseDelta;
-export type ProfileComparisonPhaseRow = EngineProfileComparisonPhaseRow;
+export interface ProfileComparisonPhaseIdentity {
+  readonly source: ProfilePhaseModel['source'];
+  readonly phase: string;
+  readonly parentSource?: ProfilePhaseModel['parentSource'];
+  readonly parentPhase?: string;
+}
 
-export type ProfileComparisonSummary = ProfileSummaryModel & {
+export interface ProfileComparisonPhaseFact {
+  readonly count: number;
+  readonly skipCount: number;
+  readonly p95DurationMicros: number | null;
+}
+
+export interface ProfileComparisonPhaseDelta {
+  readonly count?: number;
+  readonly skipCount?: number;
+  readonly p95DurationMicros?: number;
+}
+
+export interface ProfileComparisonPhaseRow {
+  readonly identity: ProfileComparisonPhaseIdentity;
+  readonly left?: ProfileComparisonPhaseFact;
+  readonly right?: ProfileComparisonPhaseFact;
+  readonly delta?: ProfileComparisonPhaseDelta;
+}
+
+export interface ProfileComparisonSummary {
   readonly runId: string;
   readonly requestId?: string;
   readonly operationId: string;
-};
+  readonly captureId: string;
+  readonly timeUnit: ProfileCapture['timeUnit'];
+  readonly completeness: ProfileCapture['completeness'];
+  readonly frameCount: number;
+  readonly recordCount: number;
+  readonly phaseCount: number;
+  readonly skipCount: number;
+  readonly p95DurationMicros: number | null;
+}
 
 export interface ProfileComparisonOperationRunError {
   readonly code:
@@ -35,7 +59,12 @@ export interface ProfileComparisonOperationRunError {
   };
 }
 
-export type ProfileComparisonEngineError = EngineProfileComparisonError;
+export interface ProfileComparisonEngineError {
+  readonly code: 'profile-artifact-invalid' | 'profile-artifact-incompatible';
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: { readonly path: string; readonly message: string };
+}
 
 export type ProfileComparisonError =
   | ProfileComparisonOperationRunError
@@ -55,12 +84,8 @@ export interface ProfileComparisonProjection {
 
 interface ProjectedSide {
   readonly side: ProfileComparisonSide;
-  readonly result?: unknown;
+  readonly model?: ProfileModel;
 }
-
-type ProfileArtifactError = Omit<EngineProfileComparisonError, 'detail'> & {
-  readonly detail: Omit<EngineProfileComparisonError['detail'], 'side'>;
-};
 
 function operationRunError(
   code: ProfileComparisonOperationRunError['code'],
@@ -79,30 +104,7 @@ function operationRunError(
   });
 }
 
-function withEngineSide(
-  side: 'left' | 'right',
-  error: ProfileArtifactError,
-): ProfileComparisonEngineError {
-  return Object.freeze({
-    ...error,
-    detail: Object.freeze({ ...error.detail, side }),
-  });
-}
-
-function summaryForRun(
-  run: OperationRun,
-  summary: ProfileSummaryModel,
-): ProfileComparisonSummary {
-  return Object.freeze({
-    ...summary,
-    runId: run.runId,
-    ...(run.requestId === undefined ? {} : { requestId: run.requestId }),
-    operationId: run.operationId,
-    completeness: Object.freeze({ ...summary.completeness }),
-  });
-}
-
-function projectSide(side: 'left' | 'right', input: unknown): ProjectedSide {
+function projectSide(input: unknown): ProjectedSide {
   const parsed = OperationRunSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -148,36 +150,103 @@ function projectSide(side: 'left' | 'right', input: unknown): ProjectedSide {
   const modeled = buildProfileModel(run.result);
   if (!modeled.ok) {
     return {
-      side: Object.freeze({ run, error: withEngineSide(side, modeled.error) }),
+      side: Object.freeze({ run, error: Object.freeze({ ...modeled.error }) }),
     };
   }
 
+  const summary = modeled.value.summary;
   return {
-    side: Object.freeze({ run, summary: summaryForRun(run, modeled.value.summary) }),
-    result: run.result,
+    side: Object.freeze({
+      run,
+      summary: Object.freeze({
+        runId: run.runId,
+        ...(run.requestId === undefined ? {} : { requestId: run.requestId }),
+        operationId: run.operationId,
+        captureId: summary.captureId,
+        timeUnit: summary.timeUnit,
+        completeness: Object.freeze({ ...summary.completeness }),
+        frameCount: summary.frameCount,
+        recordCount: summary.recordCount,
+        phaseCount: summary.phaseCount,
+        skipCount: summary.skipCount,
+        p95DurationMicros: summary.p95DurationMicros,
+      }),
+    }),
+    model: modeled.value,
   };
 }
 
-function sideWithComparisonSummary(
-  prepared: ProjectedSide,
-  comparison: EngineProfileComparisonSide,
-): ProfileComparisonSide {
-  const run = prepared.side.run;
-  if (run === undefined) return prepared.side;
+function phaseKey(phase: ProfilePhaseModel): string {
+  return JSON.stringify([
+    phase.source,
+    phase.parentSource ?? null,
+    phase.parentPhase ?? null,
+    phase.phase,
+  ]);
+}
+
+function phaseIdentity(phase: ProfilePhaseModel): ProfileComparisonPhaseIdentity {
   return Object.freeze({
-    run,
-    summary: summaryForRun(run, comparison.summary),
+    source: phase.source,
+    phase: phase.phase,
+    ...(phase.parentSource === undefined ? {} : { parentSource: phase.parentSource }),
+    ...(phase.parentPhase === undefined ? {} : { parentPhase: phase.parentPhase }),
   });
 }
 
-function sideWithComparisonError(
-  prepared: ProjectedSide,
-  error: EngineProfileComparisonError,
-): ProfileComparisonSide {
+function phaseFact(phase: ProfilePhaseModel): ProfileComparisonPhaseFact {
   return Object.freeze({
-    ...prepared.side,
-    error: Object.freeze({ ...error, detail: Object.freeze({ ...error.detail }) }),
+    count: phase.count,
+    skipCount: phase.skipCount,
+    p95DurationMicros: phase.p95DurationMicros,
   });
+}
+
+function phaseDelta(
+  left: ProfileComparisonPhaseFact | undefined,
+  right: ProfileComparisonPhaseFact | undefined,
+  comparableTimeUnit: boolean,
+): ProfileComparisonPhaseDelta | undefined {
+  if (left === undefined || right === undefined) return undefined;
+  const delta: {
+    count?: number;
+    skipCount?: number;
+    p95DurationMicros?: number;
+  } = {
+    count: right.count - left.count,
+    skipCount: right.skipCount - left.skipCount,
+  };
+  if (
+    comparableTimeUnit
+    && left.p95DurationMicros !== null
+    && right.p95DurationMicros !== null
+  ) {
+    delta.p95DurationMicros = right.p95DurationMicros - left.p95DurationMicros;
+  }
+  return Object.freeze(delta);
+}
+
+function projectPhases(left: ProjectedSide, right: ProjectedSide): readonly ProfileComparisonPhaseRow[] {
+  const leftByKey = new Map((left.model?.phases ?? []).map((phase) => [phaseKey(phase), phase]));
+  const rightByKey = new Map((right.model?.phases ?? []).map((phase) => [phaseKey(phase), phase]));
+  const keys = [...new Set([...leftByKey.keys(), ...rightByKey.keys()])].sort();
+  const comparableTimeUnit = left.side.summary?.timeUnit !== undefined
+    && left.side.summary.timeUnit === right.side.summary?.timeUnit;
+
+  return Object.freeze(keys.map((key) => {
+    const leftPhase = leftByKey.get(key);
+    const rightPhase = rightByKey.get(key);
+    const leftFact = leftPhase === undefined ? undefined : phaseFact(leftPhase);
+    const rightFact = rightPhase === undefined ? undefined : phaseFact(rightPhase);
+    const identity = phaseIdentity(leftPhase ?? rightPhase as ProfilePhaseModel);
+    const delta = phaseDelta(leftFact, rightFact, comparableTimeUnit);
+    return Object.freeze({
+      identity,
+      ...(leftFact === undefined ? {} : { left: leftFact }),
+      ...(rightFact === undefined ? {} : { right: rightFact }),
+      ...(delta === undefined ? {} : { delta }),
+    });
+  }));
 }
 
 /** Purely compares two imported OperationRun artifacts without mutating or reserializing them. */
@@ -185,34 +254,11 @@ export function projectProfileComparison(
   left: unknown,
   right: unknown,
 ): ProfileComparisonProjection {
-  const leftProjection = projectSide('left', left);
-  const rightProjection = projectSide('right', right);
-
-  if (leftProjection.result === undefined || rightProjection.result === undefined) {
-    return Object.freeze({
-      left: leftProjection.side,
-      right: rightProjection.side,
-      phases: Object.freeze([]),
-    });
-  }
-
-  const compared = compareProfileCaptures(leftProjection.result, rightProjection.result);
-
-  if (!compared.ok) {
-    return Object.freeze({
-      left: compared.error.detail.side === 'left'
-        ? sideWithComparisonError(leftProjection, compared.error)
-        : leftProjection.side,
-      right: compared.error.detail.side === 'right'
-        ? sideWithComparisonError(rightProjection, compared.error)
-        : rightProjection.side,
-      phases: Object.freeze([]),
-    });
-  }
-
+  const leftProjection = projectSide(left);
+  const rightProjection = projectSide(right);
   return Object.freeze({
-    left: sideWithComparisonSummary(leftProjection, compared.value.left),
-    right: sideWithComparisonSummary(rightProjection, compared.value.right),
-    phases: compared.value.phases,
+    left: leftProjection.side,
+    right: rightProjection.side,
+    phases: projectPhases(leftProjection, rightProjection),
   });
 }

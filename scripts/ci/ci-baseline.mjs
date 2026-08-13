@@ -57,28 +57,6 @@ function normalizeList(value, code, message) {
   return values.map((item) => item.trim());
 }
 
-function normalizePermissions(value, file, scope) {
-  if (value === undefined) return null;
-  if (typeof value === 'string') {
-    if (!['read-all', 'write-all', 'none'].includes(value)) {
-      throw contractError('workflow-permissions-invalid', `${file}: ${scope} permissions must use a supported aggregate value`, {file, scope, value});
-    }
-    return value;
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw contractError('workflow-permissions-invalid', `${file}: ${scope} permissions must be an object or aggregate value`, {file, scope});
-  }
-  const permissions = {};
-  for (const key of Object.keys(value).sort()) {
-    const permission = value[key];
-    if (!['read', 'write', 'none'].includes(permission)) {
-      throw contractError('workflow-permissions-invalid', `${file}: ${scope} permission ${key} must be read, write, or none`, {file, scope, key, permission});
-    }
-    permissions[key] = permission;
-  }
-  return permissions;
-}
-
 function runnerExpression(value) {
   if (Array.isArray(value)) return JSON.stringify(value);
   if (typeof value === 'string') return value;
@@ -170,12 +148,10 @@ function parseWorkflowSource(source) {
   }
   requireObject(document, 'workflow-document-invalid', `${source.file}: workflow document is not an object`);
   const jobs = requireObject(document.jobs, 'workflow-jobs-missing', `${source.file}: jobs is missing`);
-  const workflowPermissions = normalizePermissions(document.permissions, source.file, 'workflow');
   const jobRecords = Object.entries(jobs).map(([id, value]) => {
     const job = requireObject(value, 'workflow-job-invalid', `${source.file}: job ${id} is not an object`);
     const timeout = job['timeout-minutes'];
     const timeoutMinutes = Number.isFinite(timeout) ? timeout : null;
-    const jobPermissions = normalizePermissions(job.permissions, source.file, `job ${id}`);
     return {
       id,
       name: typeof job.name === 'string' && job.name.trim().length > 0 ? job.name.trim() : id,
@@ -188,8 +164,6 @@ function parseWorkflowSource(source) {
       timeoutMinutes,
       condition: typeof job.if === 'string' ? job.if : null,
       uses: typeof job.uses === 'string' ? job.uses : null,
-      permissions: jobPermissions ?? workflowPermissions,
-      permissionsSource: jobPermissions === null ? 'workflow' : 'job',
     };
   });
 
@@ -197,7 +171,6 @@ function parseWorkflowSource(source) {
     file: source.file,
     name: typeof document.name === 'string' ? document.name : source.file,
     triggers: document.on ?? document.true ?? null,
-    permissions: workflowPermissions,
     jobs: jobRecords,
   };
 }

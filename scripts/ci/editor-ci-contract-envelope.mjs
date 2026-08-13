@@ -1,7 +1,4 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-
-const PRODUCER_CONTRACT = JSON.parse(readFileSync(new URL('./editor-ci-contract.json', import.meta.url), 'utf8'));
 
 const FAILURE_CLASSES = new Set(['admission', 'environment', 'source', 'external-transport']);
 const TERMINAL_STATUSES = new Set(['pass', 'failure', 'skipped']);
@@ -26,12 +23,12 @@ export const ADMISSION_ENVELOPE_FIELDS = [
 const SHA1 = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 
-// The delivery envelope projects the producer contract; it does not own a
-// second context roster. Keep the exported compatibility name because landed
-// evidence consumers use it, but derive it from the one contract SSOT.
-export const LANDED_REQUIRED_CONTEXTS = Object.freeze(
-  (PRODUCER_CONTRACT.requiredContexts ?? []).map((entry) => entry.context),
-);
+export const LANDED_REQUIRED_CONTEXTS = [
+  'b2-self-boot',
+  'typecheck',
+  'submodule-pin',
+  'smoke-play',
+];
 
 export const ENVELOPE_FIELDS = [
   'checkId',

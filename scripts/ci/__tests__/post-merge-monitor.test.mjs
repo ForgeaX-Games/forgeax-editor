@@ -192,15 +192,6 @@ test('workflow is read-only, main-push scoped, and never attributes to monitor S
   assert.doesNotMatch(workflow, /github\.sha(?![a-z_])/);
 });
 
-test('post-merge monitor admits the live policy before classifying success', () => {
-  const source = readFileSync(resolve('scripts/ci/post-merge-monitor.mjs'), 'utf8');
-  assert.match(source, /discoverLiveRuleset/);
-  assert.match(source, /validateRuntimeProjection/);
-  assert.match(source, /classifyPostMergeAdmission/);
-  assert.ok(source.indexOf('const admission = classifyPostMergeAdmission') < source.indexOf('const finding = admission.ok'));
-  assert.match(source, /liveAdmissionError/);
-});
-
 test('run attribution is mandatory', () => {
   assert.throws(() => classifyWorkflowRun({ run: run({ head_sha: '' }) }), /head_sha/);
   assert.throws(() => classifyWorkflowRun({ run: run({ html_url: '' }) }), /html_url/);

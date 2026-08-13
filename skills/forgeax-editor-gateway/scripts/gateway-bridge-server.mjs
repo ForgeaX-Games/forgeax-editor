@@ -26,9 +26,6 @@ import { WebSocketServer } from 'ws';
 
 const PORT = Number(process.env.FORGEAX_BRIDGE_PORT ?? 15296);
 const HOST = '127.0.0.1';
-const standalonePort = Number(process.env.FORGEAX_STANDALONE_PORT ?? 15290);
-const EDITOR_URL = process.env.FORGEAX_GATEWAY_URL?.trim()
-  || `http://localhost:${Number.isInteger(standalonePort) && standalonePort > 0 ? standalonePort : 15290}/`;
 const DEFAULT_EVAL_TIMEOUT_MS = parseTimeout(
   process.env.FORGEAX_BRIDGE_EVAL_TIMEOUT_MS,
   120_000,
@@ -59,7 +56,7 @@ const server = http.createServer((req, res) => {
       // Structured, property-access discriminable (charter P3) — not a bare 500.
       return sendJson(res, 200, {
         ok: false,
-        error: { code: 'PAGE_NOT_CONNECTED', hint: `no editor page attached to the bridge; open/refresh the editor at ${EDITOR_URL}` },
+        error: { code: 'PAGE_NOT_CONNECTED', hint: 'no editor page attached to the bridge; open/refresh the editor at :15290' },
       });
     }
     let body = '';

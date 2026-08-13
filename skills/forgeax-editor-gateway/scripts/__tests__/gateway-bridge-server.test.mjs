@@ -60,40 +60,6 @@ test('bridge reports its long-eval timeout and accepts a per-request timeout', a
   }
 });
 
-test('bridge reports the configured editor URL when no page is attached', async () => {
-  const port = 17000 + (process.pid % 500);
-  const child = spawn('bun', [fileURLToPath(RELAY)], {
-    env: {
-      ...process.env,
-      FORGEAX_BRIDGE_PORT: String(port),
-      FORGEAX_STANDALONE_PORT: '16290',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  try {
-    const base = `http://127.0.0.1:${port}`;
-    await waitForHealth(`${base}/health`);
-    const response = await fetch(`${base}/eval`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: '1 + 1' }),
-    });
-    assert.deepEqual(await response.json(), {
-      ok: false,
-      error: {
-        code: 'PAGE_NOT_CONNECTED',
-        hint: 'no editor page attached to the bridge; open/refresh the editor at http://localhost:16290/',
-      },
-    });
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM');
-      await once(child, 'exit').catch(() => undefined);
-    }
-  }
-});
-
 async function waitForHealth(url) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
