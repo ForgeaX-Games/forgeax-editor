@@ -36,6 +36,10 @@ describe('Operation Center component contract', () => {
     expect(source).toContain('onAction');
     expect(source).toContain('Export JSON');
     expect(source).toContain('getSnapshot().runs');
+    expect(source).toContain('profile-compare-left-input');
+    expect(source).toContain('profile-compare-right-input');
+    expect(source).toContain('projectProfileComparison');
+    expect(source).toContain('unavailable');
   });
 
   it('does not map accepted to success in the component-facing rows', () => {

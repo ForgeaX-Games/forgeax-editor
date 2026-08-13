@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
 import type { OperationCenterAction, OperationCenterRow } from './run-view-model';
 import {
   getOperationCenterRows,
@@ -6,6 +6,12 @@ import {
   subscribeOperationProjection,
 } from './run-view-model';
 import { downloadOperationRun } from './run-export';
+import {
+  projectProfileComparison,
+  type ProfileComparisonPhaseFact,
+  type ProfileComparisonProjection,
+  type ProfileComparisonSide,
+} from '../operation-projection';
 
 export interface OperationCenterProps {
   readonly onAction?: (action: OperationCenterAction, runId: string, row: OperationCenterRow) => void;
@@ -71,6 +77,178 @@ function exportRun(runId: string): void {
   const run = source.getSnapshot().runs.find((candidate) => candidate.runId === runId);
   if (run === undefined) return;
   downloadOperationRun(run);
+}
+
+function formatMetric(value: number | null | undefined): string {
+  return value === undefined || value === null ? 'unavailable' : String(value);
+}
+
+function formatPhaseIdentity(
+  identity: ProfileComparisonProjection['phases'][number]['identity'],
+): string {
+  const parent = identity.parentPhase === undefined
+    ? ''
+    : ` parent=${identity.parentSource ?? identity.source}:${identity.parentPhase}`;
+  return `${identity.source}:${identity.phase}${parent}`;
+}
+
+function renderPhaseFact(
+  side: 'left' | 'right',
+  fact: ProfileComparisonPhaseFact | undefined,
+): ReactNode {
+  return (
+    <div data-side={side}>
+      <span data-field="count">count={formatMetric(fact?.count)}</span>
+      <span data-field="skip-count">skips={formatMetric(fact?.skipCount)}</span>
+      <span data-field="p95-duration">p95µs={formatMetric(fact?.p95DurationMicros)}</span>
+    </div>
+  );
+}
+
+function renderCompleteness(side: ProfileComparisonSide): ReactNode {
+  const completeness = side.summary?.completeness;
+  if (completeness === undefined) return <span data-field="completeness">unavailable</span>;
+  return (
+    <span data-field="completeness">
+      <span data-field="completeness-status">{completeness.status}</span>
+      <span data-field="retained-events"> retained={completeness.retainedEventCount}</span>
+      <span data-field="dropped-events"> dropped={completeness.droppedEventCount}</span>
+      {completeness.incompleteReason !== undefined && (
+        <span data-field="incomplete-reason"> reason={completeness.incompleteReason}</span>
+      )}
+      {completeness.firstAffectedFrameId !== undefined && (
+        <span data-field="first-affected-frame"> firstAffected={completeness.firstAffectedFrameId}</span>
+      )}
+      {completeness.lastAffectedFrameId !== undefined && (
+        <span data-field="last-affected-frame"> lastAffected={completeness.lastAffectedFrameId}</span>
+      )}
+    </span>
+  );
+}
+
+function ProfileComparisonSideView({
+  label,
+  side,
+}: {
+  readonly label: 'Left' | 'Right';
+  readonly side: ProfileComparisonSide;
+}): ReactNode {
+  const summary = side.summary;
+  return (
+    <section data-testid={`profile-compare-${label.toLowerCase()}`} data-side={label.toLowerCase()}>
+      <h5>{label} artifact</h5>
+      <div data-field="run-id">run={side.run?.runId ?? 'unavailable'}</div>
+      <div data-field="operation-id">operation={side.run?.operationId ?? 'unavailable'}</div>
+      <div data-field="status">status={side.run?.status ?? 'unavailable'}</div>
+      {summary === undefined ? (
+        <div data-field="summary">summary=unavailable</div>
+      ) : (
+        <>
+          <div data-field="capture-id">capture={summary.captureId}</div>
+          <div data-field="time-unit">unit={summary.timeUnit}</div>
+          <div data-field="frame-count">frames={summary.frameCount}</div>
+          <div data-field="record-count">records={summary.recordCount}</div>
+          <div data-field="phase-count">phases={summary.phaseCount}</div>
+          <div data-field="skip-count">skips={summary.skipCount}</div>
+          <div data-field="p95-duration">p95µs={formatMetric(summary.p95DurationMicros)}</div>
+        </>
+      )}
+      {renderCompleteness(side)}
+      {side.error !== undefined && (
+        <div data-field="comparison-error">
+          {side.error.code}: {side.error.hint}
+          {'issues' in side.error.detail && side.error.detail.issues?.join(' ')}
+          {'path' in side.error.detail && ` ${side.error.detail.path}: ${side.error.detail.message}`}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProfileComparisonView({ projection }: { readonly projection: ProfileComparisonProjection }): ReactNode {
+  return (
+    <div data-testid="profile-compare-result">
+      <div className="profile-compare-sides">
+        <ProfileComparisonSideView label="Left" side={projection.left} />
+        <ProfileComparisonSideView label="Right" side={projection.right} />
+      </div>
+      <div data-testid="profile-compare-phases">
+        <h5>Phase comparison</h5>
+        {projection.phases.length === 0 ? (
+          <div data-field="empty">No comparable phases</div>
+        ) : projection.phases.map((phase, index) => (
+          <div
+            className="profile-compare-phase"
+            data-testid={`profile-compare-phase-${index}`}
+            key={`${formatPhaseIdentity(phase.identity)}-${index}`}
+          >
+            <div data-field="identity">{formatPhaseIdentity(phase.identity)}</div>
+            {renderPhaseFact('left', phase.left)}
+            {renderPhaseFact('right', phase.right)}
+            <div data-side="delta">
+              <span data-field="count">delta-count={formatMetric(phase.delta?.count)}</span>
+              <span data-field="skip-count">delta-skips={formatMetric(phase.delta?.skipCount)}</span>
+              <span data-field="p95-duration">delta-p95µs={formatMetric(phase.delta?.p95DurationMicros)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProfileComparisonControl(): ReactNode {
+  const [inputs, setInputs] = useState<{ readonly left?: unknown; readonly right?: unknown }>({});
+  const [fileError, setFileError] = useState<string | undefined>();
+  const projection = inputs.left === undefined || inputs.right === undefined
+    ? undefined
+    : projectProfileComparison(inputs.left, inputs.right);
+
+  async function onArtifactChange(
+    side: 'left' | 'right',
+    event: ChangeEvent<HTMLInputElement>,
+  ): Promise<void> {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (file === undefined) return;
+    try {
+      const value = JSON.parse(await file.text()) as unknown;
+      setInputs((current) => ({ ...current, [side]: value }));
+      setFileError(undefined);
+    } catch {
+      setFileError(`${side} artifact is not valid JSON.`);
+    }
+  }
+
+  return (
+    <section className="profile-comparison" data-testid="profile-comparison">
+      <h4>Compare exported OperationRuns</h4>
+      <label>
+        Left artifact
+        <input
+          type="file"
+          accept="application/json,.json"
+          data-testid="profile-compare-left-input"
+          onChange={(event) => void onArtifactChange('left', event)}
+        />
+      </label>
+      <label>
+        Right artifact
+        <input
+          type="file"
+          accept="application/json,.json"
+          data-testid="profile-compare-right-input"
+          onChange={(event) => void onArtifactChange('right', event)}
+        />
+      </label>
+      {fileError !== undefined && <div data-field="file-error">{fileError}</div>}
+      {projection === undefined ? (
+        <div data-field="comparison-empty">Select two exported OperationRun JSON files.</div>
+      ) : (
+        <ProfileComparisonView projection={projection} />
+      )}
+    </section>
+  );
 }
 
 export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
@@ -144,6 +322,7 @@ export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
           ))}
         </div>
       )}
+      <ProfileComparisonControl />
     </section>
   );
 }
