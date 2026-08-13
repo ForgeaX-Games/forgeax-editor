@@ -1,9 +1,8 @@
 // FPS store — lightweight holder for the live frames-per-second value reported
-// by the frame-loop accumulator (installFpsReport in main.tsx). The GameOverlay
-// (w24) and ViewportBar (w25) read this to display a live FPS counter.
+// by the frame-loop accumulator. The PanelShell viewport toolbar reads this to
+// display the live FPS counter outside the render surface.
 //
-// This is the sole SSOT for the editor's FPS readout. The in-viewport counter
-// reads directly from this store because the viewport and overlay share one realm.
+// This is the sole SSOT for the editor's FPS readout.
 
 type FpsListener = (fps: number) => void;
 const listeners = new Set<FpsListener>();

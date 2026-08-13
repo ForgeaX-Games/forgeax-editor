@@ -310,10 +310,10 @@ export interface AppState {
   // (that would spin up a second 3D engine / WS for the same surface), so
   // KeepAliveExtensionIframes filters these out.
   //
-  // Browser form: detach is a no-op (WindowManager.canDetach() === false), so
-  // this map stays empty and behavior is unchanged.
+  // Browser uses window.open; Tauri uses WebviewWindow. Both carriers converge
+  // through WindowManager and this same lease map.
   floatingSurfaces: Record<string, true>;
-  detachSurface: (d: import('./lib/platform').SurfaceDescriptor, opts?: { title?: string; x?: number; y?: number; width?: number; height?: number }) => Promise<void>;
+  detachSurface: (d: import('./lib/platform').SurfaceDescriptor, opts?: { title?: string; x?: number; y?: number; width?: number; height?: number }) => Promise<boolean>;
   redockSurface: (d: import('./lib/platform').SurfaceDescriptor) => Promise<void>;
   /** Plugin IDs currently open as top-level DockShell panels (so Sidebar knows
    *  to hide their keep-alive iframes to avoid double-rendering). */

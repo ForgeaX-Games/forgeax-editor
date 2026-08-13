@@ -17,10 +17,12 @@ import { useTranslation } from '@/i18n';
 import { useExtensionManifest } from '../lib/use-extension-manifest';
 import { StandaloneExtensionIframe } from './MainArea/StandaloneExtensionIframe';
 import { ConsolePanel } from './MainArea/ConsolePanel';
+import { TelemetryViewer } from './MainArea/TelemetryViewer';
 import { Sidebar } from './Sidebar/Sidebar';
 import { MainArea } from './MainArea/MainArea';
 import { usePanelRenderers } from './DockShell/panelRenderers';
 import { FatalBanner } from './StatusBar/FatalBanner';
+import { PanelShell } from './PanelShell/PanelShell';
 
 interface Props {
   surface: SurfaceDescriptor;
@@ -41,6 +43,7 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
   const { t } = useTranslation();
   const renderers = usePanelRenderers();
   const chatDescriptor = renderers.panels?.chat;
+  const viewportDescriptor = renderers.panels?.viewport;
   const SceneEditor = renderers.surfaces?.SceneEditor;
   const AgentsBrowser = renderers.detached?.AgentsBrowser;
   const FilesBrowser = renderers.detached?.FilesBrowser;
@@ -87,29 +90,45 @@ function DetachedPanelSurface({ surface }: Props): ReactElement {
     case 'console':
       body = <ConsolePanel />;
       break;
+    case 'telemetry':
+      body = <TelemetryViewer />;
+      break;
     case 'tools':
       body = <Sidebar />;
       break;
     case 'main':
       body = <MainArea />;
       break;
-    // Viewport panel — renders the combined edit+preview surface in its own window.
-    // Detached windows have NO keep-alive layer (the whole OS window IS the
-    // visibility), so render the real surface directly via PanelRenderers — not the
-    // in-shell <SurfaceAnchor> placeholder, which would leave the window empty.
+    // Viewport panel — detach the WHOLE panel, including its shared PanelShell
+    // header. The SceneEditor remains a pure renderer surface; operation controls
+    // must never be injected into the game-view content as a detached-only fallback.
+    // Detached windows have no keep-alive layer, so replace the descriptor's docked
+    // anchor body with the real surface while preserving the same panel chrome.
     // 2026-06-30: 'preview'/'edit' merged into single 'viewport' panel.
     case 'viewport':
     case 'edit': // legacy backward compat
     case 'preview': // legacy backward compat
       body = (
-        <div className="surface-region">
-          <FatalBanner source="edit" />
-          {SceneEditor ? (
-            <div data-fx-slot="SceneEditor" style={{ display: 'contents' }}><SceneEditor viewportOnly={false} /></div>
-          ) : (
-            <NoEditorBody />
-          )}
-        </div>
+        <PanelShell
+          id="viewport"
+          panel={{
+            title: 'Viewport',
+            header: { visible: true, showTitle: false },
+            content: { padding: 'none', scroll: 'none', tone: 'tool' },
+            dockChrome: { singleTab: 'hideTitle' },
+            ...viewportDescriptor,
+            render: () => (
+              <div className="surface-region">
+                <FatalBanner source="edit" />
+                {SceneEditor ? (
+                  <div data-fx-slot="SceneEditor" style={{ display: 'contents' }}><SceneEditor /></div>
+                ) : (
+                  <NoEditorBody />
+                )}
+              </div>
+            ),
+          }}
+        />
       );
       break;
     default:

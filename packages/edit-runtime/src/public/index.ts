@@ -36,24 +36,12 @@
 import { defineApp } from './app-kit';
 import { EDITOR_PANELS } from '../../../core/src/manifest';
 
-// `viewportOnly=1` query param: runtime contract.
-//
-// `?viewportOnly=1` tells the iframe-mounted editor runtime (served on
-// :15280, packages/editor/packages/edit-runtime + play-runtime) to render
-// only the 3D viewport surface and suppress any host-only chrome the
-// runtime might otherwise paint inside the iframe. Hosts (forgeax-studio
-// at :18920, the standalone shell at :15290) are responsible for the
-// surrounding panels / dock / chat surfaces; the iframe is purely the
-// 3D canvas. The flag is the documented contract between the iframe
-// runtime and host: it is part of the public manifest below
-// (`entryUrl`), is asserted by `packages/edit-runtime/src/__tests__/index.test.ts`,
-// and is the value mounted by `apps/standalone/main.tsx`.
-// Removing the flag is a host-vs-iframe boundary change and requires
-// an ADR. (verify R1 Pure-trial F-3 carry-over: discoverability
-// docstring, not a behavioural change.)
+// The runtime entry is always a pure renderer surface. PanelShell owns every
+// operation-level control in docked, detached, and standalone product hosts;
+// there is no alternate "full chrome inside the viewport" runtime mode.
 const editorApp = defineApp({
   id: 'editor',
-  entryUrl: 'http://127.0.0.1:15280/?viewportOnly=1',
+  entryUrl: 'http://127.0.0.1:15280/',
   panels: EDITOR_PANELS.map((id) => ({ id })),
   surfaces: [],
   routes: [],

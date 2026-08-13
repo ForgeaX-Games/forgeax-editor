@@ -94,7 +94,7 @@ describe('installFpsReport', () => {
           listener = next;
           return unsubscribe;
         },
-        (fps) => samples.push(fps),
+        { onFps: (fps) => samples.push(fps) },
       );
 
       now = 999;

@@ -252,7 +252,7 @@ const panelPopupController = createBrowserPanelPopupController({
   onClosed: emitPanelPopupChanged,
 });
 
-function StandaloneSceneEditor(_props: { viewportOnly?: boolean }): ReactNode {
+function StandaloneSceneEditor(): ReactNode {
   const detachedRuntime = new URLSearchParams(window.location.search).has('runtimeId');
   const disposeActionsRef = useRef<(() => void) | null>(null);
   const connectionRef = useRef<object | null>(null);

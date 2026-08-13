@@ -4,8 +4,11 @@ import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-render';
 import type { EntityHandle, Handle, World } from '@forgeax/engine-ecs';
 import type { EngineFacade } from '@forgeax/editor-core';
+import { resolveVisibility } from '@forgeax/editor-core';
+import { mat4, vec3, quat as quatMath } from '@forgeax/engine-math';
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { MaterialAsset, MaterialPass, MeshAsset } from '@forgeax/engine-types';
+import { isEntEffectivelyHidden } from './viewport-entity-read';
 
 const STENCIL_REFERENCE = 1;
 const OUTLINE_QUEUE = 2001;
@@ -139,9 +142,15 @@ export function createSelectionStencilOutlinePool(
   function targets(scene: World): RenderTarget[] {
     const selected = deps.getSelectionList();
     if (selected.size === 0) return [];
+    // worldRenderableHandles intentionally includes hidden entities; the
+    // outline is chrome for what is on screen, so a hidden selection must
+    // not keep drawing ghosts (the scene mesh itself is already skipped by
+    // the engine extract).
+    const visibility = resolveVisibility(scene);
     const roots = [...selected];
     return deps.getRenderableHandles(scene)
       .filter((entity) => roots.some((root) => isDescendantOf(scene, entity, root)))
+      .filter((entity) => !isEntEffectivelyHidden(scene, entity, visibility))
       .map((entity) => readTarget(scene, entity))
       .filter((target): target is RenderTarget => target !== null);
   }
@@ -152,12 +161,16 @@ export function createSelectionStencilOutlinePool(
   }
 
   function syncTransform(entity: EntityHandle, world: ArrayLike<number>, expansion: number): void {
-    const sx = Math.hypot(world[0]!, world[1]!, world[2]!);
-    const sy = Math.hypot(world[4]!, world[5]!, world[6]!);
-    const sz = Math.hypot(world[8]!, world[9]!, world[10]!);
+    // Full TRS decompose: column-length scale extraction alone drops the world
+    // rotation, leaving the ghost axis-aligned whenever the source is rotated.
+    const pos = vec3.create();
+    const rot = quatMath.create();
+    const scl = vec3.create();
+    mat4.decompose(pos, rot, scl, world as unknown as Parameters<typeof mat4.decompose>[3]);
     deps.editorEngine.set(entity, Transform, {
-      pos: [world[12]!, world[13]!, world[14]!],
-      scale: [sx * expansion, sy * expansion, sz * expansion],
+      pos: [pos[0]!, pos[1]!, pos[2]!],
+      quat: [rot[0]!, rot[1]!, rot[2]!, rot[3]!],
+      scale: [scl[0]! * expansion, scl[1]! * expansion, scl[2]! * expansion],
     });
   }
 

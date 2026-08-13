@@ -112,9 +112,9 @@
       "confirm": "Confirm"
     },
     "tour": {
-      "assets": {
-        "anchor": "Content Browser",
-        "body": "Your files, scenes, and art assets are managed, searched, and imported here — it's your resource hub."
+      "footer": {
+        "anchor": "Status Bar · Content Browser & Info",
+        "body": "The status bar at the very bottom hosts collapsed tool panels: open the 'Content Browser' to manage, search, and import your files, scenes, and art assets — your resource hub; open 'Info' to view live logs from play, edit, and the engine. They stay tucked away here and expand upward whenever you need them."
       },
       "preview": {
         "anchor": "Viewport",
@@ -846,8 +846,6 @@
       "expand": "Expand",
       "expandAll": "Expand all"
     },
-    "windowTitle": "Chat",
-    "popOut": "Pop out chat into a separate window",
     "empty": {
       "title": "Start a conversation",
       "subtitle": "Tell FORGE what game you want to make — e.g. \"write a spinning cube in games/gta-2.5d/main.ts\"."
@@ -1280,7 +1278,9 @@
     "moveOffSide": "Move off Side",
     "moveToPrimaryDock": "Move to Primary Dock",
     "chatToDefault": "Show in Default Position",
+    "detachedWindowPlaceholder": "Opened in a separate window",
     "tabContext": {
+      "openInNewWindow": "Open in New Window",
       "close": "Close",
       "closeOthers": "Close Others"
     },
@@ -1312,6 +1312,9 @@
     "newPage": "New page",
     "allPages": "All pages",
     "noOpenableTypes": "No openable page types",
+    "searchPageTypes": "Search page types…",
+    "noMatchingTypes": "No matching page types",
+    "availableTypes": "Available Pages",
     "closeTab": "Close {{title}}",
     "context": {
       "close": "Close",
@@ -1407,8 +1410,6 @@
   },
   "wbExtensionDock": {
     "loadingExtension": "Loading {{extensionId}}…",
-    "popoutTitle": "Pop out as a standalone OS window",
-    "popoutLabel": "Standalone window",
     "loadingExtensionGeneric": "Loading extension…",
     "loadingWorkbenchHost": "Connecting to the Workbench host…",
     "workbenchHostFailed": "Workbench host failed to load: {{error}}",

@@ -386,6 +386,10 @@ export function createViewport({
     const primary = getSelection();
     if (primary === null) return null;
     const world = gateway.activeWorld;
+    // A hidden selection shows no gizmo — the entity renders nothing, so its
+    // manipulation chrome must vanish with it (same rule as the pick sweep).
+    const visibility = resolveVisibility(world);
+    if (isEntEffectivelyHidden(world, primary, visibility)) return null;
     const pt = readWorldTransform(world, primary);
     if (!pt) return null;
     const quat = readWorldQuat(world, primary);
@@ -396,6 +400,7 @@ export function createViewport({
     }
     let sx = 0, sy = 0, sz = 0, n = 0;
     for (const id of selected) {
+      if (isEntEffectivelyHidden(world, id, visibility)) continue;
       const t = readWorldTransform(world, id);
       if (!t) continue; // deleted / no Transform → excluded from the average
       sx += num(t.x, 0); sy += num(t.y, 0); sz += num(t.z, 0); n++;

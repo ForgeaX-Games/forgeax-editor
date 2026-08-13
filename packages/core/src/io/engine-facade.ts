@@ -40,7 +40,6 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetError, SceneAsset } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { activeSpan, type EngineInterfaceName } from './trace';
-import { normalizeAnimationPlayerSceneAsset } from '../scene/animation-slot-sync';
 
 // feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
 // "engine interface name -> side-effect hint" table (SSOT, AC-07 / D-4). It
@@ -223,6 +222,12 @@ export class EngineFacade {
     return this._world.despawn(entity);
   }
 
+  /** Despawn a SceneInstance root and all of its mapped members. */
+  despawnScene(root: EntityHandle): Result<number, EcsError> {
+    _recordLeaf('world.despawn');
+    return this._world.despawnScene(root);
+  }
+
   /** Allocate a shared reference to an asset (chrome casting, not an op).
    *  Records 'world.allocSharedRef' leaf. Forwards the engine's opaque
    *  `Handle<Target, 'shared'>`. */
@@ -318,8 +323,7 @@ export class EngineFacade {
       });
     }
     _recordLeaf('world.allocSharedRef');
-    const normalizedAsset = normalizeAnimationPlayerSceneAsset(asset);
-    const handle = this._world.allocSharedRef('SceneAsset', normalizedAsset);
+    const handle = this._world.allocSharedRef('SceneAsset', asset);
     _recordLeaf('registry.instantiateFlat');
     return this._registry.instantiateFlat(
       handle as Handle<'SceneAsset', 'shared'>,

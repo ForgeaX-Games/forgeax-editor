@@ -1,19 +1,26 @@
 import { Fragment, useCallback, useEffect, useMemo, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { FloatingMenu } from '../ui/FloatingMenu';
-import { DockviewReact, type DockviewApi, type DockviewReadyEvent, type SerializedDockview } from 'dockview';
+import {
+  DockviewReact,
+  themeAbyss,
+  type DockviewApi,
+  type DockviewReadyEvent,
+  type DockviewTheme,
+  type SerializedDockview,
+} from 'dockview';
 import 'dockview/dist/styles/dockview.css';
-import { getWindowManager, surfaceKey } from '../../lib/platform';
+import { getWindowManager, type DetachedWindowCapability } from '../../lib/platform';
 import { useTranslation, t as panelT } from '@/i18n';
 import { useShellStore } from '../../store';
 // Panel registry — single declarative source for dockview panels (§C1).
 import {
   BASE_PANEL_COMPONENTS,
   BASE_PANEL_TITLE,
+  BASE_PANEL_WINDOWING,
   buildEditorPanelComponents,
   CORE_PANEL_IDS as PANEL_IDS,
   OPTIONAL_PANEL_IDS as OPTIONAL_IDS,
-  SURFACE_PANEL_IDS as SURFACE_PANELS,
 } from './panelRegistry';
 import { usePanelRenderers, type PanelDescriptor } from './panelRenderers';
 import { DockTab } from './DockTab';
@@ -24,7 +31,7 @@ import { useActiveWorkbench, useWorkbenchActions } from '../../lib/useWorkbench'
 import { registerDockviewApi } from './dockviewRegistry';
 import { handleCrossInstanceDrop, type CrossInstanceDropEvent } from './crossInstanceDrop';
 import { buildTabContextMenuItems } from './tabContextMenu';
-import { isDockTitleHidden, setDockTitleHidden } from './dockTitle';
+import { isDockTitleHidden, setDockTitleHidden, withDockTitleRestore } from './dockTitle';
 import { AuxBarResizer } from './AuxBarResizer';
 import { useAuxBarWidth } from './useAuxBarWidth';
 import { ChatDockResizer } from './ChatDockResizer';
@@ -50,6 +57,14 @@ import { sanitizeRetiredDockLayout } from './sanitizeDockLayout';
 import { installEdgeDrawer } from './edgeDrawer';
 import { designedPanelPosition } from './reopen-position';
 import { isOnSideEdge, nearerSideEdge, type SideEdge } from './sideEdgeMove';
+import {
+  canOpenPanelWindow,
+  detachedDockPanelForSurface,
+  openPanelWindow,
+  pageRuntimeOwnsPanel,
+  resolvePanelWindowing,
+} from './panelWindowing';
+import { PanelWindowingBoundary } from './PanelWindowingBoundary';
 import './DockShell.css';
 
 // Anchor for `addPanel({ position: { referencePanel } })`. MUST exclude non-grid
@@ -160,6 +175,15 @@ function rebuildRegionDefault(
 //   EDITOR   — ep:* editor sub-panels (in-process React components, single-realm)
 
 const LS_KEY = STORAGE_KEYS.legacyDockLayout;  // legacy — only read for migration to workspace layouts
+const BASE_PANEL_COMPONENT_IDS = new Set(Object.keys(BASE_PANEL_COMPONENTS));
+
+// Group spacing is layout geometry, not decoration. Keep it in dockview's theme
+// contract so split sizing, sashes, and drag/drop overlays all account for it.
+const FORGEAX_DOCK_THEME: DockviewTheme = {
+  ...themeAbyss,
+  name: 'forgeax-abyss',
+  gap: 6,
+};
 
 // Re-export so external consumers (WorkbenchSwitcher, tests) don't need to know
 // buildDefault lives in builtinWorkbenches.ts.
@@ -182,36 +206,6 @@ function _setPanelVisibility(id: string, visible: boolean): void {
 /** Whether a panel with the given id is currently mounted in any DockRegion. */
 export function isPanelVisible(id: string): boolean {
   return _visiblePanelIds.has(id);
-}
-
-// Pop a dock panel OUT into a REAL OS window (index.html?surface=panel&id=<id>
-// → DetachedSurface, which renders the panel's in-process React component).
-// Browser uses a popup; Tauri uses a native WebviewWindow.
-//
-// ep:* editor panels are in-process and intentionally stay docked: DetachedSurface
-// has no editor-panel body. Other detachable shell panels use the shared
-// DetachedSurface path.
-function popPanelToWindow(
-  api: DockviewApi,
-  id: string,
-  titleFor: (id: string) => string,
-  pos?: { x: number; y: number },
-): void {
-  const wm = getWindowManager();
-  if (!wm.canDetach()) return;
-
-  if (!SURFACE_PANELS.has(id)) return;
-  const descriptor = { kind: 'panel' as const, id };
-  const defaultSize = id === 'viewport'
-    ? { width: 1280, height: 800 }
-    : { width: 480, height: 680 };
-  void useShellStore.getState()
-    .detachSurface(descriptor, { title: titleFor(id), ...defaultSize, ...(pos ?? {}) })
-    .then(() => {
-      if (id !== 'viewport' && useShellStore.getState().floatingSurfaces[`panel:${id}`]) {
-        api.getPanel(id)?.api.close();
-      }
-    });
 }
 
 export function DockRegion({ region }: { region: DockRegionId }) {
@@ -275,6 +269,24 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       title: activePageScope.layout.panels[id]?.title ?? id,
     }));
   }, [activePageScope]);
+  const pagePanelWindowing = useMemo<Readonly<Record<string, DetachedWindowCapability>>>(() => {
+    if (!activePageInstance || !activeResolvedPage || activeResolvedPage.status !== 'available') return {};
+    const entries: Array<[string, DetachedWindowCapability]> = [];
+    for (const placement of activeResolvedPage.panels) {
+      const declared = placement.panelType.windowing;
+      if (!declared) continue;
+      const context = {
+        pageKey: activePageInstance.key,
+        placementId: placement.id,
+        pageContext: activePageInstance.context,
+        initialProps: placement.initialProps,
+      };
+      entries.push([placement.id, {
+        createTarget: () => declared.createTarget(context),
+      }]);
+    }
+    return Object.fromEntries(entries);
+  }, [activePageInstance, activeResolvedPage]);
   const panelLocations = activeWorkbench?.panelLocations ?? {};
   const { moveTo, resetPanelLocations } = useWorkbenchActions();
   // Latest panelLocations for non-React callbacks (the F1 chat-toggle handler
@@ -332,6 +344,18 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // descriptor titles without re-binding.
   const panelsRef = useRef<Record<string, PanelDescriptor> | undefined>(panels);
   useEffect(() => { panelsRef.current = panels; }, [panels]);
+  const pagePanelWindowingRef = useRef(pagePanelWindowing);
+  useLayoutEffect(() => { pagePanelWindowingRef.current = pagePanelWindowing; }, [pagePanelWindowing]);
+  const windowingFor = useCallback((id: string): DetachedWindowCapability | undefined => (
+    resolvePanelWindowing(id, {
+      basePanelIds: BASE_PANEL_COMPONENT_IDS,
+      baseWindowing: BASE_PANEL_WINDOWING,
+      pageWindowing: pagePanelWindowingRef.current,
+      injectedWindowing: panelsRef.current?.[id]?.windowing,
+    })
+  ), []);
+  const windowingForRef = useRef(windowingFor);
+  windowingForRef.current = windowingFor;
   // The injected editor id list is referenced by once-bound callbacks below;
   // mirror it so workbench switching never uses the initial host snapshot.
   const editorPanelIdsRef = useRef(editorPanelIds);
@@ -449,23 +473,36 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // extensions no longer install a second global wb:* panel registry here.
   const components = useMemo(() => ({
     ...(activeResolvedPage?.status === 'available' && activePageInstance
-      ? Object.fromEntries(activeResolvedPage.panels.map((placement) => [
+      ? Object.fromEntries(activeResolvedPage.panels
+        .filter((placement) => pageRuntimeOwnsPanel(
           placement.id,
-          () => placement.panelType.runtime.kind === 'iframe'
-            ? (
+          BASE_PANEL_COMPONENT_IDS,
+          editorPanelIds,
+        ))
+        .map((placement) => [
+          placement.id,
+          withDockTitleRestore(() => (
+            <PanelWindowingBoundary capability={resolvePanelWindowing(placement.id, {
+              basePanelIds: BASE_PANEL_COMPONENT_IDS,
+              baseWindowing: BASE_PANEL_WINDOWING,
+              pageWindowing: pagePanelWindowing,
+              injectedWindowing: panels?.[placement.id]?.windowing,
+            })}>
+              {placement.panelType.runtime.kind === 'iframe' ? (
                 <iframe
                   src={placement.panelType.runtime.src}
                   title={placement.id}
                   data-page-instance={activePageInstance.encodedKey}
                   style={{ width: '100%', height: '100%', border: 0 }}
                 />
-              )
-            : placement.panelType.runtime.render({
+              ) : placement.panelType.runtime.render({
                 pageKey: activePageInstance.key,
                 placementId: placement.id,
                 pageContext: activePageInstance.context,
                 initialProps: placement.initialProps,
-              }),
+              })}
+            </PanelWindowingBoundary>
+          )),
         ]))
       : {}),
     // Canonical shell/editor placements intentionally win when a Page reuses
@@ -473,7 +510,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
     // and therefore retain the Page-owned runtime installed above.
     ...BASE_PANEL_COMPONENTS,
     ...buildEditorPanelComponents(editorPanelIds),
-  }), [activePageInstance, activeResolvedPage, editorPanelIds]);
+  }), [activePageInstance, activeResolvedPage, editorPanelIds, pagePanelWindowing, panels]);
   // Mirror the component keys into a ref so layout restore callbacks (registered
   // once with [] deps) can validate saved layouts against the CURRENT set.
   const componentKeysRef = useRef<ReadonlySet<string>>(new Set(Object.keys(components)));
@@ -1312,8 +1349,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
   // When a surface-popped panel's OS window closes, bring it back into the dock.
   useEffect(() => {
     return getWindowManager().onSurfaceWindowClosed((d) => {
-      useShellStore.getState().markSurfaceDocked(surfaceKey(d));
-      if (SURFACE_PANELS.has(d.id)) reopen(d.id);
+      const panelId = detachedDockPanelForSurface(d) ?? (d.kind === 'panel' ? d.id : undefined);
+      if (panelId) reopen(panelId);
     });
   }, [reopen]);
 
@@ -1363,37 +1400,38 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       const x = e.clientX, y = e.clientY;
       const start = dragStartRef.current;
       const moved = Math.hypot(x - start.x, y - start.y);
-      setTimeout(() => {
-        if (dropHandledRef.current) return;  // dockview docked/merged/split it → not a float
-        if (moved < 24) return;              // a click / micro-drag, not a tear-off
-        const api = apiRef.current;
-        const panel = api?.getPanel(id);
-        if (!api || !panel) return;
-        // When a physical carrier is available: ANY drop NOT handled by dockview
-        // (outside the window OR over empty space) → pop the panel to a real popup
-        // or OS window. This gives a consistent
-        // UE/Blender feel: tear off = independent window, no intermediate in-app float.
-        // ep:* editor panels are NOT tear-off targets: DetachedSurface has no editor-
-        // panel body, so they stay docked in the single realm.
-        if (getWindowManager().canDetach() && SURFACE_PANELS.has(id)) {
-          const outside =
-            e.screenX < window.screenX ||
-            e.screenY < window.screenY ||
-            e.screenX > window.screenX + window.innerWidth ||
-            e.screenY > window.screenY + window.innerHeight;
-          // Position near the drop point; offset so the title bar is under the cursor.
-          const wx = outside
-            ? Math.round(e.screenX - 140)
-            : Math.round(window.screenX + x - 140);
-          const wy = outside
-            ? Math.round(e.screenY - 16)
-            : Math.round(window.screenY + y - 16);
-          popPanelToWindow(api, id, titleFor, { x: wx, y: wy });
-          return;
-        }
-        // No physical carrier: do nothing — panel stays docked where it was.
-        // (addFloatingGroup caused confusing in-app "free panels"; removed.)
-      }, 0);
+      // Native HTML5 ordering is drop → dragend. Dockview's onDidDrop callback
+      // runs from that drop and synchronously flips dropHandledRef, so the value
+      // is final here. Staying synchronous also preserves browser user activation
+      // for window.open; deferring to a timer lets popup blockers reject tear-off.
+      if (dropHandledRef.current) return;  // dockview docked/merged/split it → not a float
+      if (moved < 24) return;              // a click / micro-drag, not a tear-off
+      const api = apiRef.current;
+      const panel = api?.getPanel(id);
+      if (!api || !panel) return;
+      const windowing = windowingForRef.current(id);
+      if (canOpenPanelWindow(windowing, getWindowManager().canDetach())) {
+        const outside =
+          e.screenX < window.screenX ||
+          e.screenY < window.screenY ||
+          e.screenX > window.screenX + window.innerWidth ||
+          e.screenY > window.screenY + window.innerHeight;
+        // Position near the drop point; offset so the title bar is under the cursor.
+        const wx = outside
+          ? Math.round(e.screenX - 140)
+          : Math.round(window.screenX + x - 140);
+        const wy = outside
+          ? Math.round(e.screenY - 16)
+          : Math.round(window.screenY + y - 16);
+        void openPanelWindow(id, windowing, {
+          detachSurface: useShellStore.getState().detachSurface,
+          position: { x: wx, y: wy },
+          closeDockPanel: () => {
+            try { api.getPanel(id)?.api.close(); } catch { /* noop */ }
+          },
+        });
+      }
+      // No physical carrier: do nothing — panel stays docked where it was.
     };
     window.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('dragstart', onDragStart, true);
@@ -1442,7 +1480,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
       {region === 'AuxBar' && <AuxBarResizer />}
       {region === 'ChatDock' && <ChatDockResizer />}
       <DockviewReact
-        className="dockview-theme-abyss fx-dockshell"
+        className="fx-dockshell"
+        theme={FORGEAX_DOCK_THEME}
         components={components}
         // Custom tab renders a leading Lucide icon (iconForDockPanel) before the
         // title — applied globally so every group's tabs get it without per-panel
@@ -1451,6 +1490,7 @@ export function DockRegion({ region }: { region: DockRegionId }) {
         defaultTabComponent={DockTab}
         onReady={onReady}
         disableFloatingGroups={false}
+        hideBorders
         // Cross-instance drag & drop (§P2/T3): dockview 6.6.1 doesn't auto-move
         // panels between DockviewComponent instances. We reconcile imperatively —
         // close on source, add on target, then persist via moveTo(). Same-instance
@@ -1480,6 +1520,8 @@ export function DockRegion({ region }: { region: DockRegionId }) {
             const shellRect = shellEl?.getBoundingClientRect() ?? panelRect;
             nearer = nearerSideEdge(panelRect, shellRect);
           }
+          const windowing = windowingFor(params.panel.id);
+          const canPopOut = canOpenPanelWindow(windowing, getWindowManager().canDetach());
           return buildTabContextMenuItems(
             region,
             params.panel.id,
@@ -1531,6 +1573,18 @@ export function DockRegion({ region }: { region: DockRegionId }) {
                 }
               },
             },
+            canPopOut
+              ? {
+                  onPopOut: () => {
+                    void openPanelWindow(params.panel.id, windowing, {
+                      detachSurface: useShellStore.getState().detachSurface,
+                      closeDockPanel: () => {
+                        try { params.panel.api.close(); } catch { /* noop */ }
+                      },
+                    });
+                  },
+                }
+              : undefined,
           );
         }}
       />

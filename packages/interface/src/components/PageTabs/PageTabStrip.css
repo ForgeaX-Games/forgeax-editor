@@ -180,6 +180,24 @@
   background: var(--color-interaction-hover);
   color: var(--color-text-primary);
 }
+.page-tab-new {
+  width: 30px;
+  height: calc(var(--page-tab-h) - 5px);
+  padding: 0;
+  border-color: transparent;
+  justify-content: center;
+  align-self: flex-end;
+  flex-shrink: 0;
+}
+.page-tab-new:hover,
+.page-tab-new:focus-visible {
+  border-color: transparent;
+  background: var(--color-interaction-hover);
+}
+.page-tab-new .page-tab-btn__icon {
+  width: 13px;
+  height: 13px;
+}
 .page-tab-btn__icon {
   width: 12px;
   height: 12px;

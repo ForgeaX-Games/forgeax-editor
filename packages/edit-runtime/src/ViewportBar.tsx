@@ -11,8 +11,8 @@
 //   - Gizmo mode reads/writes the store's gizmoMode (same as EditorApp does).
 //   - Scene save is no longer surfaced here; the Content Browser "Save" action is
 //     the canonical human save entry (UE-style summary dialog → saveDocToDisk).
-//   - ▶/■/display + FPS: viewport quadrant controls (w25, requirements AC-05/06/04)
-//     received as props from ViewportChrome.
+//   - Legacy in-process toolbar retained for its standalone API surface. Product
+//     hosts use the declarative PanelShell contributions in ViewportPanel.tsx.
 import { useEffect, useState } from 'react';
 // M3 (AC-03): gizmo-mode (session op) and save (session op) go through the one
 // gateway door — gateway.dispatch({ kind, … }) — not the direct setGizmoMode /

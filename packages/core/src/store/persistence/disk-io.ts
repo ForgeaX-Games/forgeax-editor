@@ -52,6 +52,12 @@ import type { SceneAsset } from '@forgeax/engine-types';
 import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-facade';
 import type { ImportedPreviewSessionState } from '../../io/scene-authoring-session';
 import { normalizeAnimationPlayerSceneAsset } from '../../scene/animation-slot-sync';
+import {
+  bindAllSceneAnimationTargets,
+  bindSceneInstanceAnimationTargets,
+  type AnimationTargetBindingError,
+} from '../../scene/animation-target-binding';
+import { createEngineFacade } from '../../io/engine-facade';
 import { normalizeMaterialPackEntries } from '../../io/material-pack-refs';
 import { normalizeMaterialInstancePackEntries } from '../../assets/material-instance-schema';
 
@@ -84,6 +90,27 @@ export interface SaveDocToDiskCommit {
   /** Whether the authored document was clean after applying the revision collar. */
   readonly dirty: boolean;
 }
+
+export interface SceneInstantiationFailure {
+  readonly code: string;
+  readonly hint: string;
+  readonly detail?: unknown;
+}
+
+export type SceneInstantiationError = AnimationTargetBindingError | SceneInstantiationFailure;
+
+export type SceneInstantiationCleanup =
+  | { readonly attempted: false }
+  | { readonly attempted: true; readonly ok: true; readonly root: EntityHandle }
+  | { readonly attempted: true; readonly ok: false; readonly root: EntityHandle; readonly error: unknown };
+
+export type SceneInstantiationResult =
+  | { readonly ok: true; readonly root: number }
+  | {
+    readonly ok: false;
+    readonly error: SceneInstantiationError;
+    readonly cleanup: SceneInstantiationCleanup;
+  };
 
 export type SaveDocToDiskResult =
   | { readonly ok: true; readonly result: SaveDocToDiskCommit }
@@ -367,7 +394,11 @@ function appendInlineAssets(
  * State: none at factory scope — all mutable persistence state lives on
  * `deps.ctx` (ScenePersistenceContext); the factory only closes over `deps`.
  */
-export function createDiskIo(deps: DiskIoDeps): DiskIo {
+interface DetailedDiskIo {
+  instantiateSceneRefUnderWorldDetailed(sceneGuid: string, parentHandle: number): Promise<SceneInstantiationResult>;
+}
+
+export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
   const { ctx, gateway } = deps;
 
   // ── path helpers ────────────────────────────────────────────────────────────
@@ -486,23 +517,65 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
   function teardownCurrentScene(preserve?: ReadonlySet<number>): void {
     const w: WorldType = gateway.doc.world;
     if (w) {
+      const engine = createEngineFacade(w, gateway.doc.registry);
+      // `worldRootHandles` is intentionally Name-based for the editor read
+      // model. Imported scene trees, however, may have unnamed mount carriers
+      // between a staged root and named child members. Treating those named
+      // descendants as roots during the old-scene sweep would despawn the
+      // freshly staged tree one branch at a time. Preserve the complete ECS
+      // descendant closure while the old scene is being replaced.
+      const preserved = preserve === undefined ? undefined : new Set(preserve);
+      if (preserved !== undefined) {
+        for (const root of preserve ?? []) {
+          for (const descendant of w.iterDescendants(root as EntityHandle)) {
+            preserved.add(descendant as number);
+          }
+        }
+      }
       const seen = new Set<number>();
       for (const e of ctx.currentSceneEntities) {
         if (seen.has(e as number)) continue;
-        if (preserve?.has(e as number)) continue;
+        if (preserved?.has(e as number)) continue;
         seen.add(e as number);
-        try { w.despawnScene(e); } catch { /* best-effort */ }
+        try {
+          const cleanup = engine.despawnScene(e);
+          if (!cleanup.ok) console.error('[editor-core] scene teardown failed:', { root: e, error: cleanup.error });
+        } catch (error) {
+          console.error('[editor-core] scene teardown threw:', { root: e, error });
+        }
       }
       try {
         for (const h of worldRootHandles(w)) {
           if (seen.has(h as number)) continue;
-          if (preserve?.has(h as number)) continue;
+          if (preserved?.has(h as number)) continue;
           seen.add(h as number);
-          try { w.despawnScene(h); } catch { /* best-effort */ }
+          try {
+            const cleanup = engine.despawnScene(h);
+            if (!cleanup.ok) console.error('[editor-core] scene root sweep failed:', { root: h, error: cleanup.error });
+          } catch (error) {
+            console.error('[editor-core] scene root sweep threw:', { root: h, error });
+          }
         }
       } catch { /* best-effort */ }
     }
     ctx.currentSceneEntities = [];
+  }
+
+  function teardownStagedRoots(roots: readonly EntityHandle[]): { ok: boolean; failures: readonly unknown[] } {
+    const w: WorldType = gateway.doc.world;
+    if (!w) return { ok: false, failures: [{ code: 'WORLD_UNAVAILABLE' }] };
+    const engine = createEngineFacade(w, gateway.doc.registry);
+    const failures: unknown[] = [];
+    for (const root of roots) {
+      try {
+        const cleanup = engine.despawnScene(root);
+        if (!cleanup.ok) failures.push({ root, error: cleanup.error });
+      } catch (error) {
+        failures.push({ root, error });
+      }
+    }
+    if (failures.length > 0) console.error('[editor-core] staged scene rollback failed:', { roots, failures });
+    return { ok: failures.length === 0, failures };
   }
 
   /** Open the game's scene by GUID via the engine's canonical loadByGuid ->
@@ -513,22 +586,20 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  anchored). Returns true on success. @internal-store — disk-watch CALLS this
    *  to reload (D-6 seam).
    *
-   *  LOAD ORDER: resolve the SceneAsset bytes first, then tear down the old
-   *  authored tree, then instantiate the replacement. We must not materialise
-   *  two scene graphs in the same World and subsequently try to identify the old
-   *  one by root handles: nested SceneInstance anchors and their derived members
-   *  share ChildOf/Children teardown paths with their wrapper. The former
-   *  instantiate-then-teardown order could therefore despawn a freshly-created
-   *  mount member, leaving an anchor whose mapping only contained stale handles
-   *  (Fox / imported GLB vanished after Save -> reopen).
+   *  LOAD ORDER: resolve the SceneAsset bytes, instantiate + bind the replacement
+   *  as a staged tree, then tear down the old authored tree while preserving the
+   *  staged roots. Binding must pass before the active context changes; a failed
+   *  stage is discarded and the old tree/handles remain authoritative. The
+   *  preserve set prevents teardown's root sweep from treating the staged tree as
+   *  an orphan while the old tree is still present.
    *
-   *  `loadByGuid` remains before teardown, so a missing/corrupt pack leaves the
-   *  current scene intact. Once a valid payload is available, replacement is
-   *  deliberately single-tree rather than pseudo-atomic in one World. */
+   *  `loadByGuid` remains before any world mutation, so a missing/corrupt pack
+   *  leaves the current scene intact. */
   async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
     if (!w || !reg) return false;
+    let stagedRoots: EntityHandle[] = [];
     try {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(sceneGuid);
@@ -542,19 +613,30 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       }
       const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
       const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
-      // Do not overlap the replacement with the old scene in one World. See the
-      // load-order invariant above: teardown after instantiation can delete the
-      // new nested SceneInstance members through an old wrapper's subtree.
-      teardownCurrentScene();
       const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) {
         console.warn(`[editor-core] scene instantiateFlat failed guid=${sceneGuid}: ${JSON.stringify(instRes.error)}`);
         return false;
       }
-      // Track the scene's top-level entities so a later reload can despawn them.
-      ctx.currentSceneEntities = instRes.value;
+      stagedRoots = [...instRes.value];
+      const bindingFailures = bindAllSceneAnimationTargets(w, { mutation: createEngineFacade(w, reg) }, stagedRoots)
+        .flatMap((entry) => entry.failures);
+      if (bindingFailures.length > 0) {
+        console.warn('[editor-core] scene animation binding failed:', bindingFailures);
+        const rollback = teardownStagedRoots(stagedRoots);
+        if (!rollback.ok) console.error('[editor-core] scene load rollback left staged roots:', rollback.failures);
+        stagedRoots = [];
+        return false;
+      }
+      teardownCurrentScene(new Set(stagedRoots.map((root) => root as number)));
+      ctx.currentSceneEntities = stagedRoots;
+      stagedRoots = [];
       return true;
     } catch (error) {
+      if (stagedRoots.length > 0) {
+        const rollback = teardownStagedRoots(stagedRoots);
+        if (!rollback.ok) console.error('[editor-core] scene load exception rollback left staged roots:', rollback.failures);
+      }
       console.warn(
         `[editor-core] scene load threw guid=${sceneGuid}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
       );
@@ -575,6 +657,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     const w = gateway.doc.world;
     const reg = gateway.doc.registry;
     if (!w || !reg) return null;
+    let stagedRoots: EntityHandle[] = [];
     try {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(facts.guid);
@@ -583,10 +666,21 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
       if (!loaded.ok || loaded.value.kind !== 'scene') return null;
       const sceneAsset = normalizeAndCatalogSceneAsset(reg, facts.guid, loaded.value);
       const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
-      teardownCurrentScene();
       const instantiated = reg.instantiateFlat(sceneHandle, w);
       if (!instantiated.ok) return null;
-      ctx.currentSceneEntities = [...instantiated.value];
+      stagedRoots = [...instantiated.value];
+      const bindingFailures = bindAllSceneAnimationTargets(w, { mutation: createEngineFacade(w, reg) }, stagedRoots)
+        .flatMap((entry) => entry.failures);
+      if (bindingFailures.length > 0) {
+        console.warn('[editor-core] imported preview animation binding failed:', bindingFailures);
+        const rollback = teardownStagedRoots(stagedRoots);
+        if (!rollback.ok) console.error('[editor-core] imported preview rollback left staged roots:', rollback.failures);
+        stagedRoots = [];
+        return null;
+      }
+      teardownCurrentScene(new Set(stagedRoots.map((root) => root as number)));
+      ctx.currentSceneEntities = stagedRoots;
+      stagedRoots = [];
       return {
         ...facts,
         effectiveScene: structuredClone(sceneAsset),
@@ -594,6 +688,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
         registry: reg,
       };
     } catch {
+      if (stagedRoots.length > 0) {
+        const rollback = teardownStagedRoots(stagedRoots);
+        if (!rollback.ok) console.error('[editor-core] imported preview exception rollback left staged roots:', rollback.failures);
+      }
       return null;
     }
   }
@@ -605,32 +703,91 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    * instantiate spine — the ANCHORED `reg.instantiate` (keeps a SceneInstance so
    * overrides stay isolated and the prefab source is protected), unlike
    * loadSceneByGuid which opens the top scene FLAT. ADDITIVE: does NOT teardown
-   * the current scene / touch currentSceneEntities. Returns the nested root
-   * handle, or null on failure — callers MUST treat null as "add failed"
-   * (NEVER fall back to a cube).
+   * the current scene / touch currentSceneEntities. Binding failures remain
+   * structured and carry explicit cleanup facts to the session operation.
    */
+  async function instantiateSceneRefUnderWorldDetailed(
+    sceneGuid: string,
+    parentHandle: number,
+  ): Promise<SceneInstantiationResult> {
+    const w: WorldType = gateway.doc.world;
+    const reg: AssetRegistry | undefined = gateway.doc.registry;
+    const unavailable = (code: string, hint: string, detail?: unknown): SceneInstantiationResult => ({
+      ok: false,
+      error: { code, hint, ...(detail === undefined ? {} : { detail }) },
+      cleanup: { attempted: false },
+    });
+    if (!w || !reg) return unavailable('scene-world-unavailable', 'editor world or asset registry is unavailable');
+    let instantiatedRoot: EntityHandle | null = null;
+    try {
+      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+      const parsed = AssetGuid.parse(sceneGuid);
+      if (!parsed.ok) return unavailable('scene-guid-invalid', `scene asset GUID is invalid: ${sceneGuid}`, parsed.error);
+      const loadRes = await reg.loadByGuid(parsed.value);
+      if (!loadRes.ok) {
+        console.warn('[editor-core] instantiateSceneRefUnderWorld: loadByGuid failed:', loadRes.error);
+        return unavailable('scene-load-failed', `scene asset could not be loaded: ${sceneGuid}`, loadRes.error);
+      }
+      const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
+      const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
+      const instRes = reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
+      if (!instRes.ok) {
+        console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code);
+        return unavailable('scene-instantiate-failed', 'scene asset could not be instantiated', instRes.error);
+      }
+      instantiatedRoot = instRes.value as EntityHandle;
+      const engine = createEngineFacade(w, reg);
+      const binding = bindSceneInstanceAnimationTargets(w, instantiatedRoot, {
+        ensurePlayerForSkin: true,
+        mutation: engine,
+      });
+      if (binding.failures.length > 0) {
+        console.warn('[editor-core] nested scene animation binding failed:', binding.failures);
+        const cleanup = engine.despawnScene(instantiatedRoot);
+        return {
+          ok: false,
+          error: {
+            code: 'animation-target-binding-failed',
+            hint: 'nested scene asset instantiated but animation targets could not be bound',
+            detail: binding.failures,
+          },
+          cleanup: cleanup.ok
+            ? { attempted: true, ok: true, root: instantiatedRoot }
+            : { attempted: true, ok: false, root: instantiatedRoot, error: cleanup.error },
+        };
+      }
+      return { ok: true, root: instantiatedRoot as number };
+    } catch (err) {
+      console.warn('[editor-core] instantiateSceneRefUnderWorld: threw', err);
+      const cleanup = instantiatedRoot === null
+        ? { attempted: false as const }
+        : (() => {
+          const result = createEngineFacade(w, reg).despawnScene(instantiatedRoot);
+          return result.ok
+            ? { attempted: true as const, ok: true as const, root: instantiatedRoot }
+            : { attempted: true as const, ok: false as const, root: instantiatedRoot, error: result.error };
+        })();
+      return {
+        ok: false,
+        error: {
+          code: 'scene-instantiate-threw',
+          hint: err instanceof Error ? err.message : String(err),
+          detail: err,
+        },
+        cleanup,
+      };
+    }
+  }
+
+  // Keep the long-standing store/barrel contract stable. Internal callers that
+  // need diagnostics use the detailed companion above; the published helper
+  // continues to return only the mounted root or null on failure.
   async function instantiateSceneRefUnderWorld(
     sceneGuid: string,
     parentHandle: number,
   ): Promise<number | null> {
-    const w: WorldType = gateway.doc.world;
-    const reg: AssetRegistry | undefined = gateway.doc.registry;
-    if (!w || !reg) return null;
-    try {
-      const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-      const parsed = AssetGuid.parse(sceneGuid);
-      if (!parsed.ok) return null;
-      const loadRes = await reg.loadByGuid(parsed.value);
-      if (!loadRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: loadByGuid failed:', loadRes.error); return null; }
-      const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
-      const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
-      const instRes = reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
-      if (!instRes.ok) { console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
-      return instRes.value as number;
-    } catch (err) {
-      console.warn('[editor-core] instantiateSceneRefUnderWorld: threw', err);
-      return null;
-    }
+    const result = await instantiateSceneRefUnderWorldDetailed(sceneGuid, parentHandle);
+    return result.ok ? result.root : null;
   }
 
   /**
@@ -693,6 +850,15 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     const p = scenePath();
     if (!p) return false;
     const reg = gateway.doc.registry;
+    const previousLoadState = {
+      currentSceneGuid: ctx.currentSceneGuid,
+      currentSceneEntities: [...ctx.currentSceneEntities],
+      loadedInlineAssetFloor: ctx.loadedInlineAssetFloor,
+      loadedInlineAssets: ctx.loadedInlineAssets,
+      loadedEntityFloor: ctx.loadedEntityFloor,
+      isDirty: ctx.isDirty,
+    };
+    let committed = false;
     // Forget the previous scene's identity before loading a new one.
     ctx.currentSceneGuid = null;
     ctx.loadedInlineAssetFloor = null;
@@ -813,6 +979,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
                 // a new GUID behind and impersonate successful navigation.
                 ctx.currentSceneGuid = sceneAssetEntry.guid;
                 ctx.isDirty = false;
+                committed = true;
                 deps.notifyDocChanged();
                 return true;
               }
@@ -823,6 +990,16 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
         }
       }
     } catch { /* fall through to seed */ }
+    finally {
+      if (!committed) {
+        ctx.currentSceneGuid = previousLoadState.currentSceneGuid;
+        ctx.currentSceneEntities = [...previousLoadState.currentSceneEntities];
+        ctx.loadedInlineAssetFloor = previousLoadState.loadedInlineAssetFloor;
+        ctx.loadedInlineAssets = previousLoadState.loadedInlineAssets;
+        ctx.loadedEntityFloor = previousLoadState.loadedEntityFloor;
+        ctx.isDirty = previousLoadState.isDirty;
+      }
+    }
     // Only engine-native scene packs load; a legacy scene.json is migrated on the
     // next save (packToSession deleted, AC-15).
     return false;
@@ -1169,6 +1346,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
     loadSceneByGuid,
     loadImportedScenePreviewState,
     instantiateSceneRefUnderWorld,
+    instantiateSceneRefUnderWorldDetailed,
     resolveAssetRefToHandle,
     doLoadDocFromDisk,
     doSaveDocToDisk,

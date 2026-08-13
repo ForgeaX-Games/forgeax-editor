@@ -351,7 +351,7 @@ export const resolveEditPhysics = hostSession.resolveEditPhysics;
 
 /**
  * Run the application session tail on an already-booted world. Returns the ▶/■ +
- * dispose triple ViewportComponent wires to the ViewportChrome actions. Composed
+ * dispose triple ViewportComponent exposes through Runtime operations. Composed
  * over the real singletons here; see host-session.ts for the boot ordering body.
  */
 export const initHostSession = hostSession.initHostSession;

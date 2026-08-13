@@ -147,8 +147,8 @@ function bootFullShell(el: HTMLElement) {
   appBootSpan('app.boot.store', () => bootStore());
 
   // Windowing: when a detached surface window is closed by the user, redock it
-  // (the main window re-mounts its keep-alive iframe). No-op in the browser
-  // (WindowManager.onSurfaceWindowClosed never fires there).
+  // (the main window re-mounts its keep-alive iframe or retained Page anchor).
+  // Browser popup polling and Tauri destroyed events both converge here.
   getWindowManager().onSurfaceWindowClosed((d) => {
     useShellStore.getState().markSurfaceDocked(surfaceKey(d));
   });

@@ -2,18 +2,21 @@ import { describe, expect, it } from 'bun:test';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { ChildOf, Transform } from '@forgeax/engine-scene';
-import { MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-render';
+import { MeshFilter, MeshRenderer, Materials, Visibility, VisibilityStateValue } from '@forgeax/engine-render';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EngineFacade } from '@forgeax/editor-core';
 import type { MeshAsset } from '@forgeax/engine-types';
 
 import { createSelectionStencilOutlinePool } from '../selection-stencil-outline';
 
+interface SetCall { entity: EntityHandle; data: Record<string, unknown> }
+
 function fakeEditorFacade(): {
   facade: EngineFacade;
   spawned: Set<EntityHandle>;
   despawned: Set<EntityHandle>;
   sets: Array<EntityHandle>;
+  setCalls: Array<SetCall>;
   spawns: Array<readonly unknown[]>;
   allocations: Array<unknown>;
 } {
@@ -21,6 +24,7 @@ function fakeEditorFacade(): {
   const spawned = new Set<EntityHandle>();
   const despawned = new Set<EntityHandle>();
   const sets: EntityHandle[] = [];
+  const setCalls: SetCall[] = [];
   const spawns: Array<readonly unknown[]> = [];
   const allocations: unknown[] = [];
   const facade = {
@@ -34,8 +38,9 @@ function fakeEditorFacade(): {
       spawns.push(components);
       return { ok: true, value: entity, unwrap: () => entity };
     },
-    set: (entity: EntityHandle) => {
+    set: (entity: EntityHandle, _component: unknown, data: unknown) => {
       sets.push(entity);
+      setCalls.push({ entity, data: data as Record<string, unknown> });
       return { ok: true, value: undefined, unwrap: () => undefined };
     },
     despawn: (entity: EntityHandle) => {
@@ -44,7 +49,7 @@ function fakeEditorFacade(): {
       return { ok: true, value: undefined, unwrap: () => undefined };
     },
   } as unknown as EngineFacade;
-  return { facade, spawned, despawned, sets, spawns, allocations };
+  return { facade, spawned, despawned, sets, setCalls, spawns, allocations };
 }
 
 function sceneWithMesh(submeshCount = 1): { world: World; entity: EntityHandle } {
@@ -145,6 +150,94 @@ describe('createSelectionStencilOutlinePool', () => {
 
     pool.update();
     expect(fake.spawned).toHaveLength(2);
+    pool.dispose();
+  });
+
+  it('spawns no ghosts for a hidden selected entity (bug: eye toggle left outline behind)', () => {
+    const world = new World();
+    const material = world.allocSharedRef('MaterialAsset', Materials.unlit([0.5, 0.5, 0.5, 1]));
+    const entity = world.spawn(
+      { component: Transform, data: { pos: [1, 2, 3] } },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [material] } },
+      { component: Visibility, data: { state: VisibilityStateValue.hidden } },
+    ).unwrap();
+    const fake = fakeEditorFacade();
+    const pool = createSelectionStencilOutlinePool({
+      sceneWorld: () => world,
+      editorEngine: fake.facade,
+      getSelectionList: () => new Set<EntityHandle>([entity]),
+      getRenderableHandles: () => [entity],
+      isAuxVisible: () => true,
+      isEditMode: () => true,
+    });
+
+    pool.update();
+    expect(fake.spawned.size).toBe(0);
+    pool.dispose();
+  });
+
+  it('spawns no ghosts when the selection is hidden by an ancestor', () => {
+    const world = new World();
+    const material = world.allocSharedRef('MaterialAsset', Materials.unlit([0.5, 0.5, 0.5, 1]));
+    const root = world.spawn(
+      { component: Transform, data: {} },
+      { component: Visibility, data: { state: VisibilityStateValue.hidden } },
+    ).unwrap();
+    const child = world.spawn(
+      { component: Transform, data: { pos: [1, 0, 0] } },
+      { component: ChildOf, data: { parent: root } },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [material] } },
+    ).unwrap();
+    const fake = fakeEditorFacade();
+    const pool = createSelectionStencilOutlinePool({
+      sceneWorld: () => world,
+      editorEngine: fake.facade,
+      getSelectionList: () => new Set<EntityHandle>([root]),
+      getRenderableHandles: () => [child],
+      isAuxVisible: () => true,
+      isEditMode: () => true,
+    });
+
+    pool.update();
+    expect(fake.spawned.size).toBe(0);
+    pool.dispose();
+  });
+
+  it('carries the world rotation into the ghost transforms (bug: rotated outline went axis-aligned)', () => {
+    const { world, entity } = sceneWithMesh();
+    // 90° around Y, translation (1,2,3) — column-major mat4. The propagate
+    // kernel does not run in a bare World, so the test authors the resolved
+    // world column directly.
+    world.set(entity, Transform, {
+      world: [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 2, 3, 1],
+    });
+    const fake = fakeEditorFacade();
+    const pool = createSelectionStencilOutlinePool({
+      sceneWorld: () => world,
+      editorEngine: fake.facade,
+      getSelectionList: () => new Set<EntityHandle>([entity]),
+      getRenderableHandles: () => [entity],
+      isAuxVisible: () => true,
+      isEditMode: () => true,
+    });
+
+    pool.update();
+    const withQuat = fake.setCalls.filter((call) => Array.isArray(call.data.quat));
+    expect(withQuat.length).toBe(2);
+    for (const call of withQuat) {
+      // decompose sign is ambiguous (q == -q); compare absolute components.
+      const q = (call.data.quat as number[]).map(Math.abs);
+      expect(q[0]).toBeCloseTo(0, 5);
+      expect(q[1]).toBeCloseTo(Math.SQRT1_2, 5);
+      expect(q[2]).toBeCloseTo(0, 5);
+      expect(q[3]).toBeCloseTo(Math.SQRT1_2, 5);
+      expect(call.data.pos as number[]).toEqual([1, 2, 3]);
+    }
+    const shell = withQuat.find((call) => (call.data.scale as number[])[0]! > 1.01);
+    expect(shell).toBeDefined();
+    expect((shell!.data.scale as number[])[0]).toBeCloseTo(1.05, 5);
     pool.dispose();
   });
 });

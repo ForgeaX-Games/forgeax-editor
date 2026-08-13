@@ -449,15 +449,17 @@ export function OnboardingController() {
 
   const onLang = (next: Locale) => { setLang(next); changeLanguage(next); };
 
-  // Steps trace the default Scene layout in do-a-game order: content browser →
-  // viewport → scene outline/properties → top bar → chat. Each anchorId matches
-  // a `data-tour-id` (assets/hierarchy via panelRegistry EP_TOUR_IDS, preview on
-  // the viewport panel, topbar on the TopBar root, chat on the chat panel).
+  // Steps trace the default Scene layout in do-a-game order: viewport → scene
+  // outline/properties → top bar → footer (content browser + info now collapse
+  // into the global footer, so the tour anchors the footer instead of a live CB
+  // panel) → chat. Each anchorId matches a `data-tour-id` (hierarchy via
+  // panelRegistry EP_TOUR_IDS, preview on the viewport panel, topbar on the
+  // TopBar root, footer on the StatusBar host, chat on the chat panel).
   const TOUR_STEPS: TourStep[] = [
-    { anchorId: 'assets', anchor: t('onboarding.tour.assets.anchor'), body: t('onboarding.tour.assets.body') },
     { anchorId: 'preview', anchor: t('onboarding.tour.preview.anchor'), body: t('onboarding.tour.preview.body') },
     { anchorId: ['hierarchy', 'inspector'], anchor: t('onboarding.tour.hierarchy.anchor'), body: t('onboarding.tour.hierarchy.body') },
     { anchorId: 'topbar', anchor: t('onboarding.tour.topbar.anchor'), body: t('onboarding.tour.topbar.body') },
+    { anchorId: 'footer', anchor: t('onboarding.tour.footer.anchor'), body: t('onboarding.tour.footer.body') },
     { anchorId: 'chat', anchor: t('onboarding.tour.chat.anchor'), body: t('onboarding.tour.chat.body') },
   ];
 

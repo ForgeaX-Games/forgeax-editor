@@ -15,7 +15,7 @@ function SurfaceAnchor({ kind }: { kind: SurfaceKind }) {
 
 // ViewportPanel — combined edit+preview surface, renders the editor viewport anchor.
 // The keep-alive layer manages the actual surface rendering.
-export function ViewportPanel(_props: { viewportOnly?: boolean } = {}) {
+export function ViewportPanel() {
   return (
     <div className="surface-region">
       <SurfaceAnchor kind="edit" />

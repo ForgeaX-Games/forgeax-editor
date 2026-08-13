@@ -253,6 +253,17 @@ export class AssetIOFacade {
     this.runtimeBinding = binding;
   }
 
+  /** Read the host-authoritative binding for bounded preview runtimes.
+   *
+   * Preview worlds are created outside the main viewport, but they must use
+   * the same generation-scoped catalog/import endpoints. Keeping this read on
+   * the shared facade prevents preview code from guessing a game root or
+   * retaining a stale binding of its own.
+   */
+  getRuntimeBinding(): RuntimeAssetBinding | undefined {
+    return this.runtimeBinding;
+  }
+
   async prepareResourceTransaction(input: unknown): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
     if (this.resourceTransaction === undefined) return null;
     return this.resourceTransaction.prepare(input);

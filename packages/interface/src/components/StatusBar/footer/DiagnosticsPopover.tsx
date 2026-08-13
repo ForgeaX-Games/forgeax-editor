@@ -200,12 +200,12 @@ export function DiagnosticsChip() {
   );
 }
 
-// statusbar.center is the far-right group (flex-end); a LOWER priority than the
-// health chip lands diagnostics as the RIGHTMOST chip.
+// Pulse chips and diagnostics share statusbar.right. Its lower priority keeps
+// diagnostics after MB / SKILL / TOOL / AGENT and immediately before Version.
 export const diagnosticsStatusItem: StatusItemContribution = {
   kind: 'status-item',
   id: 'diagnostics',
-  location: 'statusbar.center',
+  location: 'statusbar.right',
   priority: 5,
   item: { type: 'custom', render: () => <DiagnosticsChip /> },
 };

@@ -1,8 +1,14 @@
 import { useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
-import type { OperationCenterAction, OperationCenterRow } from './run-view-model';
+import type {
+  OperationCenterAction,
+  OperationCenterRow,
+  OperationRunArtifactRow,
+  OperationRunArtifactProjection,
+} from './run-view-model';
 import {
   getOperationCenterRows,
   getOperationProjectionSource,
+  projectOperationRunArtifact,
   subscribeOperationProjection,
 } from './run-view-model';
 import { downloadOperationRun } from './run-export';
@@ -70,6 +76,57 @@ function formatResult(value: unknown): string {
   } catch {
     return '[unserializable result]';
   }
+}
+
+function formatProgress(row: OperationCenterRow): string {
+  const fraction = Math.round(row.progress.fraction * 100);
+  const counts = row.progress.completed === undefined || row.progress.total === undefined
+    ? ''
+    : ` ${row.progress.completed}/${row.progress.total}`;
+  return `${row.progress.stage} ${fraction}%${counts}`;
+}
+
+function OperationRunArtifactView({ row }: { readonly row: OperationRunArtifactRow }): ReactNode {
+  return (
+    <article data-testid="operation-run-inspector-result" data-status={row.status}>
+      <div data-field="run-id">{row.runId}</div>
+      <div data-field="request-id">{row.requestId ?? 'no requestId'}</div>
+      <div data-field="operation-id">{row.operationId}</div>
+      <div data-field="actor">{row.actor.kind}:{row.actor.id}</div>
+      <div data-field="scope">{row.scope}</div>
+      <div data-field="progress">{formatProgress(row)}</div>
+      <div data-field="terminal">{row.status}{row.isTerminal ? '' : ' (non-terminal)'}</div>
+      <div data-field="result">{row.result === undefined ? 'none' : formatResult(row.result)}</div>
+      <div data-field="error">
+        {row.error === undefined ? 'none' : `${row.error.code}: ${row.error.hint}`}
+      </div>
+      <div data-field="recovery-actions">
+        {row.recoveryActions.length === 0 ? 'none' : row.recoveryActions.join(', ')}
+      </div>
+      <div data-field="recovery-state">
+        retryable={String(row.retryable)}
+        cancellable={String(row.cancellable)}
+        attempt={row.attempt}
+        sequence={row.sequence}
+      </div>
+    </article>
+  );
+}
+
+function OperationRunArtifactErrorView({
+  error,
+}: {
+  readonly error: Extract<OperationRunArtifactProjection, { readonly error: unknown }>['error'];
+}): ReactNode {
+  return (
+    <div data-testid="operation-run-inspector-error" data-code={error.code}>
+      <div data-field="error-code">{error.code}</div>
+      <div data-field="error-expected">expected {error.expected}</div>
+      <ul data-field="error-issues">
+        {error.issues.map((issue) => <li key={issue}>{issue}</li>)}
+      </ul>
+    </div>
+  );
 }
 
 function exportRun(runId: string): void {
@@ -251,6 +308,52 @@ function ProfileComparisonControl(): ReactNode {
   );
 }
 
+function OperationRunArtifactInspector(): ReactNode {
+  const [projection, setProjection] = useState<OperationRunArtifactProjection | undefined>();
+  const [fileError, setFileError] = useState<string | undefined>();
+
+  async function onArtifactChange(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (file === undefined) return;
+    try {
+      const value = JSON.parse(await file.text()) as unknown;
+      setProjection(projectOperationRunArtifact(value));
+      setFileError(undefined);
+    } catch {
+      setProjection(undefined);
+      setFileError('operation-run-invalid-json');
+    }
+  }
+
+  return (
+    <section className="operation-run-inspector" data-testid="operation-run-inspector">
+      <h4>Inspect exported OperationRun</h4>
+      <label>
+        OperationRun artifact
+        <input
+          type="file"
+          accept="application/json,.json"
+          data-testid="operation-run-inspector-input"
+          onChange={(event) => void onArtifactChange(event)}
+        />
+      </label>
+      {fileError !== undefined && (
+        <div data-testid="operation-run-inspector-file-error" data-code={fileError}>
+          {fileError}
+        </div>
+      )}
+      {projection === undefined ? (
+        <div data-field="inspector-empty">Select one exported OperationRun JSON file.</div>
+      ) : 'error' in projection ? (
+        <OperationRunArtifactErrorView error={projection.error} />
+      ) : (
+        <OperationRunArtifactView row={projection.row} />
+      )}
+    </section>
+  );
+}
+
 export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
   const subscribedRows = useRows();
   const visibleRows = subscribedRows;
@@ -285,7 +388,7 @@ export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
               <div data-field="request-id">{row.requestId ?? 'no requestId'}</div>
               <div data-field="actor">{row.actor.kind}:{row.actor.id}</div>
               <div data-field="parent-run">{row.parentRunId ?? 'root run'}</div>
-              <div data-field="progress">{row.progress.stage} {Math.round(row.progress.fraction * 100)}%</div>
+              <div data-field="progress">{formatProgress(row)}</div>
               <div data-field="terminal">{row.status}</div>
               {row.result !== undefined && <div data-field="result">{formatResult(row.result)}</div>}
               {row.error && <div data-field="error">{row.error.code}: {row.error.hint}</div>}
@@ -322,6 +425,7 @@ export function OperationCenter({ onAction }: OperationCenterProps): ReactNode {
           ))}
         </div>
       )}
+      <OperationRunArtifactInspector />
       <ProfileComparisonControl />
     </section>
   );

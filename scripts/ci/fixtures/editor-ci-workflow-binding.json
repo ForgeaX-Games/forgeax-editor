@@ -5,10 +5,10 @@
       {
         "file": "ci.yml",
         "jobs": [
-          {"id": "b2-self-boot", "name": "b2-self-boot", "runner": {"kind": "self-hosted", "pool": "standard"}},
-          {"id": "typecheck", "name": "typecheck", "runner": {"kind": "self-hosted", "pool": "standard"}},
-          {"id": "submodule-pin", "name": "submodule-pin", "runner": {"kind": "self-hosted", "pool": "standard"}},
-          {"id": "smoke-play", "name": "smoke-play", "runner": {"kind": "self-hosted", "pool": "heavy"}}
+          {"id": "b2-self-boot", "name": "b2-self-boot", "runner": {"kind": "self-hosted", "pool": "standard"}, "permissions": {"contents": "read"}},
+          {"id": "typecheck", "name": "typecheck", "runner": {"kind": "self-hosted", "pool": "standard"}, "permissions": {"contents": "read"}},
+          {"id": "submodule-pin", "name": "submodule-pin", "runner": {"kind": "self-hosted", "pool": "standard"}, "permissions": {"contents": "read"}},
+          {"id": "smoke-play", "name": "smoke-play", "runner": {"kind": "self-hosted", "pool": "heavy"}, "permissions": {"contents": "read"}}
         ]
       }
     ],
@@ -28,12 +28,12 @@
     "runner-capacity": "runner-capacity"
   },
   "expectedErrors": {
-    "missing-binding": "required-context-missing",
+    "missing-binding": "required-context-drift",
     "one-to-many": "required-context-ambiguous",
     "zero-job": "zero-job",
     "doc-only": "doc-only-evidence-insufficient",
-    "context-drift": "required-context-missing",
-    "runner-capacity": "runner-capacity-drift"
+    "context-drift": "required-context-drift",
+    "runner-capacity": "runner-capability-drift"
   },
   "portfolioAssertions": {
     "parentCheckId": "smoke-play",

@@ -16,6 +16,8 @@ export {
   type DetachWindowOptions,
 } from './window-manager';
 export {
+  type DetachedWindowCapability,
+  type DetachedWindowTarget,
   type SurfaceDescriptor,
   type SurfaceKind,
   type SurfacePane,

@@ -52,9 +52,12 @@ import {
 // ── FPS report ────────────────────────────────────────────────────────────────
 export function installFpsReport(
   subscribeFrameEnd: (listener: () => void) => () => void,
-  onFps: (fps: number) => void,
-  shouldPublish: () => boolean = () => true,
+  options: {
+    readonly onFps?: (fps: number) => void;
+    readonly shouldPublish?: () => boolean;
+  } = {},
 ): () => void {
+  const shouldPublish = options.shouldPublish ?? (() => true);
   // Count the renderer's producer-owned completion signal. A separate rAF can
   // keep firing after App/update/draw stalls and would make the smoke lie.
   let frames = 0;
@@ -67,7 +70,7 @@ export function installFpsReport(
       const fps = Math.round((frames * 1000) / elapsedMs);
       if (shouldPublish()) {
         setFps(fps);
-        onFps(fps);
+        options.onFps?.(fps);
       }
       frames = 0;
       lastSampleMs = nowMs;

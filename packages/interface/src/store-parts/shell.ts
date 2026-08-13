@@ -45,7 +45,7 @@ export function createShellState(
     floatingSurfaces: {},
     detachSurface: async (d: SurfaceDescriptor, opts?: { title?: string; x?: number; y?: number; width?: number; height?: number }) => {
       const wm = getWindowManager();
-      if (!wm.canDetach()) return;
+      if (!wm.canDetach()) return false;
       const key = surfaceKey(d);
       if (d.kind === 'panel' && d.id === 'viewport') {
         window.dispatchEvent(new CustomEvent(VIEWPORT_CARRIER_WILL_DETACH));
@@ -59,6 +59,7 @@ export function createShellState(
           return { floatingSurfaces: next };
         });
       }
+      return ok;
     },
     redockSurface: async (d: SurfaceDescriptor) => {
       const wm = getWindowManager();

@@ -9,7 +9,8 @@
 // The scanner uses the assetIO.listSourceFiles() gate (GET /api/files/tree) to
 // enumerate the assets/ directory, then cross-references source files against
 // their expected .meta.json sidecars. Files flagged as `needsMeta` are passed
-// to integrity-repair.ts for automatic re-import via executeAssetImport.
+// to integrity-repair.ts for recovery-intent projection; startup performs no
+// import or disk mutation.
 //
 // Anchors:
 //   dev-plan: 2026-07-23-startup-asset-integrity-scan-auto-repair.dev-plan.md §4.4

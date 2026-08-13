@@ -16,4 +16,9 @@ describe('Hierarchy large-scene viewport', () => {
     expect(panel).toContain('projection.rows.length === worldEntityIds.length');
     expect(panel).toContain('flattenVisibleRows(roots, view.collapsed, activeWorld, usableProjection)');
   });
+
+  it('resynchronizes the native scroll offset after a dock resize clamps it', () => {
+    expect(panel).toContain('element.scrollHeight - element.clientHeight');
+    expect(panel).toContain("element.dispatchEvent(new Event('scroll'))");
+  });
 });

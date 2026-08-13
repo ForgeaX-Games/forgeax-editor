@@ -20,11 +20,15 @@ describe('Hierarchy runtime access', () => {
   });
 
   it('lets a projection-only shell use the carrier even when a bootstrap World is present', () => {
+    // Projection-only ≠ read-only: the standalone panel host is always a
+    // projection-only shell, and its mutations reach the carrier through
+    // dispatchActiveEditorOperation. Gating writes on usesRemoteProjection
+    // killed rename/hide/reparent in the standalone editor (2026-08-13).
     expect(resolveHierarchyRuntimeAccess({
       hasLocalRuntimeGraph: false,
       hasRemoteProjection: true,
       gatewayMode: 'edit',
-    })).toEqual({ usesRemoteProjection: true, readOnly: true });
+    })).toEqual({ usesRemoteProjection: true, readOnly: false });
   });
 
   it('keeps Play read-only even when the local RuntimeUiGraph is present', () => {

@@ -31,9 +31,10 @@
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose).
 
 import { describe, expect, it } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
+import { Entity, World } from '@forgeax/engine-ecs';
 import { Name, Transform } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { SceneInstance } from '@forgeax/engine-render';
 import {
   createDiskIo,
   type DiskIoDeps,
@@ -550,13 +551,23 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes gu
     });
     const { deps, ctx } = makeDeps({ fetch: net.fetch, fetchWithTimeout: net.fetchWithTimeout });
     ctx.currentSceneId = 'shoot';
+    ctx.currentSceneGuid = 'old-scene-guid';
+    ctx.loadedInlineAssetFloor = 3;
+    ctx.loadedInlineAssets = [];
+    ctx.loadedEntityFloor = 7;
+    ctx.isDirty = true;
     const io = createDiskIo(deps);
     const ok = await io.doLoadDocFromDisk();
     expect(ok).toBe(false); // loadSceneByGuid fails on the headless (null) world
     expect(net.fetchTimeoutCalls.length).toBe(1);
     expect(net.fetchTimeoutCalls[0]).toContain(encodeURIComponent('/games/g1/scene.pack.json'));
-    // A failed engine load must not publish a GUID for a scene that is not live.
-    expect(ctx.currentSceneGuid).toBeNull();
+    // A failed engine load must preserve the old live-scene identity and safety
+    // floors; load staging must not leave a half-reset document behind.
+    expect(ctx.currentSceneGuid).toBe('old-scene-guid');
+    expect(ctx.loadedInlineAssetFloor).toBe(3);
+    expect(ctx.loadedInlineAssets).toEqual([]);
+    expect(ctx.loadedEntityFloor).toBe(7);
+    expect(ctx.isDirty).toBe(true);
   });
 });
 
@@ -667,6 +678,76 @@ describe('loadSceneByGuid — headless world short-circuits (AC-02)', () => {
     } finally {
       console.warn = previousWarn;
     }
+  });
+});
+
+describe('loadSceneByGuid — staged replacement preserves nested descendants', () => {
+  it('does not sweep named members below an unnamed nested-scene carrier', async () => {
+    const world = new World();
+    const registry = new AssetRegistry({} as never);
+    const childGuid = '33333333-3333-4333-8333-333333333333';
+    const sceneGuid = '44444444-4444-4444-8444-444444444444';
+    const childScene = {
+      kind: 'scene' as const,
+      entities: [
+        { localId: 0 as never, components: { Name: { value: 'NestedRoot' }, Transform: { pos: [0, 0, 0] } } },
+        {
+          localId: 1 as never,
+          components: {
+            Name: { value: 'NestedNamedChild' },
+            Transform: { pos: [1, 0, 0] },
+            ChildOf: { parent: 0 },
+          },
+        },
+      ],
+    };
+    const scene = {
+      kind: 'scene' as const,
+      entities: [
+        { localId: 0 as never, components: { Name: { value: 'NewRoot' }, Transform: { pos: [0, 0, 0] } } },
+      ],
+      mounts: [{ localId: 1 as never, source: childGuid, memberFirst: 2 as never, memberCount: 2, parent: 0 as never }],
+    };
+    expect(registry.catalog(childGuid, childScene).ok).toBe(true);
+    expect(registry.catalog(sceneGuid, scene).ok).toBe(true);
+
+    const old = world.spawn(
+      { component: Name, data: { value: 'OldSceneRoot' } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
+    );
+    expect(old.ok).toBe(true);
+    if (!old.ok) return;
+
+    const ctx = createScenePersistenceContext();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneEntities = [old.value];
+    const gateway = makeFakeGateway({ world, registry }).gateway;
+    const io = createDiskIo({
+      ctx,
+      gateway,
+      fetch: async () => new Response('{}', { status: 200 }),
+      fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+      resolveGamePath: (rel) => `/games/g1/${rel}`,
+      notifyDocChanged: () => {},
+    });
+
+    expect(await io.loadSceneByGuid(sceneGuid)).toBe(true);
+    expect(world.get(old.value, Entity).ok).toBe(false);
+    expect(ctx.currentSceneEntities).toHaveLength(1);
+    const newRoot = ctx.currentSceneEntities[0]!;
+    expect(world.get(newRoot, Name)).toMatchObject({ ok: true, value: { value: 'NewRoot' } });
+
+    const descendants = [...world.iterDescendants(newRoot)];
+    const nestedAnchor = descendants.find((entity) => world.get(entity, SceneInstance).ok);
+    expect(nestedAnchor).toBeDefined();
+    if (nestedAnchor === undefined) return;
+    const instance = world.get(nestedAnchor, SceneInstance);
+    expect(instance.ok).toBe(true);
+    if (!instance.ok) return;
+    const members = [...instance.value.mapping].filter((entity) => entity !== 0xffffffff);
+    expect(members).toHaveLength(2);
+    expect(members.every((entity) => world.get(entity as never, Entity).ok)).toBe(true);
+    expect(members.some((entity) => world.get(entity as never, Name).ok && world.get(entity as never, Name).unwrap().value === 'NestedNamedChild')).toBe(true);
   });
 });
 

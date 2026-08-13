@@ -362,6 +362,119 @@
   min-width: 28px;
 }
 .cb-nav-btn:disabled { opacity: 0.3; cursor: default; }
+/* ── Address bar (breadcrumb + editable path), desktop-file-manager parity ── */
+/* Fixed-height slot shared by both states: swapping breadcrumb <-> input never
+ * changes the row height, so the CB never reflows/flickers on edit. 26px keeps
+ * the slot within the 28px (h-7) toolbar buttons, so the toolbar stays put. */
+.cb-address-slot {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  height: 26px;
+}
+/* The whole strip is the "click to type a path" hit target; the breadcrumb
+ * shrinks to its content so the blank remainder stays clickable. */
+.cb-address {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  overflow: hidden;
+  cursor: text;
+  border-radius: 4px;
+}
+.cb-address:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--color-border-strong, #555);
+}
+/* Override the component's own flex-1 so it no longer eats the whole row. */
+.cb-address .cb-address-crumb {
+  flex: 0 1 auto;
+}
+/* Each directory name is its own clickable item with a distinct hover, so the
+ * per-segment target reads clearly (no whole-bar background). */
+.cb-crumb-item:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--color-text-primary, #fff);
+}
+.cb-crumb-current {
+  color: var(--color-text-primary, #fff);
+  font-weight: 600;
+}
+/* Native input tuned to fill the slot exactly — no extra vertical box. */
+.cb-address-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: normal;
+  color: var(--color-text-primary, #fff);
+  background: var(--color-background-base, #1e1e1e);
+  border: 1px solid var(--color-border-strong, #555);
+  border-radius: 4px;
+  outline: none;
+  appearance: none;
+}
+.cb-address-input::placeholder {
+  color: var(--color-text-tertiary, #888);
+}
+.cb-address-input:focus {
+  border-color: var(--color-brand-line, rgba(212, 255, 72, 0.55));
+}
+/* Per-level chevron: plain divider by default, dropdown trigger when the
+ * level has subfolders. */
+.cb-crumb-chevron {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.cb-crumb-chevron-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  width: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-text-tertiary, #888);
+  cursor: pointer;
+  appearance: none;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+/* Rotate the icon, NOT the button: the trigger's bounding box must stay fixed
+ * so the popper anchored to it does not reposition (which reads as a jitter). */
+.cb-crumb-chevron-btn > svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.12s ease;
+}
+.cb-crumb-chevron-btn:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--color-text-primary, #fff);
+}
+.cb-crumb-chevron-btn[data-state='open'] {
+  color: var(--color-text-primary, #fff);
+}
+.cb-crumb-chevron-btn[data-state='open'] > svg {
+  transform: rotate(90deg);
+}
+.cb-crumb-menu {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.cb-crumb-menu [data-active] {
+  color: var(--color-text-primary, #fff);
+  font-weight: 600;
+}
 /* ── Filter bar ── */
 .cb-filter-bar {
   display: flex;

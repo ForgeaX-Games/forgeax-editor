@@ -143,39 +143,40 @@ describe('Editor Page contribution', () => {
       name: 'IM_Test',
       payload: createDefaultInputMapPayload(),
     });
+    const pageSnapshot = {
+      generation: 0,
+      activeKey: encodedKey,
+      instances: [{
+        key,
+        encodedKey,
+        typeId: '@forgeax/editor#page/input-map',
+        context: {},
+        resource: {
+          canonicalId: guid,
+          uri: `forgeax-asset://${guid}`,
+          displayPath: 'IM_Test',
+          kind: 'input-map',
+          metadata: {
+            asset: {
+              guid,
+              kind: 'input-map',
+              name: 'IM_Test',
+              payload: createDefaultInputMapPayload(),
+              packPath: 'assets/IM_Test.pack.json',
+            },
+          },
+        },
+        openedAt: 0,
+        closable: true,
+      }],
+    };
     const host = {
       pages: {
         open: async () => key,
         close: async (pageKey: unknown, request: unknown) => {
           closed.push({ key: pageKey, request });
         },
-        getSnapshot: () => ({
-          generation: 0,
-          activeKey: encodedKey,
-          instances: [{
-            key,
-            encodedKey,
-            typeId: '@forgeax/editor#page/input-map',
-            context: {},
-            resource: {
-              canonicalId: guid,
-              uri: `forgeax-asset://${guid}`,
-              displayPath: 'IM_Test',
-              kind: 'input-map',
-              metadata: {
-                asset: {
-                  guid,
-                  kind: 'input-map',
-                  name: 'IM_Test',
-                  payload: createDefaultInputMapPayload(),
-                  packPath: 'assets/IM_Test.pack.json',
-                },
-              },
-            },
-            openedAt: 0,
-            closable: true,
-          }],
-        }),
+        getSnapshot: () => pageSnapshot,
         subscribe: () => () => {},
       },
       resourceEditors: {
@@ -185,8 +186,13 @@ describe('Editor Page contribution', () => {
     const extension = createEditorPageExtension(() => null);
     const dispose = await extension.setup?.({ host } as never);
     try {
+      const initialAsset = getActiveEditorAsset();
+      expect(getActiveEditorAsset()).toBe(initialAsset);
+
       renameInputMapStaging(guid, 'IM_Player');
-      expect(getActiveEditorAsset()?.name).toBe('IM_Player');
+      const renamedAsset = getActiveEditorAsset();
+      expect(renamedAsset?.name).toBe('IM_Player');
+      expect(renamedAsset).not.toBe(initialAsset);
 
       broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'deleted', guid });
       await new Promise((resolve) => { setTimeout(resolve, 0); });

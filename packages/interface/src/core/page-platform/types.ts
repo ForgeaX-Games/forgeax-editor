@@ -12,6 +12,7 @@ import type {
 } from '@forgeax/types';
 import type { SerializedDockview } from 'dockview';
 import type { ReactNode } from 'react';
+import type { DetachedWindowCapability } from '../../lib/platform';
 
 export interface PanelRenderContext {
   readonly pageKey: PageKey;
@@ -27,6 +28,8 @@ export type PanelRuntime =
 export interface PanelTypeRegistration {
   readonly id: QualifiedPanelTypeId;
   readonly runtime: PanelRuntime;
+  /** Complete detached-window target factory. Missing means dock-only. */
+  readonly windowing?: DetachedWindowCapability<PanelRenderContext>;
 }
 
 export interface PagePanelPlacement {

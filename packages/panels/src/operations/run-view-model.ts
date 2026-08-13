@@ -5,11 +5,12 @@
 // source when they have one; the empty source keeps the panel mountable before
 // the host finishes booting.
 
-import type {
-  AuthoredCommit,
-  CommandError,
-  OperationRun,
-  RunProgress,
+import {
+  OperationRunSchema,
+  type AuthoredCommit,
+  type CommandError,
+  type OperationRun,
+  type RunProgress,
 } from '@forgeax/editor-product';
 
 export type OperationCenterAction = 'retry' | 'cancel' | 'undo' | 'inspect' | 'reveal-source';
@@ -91,6 +92,57 @@ export interface OperationProjectionSource {
 
 export interface OperationCenterRow extends OperationRunFactProjection {
   readonly commit?: AuthoredCommit;
+}
+
+export interface OperationRunArtifactError {
+  readonly code: 'operation-run-invalid';
+  readonly expected: 'a schema-valid OperationRun export';
+  readonly issues: readonly string[];
+}
+
+export type OperationRunArtifactProjection =
+  | { readonly row: OperationRunArtifactRow }
+  | { readonly error: OperationRunArtifactError };
+
+export interface OperationRunArtifactRow extends OperationCenterRow {
+  readonly cancellable: boolean;
+  readonly retryable: boolean;
+}
+
+/**
+ * Validate one imported artifact at the existing product boundary and derive
+ * the same generic facts used by the live Operation Center. This is a read-only
+ * file boundary: it never registers, persists, or dispatches the imported run.
+ */
+export function projectOperationRunArtifact(value: unknown): OperationRunArtifactProjection {
+  const parsed = OperationRunSchema.safeParse(value);
+  if (!parsed.success) {
+    return Object.freeze({
+      error: Object.freeze({
+        code: 'operation-run-invalid' as const,
+        expected: 'a schema-valid OperationRun export' as const,
+        issues: Object.freeze([...parsed.error.issues]),
+      }),
+    });
+  }
+
+  const row = buildOperationCenterRows([parsed.data])[0];
+  if (row === undefined) {
+    return Object.freeze({
+      error: Object.freeze({
+        code: 'operation-run-invalid' as const,
+        expected: 'a schema-valid OperationRun export' as const,
+        issues: Object.freeze(['OperationRun projection produced no row.']),
+      }),
+    });
+  }
+  return Object.freeze({
+    row: Object.freeze({
+      ...row,
+      cancellable: parsed.data.cancellable,
+      retryable: parsed.data.retryable,
+    }) as OperationRunArtifactRow,
+  });
 }
 
 function inputSubjectId(input: unknown): string | undefined {

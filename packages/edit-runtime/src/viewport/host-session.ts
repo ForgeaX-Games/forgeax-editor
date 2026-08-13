@@ -21,7 +21,14 @@ import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { parseScenePayload } from '@forgeax/engine-assets-runtime';
 import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import type { SceneAsset } from '@forgeax/engine-types';
-import { createRuntimeUiGraph, entComponent, normalizeAnimationPlayerSceneAsset, panelBridge, publishMeshStats } from '@forgeax/editor-core';
+import {
+  bindSceneInstanceAnimationTargets,
+  createRuntimeUiGraph,
+  entComponent,
+  normalizeAnimationPlayerSceneAsset,
+  panelBridge,
+  publishMeshStats,
+} from '@forgeax/editor-core';
 import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDirtyPolicy, SelectedAsset } from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
@@ -389,7 +396,7 @@ export function createHostSession(deps: HostSessionDeps): {
    * Ordered exactly as the original bootEditor: authored-scene load
    * -> run-lifecycle -> environment skylight -> asset/resolver preload -> mesh-stats
    * publish -> preview-skin -> cross-window sync -> disk-watch -> flush beacons.
-   * Returns the ▶/■ pair so ViewportComponent can wire the ViewportChrome actions.
+   * Returns the ▶/■ pair so the Runtime operation transport can serve PanelShell.
    */
   async function initHostSession(ctx: HostSessionContext): Promise<HostSession> {
     const {
@@ -1183,11 +1190,11 @@ export function createHostSession(deps: HostSessionDeps): {
       if (!sceneInst.ok || !sceneInst.value) return;
       let skinEnt: unknown = null;
       for (const ent of sceneInst.value.mapping) {
-        if (!ent) continue;
+        if (ent === undefined || ent === null || Number(ent) === 0xffffffff) continue;
         const r = engine.get(eid(ent), Skin);
         if (r.ok) { skinEnt = ent; break; }
       }
-      if (!skinEnt) return;
+      if (skinEnt === null) return;
       const defaultName = skin.clipDefault ?? 'idle';
       const clipGuids = skin.clipGuids ?? [];
       if (clipGuids.length === 0) return;
@@ -1197,7 +1204,8 @@ export function createHostSession(deps: HostSessionDeps): {
       if (!clipRes.ok) { console.warn('[editor] preview skin clip load failed:', (clipRes.error as { code?: string })?.code); return; }
       if (getSceneId() !== slug) return;
       const clipHandle = engine.allocSharedRef('AnimationClip', clipRes.value);
-      engine.addComponent(eid(skinEnt), {
+      const playerEntity = eid(skinRoot);
+      engine.addComponent(playerEntity, {
         component: AnimationPlayer,
         data: {
           // clips is array<shared<AnimationClip>,4>; slots 1-3 are the engine's
@@ -1211,6 +1219,21 @@ export function createHostSession(deps: HostSessionDeps): {
           looping: true,
         },
       });
+      const binding = bindSceneInstanceAnimationTargets(world as never, playerEntity, {
+        player: playerEntity,
+        mutation: engine,
+      });
+      if (binding.failures.length > 0) {
+        console.warn('[editor] preview skin animation binding failed:', binding.failures);
+        const cleanup = engine.despawnScene(eid(skinRoot));
+        if (!cleanup.ok) {
+          console.error('[editor] preview skin animation rollback failed:', {
+            root: skinRoot,
+            error: cleanup.error,
+          });
+        }
+        return;
+      }
       const clipDurationSec = Math.max(0.001, Number((clipRes.value as { duration?: number }).duration) || 1);
       console.log(`[editor] preview skin loaded for ${slug} (default clip via guid ${clipGuids[0]!.slice(0, 8)}, ${defaultName})`);
 
@@ -1218,7 +1241,7 @@ export function createHostSession(deps: HostSessionDeps): {
         const { onClipControl, getClipControl } = await import('@forgeax/editor-core');
         const applyClip = (): void => {
           const c = getClipControl();
-          const cur = engine.get(eid(skinEnt), AnimationPlayer) as { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
+          const cur = engine.get(playerEntity, AnimationPlayer) as { ok: boolean; value?: { times?: Float32Array; speeds?: Float32Array } };
           if (!cur.ok || !cur.value) return;
           const speeds = Float32Array.from(cur.value.speeds ?? new Float32Array([1, 1, 1, 1]));
           speeds[0] = c.speed;
@@ -1228,7 +1251,7 @@ export function createHostSession(deps: HostSessionDeps): {
             times[0] = Math.max(0, Math.min(1, c.phase)) * clipDurationSec;
             data.times = times;
           }
-          engine.set(eid(skinEnt), AnimationPlayer, data);
+          engine.set(playerEntity, AnimationPlayer, data);
         };
         onClipControl(applyClip);
         applyClip();

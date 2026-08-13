@@ -123,4 +123,28 @@ describe('buildTabContextMenuItems', () => {
     );
     expect(items.some((x) => typeof x === 'object' && x.label === 'Hide Panel Title Bar')).toBe(false);
   });
+
+  it('declared windowing capability contributes the localized pop-out action', () => {
+    let opened = 0;
+    const items = buildTabContextMenuItems(
+      'DockShell',
+      'chat',
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      { onPopOut: () => { opened += 1; } },
+    );
+    const popOut = items.find((item): item is { label: string; action: () => void } =>
+      typeof item === 'object' && item.label === 'Open in New Window');
+    expect(popOut).toBeDefined();
+    popOut?.action();
+    expect(opened).toBe(1);
+  });
+
+  it('omits the pop-out action when no windowing capability is declared', () => {
+    const items = buildTabContextMenuItems('DockShell', 'ep:inspector', () => {});
+    expect(items.some((item) =>
+      typeof item === 'object' && item.label === 'Open in New Window')).toBe(false);
+  });
 });

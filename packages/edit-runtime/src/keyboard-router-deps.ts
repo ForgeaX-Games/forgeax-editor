@@ -11,8 +11,8 @@
 //   - studio (packages/studio/src/panels/editorRenderers.tsx)
 // Previously it lived only in apps/standalone/main.tsx; studio's editorRenderers.tsx
 // (which "mirrors" standalone) silently omitted it, so in the studio host the G /
-// Esc display-toggle keyboard path was dead — the only pop-out-to-edit path left
-// was the GameOverlay hover button. Extracting here removes that divergence.
+// Esc display-toggle keyboard path was dead. Extracting here removes that
+// divergence without requiring operation controls inside the game view.
 //
 // NOTE: this module deliberately does NOT import @forgeax/interface — it returns a
 // structurally-typed object and each host casts it to interface's KeyboardRouterDeps

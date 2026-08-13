@@ -44,6 +44,9 @@ export interface CBDerivedView {
   scopedAssets: { asset: CBAsset; rel: string }[];
   relByAssetGuid: Map<string, string>;
   diskFiles: CBFile[];
+  /** Every directory path in the game (asset + disk), sorted. Drives the
+   *  address-bar breadcrumb dropdowns, which list a level's subfolders. */
+  allDirs: string[];
   viewMode: CBViewMode2;
   sourceTree: SourceTreeNode[];
   foldersInPath: CBFolder[];
@@ -381,6 +384,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     scopedAssets,
     relByAssetGuid,
     diskFiles,
+    allDirs: packDirs,
     viewMode,
     sourceTree,
     foldersInPath,

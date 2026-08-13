@@ -1,8 +1,8 @@
 /**
- * VersionBadge — forgeax-studio version chip pinned to bottom-left.
+ * VersionBadge — forgeax-studio version chip pinned to bottom-right.
  *
- * Always-visible: priority=1000 anchors it as the leftmost chip of the
- * GlobalStatusBar (Blender-style bottom strip). Click → opens CHANGELOG
+ * Always-visible: its dedicated slot is visually ordered at the far right of
+ * the GlobalStatusBar (Blender-style bottom strip). Click → opens CHANGELOG
  * in a new tab (the repo file path the user can also `cat` locally).
  * Hover → tooltip shows commit sha + date + branch.
  *
@@ -91,9 +91,9 @@ export function VersionChip() {
   );
 }
 
-/** ADR-0030 §2.2 — version badge as a `custom` status-item. Pinned as the
- *  leftmost permanent chip (priority 1000 > FPS/slug/agent's ~50-200), so the
- *  carousel rotation can never replace it. */
+/** ADR-0030 §2.2 — version badge as a `custom` status-item. The left slot is
+ *  visually ordered last by GlobalStatusBar.css, preserving a dedicated,
+ *  non-rotating far-right version position. */
 export const versionStatusItem: StatusItemContribution = {
   kind: 'status-item',
   id: 'forgeax-version',

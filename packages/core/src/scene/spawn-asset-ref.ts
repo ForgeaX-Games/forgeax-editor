@@ -4,7 +4,9 @@
  */
 import { resolveComponent } from '@forgeax/engine-ecs';
 import { walkMaterialPassesOverSharedRefs } from '@forgeax/engine-assets-runtime';
-import { gateway, broadcastAssetsChanged, instantiateSceneRefUnderWorld, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
+import { gateway, broadcastAssetsChanged, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
+import { instantiateSceneRefUnderWorldDetailed } from '../store/scene-persistence';
+import type { SceneInstantiationCleanup, SceneInstantiationError } from '../store/persistence/disk-io';
 import { recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { planAssetPlacement } from '../assets/asset-placement-plan';
 import { registerApplier } from '../io/appliers';
@@ -153,98 +155,6 @@ async function resolveSceneSubAssetGuid(ref: DragAssetRef): Promise<string | nul
   }
 }
 
-/**
- * After a SceneInstance mount, ensure every Skin entity has an AnimationPlayer
- * whose four direct-play slot columns have one shared length. This covers both
- * players we add for authoring convenience and players baked by an importer:
- * imported clips can arrive with `clips=[handle]` while the runtime columns are
- * still empty. The collect fold (`foldMountOverrides`) captures the runtime
- * component repair as a MountOverride automatically on save.
- */
-function autoAddAnimationPlayerToSkinEntities(sceneInstanceRoot: number): void {
-  try {
-    const w = gateway.doc.world as unknown as {
-      getSceneInstanceState(root: unknown): { ok: boolean; value?: { entityToLocalId: Map<unknown, unknown> } };
-      get(entity: unknown, token: unknown): { ok: boolean; value?: unknown };
-      addComponent(entity: unknown, data: { component: unknown; data: unknown }): { ok: boolean };
-      set(entity: unknown, token: unknown, data: Record<string, unknown>): { ok: boolean };
-    };
-    if (!w) return;
-
-    const skinToken = resolveComponent('Skin');
-    const animToken = resolveComponent('AnimationPlayer');
-    if (!skinToken || !animToken) return;
-
-    const stateRes = w.getSceneInstanceState(sceneInstanceRoot);
-    if (!stateRes.ok || !stateRes.value) return;
-
-    for (const member of stateRes.value.entityToLocalId.keys()) {
-      const hasSkin = w.get(member, skinToken);
-      if (!hasSkin.ok) continue;
-      const hasAnim = w.get(member, animToken);
-      if (hasAnim.ok) {
-        const player = (hasAnim.value ?? {}) as Record<string, unknown>;
-        const clips = player.clips as { length?: unknown } | undefined;
-        const count = typeof clips?.length === 'number' ? clips.length : 0;
-        const times = normalizeAnimationSlots(player.times, count, 0);
-        const weights = normalizeAnimationSlots(player.weights, count, 1);
-        const speeds = normalizeAnimationSlots(player.speeds, count, 1);
-        const timesLength = slotLength(player.times);
-        const weightsLength = slotLength(player.weights);
-        const speedsLength = slotLength(player.speeds);
-        if (timesLength !== count || weightsLength !== count || speedsLength !== count) {
-          const r = w.set(member, animToken, { times, weights, speeds });
-          if (r.ok) {
-            console.info('[spawn-asset] normalized AnimationPlayer slots on Skin entity', member, {
-              clips: count,
-              times: times.length,
-              weights: weights.length,
-              speeds: speeds.length,
-            });
-          }
-        }
-        continue;
-      }
-
-      const r = w.addComponent(member, {
-        component: animToken,
-        data: {
-          // An auto-created player has no authored clip yet. Keep all four
-          // parallel slot columns at length 0; writing weights/speeds with
-          // four defaults while clips/times stay empty creates the guarded
-          // 0/0/4/4 mismatch on the first world.update().
-          clips: [],
-          times: new Float32Array(0),
-          weights: new Float32Array(0),
-          speeds: new Float32Array(0),
-          paused: false,
-          looping: true,
-        },
-      });
-      if (r.ok) {
-        console.info('[spawn-asset] auto-added AnimationPlayer to Skin entity', member);
-      }
-    }
-  } catch (e) {
-    console.warn('[spawn-asset] autoAddAnimationPlayerToSkinEntities failed:', e);
-  }
-}
-
-function slotLength(value: unknown): number {
-  const length = (value as { length?: unknown } | undefined)?.length;
-  return typeof length === 'number' ? length : 0;
-}
-
-function normalizeAnimationSlots(value: unknown, count: number, fallback: number): Float32Array {
-  const result = new Float32Array(count);
-  const source = value as ArrayLike<unknown> | undefined;
-  for (let i = 0; i < count; i++) {
-    const next = source?.[i];
-    result[i] = typeof next === 'number' && Number.isFinite(next) ? next : fallback;
-  }
-  return result;
-}
-
 type SceneMountCleanup =
   | { attempted: false }
   | { attempted: true; ok: true; wrapper: EntityHandle }
@@ -252,8 +162,9 @@ type SceneMountCleanup =
 
 type SceneMountFailure = {
   ok: false;
-  hint: string;
+  failure: SceneInstantiationError;
   cleanup: SceneMountCleanup;
+  instantiationCleanup: SceneInstantiationCleanup;
 };
 
 /** Add a whole imported GLB/FBX to the scene as a NESTED SceneInstance mount:
@@ -282,12 +193,16 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string, requestId: 
   if (wrapperHandle === undefined) {
     return {
       ok: false,
-      hint: 'could not create the SceneInstance wrapper entity',
+      failure: {
+        code: 'scene-wrapper-spawn-failed',
+        hint: 'could not create the SceneInstance wrapper entity',
+      },
       cleanup: { attempted: false },
+      instantiationCleanup: { attempted: false },
     };
   }
-  const root = await instantiateSceneRefUnderWorld(sceneGuid, wrapperHandle as unknown as number);
-  if (root === null) {
+  const instantiated = await instantiateSceneRefUnderWorldDetailed(sceneGuid, wrapperHandle as unknown as number);
+  if (!instantiated.ok) {
     let cleanupFacts: SceneMountCleanup;
     try {
       const cleanup = gateway.dispatch({ kind: 'destroyEntity', entity: wrapperHandle }, 'ai');
@@ -307,13 +222,12 @@ async function spawnGlbSceneAsMount(sceneGuid: string, name: string, requestId: 
     }
     return {
       ok: false,
-      hint: cleanupFacts.attempted && cleanupFacts.ok
-        ? `could not load or instantiate scene asset ${sceneGuid}; the provisional wrapper was rolled back`
-        : `could not load or instantiate scene asset ${sceneGuid}; wrapper cleanup failed and requires recovery`,
+      failure: instantiated.error,
       cleanup: cleanupFacts,
+      instantiationCleanup: instantiated.cleanup,
     };
   }
-  autoAddAnimationPlayerToSkinEntities(root as unknown as number);
+  const root = instantiated.root;
   notifyDocChanged();
   broadcastAssetsChanged();
   console.info('[CB:import] spawn.scene-mount', { sceneGuid, name, wrapper: wrapperHandle, root });
@@ -349,14 +263,28 @@ registerApplier('session', 'addSceneAssetToScene', (op) => {
       if (result.ok) {
         return { ok: true, result: { requestId, sceneGuid, name: label, wrapper: result.wrapper, root: result.root } };
       }
+      const nestedCleanupOk = !result.instantiationCleanup.attempted || result.instantiationCleanup.ok;
+      const cleanupRecovered = result.cleanup.attempted && result.cleanup.ok && nestedCleanupOk;
       return {
         ok: false,
         error: {
           code: 'scene-mount-failed',
-          hint: result.hint,
-          current: { requestId, sceneGuid, name: label, cleanup: result.cleanup },
-          retryable: result.cleanup.attempted && result.cleanup.ok,
-          recoveryActions: result.cleanup.attempted && result.cleanup.ok ? [] : ['inspect provisional wrapper and retry cleanup'],
+          hint: result.failure.hint,
+          cause: {
+            code: result.failure.code,
+            hint: result.failure.hint,
+            ...(result.failure.detail === undefined ? {} : { details: result.failure.detail }),
+          },
+          current: {
+            requestId,
+            sceneGuid,
+            name: label,
+            failure: result.failure,
+            cleanup: result.cleanup,
+            instantiationCleanup: result.instantiationCleanup,
+          },
+          retryable: cleanupRecovered,
+          recoveryActions: cleanupRecovered ? [] : ['inspect provisional wrapper and retry cleanup'],
         },
       };
     })

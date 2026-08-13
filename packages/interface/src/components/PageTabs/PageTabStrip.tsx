@@ -16,6 +16,7 @@ import {
   FolderSearch,
   Minus,
   Pin,
+  Plus,
   Save,
   X,
   type LucideIcon,
@@ -29,6 +30,7 @@ import {
   type PageMenuItem,
 } from '../../core/page-platform';
 import { unsavedChangesDialog } from '../../lib/dialog';
+import { lucideIconOrBox } from '../../lib/lucide-icon';
 import { iconForPage } from '../../lib/page-tab-icons';
 import { useTranslation } from '@/i18n';
 import {
@@ -38,6 +40,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { SearchableMenu, type SearchableMenuItem } from '@/components/ui/SearchableMenu';
+import { openablePageTypes } from './openablePageTypes';
 import './PageTabStrip.css';
 
 // Lucide glyphs for controller-contributed menu items (kebab name → component),
@@ -84,6 +88,16 @@ export function PageTabStrip(): ReactElement | null {
   const host = useHost();
   const { t } = useTranslation();
   const snapshot = useSyncExternalStore(host.pages.subscribe, host.pages.getSnapshot, host.pages.getSnapshot);
+  const registry = useSyncExternalStore(
+    host.pageRegistry.subscribe,
+    host.pageRegistry.getSnapshot,
+    host.pageRegistry.getSnapshot,
+  );
+  const activityCatalog = useSyncExternalStore(
+    host.activities.subscribe,
+    host.activities.getSnapshot,
+    host.activities.getSnapshot,
+  );
 
   const listRef = useRef<HTMLDivElement>(null);
   const dragKeyRef = useRef<string | null>(null);
@@ -95,6 +109,23 @@ export function PageTabStrip(): ReactElement | null {
   const [, setDirtyTick] = useState(0);
 
   const { instances, activeKey } = snapshot;
+  const openableTypes = openablePageTypes(registry);
+  const activityByPageType = new Map<string, (typeof activityCatalog.activities)[number]>();
+  for (const activity of activityCatalog.activities) {
+    if (activity.pageTypeId && !activityByPageType.has(activity.pageTypeId)) {
+      activityByPageType.set(activity.pageTypeId, activity);
+    }
+  }
+  const newPageItems: SearchableMenuItem[] = openableTypes.map((pageType) => ({
+    id: pageType.id,
+    label: pageType.title,
+    description: pageType.id,
+    keywords: [pageType.cardinality],
+    group: t('pageTabs.availableTypes'),
+    icon: activityByPageType.has(pageType.id)
+      ? lucideIconOrBox(activityByPageType.get(pageType.id)?.icon)
+      : iconForPage({ typeId: pageType.id }),
+  }));
 
   const focus = useCallback((key: string) => void host.pages.focus(key).catch(() => {}), [host]);
 
@@ -266,6 +297,29 @@ export function PageTabStrip(): ReactElement | null {
             );
           })}
         </div>
+
+        <SearchableMenu
+          ariaLabel={t('pageTabs.newPage')}
+          searchPlaceholder={t('pageTabs.searchPageTypes')}
+          emptyText={openableTypes.length === 0
+            ? t('pageTabs.noOpenableTypes')
+            : t('pageTabs.noMatchingTypes')}
+          items={newPageItems}
+          onSelect={(item) => {
+            const pageType = openableTypes.find((candidate) => candidate.id === item.id);
+            if (pageType) void host.pages.open({ typeId: pageType.id }).catch(() => {});
+          }}
+          trigger={(
+            <button
+              type="button"
+              className="page-tab-btn page-tab-new no-motion-lift"
+              title={t('pageTabs.newPage')}
+              aria-label={t('pageTabs.newPage')}
+            >
+              <Plus className="page-tab-btn__icon" aria-hidden />
+            </button>
+          )}
+        />
 
         <div className="page-tab-actions">
           {overflowing && (

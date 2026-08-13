@@ -29,7 +29,6 @@ import { useHost } from '../../core/app-shell';
 import { usePanelRenderers } from '../DockShell/panelRenderers';
 import { FatalBanner } from '../StatusBar/FatalBanner';
 import { useShellStore } from '../../store';
-import { getWindowManager } from '../../lib/platform';
 import {
   getAnchor,
   subscribeAnchors,
@@ -213,7 +212,7 @@ export function SurfaceKeepAliveLayer(): ReactNode {
     // (play, debug) can add sibling branches without restructuring.
     if (kind !== 'edit') return <NoEditor kind={kind} />;
     return SceneEditor ? (
-      <div data-fx-slot="SceneEditor" style={{ display: 'contents' }}><SceneEditor viewportOnly={true} /></div>
+      <div data-fx-slot="SceneEditor" style={{ display: 'contents' }}><SceneEditor /></div>
     ) : (
       <NoEditor kind="edit" />
     );
@@ -243,23 +242,6 @@ export function SurfaceKeepAliveLayer(): ReactNode {
               viewport. FatalBanner is fixed to 'edit' accordingly. */}
           <FatalBanner source="edit" />
           {kind === 'edit' && viewportFloating ? null : renderSurface(kind)}
-          {kind === 'edit' && !viewportFloating && getWindowManager().canDetach() ? (
-            <button
-              type="button"
-              className="fx-viewport-popout"
-              data-testid="surface-popout-viewport"
-              title="Pop viewport out to a window"
-              aria-label="Pop viewport out to a window"
-              onClick={() => {
-                void useShellStore.getState().detachSurface(
-                  { kind: 'panel', id: 'viewport' },
-                  { title: 'Viewport', width: 1280, height: 800 },
-                );
-              }}
-            >
-              ⧉
-            </button>
-          ) : null}
         </div>
       ))}
     </div>

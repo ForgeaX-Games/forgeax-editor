@@ -21,18 +21,16 @@
 //   "engine boots exactly once" — the literal AC-04 invariant. The standalone
 //   host mounts this once; edit-runtime's main.tsx also mounts it once.
 //
-// WHY IT OWNS ITS DOM
-//   In-process there is no index.html #app/#ui scaffold, so the component renders
-//   its own layered container: a full-size <canvas> under a click-through overlay
-//   layer that hosts ViewportChrome (ViewportBar / GameOverlay). Same pointer-
-//   events discipline as edit-runtime/index.html (#ui pointer-events:none;
-//   interactive chrome opts back in).
+// WHY IT OWNS ONLY THE RENDER SURFACE
+//   In-process there is no index.html #app scaffold, so the component provides
+//   the full-size canvas container itself. Product controls are intentionally
+//   excluded: PanelShell owns the toolbar in every host and detached window.
 //
 // Anchors: plan-strategy S2 D8 (ViewportComponent = canvas+world+renderer+camera+
 // interaction, createApp moved), S4 R3 (net-zero world ctor), requirements C-1
 // (single world), AC-04 (engine boots once in host), AC-12 (active-camera cut).
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Transform } from '@forgeax/engine-scene';
 import {
   Camera,
@@ -143,7 +141,6 @@ import {
 import { registerEditorVisualHost } from './visual-source';
 import { _syncDisplayMode, isAuxVisible } from './display-bus';
 import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
-import { ViewportChrome } from '../ViewportChrome';
 import {
   createInfiniteGridDiagnosticsProvider,
   validatePerspectiveFov,
@@ -424,10 +421,9 @@ export function ViewportComponent({
   selectedSceneGuid,
 }: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [fps, setFpsState] = useState(0);
-  // Deferred ▶/■ actions — wired once host-boot returns the run lifecycle. The
-  // chrome mounts immediately (usable even if WebGPU is slow); its callbacks
-  // resolve through this holder so they don't close over undefined references.
+  // Deferred ▶/■ actions are reached through the hosting PanelShell toolbar and
+  // the Runtime transport. This renderer surface deliberately owns no product
+  // controls, whether docked or detached.
   const actionsRef = useRef<BootFns>({ playSimulation: () => ({ ok: true }), stopSimulation: () => {} });
   useEffect(() => {
     if (bootStarted) return;
@@ -437,7 +433,7 @@ export function ViewportComponent({
     const container = containerRef.current;
     if (!container) return;
 
-    void bootViewport(container, actionsRef, setFpsState, {
+    void bootViewport(container, actionsRef, {
       slug: gameSlug,
       gameRoot,
       runtimeBinding,
@@ -468,29 +464,7 @@ export function ViewportComponent({
       ref={containerRef}
       className="ep-viewport-root"
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: '#16161a' }}
-    >
-      {/* The overlay layer for ViewportChrome. Click-through by default so
-          viewport clicks reach the canvas; interactive chrome opts back in. */}
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        <ViewportChrome
-          fps={fps}
-          // M3 (AC-02, D-11): ▶/■ go through the one gateway door as session ops.
-          // The play/stop appliers (registered at boot below) route back to
-          // actionsRef.current, so the button and an AI `gateway.dispatch({kind:'play'},
-          // 'ai')` are the same action. Defined here (the single callback source
-          // shared by ViewportBar + GameOverlay) so both surfaces dispatch uniformly.
-          onPlay={() => gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' }, 'human')}
-          onStop={() => gateway.dispatch({ kind: 'stop' })}
-          onToggleDisplay={() => {
-            const q = getViewportQuadrant();
-            // M4 T4-7 (G-6): route the G button through the one gateway door as a
-            // session op, so display toggle is ledger-visible + AI-equivalent.
-            gateway.dispatch({ kind: 'setDisplay', display: q.display === 'game' ? 'scene' : 'game' }, 'human');
-          }}
-          onControlGame={() => gateway.dispatch({ kind: 'grantGameControl' }, 'human')}
-        />
-      </div>
-    </div>
+    />
   );
 }
 
@@ -498,7 +472,6 @@ export function ViewportComponent({
 async function bootViewport(
   container: HTMLDivElement,
   actionsRef: React.MutableRefObject<BootFns>,
-  onFps: (fps: number) => void,
   gameSession: HostGameSession,
   isCurrentBoot: () => boolean,
 ): Promise<Viewport | null> {
@@ -1176,7 +1149,6 @@ async function bootViewport(
         // Reset the display while the play world is being handed over; the
         // browser-frame reporter remains the single FPS source for both modes.
         setFps(0);
-        onFps(0);
         vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = playWorld as World;
         canvas.focus({ preventScroll: true });
@@ -1187,7 +1159,6 @@ async function bootViewport(
       onRemotePlayStarted: () => {
         remotePlayFpsActive = true;
         setFps(0);
-        onFps(0);
         vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = undefined;
         canvasInput.revokeGame();
@@ -1197,7 +1168,6 @@ async function bootViewport(
       onRemotePlayFps: (fps) => {
         if (!remotePlayFpsActive) return;
         setFps(fps);
-        onFps(fps);
       },
       onPlayFailed: () => {
         remotePlayFpsActive = false;
@@ -1351,7 +1321,7 @@ async function bootViewport(
 
   // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
   // is ledger-visible + AI-equivalent, symmetric to play/stop. The router (and the
-  // ViewportBar / GameOverlay display buttons) dispatch it; the real quadrant mutation
+  // PanelShell toolbar and keyboard router dispatch it; the real quadrant mutation
   // lives here in edit-runtime (DAG downstream — core stays headless, RK-11).
   // The implementation above owns display and game-control registration too;
   // this comment keeps the historical M4 traceability anchor near the seam.
@@ -1422,8 +1392,7 @@ async function bootViewport(
   // leave the live carrier rendering while the FPS publisher never runs.
   registerTeardown(installFpsReport(
     (listener) => renderer.subscribeFrameEnd(listener),
-    onFps,
-    () => !remotePlayFpsActive,
+    { shouldPublish: () => !remotePlayFpsActive },
   ));
   editorApp.start();
   // Cross-realm M1 boundary: the Runtime owns Gateway/World/Registry and serves

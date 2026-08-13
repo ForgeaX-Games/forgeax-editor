@@ -1,6 +1,6 @@
 /**
- * HealthChip — the compact "latest health state" chip on the FAR RIGHT of the
- * status bar (statusbar.center, flex-end aligned).
+ * HealthChip — the compact "latest health state" chip that starts the
+ * right-aligned status cluster (statusbar.center).
  *
  * Replaces the old full-width HealthStatusBar strip: that strip's "latest line"
  * job collapses to this one chip (severity icon + truncated latest message +
@@ -74,8 +74,7 @@ export function HealthChip() {
 }
 
 /** ADR-0030 §2.2 — health chip as a `custom` status-item contribution. The
- *  'statusbar.center' slot is the flex spacer (content flex-end aligned) so
- *  this single chip pins to the far right of the status bar. */
+ *  'statusbar.center' slot starts the right-aligned footer status cluster. */
 export const healthStatusItem: StatusItemContribution = {
   kind: 'status-item',
   id: 'health.latest',

@@ -300,7 +300,10 @@
         "resizeFolderTree": "拖拽调整目录树宽度",
         "back": "后退",
         "forward": "前进",
-        "all": "全部"
+        "all": "全部",
+        "editPath": "点击输入路径",
+        "editPathPlaceholder": "输入文件夹路径并回车",
+        "openSubfolders": "{{name}} 的子文件夹"
       },
       "sourceTree": {
         "favorites": "收藏夹",

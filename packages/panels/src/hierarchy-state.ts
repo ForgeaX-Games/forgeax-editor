@@ -79,7 +79,12 @@ export function resolveHierarchyRuntimeAccess(input: {
   const usesRemoteProjection = !input.hasLocalRuntimeGraph && input.hasRemoteProjection;
   return {
     usesRemoteProjection,
-    readOnly: input.gatewayMode === 'play' || usesRemoteProjection,
+    // Remote projection is a DATA-SOURCE switch, not a write gate: mutation
+    // ops route to the carrier through dispatchActiveEditorOperation (the
+    // projection-client seam), so a projection-only shell — which the
+    // standalone editor's panel host always is — stays editable. Only Play
+    // is read-only.
+    readOnly: input.gatewayMode === 'play',
   };
 }
 

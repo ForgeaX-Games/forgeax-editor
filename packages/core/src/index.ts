@@ -18,6 +18,16 @@ export type {
 // reach them from the editor-core barrel.
 export type { EntityHandle, WorldType } from './scene/scene-types';
 export { normalizeAnimationPlayerSceneAsset } from './scene/animation-slot-sync';
+export {
+  bindAllSceneAnimationTargets,
+  bindSceneInstanceAnimationTargets,
+  type AnimationTargetBindingError,
+  type AnimationTargetBindingFailure,
+  type AnimationTargetBindingMove,
+  type AnimationTargetBindingMutation,
+  type AnimationTargetBindingOptions,
+  type AnimationTargetBindingReport,
+} from './scene/animation-target-binding';
 
 export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy, SceneSwitchDirtyPolicy } from './types';
 export type { EditorOpLifecycle } from './types';

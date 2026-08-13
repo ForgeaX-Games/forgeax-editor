@@ -126,10 +126,12 @@ function ContentBrowserActionBar({
   executeCommand,
   nav,
   gameSlug,
+  allDirs,
 }: {
   executeCommand: (command: string) => void;
   nav: ReturnType<typeof useNavHistory>;
   gameSlug: string;
+  allDirs: string[];
 }): ReactNode {
   const { t } = useTranslation();
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
@@ -168,7 +170,7 @@ function ContentBrowserActionBar({
           {t('editor.contentBrowser.actions.saveAll')}
         </Button>
       </div>
-      <CBNavigationBar nav={nav} gameSlug={gameSlug} inline />
+      <CBNavigationBar nav={nav} gameSlug={gameSlug} allDirs={allDirs} inline />
     </div>
   );
 }
@@ -384,6 +386,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     scopedAssets,
     relByAssetGuid,
     diskFiles,
+    allDirs,
     viewMode,
     sourceTree,
     foldersInPath,
@@ -1431,7 +1434,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
 
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
-            <ContentBrowserActionBar executeCommand={executeContentBrowserCommand} nav={nav} gameSlug={gameSlug} />
+            <ContentBrowserActionBar executeCommand={executeContentBrowserCommand} nav={nav} gameSlug={gameSlug} allDirs={allDirs} />
             <div className="cb-content-body">
               <div className="cb-grid-column">
                 <CBFilterBar filter={filter} sort={sort} thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />

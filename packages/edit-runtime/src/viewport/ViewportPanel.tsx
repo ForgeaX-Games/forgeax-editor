@@ -31,6 +31,7 @@ import {
   FLY_SPEED_MIN,
   FOV_MAX,
   FOV_MIN,
+  VISUAL_QUALITY_PRESETS,
   dispatchActiveEditorOperation,
   entComponents,
   gateway,
@@ -52,6 +53,7 @@ import {
   useSceneList,
   useSelection,
   useViewportPreferences,
+  type VisualQualityPreset,
   type ViewportPreferencesPatch,
 } from '@forgeax/editor-core';
 import { getLocale, useTranslation, type Locale } from '@forgeax/editor-core/i18n';
@@ -191,13 +193,27 @@ function currentText(text: LocalizedText): string {
   return pickText(text, getLocale());
 }
 
-const VIEW_PRESETS = [
-  { id: 'game', key: '1', swatch: '#c2c8cf', name: L('游戏效果', 'Game Look'), desc: L('最终画面，隐藏辅助', 'Final frame, aids hidden'), active: true },
-  { id: 'material', key: '2', swatch: '#b58f5e', name: L('材质检查', 'Material'), desc: L('只看基础色 ≈ Unlit', 'Base color only ≈ Unlit'), active: false },
-  { id: 'structure', key: '3', swatch: '#61afef', name: L('结构检查', 'Structure'), desc: L('线框 ≈ Wireframe', 'Wireframe'), active: false },
-  { id: 'lighting', key: '4', swatch: '#9a9a9a', name: L('光照检查', 'Lighting'), desc: L('只看明暗关系', 'Read the values only'), active: false },
-  { id: 'perf', key: '5', swatch: '#e5484d', name: L('性能检查', 'Performance'), desc: L('开销热力图', 'Cost heatmap'), active: false },
-] as const;
+const VISUAL_QUALITY_META: Record<VisualQualityPreset, {
+  readonly swatch: string;
+  readonly name: LocalizedText;
+  readonly desc: LocalizedText;
+}> = {
+  draft: {
+    swatch: '#61afef',
+    name: L('草稿', 'Draft'),
+    desc: L('较低渲染开销，适合快速编辑', 'Lower render cost for fast editing'),
+  },
+  balanced: {
+    swatch: '#c2c8cf',
+    name: L('平衡', 'Balanced'),
+    desc: L('质量与性能的默认平衡', 'Default quality and performance balance'),
+  },
+  cinematic: {
+    swatch: '#b58f5e',
+    name: L('电影级', 'Cinematic'),
+    desc: L('高质量灯光与后处理', 'High-quality lighting and post-processing'),
+  },
+};
 
 type LayoutIconName = 'laySingle' | 'layCols' | 'layRows' | 'layoutGrid' | 'layTri';
 interface LayoutItem {
@@ -437,11 +453,13 @@ function ToolMenuTrigger({
   title,
   active = false,
   running = false,
+  testId,
   children,
 }: {
   title: string;
   active?: boolean;
   running?: boolean;
+  testId?: string;
   children: ReactNode;
 }): ReactNode {
   return (
@@ -449,7 +467,7 @@ function ToolMenuTrigger({
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <MenuTrigger title={title} active={active} running={running}>
+            <MenuTrigger title={title} active={active} running={running} data-testid={testId}>
               {children}
             </MenuTrigger>
           </DropdownMenuTrigger>
@@ -464,11 +482,13 @@ function PopPanel({
   title,
   align = 'center',
   width,
+  testId,
   children,
 }: {
   title: string;
   align?: 'start' | 'center' | 'end';
   width?: number;
+  testId?: string;
   children: ReactNode;
 }): ReactNode {
   return (
@@ -476,6 +496,7 @@ function PopPanel({
       className="fx-vp-pop"
       align={align}
       sideOffset={6}
+      data-testid={testId}
       style={width ? { minWidth: width } : undefined}
     >
       <div className="fx-vp-pop-title">{title}</div>
@@ -492,6 +513,7 @@ function PopItem({
   active = false,
   disabled = false,
   command,
+  testId,
   onClick,
   onClose,
 }: {
@@ -502,6 +524,7 @@ function PopItem({
   active?: boolean;
   disabled?: boolean;
   command?: string;
+  testId?: string;
   onClick?: () => void;
   onClose?: () => void;
 }): ReactNode {
@@ -510,6 +533,7 @@ function PopItem({
     <button
       type="button"
       className="fx-vp-pop-item"
+      data-testid={testId}
       data-active={active ? 'true' : 'false'}
       disabled={disabled}
       aria-disabled={disabled ? 'true' : undefined}
@@ -792,34 +816,41 @@ function SnapMenuControl(): ReactNode {
 }
 
 function CameraMenuControl(): ReactNode {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const prefs = useViewportPreferences();
   const perspective = prefs.projection === 'perspective';
+  const setView = (view: 'perspective' | 'top' | 'bottom' | 'left' | 'right' | 'front' | 'back'): void => {
+    void dispatchActiveEditorOperation({ kind: 'cameraSetView', view }, 'human');
+  };
 
   return (
     <DropdownMenu>
-      <ToolMenuTrigger title={perspective ? pickText(L('透视', 'Perspective'), locale) : pickText(L('正交', 'Orthographic'), locale)}>
+      <ToolMenuTrigger title={t(`editor.viewportView.${prefs.activeView}`)} testId="vp-view-label">
         <Camera size={15} />
       </ToolMenuTrigger>
-      <PopPanel title={pickText(L('相机 · 视角与镜头', 'Camera · view & lens'), locale)}>
+      <PopPanel title={pickText(L('相机 · 视角与镜头', 'Camera · view & lens'), locale)} testId="vp-view-dropdown">
         <PopItem
           icon={<Eye size={14} />}
+          testId="vp-view-item-perspective"
           label={pickText(L('透视', 'Perspective'), locale)}
           desc={pickText(L('3D 人眼视角', '3D eye view'), locale)}
-          active={perspective}
-          onClick={() => gateway.dispatch({ kind: 'cameraSetProjection', projection: 'perspective' }, 'human')}
+          active={prefs.activeView === 'perspective'}
+          onClick={() => setView('perspective')}
         />
         <PopItem
           icon={<Axis3d size={14} />}
           label={pickText(L('正交', 'Orthographic'), locale)}
           desc={pickText(L('平行投影 · 无透视形变', 'Parallel projection'), locale)}
-          active={!perspective}
-          onClick={() => gateway.dispatch({ kind: 'cameraSetProjection', projection: 'orthographic' }, 'human')}
+          active={prefs.activeView === 'orthographic'}
+          onClick={() => { void dispatchActiveEditorOperation({ kind: 'cameraSetProjection', projection: 'orthographic' }, 'human'); }}
         />
-        <PopItem icon={<Axis3d size={14} />} label={pickText(L('顶视', 'Top'), locale)} desc={pickText(L('正交 · 从上往下', 'Ortho · top-down'), locale)} disabled />
-        <PopItem icon={<Box size={14} />} label={pickText(L('前视', 'Front'), locale)} desc={pickText(L('正交 · 从前', 'Ortho · front'), locale)} disabled />
-        <PopItem icon={<Box size={14} />} label={pickText(L('侧视', 'Side'), locale)} desc={pickText(L('正交 · 从侧', 'Ortho · side'), locale)} disabled />
+        <PopItem icon={<Axis3d size={14} />} testId="vp-view-item-top" label={pickText(L('顶视', 'Top'), locale)} desc={pickText(L('正交 · 从上往下', 'Ortho · top-down'), locale)} active={prefs.activeView === 'top'} onClick={() => setView('top')} />
+        <PopItem icon={<Axis3d size={14} />} testId="vp-view-item-bottom" label={pickText(L('底视', 'Bottom'), locale)} desc={pickText(L('正交 · 从下往上', 'Ortho · bottom-up'), locale)} active={prefs.activeView === 'bottom'} onClick={() => setView('bottom')} />
+        <PopItem icon={<Box size={14} />} testId="vp-view-item-front" label={pickText(L('前视', 'Front'), locale)} desc={pickText(L('正交 · 从前', 'Ortho · front'), locale)} active={prefs.activeView === 'front'} onClick={() => setView('front')} />
+        <PopItem icon={<Box size={14} />} testId="vp-view-item-back" label={pickText(L('后视', 'Back'), locale)} desc={pickText(L('正交 · 从后', 'Ortho · back'), locale)} active={prefs.activeView === 'back'} onClick={() => setView('back')} />
+        <PopItem icon={<Box size={14} />} testId="vp-view-item-left" label={pickText(L('左视', 'Left'), locale)} desc={pickText(L('正交 · 从左', 'Ortho · left'), locale)} active={prefs.activeView === 'left'} onClick={() => setView('left')} />
+        <PopItem icon={<Box size={14} />} testId="vp-view-item-right" label={pickText(L('右视', 'Right'), locale)} desc={pickText(L('正交 · 从右', 'Ortho · right'), locale)} active={prefs.activeView === 'right'} onClick={() => setView('right')} />
         <PopSeparator />
         <PopRange
           label={pickText(L('视野 FOV', 'FOV'), locale)}
@@ -844,22 +875,25 @@ function ViewMenuControl(): ReactNode {
 
   return (
     <DropdownMenu>
-      <ToolMenuTrigger title={`${pickText(L('视图预设 · ', 'View · '), locale)}${pickText(VIEW_PRESETS[0].name, locale)}`}>
-        <span className="fx-vp-swatch" style={{ background: VIEW_PRESETS[0].swatch }} />
+      <ToolMenuTrigger title={pickText(L('视图与视觉质量', 'View and visual quality'), locale)} testId="vp-visual-quality-control">
         <Eye size={15} />
       </ToolMenuTrigger>
-      <PopPanel title={pickText(L('视图预设', 'View presets'), locale)} width={270} align="end">
-        {VIEW_PRESETS.map((preset) => (
-          <PopItem
-            key={preset.id}
-            icon={<span className="fx-vp-swatch" style={{ background: preset.swatch }} />}
-            label={pickText(preset.name, locale)}
-            desc={pickText(preset.desc, locale)}
-            kbd={preset.key}
-            active={preset.active}
-            disabled
-          />
-        ))}
+      <PopPanel title={pickText(L('视图与视觉质量', 'View and visual quality'), locale)} width={270} align="end">
+        {VISUAL_QUALITY_PRESETS.map((preset) => {
+          const meta = VISUAL_QUALITY_META[preset.id];
+          return (
+            <PopItem
+              key={preset.id}
+              testId={`vp-visual-quality-${preset.id}`}
+              icon={<span className="fx-vp-swatch" style={{ background: meta.swatch }} />}
+              label={pickText(meta.name, locale)}
+              desc={pickText(meta.desc, locale)}
+              onClick={() => {
+                void dispatchActiveEditorOperation({ kind: 'applyVisualQualityPreset', preset: preset.id }, 'human');
+              }}
+            />
+          );
+        })}
         <PopToggle
           testId="vp-grid-toggle"
           label={pickText(L('Grid', 'Grid'), locale)}

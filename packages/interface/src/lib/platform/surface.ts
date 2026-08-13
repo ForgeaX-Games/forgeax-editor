@@ -22,18 +22,62 @@ export interface SurfaceDescriptor {
   /** plugin: bus plugin id;panel: 内置面板 id(如 'agents' | 'files' | 'chat')。 */
   id: string;
   pane?: SurfacePane;
+  /** Stable identity when one surface kind/id/pane has multiple live instances. */
+  instance?: string;
+}
+
+/**
+ * Complete declaration for opening one surface in a detached window.
+ * Keeping title and default dimensions beside the descriptor prevents callers
+ * from declaring a pop-out affordance that cannot construct a usable window.
+ */
+export interface DetachedWindowTarget {
+  surface: SurfaceDescriptor;
+  title: string;
+  width: number;
+  height: number;
+  /** Close an ordinary tab, or retain its shell anchor while the body is detached. */
+  dockBehavior: 'close' | 'keep-anchor';
+}
+
+/** Presence of this factory is the declaration that a host can detach. */
+export interface DetachedWindowCapability<Context = void> {
+  createTarget(context: Context): DetachedWindowTarget;
 }
 
 /** Stable key used by the keep-alive registry AND as the Tauri window label
  *  suffix. Must be filesystem/label safe (Tauri labels disallow some chars). */
 export function surfaceKey(d: SurfaceDescriptor): string {
   const pane = d.pane ? `:${d.pane}` : '';
-  return `${d.kind}:${d.id}${pane}`;
+  const instance = d.instance ? `:instance=${encodeURIComponent(d.instance)}` : '';
+  return `${d.kind}:${d.id}${pane}${instance}`;
 }
 
-/** Tauri window labels must match /^[a-zA-Z0-9_-/:]+$/ — sanitize the key. */
+const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+/** Lossless UTF-8 → unpadded base64url. No Buffer/btoa dependency, so the same
+ * encoder runs in browsers and Tauri WebViews. Deliberately not truncated:
+ * preserving injectivity is more important than shortening uncommon long ids. */
+function utf8ToBase64Url(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let encoded = '';
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index]!;
+    const second = bytes[index + 1];
+    const third = bytes[index + 2];
+    encoded += BASE64URL_ALPHABET[first >> 2];
+    encoded += BASE64URL_ALPHABET[((first & 0x03) << 4) | ((second ?? 0) >> 4)];
+    if (second !== undefined) {
+      encoded += BASE64URL_ALPHABET[((second & 0x0f) << 2) | ((third ?? 0) >> 6)];
+    }
+    if (third !== undefined) encoded += BASE64URL_ALPHABET[third & 0x3f];
+  }
+  return encoded;
+}
+
+/** Tauri-safe, deterministic and injective label for the complete surface key. */
 export function surfaceWindowLabel(d: SurfaceDescriptor): string {
-  return `fx-surface-${surfaceKey(d).replace(/[^a-zA-Z0-9_-]+/g, '_')}`;
+  return `fx-surface-${utf8ToBase64Url(surfaceKey(d))}`;
 }
 
 /** Encode a descriptor as URL query params for a detached window entry. */
@@ -42,6 +86,7 @@ export function encodeSurfaceQuery(d: SurfaceDescriptor): string {
   p.set('surface', d.kind);
   p.set('id', d.id);
   if (d.pane) p.set('pane', d.pane);
+  if (d.instance) p.set('instance', d.instance);
   return p.toString();
 }
 
@@ -95,9 +140,11 @@ export function decodeSurfaceFromLocation(
   if (!kind || !id) return null;
   if (kind !== 'plugin' && kind !== 'panel') return null;
   const pane = p.get('pane');
+  const instance = p.get('instance');
   return {
     kind,
     id,
     pane: pane === 'left' || pane === 'center' ? pane : undefined,
+    instance: instance || undefined,
   };
 }

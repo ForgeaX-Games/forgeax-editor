@@ -734,7 +734,13 @@ const Row = memo(function Row({
           if (!selection.has(id)) dispatchHierarchyOperation({ kind: 'setSelection', id });
           onMenu({ id, x: e.clientX, y: e.clientY });
         }}
-        draggable={!readOnly}
+        onDoubleClick={(e) => {
+          if (readOnly || editing) return;
+          // The caret (expand/collapse) and eye (visibility) own their own gestures.
+          if ((e.target as HTMLElement).closest('.caret, .eye')) return;
+          setEditing(true);
+        }}
+        draggable={!readOnly && !editing}
         onDragStart={(e) => {
           if (readOnly) { e.preventDefault(); return; }
           draggingId = id;
@@ -828,13 +834,7 @@ const Row = memo(function Row({
               onBlur={(e) => commitRename(e.target.value)}
             />
           ) : (
-            <span
-              className="nm"
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                if (!readOnly) setEditing(true);
-              }}
-            >
+            <span className="nm">
               {highlight ? highlightName(nodeName, highlight) : nodeName}
             </span>
           )}
@@ -1020,6 +1020,33 @@ function VirtualizedRows({
     estimateSize: () => HIERARCHY_ROW_HEIGHT,
     overscan: 12,
   });
+  useEffect(() => {
+    const syncVirtualizerScrollOffset = (): void => {
+      const element = scrollRef.current;
+      if (!element) return;
+      const maxScrollTop = Math.max(element.scrollHeight - element.clientHeight, 0);
+      const nativeScrollTop = Math.min(Math.max(element.scrollTop, 0), maxScrollTop);
+      if (element.scrollTop !== nativeScrollTop) element.scrollTop = nativeScrollTop;
+      // Dockview can clamp the native scroll position during a panel resize
+      // without emitting a scroll event. Virtualizer then keeps its previous
+      // offset and drops the first rows from the visible range. Re-dispatching
+      // the native value makes Virtualizer re-read the actual offset through its
+      // public scroll subscription.
+      element.dispatchEvent(new Event('scroll'));
+    };
+    const observeResize = (): ResizeObserver | undefined => {
+      if (typeof ResizeObserver === 'undefined') return undefined;
+      const observer = new ResizeObserver(() => {
+        syncVirtualizerScrollOffset();
+      });
+      const element = scrollRef.current;
+      if (element) observer.observe(element);
+      return observer;
+    };
+    syncVirtualizerScrollOffset();
+    const observer = observeResize();
+    return () => observer?.disconnect();
+  }, [rowVirtualizer, scrollRef]);
   const remote = useContext(RemoteHierarchyContext);
   const localSelectedId = useSelection();
   const selectedId = remote?.primarySelection ?? localSelectedId;
@@ -1250,7 +1277,10 @@ export function HierarchyPanel() {
       items.push({ label: t('editor.hierarchy.menu.deleteSelected', { n: snapshot.length }), icon: 'trash-2', onClick: () => { void hierarchyGesture('delete', snapshot); } });
       items.push({ sep: true });
     }
-    items.push({ label: t('editor.hierarchy.menu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => { void dispatchActiveEditorOperation({ kind: 'requestRename', entity: m.id }); }, disabled: readOnly });
+    // requestRename's only consumer is THIS realm's row listener
+    // (onRenameRequest), so it must dispatch on the local gateway — routing it
+    // to the remote carrier would fire the signal in the wrong realm.
+    items.push({ label: t('editor.hierarchy.menu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => { void gateway.dispatch({ kind: 'requestRename', entity: m.id }, 'human'); }, disabled: readOnly });
     items.push({ label: t('editor.hierarchy.menu.duplicate'), icon: 'copy', shortcut: 'Ctrl+D', onClick: () => { void hierarchyGesture('duplicate', [m.id]); } });
     items.push({ label: t('editor.hierarchy.menu.copyJson'), icon: 'braces', onClick: () => {
       const value = projectedRow ?? (entExists(gateway.activeWorld, m.id)
@@ -1304,7 +1334,8 @@ export function HierarchyPanel() {
       getFocusedEntity: () => focusedHierarchyEntity,
       getSelectedEntities: selectedEntities,
       renameEntity: (entity) => {
-        void dispatchActiveEditorOperation({ kind: 'requestRename', entity });
+        // Local-realm signal — see the context-menu Rename item above.
+        void gateway.dispatch({ kind: 'requestRename', entity }, 'human');
       },
       deleteEntities: (entities) => {
         void hierarchyGesture('delete', entities);

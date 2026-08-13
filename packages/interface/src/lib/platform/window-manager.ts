@@ -33,7 +33,7 @@ export interface DetachWindowOptions {
 }
 
 export interface WindowManager {
-  /** True only inside Tauri. Components hide the "弹出窗口" affordance when false. */
+  /** Whether this runtime has a physical detached-window carrier. */
   canDetach(): boolean;
   /** Open (or focus, if already open) a detached window for this surface. */
   openSurfaceWindow(d: SurfaceDescriptor, opts?: DetachWindowOptions): Promise<boolean>;

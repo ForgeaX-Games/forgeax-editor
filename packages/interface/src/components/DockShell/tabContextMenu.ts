@@ -39,6 +39,10 @@ export interface SideEdgeMenuOptions {
   onMoveOffSide: () => void;
 }
 
+export interface PopOutMenuOptions {
+  onPopOut: () => void;
+}
+
 export function buildTabContextMenuItems(
   region: DockRegion,
   panelId: string,
@@ -46,6 +50,7 @@ export function buildTabContextMenuItems(
   titleOptions?: TabTitleMenuOptions,
   sideEdge?: SideEdgeMenuOptions,
   closeOptions?: CloseMenuOptions,
+  popOutOptions?: PopOutMenuOptions,
 ): TabContextMenuItem[] {
   // Close / Close Others as localized custom items (see file header). When no
   // close handlers are supplied (pure-builder tests) fall back to dockview's
@@ -57,6 +62,16 @@ export function buildTabContextMenuItems(
         'separator',
       ]
     : ['close', 'closeOthers', 'separator'];
+
+  if (popOutOptions) {
+    items.unshift(
+      {
+        label: panelT('dockShell.tabContext.openInNewWindow'),
+        action: popOutOptions.onPopOut,
+      },
+      'separator',
+    );
+  }
 
   if (region === 'AuxBar') {
     // AuxBar is a separate DockviewReact instance — side-edge move lives in

@@ -86,7 +86,12 @@ import {
   syncListenerFromWorldMatrix,
 } from '@forgeax/engine-audio-webaudio';
 import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
-import { normalizeAnimationPlayerSceneAsset, type SceneAsset } from '@forgeax/editor-core';
+import {
+  bindSceneInstanceAnimationTargets,
+  createEngineFacade,
+  normalizeAnimationPlayerSceneAsset,
+  type SceneAsset,
+} from '@forgeax/editor-core';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 import { supportsVfxRenderFeature } from './vfx-render-capability';
 
@@ -736,6 +741,15 @@ export async function assemblePlayWorld(
       console.warn('[editor] ▶ Play defaultScene instantiate failed:', instRes.error);
       cleanupFailedAssembly();
       return { ok: false, error: startupError('play-default-scene-instantiate-failed', instRes.error) };
+    }
+    const binding = bindSceneInstanceAnimationTargets(playWorld as World, defaultSceneRoot as never, {
+      ensurePlayerForSkin: true,
+      mutation: createEngineFacade(playWorld as World),
+    });
+    if (binding.failures.length > 0) {
+      console.warn('[editor] ▶ Play animation target binding failed:', binding.failures);
+      cleanupFailedAssembly();
+      return { ok: false, error: startupError('play-animation-target-binding-failed', binding.failures) };
     }
   }
 

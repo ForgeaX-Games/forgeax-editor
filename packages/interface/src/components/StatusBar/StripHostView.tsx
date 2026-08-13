@@ -6,9 +6,9 @@
  * channel with owner-tagged, reversible lifecycle.
  *
  *   ┌────────────────────────────────────────────────────────────────────┐
- *   │ version · slug · agent            │ health      │ RES · MB · … │
+ *   │ CB · Info · …            │ Ready · MB · … · Diagnostics · version │
  *   └────────────────────────────────────────────────────────────────────┘
- *     statusbar.left (priority desc)      statusbar.center  statusbar.right
+ *     bottom dock tabs                    center · right · left (visual order)
  *
  * Each slot has a VISIBLE_PER_SLOT capacity. On overflow the trailing visible
  * position rotates through the low-priority surplus every CAROUSEL_INTERVAL_MS
@@ -67,6 +67,7 @@ export function StripHostView() {
       aria-live="polite"
       aria-label="forgeax status bar"
       data-fx-slot="StatusBar"
+      data-tour-id="footer"
     >
       {/* Merged bottom edge menu bar: installEdgeDrawer relocates dockview's
           bottom-edge tab strip into this host so the dock tabs share the footer

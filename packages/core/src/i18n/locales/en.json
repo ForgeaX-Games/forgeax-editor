@@ -300,7 +300,10 @@
         "resizeFolderTree": "Drag to resize folder tree width",
         "back": "Back",
         "forward": "Forward",
-        "all": "All"
+        "all": "All",
+        "editPath": "Click to type a path",
+        "editPathPlaceholder": "Enter a folder path and press Enter",
+        "openSubfolders": "Subfolders of {{name}}"
       },
       "sourceTree": {
         "favorites": "Favorites",

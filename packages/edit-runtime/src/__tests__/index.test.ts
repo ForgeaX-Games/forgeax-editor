@@ -30,9 +30,9 @@ describe('@forgeax/editor root entry', () => {
     expect(mod.default.manifest.id).toBe('editor');
   });
 
-  test('manifest.entryUrl is the editor viewport-only URL', () => {
+  test('manifest.entryUrl is the pure editor renderer URL', () => {
     expect(mod.default.manifest.entryUrl).toBe(
-      'http://127.0.0.1:15280/?viewportOnly=1',
+      'http://127.0.0.1:15280/',
     );
   });
 

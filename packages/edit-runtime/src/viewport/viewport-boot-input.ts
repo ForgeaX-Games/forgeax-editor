@@ -13,7 +13,7 @@
 //     listeners exist, so a replayed keydown would wedge the key in keyState
 //     and drift the camera.
 //   - install()/uninstall(): driven by createViewport() / its dispose.
-//   - readiness mirror: lets the chrome (ViewportViewMenu) stay disabled until
+//   - readiness mirror: lets the PanelShell camera control stay disabled until
 //     the camera session ops it dispatches actually have an applier.
 
 export interface ViewportBootInput {

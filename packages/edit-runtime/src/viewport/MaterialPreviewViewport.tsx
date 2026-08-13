@@ -29,16 +29,9 @@ import {
   type PreviewMeshKind,
 } from './assemble-material-preview-world';
 import { createViewport, type Viewport } from './viewport';
+import { createPreviewBundlerOptions } from './preview-bundler-options';
 
 const MESH_KINDS: readonly PreviewMeshKind[] = ['sphere', 'cube', 'plane', 'custom'];
-
-/** Same base-aware manifest URL the main viewport injects. Without it the
- *  renderer falls back to a root-absolute `/shaders/manifest.json`, which 404s
- *  whenever the host serves the editor under a non-root base — a preview world
- *  with no compiled shaders draws nothing. */
-const PREVIEW_BUNDLER_OPTIONS = {
-  shaderManifestUrl: `${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/shaders/manifest.json`,
-};
 
 export function MaterialPreviewViewport(): ReactElement {
   const { t } = useTranslation();
@@ -64,12 +57,13 @@ export function MaterialPreviewViewport(): ReactElement {
     canvas.style.display = 'block';
     canvas.style.touchAction = 'none';
     host.appendChild(canvas);
+    const previewBundlerOptions = createPreviewBundlerOptions();
 
     void (async () => {
       const created = await createApp(
         canvas,
         { pointerLockAllowed: () => false },
-        PREVIEW_BUNDLER_OPTIONS,
+        previewBundlerOptions,
       );
       if (cancelled) {
         if (created.ok) created.value.stop();
@@ -82,7 +76,7 @@ export function MaterialPreviewViewport(): ReactElement {
           const retry = await createApp(
             canvas,
             { pointerLockAllowed: () => false, rhi: rhiNull.rhi as never },
-            PREVIEW_BUNDLER_OPTIONS,
+            previewBundlerOptions,
           );
           if (!retry.ok) {
             setStatus('error');

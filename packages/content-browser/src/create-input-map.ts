@@ -2,7 +2,7 @@
 
 import {
   createDefaultInputMapPayload,
-  gateway,
+  dispatchActiveEditorOperation,
   generateAssetGuid,
 } from '@forgeax/editor-core';
 import { toast } from '@forgeax/editor-ui';
@@ -12,7 +12,7 @@ export async function createInputMapAndOpen(name: string, packDir: string): Prom
   const guid = generateAssetGuid();
   const packPath = `${packDir}/${name}.pack.json`;
   const payload = createDefaultInputMapPayload();
-  const created = gateway.dispatch({
+  const created = await dispatchActiveEditorOperation({
     kind: 'createInputMap',
     guid,
     name,
@@ -23,7 +23,7 @@ export async function createInputMapAndOpen(name: string, packDir: string): Prom
     return;
   }
 
-  const opened = gateway.dispatch({
+  const opened = await dispatchActiveEditorOperation({
     kind: 'openAssetEditor',
     asset: {
       guid,

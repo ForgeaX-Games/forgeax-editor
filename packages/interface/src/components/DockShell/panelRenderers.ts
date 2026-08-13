@@ -21,6 +21,7 @@ import type {
   StatusItemContribution,
   DrawerPanelContribution,
 } from '../../core/panels';
+import type { DetachedWindowCapability } from '../../lib/platform';
 
 // Structural host-SDK boundary. Interface receives these factories from the
 // aggregation host but must neither import nor type-resolve @forgeax/host-sdk:
@@ -159,6 +160,8 @@ export interface PanelDescriptor {
     /** How to render this panel's dock tab when it is the only tab in its group. */
     singleTab?: 'default' | 'full' | 'hideTitle';
   };
+  /** Complete detached-window target factory. Missing means dock-only. */
+  windowing?: DetachedWindowCapability;
   /** Panel body renderer. */
   render: () => ReactNode;
 }
@@ -206,7 +209,9 @@ export interface PanelRenderers {
    *  simulation on the same in-process engine. Future play/debug modes would
    *  add sibling slots here. */
   surfaces?: {
-    SceneEditor?: ComponentType<{ viewportOnly?: boolean }>;
+    /** Pure renderer surface. Product controls belong to the hosting panel's
+     *  PanelShell header in both docked and detached windows. */
+    SceneEditor?: ComponentType;
   };
 
   /** Single-realm editor coordination callbacks. Interface declares only the

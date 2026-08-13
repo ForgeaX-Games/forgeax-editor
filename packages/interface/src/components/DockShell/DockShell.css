@@ -1,5 +1,5 @@
-/* DockShell — flush, square, padding-free dock styling (design §0.2.4: 内嵌停靠
-   用平直方角、无 padding/缝隙、彼此贴合、仅 1px 分隔线;圆角只留给浮动窗). */
+/* DockShell — square, padding-free dock styling. Dockview's theme contract owns
+   the 6px inter-group gap; CSS only skins the groups and chrome. */
 .fx-dockshell {
   flex: 1 1 auto;
   height: 100%;
@@ -15,9 +15,14 @@
 .fx-dockwrap .dv-shell.dockview-theme-abyss,
 .dockview-theme-abyss.fx-dockshell,
 .fx-dockshell {
+  /* UE-style depth: the dock canvas is the darkest layer and shows through the
+     native 6px group gaps; panel surfaces sit one semantic step above it. */
+  --fx-dock-container-background: var(--color-background-canvas, #0d0d0d);
+  --fx-dock-panel-background:     var(--color-background-base, #191919);
+
   /* ── background / chrome ── */
-  --dv-background-color:                             var(--color-background-base, #0d0d0f);
-  --dv-group-view-background-color:                  var(--color-background-base, #0d0d0f);
+  --dv-background-color:                             var(--fx-dock-container-background);
+  --dv-group-view-background-color:                  var(--fx-dock-panel-background);
   --dv-tabs-and-actions-container-background-color:  var(--color-background-elevated, #161619);
 
   /* ── tab colours. The SELECTED tab (the one whose panel is showing) is the
@@ -30,9 +35,9 @@
         inactive group / active tab →  darkest  (#0d0d0f)  fg=primary  (= "open")
         inactive group / hidden tab →  lightest (#1e1e22)  fg=muted
      No blue. No abyss purple. Consistent with the rest of the studio UI. ── */
-  --dv-activegroup-visiblepanel-tab-background-color:   var(--color-background-base, #0d0d0f);
+  --dv-activegroup-visiblepanel-tab-background-color:   var(--fx-dock-panel-background);
   --dv-activegroup-hiddenpanel-tab-background-color:    var(--color-background-elevated, #161619);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-background-base, #0d0d0f);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--fx-dock-panel-background);
   --dv-inactivegroup-hiddenpanel-tab-background-color:  var(--color-background-overlay, #1e1e22);
 
   --dv-activegroup-visiblepanel-tab-color:    var(--color-text-primary, #e8eaed);
@@ -46,7 +51,7 @@
 
   /* ── interactive accent (sash resize + drop zone): lime, NOT blue ── */
   --dv-paneview-active-outline-color: var(--lime, #7ee04a);
-  --dv-active-sash-color:             var(--lime, #7ee04a);
+  --dv-active-sash-color:             transparent;
   --dv-tabs-container-scrollbar-color: var(--color-border-default, #2a2d30);
   --dv-drag-over-background-color:    rgba(126, 224, 74, 0.18);
   --dv-drag-over-border-color:        var(--lime, #7ee04a);
@@ -59,12 +64,56 @@
   --dv-color-abyss-accent:  var(--lime, #7ee04a);
 }
 
+/* Dockview paints its root with the group color by default. Override only the
+   core grid root so the gap exposes the darker canvas without affecting edge
+   drawers or floating groups. */
+.fx-dockshell .dv-dockview {
+  --dv-separator-border: transparent;
+  background-color: var(--fx-dock-container-background);
+}
+
+/* Core grid groups are borderless UE-style surfaces: separation comes only
+   from the darker 6px canvas gap. Keep this scoped under the inner dv-dockview;
+   edge groups are hoisted beside it into .dv-shell, so their drawer outline
+   (defined below on .dv-groupview-edge > .dv-content-container) is preserved. */
+.fx-dockshell .dv-dockview .dv-groupview:not(.dv-groupview-edge),
+.fx-dockshell .dv-dockview .groupview:not(.groupview-edge) {
+  border: 0 !important;
+  outline: 0;
+  box-shadow: none;
+}
+
+/* Edge groups and the core grid are siblings in Dockview's outer shell
+   splitviews. Their separator pseudo-elements are outside `.dv-dockview`, so
+   hideBorders on the core cannot reach them. Remove only those static shell
+   separators; do not touch the edge drawer content border. */
+.fx-dockwrap
+  .dv-shell
+  > .dv-split-view-container.dv-separator-border
+  > .dv-view-container
+  > .dv-view:not(:first-child)::before,
+.fx-dockwrap
+  .dv-shell-middle-column
+  > .dv-split-view-container.dv-separator-border
+  > .dv-view-container
+  > .dv-view:not(:first-child)::before {
+  display: none;
+}
+
 /* Flush + square: no rounded corners, no extra padding on the docked content. */
 .fx-dockshell .dv-react-part,
 .fx-dockshell .dv-tabs-and-actions-container,
 .fx-dockshell .groupview,
 .fx-dockshell .tab,
 .fx-dockshell .dv-tab { border-radius: 0 !important; }
+
+/* Keep the shell and edge strips flush, but round only the TOP corners of
+   ordinary workspace tabs so the selected tab reads as a surface without
+   turning the dock into a set of floating cards. */
+.fx-dockshell .dv-groupview:not(.dv-groupview-edge):not(.groupview-edge) .dv-tab,
+.fx-dockshell .groupview:not(.dv-groupview-edge):not(.groupview-edge) .dv-tab {
+  border-radius: 6px 6px 0 0 !important;
+}
 
 /* Asymmetric padding: keep the label inset on the left, but trim the right so
    the close (X) action sits close to the tab's right edge instead of floating
@@ -358,9 +407,66 @@
   flex-grow: 0;
 }
 
-/* 1px separators are dockview's sashes already; just tint on hover/active. */
-.fx-dockshell .dv-sash.dv-sash-active,
-.fx-dockshell .sash.active { background: var(--lime, #7ee04a); }
+/* UE-style resize affordance for CORE grid gaps only. Dockview's sash remains
+   the real hit target; hovering that target (not either panel body) reveals a
+   full-width 6px lime bar, which stays visible while resizing. Edge groups are
+   hoisted outside `.dv-dockview`, so their native shell sashes and overlay
+   drawer grip keep their existing behavior. */
+.fx-dockshell .dv-dockview .dv-sash {
+  background: transparent !important;
+}
+
+.fx-dockshell .dv-dockview .dv-sash::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--lime, #7ee04a);
+  transition: opacity 100ms ease;
+}
+
+/* Extend the 4px native hit target across the full 6px visual gap. */
+.fx-dockshell
+  .dv-dockview
+  .dv-split-view-container.dv-horizontal
+  > .dv-sash-container
+  > .dv-sash::before {
+  content: '';
+  position: absolute;
+  inset: 0 -1px;
+}
+
+.fx-dockshell
+  .dv-dockview
+  .dv-split-view-container.dv-vertical
+  > .dv-sash-container
+  > .dv-sash::before {
+  content: '';
+  position: absolute;
+  inset: -1px 0;
+}
+
+.fx-dockshell
+  .dv-dockview
+  .dv-split-view-container.dv-horizontal
+  > .dv-sash-container
+  > .dv-sash::after {
+  inset: 0 -1px;
+}
+
+.fx-dockshell
+  .dv-dockview
+  .dv-split-view-container.dv-vertical
+  > .dv-sash-container
+  > .dv-sash::after {
+  inset: -1px 0;
+}
+
+.fx-dockshell .dv-dockview .dv-sash:hover::after,
+.fx-dockshell .dv-dockview .dv-sash:active::after,
+.fx-dockshell .dv-dockview .dv-sash.dv-sash-active::after {
+  opacity: 1;
+}
 
 /* Edge-strip tab titles: dockview uses writing-mode:vertical-rl. Default
    text-orientation:mixed keeps CJK upright (stacked glyph-by-glyph) while
@@ -450,6 +556,15 @@
    a prefixed selector never matches. We anchor purely on our own
    `.fx-edge-drawer-open` marker class (added by edgeDrawer.ts), which only ever
    lands on a DockShell edge group. */
+.dv-groupview-edge.fx-edge-drawer-open {
+  /* The edge group remains in dockview's shell while its content is promoted
+     to a fixed drawer. Raise the WHOLE group, not only the content node:
+     dockview's sash/drop layers are siblings and otherwise win hit-testing on
+     the 1px boundary between the drawer and the underlying panel. */
+  position: relative;
+  z-index: 1000 !important;
+}
+
 .dv-groupview-edge.fx-edge-drawer-open > .dv-content-container {
   /* UE-style: the flyout is INSET on its cross axis (the axis parallel to the
      strip) so its far edges never sit flush on the shell's layout separators —
@@ -458,6 +573,7 @@
   --fx-edge-drawer-inset: 6px;
   display: block !important;
   position: fixed;
+  pointer-events: auto;
   width: var(--fx-edge-drawer-width, 300px);
   /* left/right strips: cross axis = vertical → inset top + bottom. */
   height: calc(var(--fx-edge-strip-height) - 2 * var(--fx-edge-drawer-inset));
@@ -498,7 +614,11 @@
 }
 /* Left strip → flyout to the right; right strip → flyout to the left. */
 .dv-groupview-edge.dv-groupview-header-left.fx-edge-drawer-open > .dv-content-container {
-  left: var(--fx-edge-drawer-left);
+  /* Own the shared boundary while the drawer is open. The small overlap keeps
+     the underlying split sash from winning when the pointer lands exactly on
+     the panel border. */
+  left: calc(var(--fx-edge-drawer-left) - 3px);
+  width: calc(var(--fx-edge-drawer-width, 300px) + 3px);
   /* keep the full border; only cast the shadow AWAY from the strip (rightward). */
   box-shadow: 4px 0 12px rgba(0, 0, 0, 0.30), 1px 0 3px rgba(0, 0, 0, 0.22);
 }
@@ -506,7 +626,8 @@
   animation: fx-edge-drawer-in-left 0.12s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .dv-groupview-edge.dv-groupview-header-right.fx-edge-drawer-open > .dv-content-container {
-  right: var(--fx-edge-drawer-right);
+  right: calc(var(--fx-edge-drawer-right) - 3px);
+  width: calc(var(--fx-edge-drawer-width, 300px) + 3px);
   box-shadow: -4px 0 12px rgba(0, 0, 0, 0.30), -1px 0 3px rgba(0, 0, 0, 0.22);
 }
 .dv-groupview-edge.dv-groupview-header-right.fx-edge-drawer-animating > .dv-content-container {
@@ -522,8 +643,8 @@
   height: var(--fx-edge-drawer-height, 300px);
 }
 .dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-open > .dv-content-container {
-  top: var(--fx-edge-drawer-top);
-  height: var(--fx-edge-drawer-height, 300px);
+  top: calc(var(--fx-edge-drawer-top) - 3px);
+  height: calc(var(--fx-edge-drawer-height, 300px) + 3px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30), 0 1px 3px rgba(0, 0, 0, 0.22);
 }
 .dv-groupview-edge.dv-groupview-header-top.fx-edge-drawer-animating > .dv-content-container {
@@ -531,8 +652,8 @@
 }
 .dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-open > .dv-content-container {
   top: auto;
-  bottom: var(--fx-edge-drawer-bottom);
-  height: var(--fx-edge-drawer-height, 300px);
+  bottom: calc(var(--fx-edge-drawer-bottom) - 3px);
+  height: calc(var(--fx-edge-drawer-height, 300px) + 3px);
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.30), 0 -1px 3px rgba(0, 0, 0, 0.22);
 }
 .dv-groupview-edge.dv-groupview-header-bottom.fx-edge-drawer-animating > .dv-content-container {
@@ -702,14 +823,6 @@ html.fx-dock-dragging
 /* WbPluginDockPanel — plugin as a top-level dock leaf */
 .wb-dock-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .wb-dock-standalone { position: relative; }
-.wb-dock-popout-btn {
-  position: absolute; top: 6px; right: 8px; z-index: 2;
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11px; padding: 2px 8px; border-radius: 4px;
-  background: var(--dv-background-color, #1b1d1f); border: 1px solid var(--dv-separator-border, #2a2d30); color: var(--color-text-secondary, #aaa);
-  cursor: pointer; opacity: 0.8;
-}
-.wb-dock-popout-btn:hover { opacity: 1; color: var(--color-text-primary, #eee); }
 .wb-dock-loading, .wb-dock-placeholder { padding: 16px; font-size: 13px; color: var(--color-text-secondary, #aaa); }
 .wb-dock-error { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .wb-dock-error button { color: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 4px 10px; }

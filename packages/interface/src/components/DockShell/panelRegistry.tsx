@@ -24,6 +24,8 @@ import { RecoveryBoundary } from '../ErrorBoundary';
 import { usePanelRenderers } from './panelRenderers';
 import { DockPanelHost } from './DockPanelHost';
 import { withDockTitleRestore } from './dockTitle';
+import { t as panelT } from '../../i18n';
+import type { DetachedWindowCapability } from '../../lib/platform';
 
 // Agents panel body — injected by studio from `@forgeax/ai-workbench`.
 // When absent (interface-alone / standalone editor) render a neutral placeholder
@@ -50,11 +52,31 @@ export interface PanelDef {
    *  'optional' = off by default, toggled from the layout menu. Editor (ep:*)
    *  panels are registered separately via the EDITOR_PANELS family below. */
   group: 'core' | 'optional';
-  /** Can pop out into a real OS window (DetachedSurface). */
-  canPopOut?: boolean;
+  /** Complete detached-window target factory. Missing means dock-only. */
+  windowing?: DetachedWindowCapability;
   /** Stable `data-tour-id` for the onboarding TourOverlay to anchor a coach
    *  mark on this panel's live body. Omitted → not a tour target. */
   tourId?: string;
+}
+
+function panelWindowing(
+  id: string,
+  fallbackTitle: string,
+  size: { width: number; height: number } = { width: 480, height: 680 },
+  dockBehavior: 'close' | 'keep-anchor' = 'close',
+): DetachedWindowCapability {
+  return {
+    createTarget: () => {
+      const key = `dockShell.panelTitles.${id}`;
+      const localized = panelT(key);
+      return {
+        surface: { kind: 'panel', id },
+        title: localized === key ? fallbackTitle : localized,
+        ...size,
+        dockBehavior,
+      };
+    },
+  };
 }
 
 // ── core + optional panels ───────────────────────────────────────────────────
@@ -62,7 +84,7 @@ export interface PanelDef {
 export const CORE_PANELS: PanelDef[] = [
   // Tools is a single-panel group (nav moved to the shell ActivityRail), so its
   // dockview tab bar is redundant — the `hideTitle` single-tab marker collapses it.
-  { id: 'tools', title: 'Tools', group: 'core', canPopOut: true, tourId: 'sidebar', render: () => (
+  { id: 'tools', title: 'Tools', group: 'core', windowing: panelWindowing('tools', 'Tools'), tourId: 'sidebar', render: () => (
     <div className="fx-panel" data-dock-single-tab="hideTitle">
       <Sidebar />
     </div>
@@ -71,7 +93,7 @@ export const CORE_PANELS: PanelDef[] = [
   // which was redundant with the top-level workbench tab strip). It renders MainArea.
   // Single-panel group → hide its dockview tab bar (like tools) so the in-panel
   // plugin header (CenterExtensionLayer) sits at the very top of the column.
-  { id: 'main', title: 'Studio', group: 'core', canPopOut: true, render: () => (
+  { id: 'main', title: 'Studio', group: 'core', windowing: panelWindowing('main', 'Studio'), render: () => (
     <div className="fx-panel" data-dock-single-tab="hideTitle">
       <MainArea />
     </div>
@@ -79,19 +101,19 @@ export const CORE_PANELS: PanelDef[] = [
   // In flat-architecture mode 'viewport' is the combined panel (engine canvas +
   // gizmo). Its body is contributed via panels.viewport, same as chat/ep:*
   // panels; the descriptor renders the anchor tracked by SurfaceKeepAliveLayer.
-  { id: 'viewport', title: 'Viewport', group: 'core', canPopOut: true, tourId: 'preview', render: () => <DockPanelHost id="viewport" /> },
+  { id: 'viewport', title: 'Viewport', group: 'core', windowing: panelWindowing('viewport', 'Viewport', { width: 1280, height: 800 }, 'keep-anchor'), tourId: 'preview', render: () => <DockPanelHost id="viewport" /> },
   // R4: chat body comes from the studio-injected panels['chat'] registry.
-  { id: 'chat', title: 'ForgeaX CLI', group: 'core', canPopOut: true, tourId: 'chat', render: () => <DockPanelHost id="chat" /> },
+  { id: 'chat', title: 'ForgeaX CLI', group: 'core', windowing: panelWindowing('chat', 'ForgeaX CLI'), tourId: 'chat', render: () => <DockPanelHost id="chat" /> },
 ];
 
 export const OPTIONAL_PANELS: PanelDef[] = [
-  { id: 'agents', title: 'Agents', group: 'optional', canPopOut: true, render: () => <DockPanelHost id="agents" /> },
-  { id: 'files', title: 'Files', group: 'optional', canPopOut: true, render: () => <FilesPanel /> },
-  { id: 'console', title: 'Console', group: 'optional', canPopOut: true, render: () => <ConsolePanel /> },
+  { id: 'agents', title: 'Agents', group: 'optional', windowing: panelWindowing('agents', 'Agents'), render: () => <DockPanelHost id="agents" /> },
+  { id: 'files', title: 'Files', group: 'optional', windowing: panelWindowing('files', 'Files'), render: () => <FilesPanel /> },
+  { id: 'console', title: 'Console', group: 'optional', windowing: panelWindowing('console', 'Console'), render: () => <ConsolePanel /> },
   // Observability (trace + log) feed — trace waterfall + log stream, fed by the
   // unified store.telemetry slice (node WS `{type:'telemetry'}` + iframe
   // `VAG_TELEMETRY`). See MainArea/TelemetryViewer.tsx.
-  { id: 'telemetry', title: 'Telemetry', group: 'optional', canPopOut: true, render: () => <TelemetryViewer /> },
+  { id: 'telemetry', title: 'Telemetry', group: 'optional', windowing: panelWindowing('telemetry', 'Telemetry'), render: () => <TelemetryViewer /> },
   // Footer chrome panels — Info (Blender-INFO-style health/log feed), Checkpoints
   // (session rewind timeline) and Events (gateway feed). Formerly a bottom-drawer
   // launcher (ADR-0030 §2.3); now real dockview panels that DEFAULT into the
@@ -171,5 +193,8 @@ export function buildEditorPanelComponents(
 export const CORE_PANEL_IDS = ['tools', 'viewport', 'chat'] as const;
 /** Optional panel ids (layout menu more-panels section). */
 export const OPTIONAL_PANEL_IDS = OPTIONAL_PANELS.map((p) => p.id) as readonly string[];
-/** Panels that can pop out into a real OS window. */
-export const SURFACE_PANEL_IDS = new Set(ALL_PANELS.filter((p) => p.canPopOut).map((p) => p.id));
+/** Interface-owned detached-window declarations, derived from PanelDef. */
+export const BASE_PANEL_WINDOWING: Readonly<Record<string, DetachedWindowCapability>> =
+  Object.fromEntries(ALL_PANELS.flatMap((panel) => (
+    panel.windowing ? [[panel.id, panel.windowing] as const] : []
+  )));

@@ -1,6 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parse as parseYaml } from 'yaml';
 import {
   discoverBrowserReleaseCandidates,
   validateBrowserReleaseDiscovery,
@@ -10,6 +10,9 @@ import {
   validateAdmissionDelivery,
   validateLandedDelivery,
 } from './editor-ci-contract-envelope.mjs';
+import { buildWorkflowGraph, extractRequiredContexts } from './ci-baseline.mjs';
+import { validateWorkflowBinding } from './editor-ci-workflow-binding.mjs';
+import { discoverLiveRulesetSync, requiredContextNamesFromRuleset } from './live-ruleset-admission.mjs';
 
 export {
   ADMISSION_ENVELOPE_FIELDS,
@@ -447,8 +450,8 @@ function issue(code, expected, observed, hint) {
   return { code, expected, observed, hint };
 }
 
-function result(errors = []) {
-  return { ok: errors.length === 0, errors };
+function result(errors = [], extra = {}) {
+  return { ok: errors.length === 0, errors, ...extra };
 }
 
 function isObject(value) {
@@ -498,6 +501,23 @@ function validateCheckSchema(check, index) {
       check.failureClasses,
       'Use failure class strings in each check declaration.',
     );
+  }
+  if (check.runnerPool !== undefined && (typeof check.runnerPool !== 'string' || !['standard', 'heavy'].includes(check.runnerPool))) {
+    return issue(
+      'schema-field-type',
+      `checks[${index}].runnerPool is standard or heavy`,
+      check.runnerPool,
+      'Declare a concrete self-hosted capability pool for checks bound to required contexts.',
+    );
+  }
+  if (check.permissions !== undefined) {
+    if (!isObject(check.permissions)) {
+      return issue('schema-field-type', `checks[${index}].permissions is an object`, check.permissions, 'Declare least-privilege permissions as a mapping.');
+    }
+    const invalidPermission = Object.entries(check.permissions).find(([, value]) => !['read', 'write', 'none'].includes(value));
+    if (invalidPermission) {
+      return issue('schema-field-type', `checks[${index}].permissions values are read, write, or none`, invalidPermission, 'Use explicit GitHub permission levels.');
+    }
   }
   return null;
 }
@@ -1072,50 +1092,86 @@ function workflowFiles(workflowsDir) {
     .map((file) => resolve(workflowsDir, file));
 }
 
-function workflowJobs(workflowsDir) {
-  return workflowFiles(workflowsDir).flatMap((file) => {
-    const document = parseYaml(readFileSync(file, 'utf8'));
-    return Object.entries(document?.jobs ?? {}).map(([id, job]) => ({
-      workflow: file,
-      id,
-      name: typeof job?.name === 'string' ? job.name : id,
-    }));
-  });
+function workflowSources(workflowsDir) {
+  return workflowFiles(workflowsDir).map((file) => ({
+    file,
+    text: readFileSync(file, 'utf8'),
+  }));
 }
 
 function rulesetContexts(ruleset) {
-  const requiredRule = (ruleset?.rules ?? []).find((rule) => rule?.type === 'required_status_checks');
-  return (requiredRule?.parameters?.required_status_checks ?? []).map((record) => record?.context ?? record?.name).filter(Boolean);
+  try {
+    return requiredContextNamesFromRuleset(ruleset);
+  } catch {
+    return [];
+  }
 }
 
 function cliIssue(code, expected, observed, hint) {
   return result([issue(code, expected, observed, hint)]);
 }
 
-export function validateRuntimeProjection(contract, workflowsDir, ruleset) {
+export function validateRuntimeProjection(contract, workflowsDir, ruleset, {includePortfolio = true} = {}) {
   const contractResult = validateContract(contract);
   if (!contractResult.ok) return contractResult;
   const liveContexts = rulesetContexts(ruleset);
   if (liveContexts.length === 0) return cliIssue('admission-ruleset-empty', REQUIRED_CONTEXTS, liveContexts, 'Provide a readable required-status-check ruleset input.');
   const expectedContexts = contract.requiredContexts.map((entry) => entry.context).sort();
+  if (new Set(liveContexts).size !== liveContexts.length) {
+    return cliIssue('required-context-shadowed', 'one live ruleset record per required context', liveContexts, 'Reject shadowed duplicate required contexts before workflow binding.');
+  }
   if (JSON.stringify(liveContexts.slice().sort()) !== JSON.stringify(expectedContexts)) {
-    return cliIssue('projection-drift', expectedContexts, liveContexts, 'Align the ruleset required contexts with the contract without renaming them.');
+    const missing = expectedContexts.filter((context) => !liveContexts.includes(context));
+    const extra = liveContexts.filter((context) => !expectedContexts.includes(context));
+    return cliIssue('required-context-drift', {contexts: expectedContexts, missing: [], extra: []}, {contexts: liveContexts, missing, extra}, 'Align live required contexts with the producer-owned contract; missing and extra names are fail-closed drift.');
   }
-  const jobs = workflowJobs(workflowsDir);
-  for (const context of contract.requiredContexts) {
-    const matches = jobs.filter((job) => job.id === context.context || job.name === context.context);
-    if (matches.length !== 1) return cliIssue('projection-drift', `one workflow job for ${context.context}`, matches.length, `Bind ${context.context} to exactly one workflow job in the trusted workflow directory.`);
+  let binding;
+  try {
+    const graph = buildWorkflowGraph(workflowSources(workflowsDir), extractRequiredContexts(ruleset));
+    binding = validateWorkflowBinding(contract, graph);
+  } catch (error) {
+    return cliIssue(
+      error.code === 'workflow-graph-empty' ? 'zero-job' : error.code ?? 'workflow-admission',
+      'trusted workflow graph can be parsed and admitted',
+      error.message ?? String(error),
+      'Fix the trusted workflow, runner capability, permission set, or live ruleset before success classification.',
+    );
   }
+  if (!binding.ok) return binding;
   const root = resolve(workflowsDir, '..', '..');
+  if (!includePortfolio) return result([], {binding});
   const discovery = discoverBrowserReleaseCandidates(root, contract.browserReleasePortfolio);
   const discoveryResult = validateBrowserReleaseDiscovery(discovery, contract.browserReleasePortfolio);
   if (!discoveryResult.ok) return discoveryResult;
-  return result([], {discovery: discoveryResult.value});
+  return result([], {discovery: discoveryResult.value, binding});
 }
 
 function optionValue(args, name) {
   const index = args.indexOf(name);
   return index === -1 ? null : args[index + 1];
+}
+
+function ghJson(args) {
+  const output = execFileSync('gh', ['api', ...args], {
+    encoding: 'utf8',
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return JSON.parse(output);
+}
+
+function repositoryForLiveRuleset(args) {
+  const explicit = optionValue(args, '--repository');
+  if (explicit) return explicit;
+  if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
+  const output = execFileSync('gh', ['repo', 'view', '--json', 'nameWithOwner'], {
+    encoding: 'utf8',
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const value = JSON.parse(output)?.nameWithOwner;
+  if (typeof value !== 'string' || value.length === 0) throw new Error('gh repo view did not return nameWithOwner');
+  return value;
 }
 
 export function runCli(args = process.argv.slice(2)) {
@@ -1138,10 +1194,36 @@ export function runCli(args = process.argv.slice(2)) {
     if (!deliveryResult.ok) return deliveryResult;
     return {ok: true, status: 'pass', delivery: deliveryResult};
   }
-  if (args.includes('--live-ruleset')) {
-    return cliIssue('admission-live-ruleset-unavailable', 'readable live ruleset evidence', 'live API not requested in M1', 'Run the deterministic fixture projection or provide live ruleset evidence in the later milestone.');
-  }
   const workflowsDir = optionValue(args, '--workflows-dir');
+  if (args.includes('--live-ruleset')) {
+    try {
+      const repository = repositoryForLiveRuleset(args);
+      const discovery = discoverLiveRulesetSync({
+        readRepository: () => ghJson([`repos/${repository}`]),
+        readRulesets: () => ghJson(['--paginate', '--slurp', `repos/${repository}/rulesets?per_page=100`]),
+        readDetail: (id) => ghJson([`repos/${repository}/rulesets/${id}`]),
+      });
+      if (!discovery.ok) return discovery;
+      const projection = validateRuntimeProjection(
+        contract,
+        resolve(workflowsDir ?? '.github/workflows'),
+        discovery.ruleset,
+        {includePortfolio: !args.includes('--skip-portfolio')},
+      );
+      return {
+        ...projection,
+        liveRuleset: {
+          id: discovery.ruleset.id,
+          name: discovery.ruleset.name,
+          enforcement: discovery.ruleset.enforcement,
+          target: discovery.ruleset.target,
+        },
+        rulesetSelection: discovery.selection,
+      };
+    } catch (error) {
+      return cliIssue('live-ruleset-unavailable', 'readable live ruleset API evidence', error.message ?? String(error), 'Use a read-only GitHub API reader and fail closed when repository, list, or detail evidence is unavailable.');
+    }
+  }
   const rulesetPath = optionValue(args, '--ruleset-file');
   if (!workflowsDir || !rulesetPath) return cliIssue('admission-input-missing', '--workflows-dir and --ruleset-file', { workflowsDir, rulesetPath }, 'Provide both trusted workflow and ruleset inputs.');
   const ruleset = JSON.parse(readFileSync(resolve(rulesetPath), 'utf8'));

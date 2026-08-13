@@ -1,6 +1,6 @@
 /* Global status bar — Figma: h-24px, Fira Mono 12px.
-   Layout: [version | divider] [BUS MB PROV SKILL TOOL AGENT] [spacer →]
-   CSS order trick: left(1) → right(2) → center-spacer(3); no slot-logic change. */
+   Layout: [bottom dock tabs] [spacer →] [ready] [pulse chips] [diagnostics] [version].
+   Slot names remain contribution-contract identifiers; CSS owns visual order. */
 
 .global-status-bar {
   flex-shrink: 0;
@@ -25,15 +25,17 @@
   min-width: 0;
   overflow: hidden;
 }
-/* version badge, flex-start, shrinks to content */
+/* Version is contributed through statusbar.left for compatibility, but the
+   footer presents it as the final, far-right identity chip. */
 .sb-slot-left {
-  order: 1;
+  order: 4;
   flex: 0 0 auto;
   justify-content: flex-start;
   gap: 0;
+  padding-right: 8px;
 }
-/* divider between version and badges via ::after */
-.sb-slot-left::after {
+/* divider immediately before the far-right version */
+.sb-slot-left::before {
   content: '';
   display: block;
   width: 1px;
@@ -42,20 +44,18 @@
   margin: 0 8px;
   flex-shrink: 0;
 }
-/* badges flush-left after the version divider */
+/* Pulse chips + diagnostics sit between Ready and Version. */
 .sb-slot-right {
-  order: 2;
+  order: 3;
   flex: 0 0 auto;
   justify-content: flex-start;
   gap: 0;
 }
-/* spacer — takes remaining space and right-aligns its content (the lone
-   far-right health indicator chip). */
+/* Ready starts the right-aligned status cluster. */
 .sb-slot-center {
-  order: 4;
-  /* margin-left:auto keeps the health chip pinned right whether or not the dock
-     slot (order:3, flex:1) is present — when the dock is empty it collapses to
-     display:none, so this margin is what right-aligns the chip. */
+  order: 2;
+  /* margin-left:auto keeps the cluster right-aligned when the dock slot is
+     empty; when present, the dock's flex growth consumes the same space. */
   flex: 0 0 auto;
   margin-left: auto;
   justify-content: flex-end;
@@ -73,13 +73,12 @@
 /* ── Merged dock bottom-edge strip host ───────────────────────────────────
    installEdgeDrawer relocates dockview's bottom-edge `.dv-tabs-and-actions-
    container` into this slot so the dock tabs sit on the SAME footer row as the
-   status items. order:3 places it AFTER the version (order:1) and badges
-   (order:2) groups; flex:1 + justify-content:center floats the tabs in the
-   middle band of the footer (not jammed against the far-left version badge).
+   status items. order:1 keeps CB / Info / other bottom edge tabs flush-left;
+   flex:1 leaves the status cluster anchored at the right.
    Empty (no docked bottom panels) → display:none, so the center slot's
    margin-left:auto still right-aligns the health chip. */
 .sb-slot-dock {
-  order: 3;
+  order: 1;
   flex: 1 1 auto;
   height: 100%;
   align-items: stretch;

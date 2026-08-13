@@ -1,10 +1,12 @@
 import { createElement } from 'react';
 import {
+  encodePageKey,
   qualifyContributionId,
   resolveContributionRef,
 } from '@forgeax/types';
 import { listExtensions, type ExtensionInfo } from '../../lib/extension-api';
 import { WorkbenchExtensionPanel } from '../../components/DockShell/WorkbenchExtensionPanel';
+import { isWorkbenchHostExtension } from '../../components/DockShell/workbenchRuntime';
 import { getLocale } from '../../i18n';
 import type { AppExtension } from './types';
 import type {
@@ -33,6 +35,45 @@ export function workbenchPane(initialProps?: Readonly<Record<string, unknown>>):
   return pane === 'left' || pane === 'center' ? pane : undefined;
 }
 
+/** Adapt scanner-normalized panel types into Page runtime registrations. */
+export function catalogPanelTypeRegistrations(item: ExtensionInfo): PanelTypeRegistration[] {
+  return (item.contributes?.panelTypes ?? []).map((panel) => ({
+    id: qualifyContributionId(item.id, 'panel', panel.id) as PanelTypeRegistration['id'],
+    runtime: {
+      kind: 'inline',
+      render: (context) => createElement(WorkbenchExtensionPanel, {
+        extensionId: item.id,
+        pane: workbenchPane(context.initialProps),
+      }),
+    },
+    // DetachedSurface can replay only the legacy standalone iframe path.
+    // Workbench host extensions render WorkbenchRuntimeFrame in-dock and have no
+    // detached counterpart yet, so advertising this capability would open the
+    // wrong renderer.
+    ...(item.entry?.standalone && !isWorkbenchHostExtension(item.id)
+      ? {
+          windowing: {
+            createTarget: (context) => {
+              const pane = workbenchPane(context.initialProps);
+              return {
+                surface: {
+                  kind: 'plugin' as const,
+                  id: item.id,
+                  ...(pane ? { pane } : {}),
+                  instance: `${encodePageKey(context.pageKey)}::${context.placementId}`,
+                },
+                title: title(item.displayName),
+                width: 960,
+                height: 720,
+                dockBehavior: 'keep-anchor' as const,
+              };
+            },
+          },
+        }
+      : {}),
+  }));
+}
+
 /** Browser-side activation of scanner-normalized page contributions. Hosts may
  * override an extension with a richer in-process implementation by using the
  * same extension id; those ids are filtered before this adapter runs. */
@@ -45,16 +86,7 @@ export async function loadCatalogPageExtensions(
     const contributes = item.contributes;
     if (!contributes?.pages?.length || overriddenIds.has(item.id)) return [];
 
-    const panelTypes: PanelTypeRegistration[] = (contributes.panelTypes ?? []).map((panel) => ({
-      id: qualifyContributionId(item.id, 'panel', panel.id) as PanelTypeRegistration['id'],
-      runtime: {
-        kind: 'inline',
-        render: (context) => createElement(WorkbenchExtensionPanel, {
-          extensionId: item.id,
-          pane: workbenchPane(context.initialProps),
-        }),
-      },
-    }));
+    const panelTypes = catalogPanelTypeRegistrations(item);
     const pages: PageTypeRegistration[] = contributes.pages.map((page) => {
       const placements = (page.panels ?? []).map((placement) => ({
         id: placement.id,

@@ -1,9 +1,8 @@
 import { lazy, Suspense } from 'react';
-import { ExternalLink } from 'lucide-react';
 import { useTranslation } from '@/i18n';
 import { pickLang } from '../../lib/extension-api';
 import { useExtensionManifest } from '../../lib/use-extension-manifest';
-import { getWindowManager, type SurfaceDescriptor, type SurfacePane } from '../../lib/platform';
+import type { SurfacePane } from '../../lib/platform';
 import { useShellStore } from '../../store';
 import { usePanelRenderers } from './panelRenderers';
 import { WorkbenchRuntimeFrame } from './WorkbenchRuntimeFrame';
@@ -24,28 +23,14 @@ interface Props {
 
 function LegacyStandalonePanel({
   manifest,
-  label,
   pane,
 }: {
   manifest: Exclude<ReturnType<typeof useExtensionManifest>, null | 'loading'>;
-  label: string;
   pane?: SurfacePane;
 }) {
   const { t } = useTranslation();
-  const detachSurface = useShellStore((state) => state.detachSurface);
-  const descriptor: SurfaceDescriptor = { kind: 'plugin', id: manifest.id, ...(pane ? { pane } : {}) };
   return (
     <div className="wb-dock-panel wb-dock-standalone">
-      {getWindowManager().canDetach() && (
-        <button
-          type="button"
-          className="wb-dock-popout-btn"
-          title={t('wbExtensionDock.popoutTitle')}
-          onClick={() => void detachSurface(descriptor, { title: label })}
-        >
-          <ExternalLink size={12} /> {t('wbExtensionDock.popoutLabel')}
-        </button>
-      )}
       <Suspense fallback={<div className="wb-dock-loading">{t('wbExtensionDock.loadingExtensionGeneric')}</div>}>
         <StandaloneExtensionIframe plugin={manifest} pane={pane} active />
       </Suspense>
@@ -129,7 +114,7 @@ export function WorkbenchExtensionPanel({ extensionId, pane }: Props) {
   const label = pickLang(manifest.displayName, i18n.language, manifest.id);
   if (manifest.entry?.standalone) {
     if (!isWorkbenchHostExtension(manifest.id)) {
-      return <LegacyStandalonePanel manifest={manifest} label={label} pane={pane} />;
+      return <LegacyStandalonePanel manifest={manifest} pane={pane} />;
     }
     return (
       <WorkbenchHostPanel

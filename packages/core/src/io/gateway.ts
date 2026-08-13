@@ -32,6 +32,7 @@ import { validate as validateArgs } from './args-schema';
 import type { ValidateResult } from './args-schema';
 import { EngineFacade } from './engine-facade';
 import { assetIO, type AssetIOFacade } from './asset-io-facade';
+import { bindAllSceneAnimationTargets } from '../scene/animation-target-binding';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
 import { assetsErrorRevision, recentAssetsErrors } from '../store/assets-error-bus';
 import {
@@ -1009,6 +1010,11 @@ export class EditGateway {
     const engine = this._getEngineFacade() as unknown as EngineWriteProxy;
     const ctx: DocApplierCtx = {
       engine,
+      bindAnimationTargets: (roots) => bindAllSceneAnimationTargets(
+        this.doc.world as World,
+        { mutation: engine },
+        roots,
+      ).flatMap((entry) => entry.failures),
       // Asset write gate (north-star §2 axis symmetry): document appliers such as
       // destroyAsset reach the pack IO through this, never the raw pack-ops API.
       assetIO,

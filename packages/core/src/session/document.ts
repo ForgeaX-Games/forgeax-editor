@@ -31,6 +31,8 @@ import type { EntityHandle } from '../scene/scene-types';
 import { Visibility, VisibilityStateValue, visibilityStateFromU32, type VisibilityState } from '../visibility';
 import { EngineFacade } from '../io/engine-facade';
 import { assetIO } from '../io/asset-io-facade';
+import { normalizeAnimationPlayerSceneAsset } from '../scene/animation-slot-sync';
+import { bindAllSceneAnimationTargets, type AnimationTargetBindingFailure } from '../scene/animation-target-binding';
 import { worldRootHandles } from '../store/entity-state';
 import { getComponentSchema, type FieldSchema } from '../scene/schema';
 import { planGroupedArrayPatch } from '../scene/array-edit';
@@ -63,7 +65,7 @@ export function applyCanonicalDocumentEffect(
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
+  'get' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.
@@ -89,6 +91,10 @@ export type DocQueryFn = (descriptor: unknown) => unknown;
  *  applier body is a tsc error (AC-01 negative; ctx-world-negative guard). */
 export interface DocApplierCtx {
   engine: EngineWriteProxy;
+  /** Editor workflow hook for copied scene assets. The generic engine
+   *  materializer does not perform animation binding; the document boundary
+   *  supplies the explicit importer/authoring policy here. */
+  bindAnimationTargets(roots: readonly EntityHandle[]): readonly AnimationTargetBindingFailure[];
   /** Asset/pack write gate (north-star §2 axis symmetry with engine). Document
    *  appliers such as destroyAsset reach pack IO through this. */
   assetIO: import('../io/asset-io-facade').AssetIOFacade;
@@ -1219,7 +1225,10 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
   const asset = cmd.asset as SceneAsset | undefined;
   if (!asset) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'instantiateSceneAsset requires a collected `asset` (SceneAsset POD)' } };
 
-  const r = engine.instantiateSceneAssetFlat(asset);
+  // This is an Editor document operation, so normalize the copied payload at
+  // the workflow boundary. EngineFacade.instantiateSceneAssetFlat remains a
+  // generic asset materializer and deliberately knows nothing about animation.
+  const r = engine.instantiateSceneAssetFlat(normalizeAnimationPlayerSceneAsset(asset));
   if (!r.ok) {
     // instantiateSceneAssetFlat returns AssetError | PackError | EcsError |
     // {NO_REGISTRY} — all opaque here; surface as a single structured code so the
@@ -1229,6 +1238,15 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
   const newRoots = r.value as EntityHandle[];
   if (newRoots.length === 0) {
     return { ok: false, error: { code: 'INSTANTIATE_FAILED', hint: 'scene-asset instantiate produced no roots' } };
+  }
+  const bindingFailures = ctx.bindAnimationTargets(newRoots);
+  if (bindingFailures.length > 0) {
+    return cascadeInstantiateFailure(
+      engine,
+      newRoots,
+      'INSTANTIATE_FAILED',
+      `scene-asset animation binding failed: ${JSON.stringify(bindingFailures)}`,
+    );
   }
 
   // Retarget the PRIMARY root: parent + name. rootsToSceneAsset strips ChildOf on
@@ -1281,7 +1299,7 @@ function cascadeInstantiateFailure(
   code: CommandError['code'],
   hint: string,
 ): ApplyResult {
-  for (const root of roots) engine.despawn(root);
+  for (const root of roots) engine.despawnScene(root);
   return { ok: false, error: { code, hint } };
 }
 
@@ -1344,6 +1362,11 @@ export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
   const alias: DocAliasMap = new Map();
   const ctx: DocApplierCtx = {
     engine,
+    bindAnimationTargets: (roots) => bindAllSceneAnimationTargets(
+      session.world as World,
+      { mutation: engine },
+      roots,
+    ).flatMap((entry) => entry.failures),
     // Asset write gate (north-star §2 axis symmetry): begin/undo of destroyAsset
     // reach pack IO through this, consistent with the gateway executor ctx. The
     // shared `assetIO` singleton is intentional (AC-D2): its per-path pack write

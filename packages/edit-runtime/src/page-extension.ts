@@ -368,17 +368,41 @@ export function createEditorPageExtension(
     },
     setup(ctx) {
       hostRef = ctx.host;
+      // useActiveEditorAsset is backed by useSyncExternalStore. Keep the
+      // derived Input Map asset identity stable until the page snapshot or its
+      // staging metadata actually changes.
+      let cachedPageSnapshot: unknown;
+      let cachedSourceAsset: SelectedAsset | null | undefined;
+      let cachedStagingName: string | undefined;
+      let cachedStagingPackPath: string | undefined;
+      let cachedActiveAsset: SelectedAsset | null = null;
       const activeAsset = (): SelectedAsset | null => {
         const snapshot = ctx.host.pages.getSnapshot();
         const instance = snapshot.instances.find((candidate) => candidate.encodedKey === snapshot.activeKey);
         const value = instance?.resource?.metadata?.asset;
-        if (!value || typeof value !== 'object') return null;
-        const asset = value as SelectedAsset;
-        if (instance?.typeId !== INPUT_MAP_PAGE) return asset;
-        const staging = getInputMapStaging(asset.guid);
-        return staging
+        const asset = value && typeof value === 'object' ? value as SelectedAsset : null;
+        const staging = instance?.typeId === INPUT_MAP_PAGE && asset
+          ? getInputMapStaging(asset.guid)
+          : undefined;
+        const stagingName = staging?.name;
+        const stagingPackPath = staging?.packPath;
+        if (
+          cachedPageSnapshot === snapshot
+          && cachedSourceAsset === asset
+          && cachedStagingName === stagingName
+          && cachedStagingPackPath === stagingPackPath
+        ) {
+          return cachedActiveAsset;
+        }
+
+        cachedPageSnapshot = snapshot;
+        cachedSourceAsset = asset;
+        cachedStagingName = stagingName;
+        cachedStagingPackPath = stagingPackPath;
+        cachedActiveAsset = asset && staging
           ? { ...asset, name: staging.name, packPath: staging.packPath }
           : asset;
+        return cachedActiveAsset;
       };
       const resetNavigation = configureEditorPageNavigation({
         async openAsset(asset) {
@@ -394,7 +418,14 @@ export function createEditorPageExtension(
           });
         },
         getActiveAsset: activeAsset,
-        subscribe: ctx.host.pages.subscribe,
+        subscribe: (listener) => {
+          const unsubscribePages = ctx.host.pages.subscribe(listener);
+          const unsubscribeStaging = subscribeInputMapStaging(listener);
+          return () => {
+            unsubscribePages();
+            unsubscribeStaging();
+          };
+        },
       });
       const resetDirtyProbe = registerPageDirtyProbe({
         isDirty: (page) => {

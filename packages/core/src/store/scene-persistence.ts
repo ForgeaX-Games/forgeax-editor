@@ -99,6 +99,8 @@ import { broadcastAssetsChanged } from './assets-changed';
 import { createCommandError } from '@forgeax/editor-product';
 import { EngineFacade } from '../io/engine-facade';
 import { clearAnimationPreviews, restoreAllAnimationPreviews } from '../session/animation-preview';
+import { normalizeAnimationPlayerSceneAsset } from '../scene/animation-slot-sync';
+import { bindAllSceneAnimationTargets } from '../scene/animation-target-binding';
 
 // ── ScenePersistenceContext: the one mutable persistence-state handle (D-2) ────
 // The formerly module-level persistence `let` singletons collapse into ONE object with
@@ -703,10 +705,25 @@ registerApplier('session', 'promoteImportedScene', (rawOp) => {
       // active document. Any failure leaves the imported world/session untouched.
       const fresh = createEditSession();
       fresh.registry = sourceState.registry;
-      const instantiated = new EngineFacade(fresh.world, sourceState.registry)
-        .instantiateSceneAssetFlat(promotedScene);
+      const freshEngine = new EngineFacade(fresh.world, sourceState.registry);
+      const instantiated = freshEngine.instantiateSceneAssetFlat(
+        normalizeAnimationPlayerSceneAsset(promotedScene),
+      );
       if (!instantiated.ok) {
         return promoteFailure('promote-activation-failed', 'Promoted SceneAsset could not be instantiated in a fresh authored world.', instantiated.error);
+      }
+      const bindingFailures = bindAllSceneAnimationTargets(
+        fresh.world,
+        { mutation: freshEngine },
+        instantiated.value,
+      ).flatMap((entry) => entry.failures);
+      if (bindingFailures.length > 0) {
+        for (const root of instantiated.value) freshEngine.despawnScene(root);
+        return promoteFailure(
+          'promote-activation-failed',
+          'Promoted SceneAsset animation targets could not be bound in a fresh authored world.',
+          bindingFailures,
+        );
       }
       const content = JSON.stringify(pack, null, 2) + '\n';
       const resolvedPath = resolveGamePath(target.path);
@@ -1019,6 +1036,7 @@ export const worldToPack = diskIo.worldToPack;
 /** @internal-store — disk-watch CALLS this to reload on a genuine external edit. */
 export const loadSceneByGuid = diskIo.loadSceneByGuid;
 export const instantiateSceneRefUnderWorld = diskIo.instantiateSceneRefUnderWorld;
+export const instantiateSceneRefUnderWorldDetailed = diskIo.instantiateSceneRefUnderWorldDetailed;
 /** @internal-store — the bindAssetRef session applier CALLS this to resolve a
  *  catalogued asset GUID to a live shared<T> handle before writing it. */
 export const resolveAssetRefToHandle = diskIo.resolveAssetRefToHandle;

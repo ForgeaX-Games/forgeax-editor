@@ -112,9 +112,9 @@
       "confirm": "确认"
     },
     "tour": {
-      "assets": {
-        "anchor": "文件资源管理器",
-        "body": "项目里的文件、场景和美术资产都在这里集中管理、搜索与导入，是你的资源中心。"
+      "footer": {
+        "anchor": "底部状态栏 · 内容浏览器与信息",
+        "body": "屏幕最底部这条状态栏汇集了默认收起的工具面板：点开「内容浏览器」，项目里的文件、场景和美术资产都能在这里集中管理、搜索与导入，是你的资源中心；点开「信息」，则能查看运行、编辑与引擎的实时日志。平时它们收起在这里不占地方，需要时向上展开。"
       },
       "preview": {
         "anchor": "预览视口",
@@ -846,8 +846,6 @@
       "expand": "展开",
       "expandAll": "展开全部"
     },
-    "windowTitle": "对话 Chat",
-    "popOut": "把对话弹出为独立窗口",
     "empty": {
       "title": "开始对话",
       "subtitle": "告诉 FORGE 你想做什么游戏 —— 例如 \"在 games/gta-2.5d/main.ts 里写一个旋转立方体\"。"
@@ -1280,7 +1278,9 @@
     "moveOffSide": "移出侧边",
     "moveToPrimaryDock": "移回主停靠区",
     "chatToDefault": "在默认位置显示",
+    "detachedWindowPlaceholder": "已在独立窗口打开",
     "tabContext": {
+      "openInNewWindow": "在独立窗口中打开",
       "close": "关闭",
       "closeOthers": "关闭其他"
     },
@@ -1312,6 +1312,9 @@
     "newPage": "新建页签",
     "allPages": "全部页签",
     "noOpenableTypes": "没有可新建的页签类型",
+    "searchPageTypes": "搜索页签类型…",
+    "noMatchingTypes": "没有匹配的页签类型",
+    "availableTypes": "可新建页签",
     "closeTab": "关闭 {{title}}",
     "context": {
       "close": "关闭",
@@ -1407,8 +1410,6 @@
   },
   "wbExtensionDock": {
     "loadingExtension": "正在加载 {{extensionId}}…",
-    "popoutTitle": "弹出为独立 OS 窗口",
-    "popoutLabel": "独立窗口",
     "loadingExtensionGeneric": "正在加载扩展…",
     "loadingWorkbenchHost": "正在连接 Workbench 宿主…",
     "workbenchHostFailed": "Workbench 宿主加载失败：{{error}}",
