@@ -54,6 +54,12 @@ test('trusted carrier retrieves only the fork head workflow directory from its i
       text.indexOf('Validate self-hosted runner pool labels'),
   );
   assert.match(text, /check-workflow-admission\.mjs --workflows-dir pr-head\/\.github\/workflows/);
+  assert.match(text, /Admit live default-branch required-check policy/);
+  assert.match(text, /editor-ci-contract\.mjs --live-ruleset --skip-portfolio --workflows-dir pr-head\/\.github\/workflows/);
+  assert.ok(
+    text.indexOf('Admit live default-branch required-check policy') <
+      text.indexOf('Validate PR-head contract bindings'),
+  );
 });
 
 test('parser invocation passes the complete derived file list and pinned options', () => {

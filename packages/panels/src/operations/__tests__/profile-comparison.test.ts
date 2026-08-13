@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'bun:test';
 import { createOperationRun } from '@forgeax/editor-product';
 import { projectProfileComparison } from '../../operation-projection';
@@ -57,6 +58,17 @@ function succeededRun(runId: string, result: unknown) {
 }
 
 describe('profile comparison projection', () => {
+  it('delegates structural comparison to the Engine profiler', () => {
+    const source = readFileSync(new URL('../profile-comparison.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain('compareProfileCaptures');
+    expect(source).not.toContain('function phaseKey');
+    expect(source).not.toContain('function phaseIdentity');
+    expect(source).not.toContain('function phaseFact');
+    expect(source).not.toContain('function phaseDelta');
+    expect(source).not.toContain('function projectPhases');
+  });
+
   it('derives a union of full Engine phase identities and preserves completeness facts', () => {
     const projection = projectProfileComparison(
       succeededRun('run-left', capture('capture-0001')),
@@ -135,13 +147,19 @@ describe('profile comparison projection', () => {
       error: {
         code: 'profile-artifact-incompatible',
         expected: 'a schema-valid ProfileCapture v1 artifact',
-        detail: { path: '/schemaVersion' },
+        detail: { path: '/schemaVersion', side: 'left' },
       },
     });
     expect(engineRejected.right.summary?.captureId).toBe('capture-0003');
-    expect(engineRejected.phases).toHaveLength(3);
-    expect(engineRejected.phases.every((phase) => phase.left === undefined)).toBe(true);
-    expect(engineRejected.phases.every((phase) => phase.right !== undefined)).toBe(true);
+    expect(engineRejected.phases).toHaveLength(0);
+
+    const bothRejected = projectProfileComparison(
+      succeededRun('run-engine-invalid-left', { schemaVersion: '9.0' }),
+      succeededRun('run-engine-invalid-right', { schemaVersion: '9.0' }),
+    );
+    expect(bothRejected.left.error).toMatchObject({ detail: { side: 'left' } });
+    expect(bothRejected.right.error).toMatchObject({ detail: { side: 'right' } });
+    expect(bothRejected.phases).toHaveLength(0);
   });
 
   it('rejects non-succeeded or result-less runs without inventing a profile model', () => {

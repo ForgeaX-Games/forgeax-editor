@@ -49,11 +49,8 @@ import {
   VFX_PREVIEW_LEASE_KIND,
   VFX_PREVIEW_OPERATION_IDS,
 } from './vfx-preview-operations';
+import { createPreviewBundlerOptions } from './preview-bundler-options';
 import './vfx-preview.css';
-
-const PREVIEW_BUNDLER_OPTIONS = {
-  shaderManifestUrl: `${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/shaders/manifest.json`,
-};
 
 async function copyDependency(target: AssetRegistry, guid: string): Promise<void> {
   const payload = await loadDocumentAssetPayload(guid);
@@ -159,12 +156,13 @@ export function VfxPreviewViewport(): ReactElement {
     container.appendChild(canvas);
     setStatus('booting');
     setErrorHint(undefined);
+    const previewBundlerOptions = createPreviewBundlerOptions();
 
     const create = (rhi?: unknown) => createApp(canvas, {
       features: [vfxHost.feature],
       pointerLockAllowed: () => false,
       ...(rhi === undefined ? {} : { rhi: rhi as never }),
-    }, PREVIEW_BUNDLER_OPTIONS);
+    }, previewBundlerOptions);
 
     void (async () => {
       const loadedEffect = await loadDocumentAssetPayload(asset.guid);

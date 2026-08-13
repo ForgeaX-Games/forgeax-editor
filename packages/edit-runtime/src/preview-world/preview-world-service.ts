@@ -15,10 +15,7 @@ import {
 } from '@forgeax/editor-core';
 import { assembleMeshPreviewWorld, type MeshPreviewAssembly, type MeshPreviewBounds } from './assemble-mesh-preview-world';
 import { createViewport, type Viewport } from '../viewport/viewport';
-
-const PREVIEW_BUNDLER_OPTIONS = {
-  shaderManifestUrl: `${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/shaders/manifest.json`,
-};
+import { createPreviewBundlerOptions } from '../viewport/preview-bundler-options';
 const PREVIEW_BOOT_TIMEOUT_MS = 8_000;
 
 export type MeshPreviewStatus = 'booting' | 'empty' | 'loading' | 'ready' | 'failed';
@@ -265,13 +262,14 @@ export class PreviewWorldService {
     const host = this.host;
     const canvas = this.canvas;
     if (!host || !canvas) return;
+    const previewBundlerOptions = createPreviewBundlerOptions();
 
     try {
       let abandonPrimary = false;
       const primary = this.dependencies.createApp(
         canvas,
         { pointerLockAllowed: () => false },
-        PREVIEW_BUNDLER_OPTIONS,
+        previewBundlerOptions,
       ).then((result) => {
         if (abandonPrimary && result.ok) {
           try { result.value.stop(); } catch { /* timed-out app never became owned */ }
@@ -295,7 +293,7 @@ export class PreviewWorldService {
         created = await this.dependencies.createApp(
           canvas,
           { pointerLockAllowed: () => false, rhi: rhiNull.rhi as never },
-          PREVIEW_BUNDLER_OPTIONS,
+          previewBundlerOptions,
         );
       }
       if (!created.ok) {
@@ -305,7 +303,7 @@ export class PreviewWorldService {
         created = await this.dependencies.createApp(
           canvas,
           { pointerLockAllowed: () => false, rhi: rhiNull.rhi as never },
-          PREVIEW_BUNDLER_OPTIONS,
+          previewBundlerOptions,
         );
       }
       if (!created.ok) {

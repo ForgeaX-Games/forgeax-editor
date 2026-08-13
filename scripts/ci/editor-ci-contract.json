@@ -6,6 +6,8 @@
       "checkId": "b2-self-boot",
       "owner": "editor-ci",
       "command": "bun scripts/selfcheck-standalone-b2.mjs",
+      "runnerPool": "standard",
+      "permissions": {"contents": "read"},
       "executionHome": {
         "local-fast": true,
         "local-full": true,
@@ -20,6 +22,8 @@
       "checkId": "typecheck",
       "owner": "editor-ci",
       "command": "bun run typecheck",
+      "runnerPool": "standard",
+      "permissions": {"contents": "read"},
       "executionHome": {
         "local-fast": true,
         "local-full": true,
@@ -76,6 +80,8 @@
       "checkId": "submodule-pin",
       "owner": "editor-ci",
       "command": "node scripts/check-submodule-pins.mjs",
+      "runnerPool": "standard",
+      "permissions": {"contents": "read"},
       "executionHome": {
         "local-fast": false,
         "local-full": true,
@@ -90,6 +96,8 @@
       "checkId": "smoke-play",
       "owner": "editor-ci",
       "command": "bun run test:e2e -- apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts",
+      "runnerPool": "heavy",
+      "permissions": {"contents": "read"},
       "executionHome": {
         "local-fast": false,
         "local-full": true,

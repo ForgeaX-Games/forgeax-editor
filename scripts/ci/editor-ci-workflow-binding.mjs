@@ -6,16 +6,8 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { parse as parseYaml } from 'yaml';
 import { buildWorkflowGraph, extractRequiredContexts } from './ci-baseline.mjs';
 
-const REQUIRED_CONTEXTS = Object.freeze(['b2-self-boot', 'typecheck', 'submodule-pin', 'smoke-play']);
-const CAPACITY_BY_CHECK = Object.freeze({
-  'b2-self-boot': 'standard',
-  typecheck: 'standard',
-  'submodule-pin': 'standard',
-  'smoke-play': 'heavy',
-});
 const PRODUCER_JOB_ID = 'prerequisite-release';
 const PRODUCER_POOL = 'standard';
 
@@ -29,6 +21,12 @@ function failure(error) {
 
 function checksById(contract) {
   return new Map((contract.checks ?? []).map((check) => [check.checkId, check]));
+}
+
+function canonicalPermissions(value) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function allJobs(graph) {
@@ -115,15 +113,17 @@ function bindSupportingProducer(contract, graph, profile) {
 function validateRequiredContextNames(contract) {
   const entries = contract.requiredContexts ?? [];
   const names = entries.map((entry) => entry.context);
-  if (names.length !== REQUIRED_CONTEXTS.length ||
-      REQUIRED_CONTEXTS.some((context) => !names.includes(context)) ||
-      names.some((context) => !REQUIRED_CONTEXTS.includes(context))) {
+  if (entries.length === 0 || names.some((context) => typeof context !== 'string' || context.trim().length === 0)) {
     return issue(
       'required-context-drift',
-      REQUIRED_CONTEXTS,
+      'non-empty producer-owned required context names',
       names,
-      'Keep the four migration-era required context names stable.',
+      'Keep required context names in the producer contract and compare them with the live ruleset at admission time.',
     );
+  }
+  const duplicates = names.filter((context, index) => names.indexOf(context) !== index);
+  if (duplicates.length > 0) {
+    return issue('required-context-duplicate', 'one producer contract entry per required context', [...new Set(duplicates)], 'Remove duplicate context entries instead of creating a shadow roster.');
   }
   return null;
 }
@@ -152,6 +152,17 @@ export function validateWorkflowBinding(contract, graph, { docOnly = false, prof
   const jobs = allJobs(graph);
   const bindings = [];
   const boundJobs = new Set();
+
+  const expectedContextNames = contract.requiredContexts.map((entry) => entry.context).sort();
+  const observedContextNames = graphContexts.map((entry) => entry.context).sort();
+  if (JSON.stringify(expectedContextNames) !== JSON.stringify(observedContextNames)) {
+    return failure(issue(
+      'required-context-drift',
+      expectedContextNames,
+      observedContextNames,
+      'The live ruleset and trusted workflow graph must expose exactly the producer contract contexts.',
+    ));
+  }
 
   const hasProducer = Boolean(findJob(graph, PRODUCER_JOB_ID));
   if (requireProducer === true || profile !== undefined || hasProducer) {
@@ -200,9 +211,20 @@ function bindContext(required, graphContexts, jobs, checks, boundJobs) {
   }
   boundJobs.add(`${match.workflow}:${match.jobId}`);
 
-  const expectedPool = CAPACITY_BY_CHECK[required.checkId];
-  if (job.runner?.kind === 'self-hosted' && job.runner.pool !== expectedPool) {
-    return { ok: false, error: issue('runner-capacity-drift', expectedPool, job.runner.pool ?? null, `Keep ${required.checkId} on the ${expectedPool} self-hosted capacity pool.`) };
+  const expectedPool = check.runnerPool;
+  if (typeof expectedPool !== 'string' || expectedPool.length === 0) {
+    return { ok: false, error: issue('runner-capability-contract-missing', 'runnerPool on the producer-owned check contract', expectedPool ?? null, `Declare the runner capability for ${required.checkId} in the producer contract.`) };
+  }
+  if (job.runner?.kind !== 'self-hosted' || job.runner.pool !== expectedPool) {
+    return { ok: false, error: issue('runner-capability-drift', {kind: 'self-hosted', pool: expectedPool}, job.runner ?? null, `Keep ${required.checkId} on the ${expectedPool} self-hosted capacity pool.`) };
+  }
+  const expectedPermissions = canonicalPermissions(check.permissions);
+  const observedPermissions = canonicalPermissions(job.permissions);
+  if (!expectedPermissions) {
+    return { ok: false, error: issue('least-privilege-contract-missing', 'permissions on the producer-owned check contract', check.permissions ?? null, `Declare the least-privilege permission set for ${required.checkId}.`) };
+  }
+  if (JSON.stringify(expectedPermissions) !== JSON.stringify(observedPermissions)) {
+    return { ok: false, error: issue('least-privilege-drift', expectedPermissions, observedPermissions, `Keep ${required.checkId} at the producer-declared least-privilege permission set.`) };
   }
   return {
     ok: true,
@@ -214,6 +236,8 @@ function bindContext(required, graphContexts, jobs, checks, boundJobs) {
       jobName: match.jobName,
       owner: check.owner,
       executionHome: structuredClone(check.executionHome),
+      runnerPool: expectedPool,
+      permissions: structuredClone(expectedPermissions),
     },
   };
 }

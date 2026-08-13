@@ -45,6 +45,49 @@ test('unavailable live ruleset is not converted into a fixture-backed green resu
   assert.equal(result.envelope.terminalStatus, 'failure');
 });
 
+test('post-merge success is blocked by the same workflow runner and permission admission', () => {
+  const result = classifyPostMergeAdmission({
+    workflowRun: {id: 801, run_attempt: 1, head_sha: 'target-sha-001', html_url: 'https://example.test/run/801'},
+    targetSha: 'target-sha-001',
+    jobs: [{id: 901, name: 'typecheck', run_id: 801, run_attempt: 1, conclusion: 'success'}],
+    liveRuleset: {requiredContexts: ['typecheck']},
+    requiredContexts: ['typecheck'],
+    workflowAdmission: {
+      ok: false,
+      errors: [{code: 'least-privilege-drift', observed: {contents: 'write'}, hint: 'permission drift'}],
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.envelope.failureClass, 'admission');
+  assert.equal(result.envelope.code, 'least-privilege-drift');
+});
+
+test('post-merge admission rejects duplicate jobs and incomplete attempt packets', () => {
+  const duplicate = classifyPostMergeAdmission({
+    workflowRun: {id: 801, run_attempt: 1, head_sha: 'target-sha-001', html_url: 'https://example.test/run/801'},
+    targetSha: 'target-sha-001',
+    jobs: [
+      {id: 901, name: 'typecheck', run_id: 801, run_attempt: 1},
+      {id: 902, name: 'typecheck', run_id: 801, run_attempt: 1},
+    ],
+    liveRuleset: {requiredContexts: ['typecheck']},
+    requiredContexts: ['typecheck'],
+  });
+  assert.equal(duplicate.envelope.code, 'required-context-job-ambiguous');
+
+  const incomplete = classifyPostMergeAdmission({
+    workflowRun: {id: 801, run_attempt: 1, head_sha: 'target-sha-001', html_url: 'https://example.test/run/801'},
+    targetSha: 'target-sha-001',
+    jobs: [
+      {id: 901, name: 'typecheck', run_id: 801, run_attempt: 1},
+      {id: 902, name: 'supporting', run_id: 801},
+    ],
+    liveRuleset: {requiredContexts: ['typecheck']},
+    requiredContexts: ['typecheck'],
+  });
+  assert.equal(incomplete.envelope.code, 'run-attempt-missing');
+});
+
 function applyDeliveryMutation(input, mutation) {
   const next = structuredClone(input);
   if (!mutation) return next;
