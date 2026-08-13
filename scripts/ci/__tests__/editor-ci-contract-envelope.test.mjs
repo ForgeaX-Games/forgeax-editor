@@ -11,6 +11,9 @@ import {
   validateEnvelope,
   validateLandedDelivery,
   validateAdmissionEnvelope,
+  DELIVERY_PRODUCER_FIELDS,
+  createDeliveryEnvelope,
+  validateProducerReleaseIdentity,
 } from '../editor-ci-contract-envelope.mjs';
 import {
   DEFAULT_ADMISSION_ALLOWLIST,
@@ -93,6 +96,37 @@ function failureInput(failureClass, transient) {
       },
     ],
     sloClaim: null,
+  };
+}
+
+function producerRelease() {
+  return {
+    schemaVersion: 'forgeax-prerequisite-release/v1',
+    artifactId: 'prerequisite-release-100-1',
+    releaseDigest: `sha256:${'1'.repeat(64)}`,
+    inventory: [
+      {
+        payloadClass: 'engine-dist',
+        path: 'payload/engine-dist/index.js',
+        sha256: '2'.repeat(64),
+      },
+    ],
+    producerRunId: '100',
+    producerAttempt: 1,
+    sourceSha: 'a'.repeat(40),
+    recursivePins: [{path: 'packages/engine', pin: 'b'.repeat(40)}],
+    producerSuccess: true,
+    producerEnvironmentFingerprint: 'linux-x64-standard',
+    compatibility: {
+      os: 'linux',
+      architecture: 'x64',
+      bunVersion: '1.3.14',
+      nodeVersion: '22.13.0',
+      pnpmVersion: '11.7.0',
+      rustVersion: '1.93',
+      wasmPackVersion: '0.14.0',
+      capacityPool: ['standard', 'heavy'],
+    },
   };
 }
 
@@ -284,4 +318,51 @@ test('delivery state keeps landed, admission, and harness boundaries distinct', 
   assert.equal(pendingResult.phase, 'harness');
   assert.equal(pendingResult.status, 'pending');
   assert.equal(pendingResult.error.code, 'harness-remote-push-missing');
+});
+
+test('producer delivery identity contains the complete immutable join fields', () => {
+  const result = validateProducerReleaseIdentity(producerRelease());
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(Object.keys(result.producer).sort(), [...DELIVERY_PRODUCER_FIELDS].sort());
+  assert.equal(result.producer.artifactId, 'prerequisite-release-100-1');
+  assert.equal(result.producer.producerRunId, '100');
+  assert.equal(result.producer.producerAttempt, 1);
+  assert.equal(result.producer.sourceSha, 'a'.repeat(40));
+  assert.equal(result.producer.landedSha, undefined);
+});
+
+test('producer identity drift and cross-domain aliases fail closed with recovery fields', () => {
+  const cases = [
+    ['missing inventory', (value) => delete value.inventory, 'producer-identity-field-missing'],
+    ['wrong source SHA', (value) => { value.sourceSha = 'c'.repeat(40); }, 'producer-source-sha-mismatch'],
+    ['wrong recursive pin', (value) => { value.recursivePins[0].pin = 'd'.repeat(40); }, 'producer-recursive-pin-mismatch'],
+    ['invalid attempt', (value) => { value.producerAttempt = 0; }, 'producer-attempt-invalid'],
+    ['landed SHA alias', (value) => { value.landedSha = 'e'.repeat(40); }, 'producer-landed-sha-alias'],
+  ];
+  for (const [name, mutateProducer, expectedCode] of cases) {
+    const candidate = producerRelease();
+    mutateProducer(candidate);
+    const result = validateProducerReleaseIdentity(candidate, {
+      sourceSha: producerRelease().sourceSha,
+      recursivePins: producerRelease().recursivePins,
+    });
+    assert.equal(result.ok, false, name);
+    assert.equal(result.error.code, expectedCode, name);
+    assert.notEqual(result.error.expected, undefined, name);
+    assert.notEqual(result.error.observed, undefined, name);
+    assert.equal(typeof result.error.hint, 'string', name);
+    assert.ok(result.handoff, name);
+  }
+});
+
+test('producer execution evidence joins landed delivery without renaming either identity', () => {
+  const result = createDeliveryEnvelope({
+    producer: producerRelease(),
+    landed: landedFixture.approvedInput,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.producer.artifactId, 'prerequisite-release-100-1');
+  assert.equal(result.landed.landedSha, landedFixture.approvedInput.landedSha);
+  assert.equal(result.producer.sourceSha, landedFixture.approvedInput.admission.sourceSha);
+  assert.notEqual(result.producer.artifactId, result.landed.landedSha);
 });

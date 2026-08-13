@@ -125,17 +125,20 @@ describe('session routing — setViewportPreferences', () => {
     expect(prefs.flyBoostMultiplier).toBe(1);
   });
 
-  it('(h) drops unknown patch keys', () => {
+  it('(h) rejects unknown patch keys without shadow state or ledger residue', () => {
     const before = getViewportPreferences();
+    const ledgerBefore = gw.ledger.length;
     const r = gw.dispatch({
       kind: 'setViewportPreferences',
       patch: { nonsense: 1, invertY: true },
     } as unknown as EditorOp);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_ARGS');
     const prefs = getViewportPreferences();
-    expect(prefs.invertY).toBe(true);
+    expect(prefs.invertY).toBe(before.invertY);
     expect('nonsense' in prefs).toBe(false);
     expect(prefs.mouseSensitivity).toBe(before.mouseSensitivity);
+    expect(gw.ledger.length).toBe(ledgerBefore);
   });
 
   it('(i) never overwrites camera bookmarks from the op path', () => {
@@ -174,5 +177,19 @@ describe('session routing — setViewportPreferences', () => {
     const parsed = JSON.parse(raw!) as { v: number; mouseSensitivity: number };
     expect(parsed.v).toBe(1);
     expect(parsed.mouseSensitivity).toBe(3);
+  });
+
+  it('(l) applies grid visibility through the session operation without document undo', () => {
+    const undoBefore = gw.appliedCount();
+    const ledgerBefore = gw.ledger.length;
+    const r = gw.dispatch(patchOp({ gridVisible: false }));
+
+    expect(r.ok).toBe(true);
+    expect(getViewportPreferences().gridVisible).toBe(false);
+    expect(gw.ledger.length).toBe(ledgerBefore + 1);
+    expect(gw.appliedCount()).toBe(undoBefore);
+    const raw = storage.getItem(VIEWPORT_PREFERENCES_STORAGE_KEY);
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!).gridVisible).toBe(false);
   });
 });

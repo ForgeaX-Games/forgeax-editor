@@ -523,7 +523,7 @@ function flattenVisibleRows(
   return rows;
 }
 
-function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined {
+function useRemoteHierarchyProjection(enabled: boolean): HierarchyRuntimeProjection | undefined {
   const connection = useSyncExternalStore(
     subscribeViewportRuntimeClient,
     getViewportRuntimeClientSnapshot,
@@ -531,24 +531,49 @@ function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined 
   );
   const [projection, setProjection] = useState<HierarchyRuntimeProjection | undefined>();
   useEffect(() => {
+    if (!enabled) {
+      setProjection(undefined);
+      return;
+    }
     if (connection.status !== 'ready') {
       setProjection(undefined);
       return;
     }
+    // A new carrier/generation must not be mistaken for the previous selector's
+    // revision. The next successful query installs the new baseline.
+    setProjection(undefined);
     let disposed = false;
     let pending = false;
+    let lastProjectionRevision: number | undefined;
+    let lastSelectionIds: readonly EntityHandle[] | undefined;
     const refresh = async () => {
       if (pending) return;
       pending = true;
       try {
         const envelope = await queryViewportRuntimeProjection<HierarchyRuntimeProjection>({ kind: 'hierarchy.structure' });
         if (disposed) return;
-        if (envelope.status === 'ready') setProjection(envelope.value);
-        else if (envelope.status === 'empty') setProjection({
-          structure: { structureEpoch: envelope.revision, rows: [] },
-          selectionIds: [],
-        });
-        else setProjection(undefined);
+        if (envelope.status === 'ready') {
+          const next = envelope.value;
+          const revision = next.structure.projectionRevision;
+          const sameSelection = lastSelectionIds !== undefined
+            && lastSelectionIds.length === next.selectionIds.length
+            && lastSelectionIds.every((id, index) => id === next.selectionIds[index]);
+          if (revision !== undefined && revision === lastProjectionRevision && sameSelection) return;
+          lastProjectionRevision = revision;
+          lastSelectionIds = next.selectionIds;
+          setProjection(next);
+        } else if (envelope.status === 'empty') {
+          lastProjectionRevision = envelope.revision;
+          lastSelectionIds = [];
+          setProjection({
+            structure: { structureEpoch: envelope.revision, rows: [] },
+            selectionIds: [],
+          });
+        } else {
+          lastProjectionRevision = undefined;
+          lastSelectionIds = undefined;
+          setProjection(undefined);
+        }
       } catch {
         if (!disposed) setProjection(undefined);
       } finally {
@@ -563,7 +588,7 @@ function useRemoteHierarchyProjection(): HierarchyRuntimeProjection | undefined 
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
+  }, [enabled, connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
   return projection;
 }
 
@@ -572,8 +597,12 @@ function useHierarchyProjection(): {
   readonly remote: HierarchyRuntimeProjection | undefined;
   readonly hasLocalRuntimeGraph: boolean;
 } {
-  const remoteProjection = useRemoteHierarchyProjection();
   const graph = getActiveRuntimeUiGraph();
+  // The in-process standalone host already owns the authoritative RuntimeUiGraph.
+  // Do not also start the cross-carrier 100 ms pull loop: it creates a second
+  // projection and needlessly re-renders the whole hierarchy. The remote path
+  // remains available for a shell whose viewport lives in another carrier.
+  const remoteProjection = useRemoteHierarchyProjection(graph === null);
   const holder = useRef<{ graph: unknown; generation: number; selector: ReturnType<typeof createHierarchyStructureSelector>; mounted: ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']> } | null>(null);
   const generation = graph?.stats().worldGeneration ?? 0;
   if (graph && (holder.current?.graph !== graph || holder.current.generation !== generation)) {

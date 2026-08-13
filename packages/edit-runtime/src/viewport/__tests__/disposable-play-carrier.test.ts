@@ -6,10 +6,12 @@ import {
 } from '../disposable-play-carrier';
 import { createRunLifecycle } from '../run-lifecycle';
 
-function harness() {
+function harness(onFps?: (fps: number, generation: number) => void) {
   const events: string[] = [];
-  let listener: ((event: MessageEvent) => void) | null = null;
-  const source = { postMessage: () => events.push('post-stop') } as unknown as WindowProxy;
+  const listeners = new Set<(event: MessageEvent) => void>();
+  const source = {
+    postMessage: (message: { type?: string }) => events.push(`post:${message.type ?? 'unknown'}`),
+  } as unknown as WindowProxy;
   const frame = { generation: 1, source, element: {} as HTMLIFrameElement } satisfies DisposablePlayFrame;
   const host: DisposablePlayFrameHost = {
     create(generation, url) {
@@ -18,7 +20,10 @@ function harness() {
     },
     mount() { events.push('mount'); },
     remove() { events.push('remove'); },
-    subscribe(next) { listener = next; return () => { listener = null; events.push('unsubscribe'); }; },
+    subscribe(next) {
+      listeners.add(next);
+      return () => { listeners.delete(next); events.push('unsubscribe'); };
+    },
   };
   const carrier = createDisposablePlayCarrier({
     container: {} as HTMLElement,
@@ -27,15 +32,17 @@ function harness() {
     restoreEditSurface: async () => { events.push('restore'); return { ok: true }; },
     host,
     readyTimeoutMs: 50,
+    ...(onFps ? { onFps } : {}),
   });
   return {
     carrier,
     events,
+    send(data: unknown, eventSource: MessageEventSource | null = source) {
+      for (const next of [...listeners]) next({ source: eventSource, data } as MessageEvent);
+    },
     ready() {
-      listener?.({
-        source,
-        data: { type: 'VAG_CARRIER_HEARTBEAT', payload: { renderReadiness: 'ready' } },
-      } as MessageEvent);
+      const data = { type: 'VAG_CARRIER_HEARTBEAT', payload: { renderReadiness: 'ready' } };
+      for (const next of [...listeners]) next({ source, data } as MessageEvent);
     },
   };
 }
@@ -64,6 +71,40 @@ describe('disposable Play carrier', () => {
     expect(h.carrier.state()).toBe('edit');
   });
 
+  it('routes viewport visibility pause/resume to the child while it owns Play', async () => {
+    const h = harness();
+    const started = h.carrier.start();
+    await Promise.resolve();
+
+    h.carrier.pause();
+    h.ready();
+    expect(await started).toEqual({ ok: true });
+    h.carrier.resume();
+
+    // The pre-ready pause is sent immediately and replayed after readiness so
+    // listener-install races cannot leave a hidden Play child running.
+    expect(h.events.filter((event) => event === 'post:VAG_PREVIEW_PAUSE')).toHaveLength(2);
+    expect(h.events.filter((event) => event === 'post:VAG_PREVIEW_PLAY')).toHaveLength(1);
+  });
+
+  it('publishes FPS only from the current child source and generation', async () => {
+    const samples: Array<[number, number]> = [];
+    const h = harness((fps, generation) => samples.push([fps, generation]));
+    const started = h.carrier.start();
+    await Promise.resolve();
+    h.ready();
+    expect(await started).toEqual({ ok: true });
+
+    h.send({ type: 'VAG_FPS_STATS', payload: { fps: 117 } });
+    h.send(
+      { type: 'VAG_FPS_STATS', payload: { fps: 5 } },
+      {} as MessageEventSource,
+    );
+    h.send({ type: 'VAG_FPS_STATS', payload: { fps: 'bad' } });
+
+    expect(samples).toEqual([[117, 1]]);
+  });
+
   it('keeps 50 remote Play/Stop cycles off the retained Edit World', async () => {
     const calls = { start: 0, stop: 0, enter: 0, exit: 0, assemble: 0, pause: 0, resume: 0 };
     const lifecycle = createRunLifecycle({
@@ -80,6 +121,9 @@ describe('disposable Play carrier', () => {
       remoteCarrier: {
         start: async () => { calls.start++; return { ok: true }; },
         stop: async () => { calls.stop++; return { ok: true }; },
+        state: () => 'edit',
+        pause: () => {},
+        resume: () => {},
       },
       assemble: async () => { calls.assemble++; return { ok: false, error: new Error('unreachable') }; },
     });

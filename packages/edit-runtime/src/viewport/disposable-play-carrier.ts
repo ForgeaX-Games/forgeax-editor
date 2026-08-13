@@ -1,3 +1,5 @@
+import { VagFpsStatsSchema } from '@forgeax/editor-core/protocol';
+
 export interface DisposablePlayFrame {
   readonly generation: number;
   /** Browser iframes acquire their WindowProxy only after mount; native hosts may provide it at create time. */
@@ -17,6 +19,8 @@ export interface DisposablePlayCarrierDeps {
   readonly readyTimeoutMs?: number;
   readonly host?: DisposablePlayFrameHost;
   readonly onReady?: (payload: unknown) => void;
+  /** Child-owned frame cadence, accepted only from the current generation/source. */
+  readonly onFps?: (fps: number, generation: number) => void;
 }
 
 export interface DisposablePlayFrameHost {
@@ -29,6 +33,8 @@ export interface DisposablePlayFrameHost {
 export interface DisposablePlayCarrier {
   start(): Promise<PlayCarrierResult>;
   stop(): Promise<PlayCarrierResult>;
+  pause(): void;
+  resume(): void;
   state(): 'edit' | 'entering-play' | 'play' | 'stopping';
   generation(): number;
 }
@@ -59,12 +65,24 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
   let phase: ReturnType<DisposablePlayCarrier['state']> = 'edit';
   let frame: DisposablePlayFrame | null = null;
   let nextGeneration = 0;
+  let desiredPaused = false;
+  let unsubscribeFrameMessages = () => {};
+
+  const postToChild = (type: 'VAG_PREVIEW_PAUSE' | 'VAG_PREVIEW_PLAY'): void => {
+    const current = frame;
+    if (current === null) return;
+    const source = current.source ?? current.element.contentWindow;
+    try { source?.postMessage({ type }, '*'); } catch { /* child removal is authoritative */ }
+  };
 
   async function stopFrame(restore: boolean): Promise<PlayCarrierResult> {
     const current = frame;
     frame = null;
+    unsubscribeFrameMessages();
+    unsubscribeFrameMessages = () => {};
     if (current !== null) {
-      try { current.source?.postMessage({ type: 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* hard removal remains authoritative */ }
+      const source = current.source ?? current.element.contentWindow;
+      try { source?.postMessage({ type: 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* hard removal remains authoritative */ }
       host.remove(current);
     }
     if (!restore) return { ok: true };
@@ -98,6 +116,12 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       phase = 'edit';
       return { ok: false, error: { code: 'play-carrier-window-unavailable', hint: 'Play iframe did not expose a contentWindow after mount' } };
     }
+
+    unsubscribeFrameMessages = host.subscribe((event) => {
+      if (event.source !== source || frame?.generation !== generation) return;
+      const parsed = VagFpsStatsSchema.safeParse(event.data);
+      if (parsed.success) deps.onFps?.(parsed.data.payload.fps, generation);
+    });
 
     const ready = await new Promise<PlayCarrierResult>((resolve) => {
       let settled = false;
@@ -139,6 +163,7 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       return ready;
     }
     phase = 'play';
+    postToChild(desiredPaused ? 'VAG_PREVIEW_PAUSE' : 'VAG_PREVIEW_PLAY');
     return { ok: true };
   }
 
@@ -150,5 +175,18 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     return restored;
   }
 
-  return { start, stop, state: () => phase, generation: () => nextGeneration };
+  return {
+    start,
+    stop,
+    pause: () => {
+      desiredPaused = true;
+      postToChild('VAG_PREVIEW_PAUSE');
+    },
+    resume: () => {
+      desiredPaused = false;
+      postToChild('VAG_PREVIEW_PLAY');
+    },
+    state: () => phase,
+    generation: () => nextGeneration,
+  };
 }

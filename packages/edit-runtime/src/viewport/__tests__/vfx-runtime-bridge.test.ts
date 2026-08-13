@@ -7,7 +7,6 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
-import { createFramePhaseProfiler } from '../frame-phase-profiler';
 import { createEditVfxRuntimeBridge } from '../vfx-runtime-bridge';
 import { supportsVfxRenderFeature } from '../vfx-render-capability';
 
@@ -153,24 +152,4 @@ describe('Edit VFX runtime bridge', () => {
     }]);
   });
 
-  it('receives production render-phase callbacks from the profiler owner without enabling User Timing', () => {
-    const events: string[] = [];
-    const globalState = globalThis as { __forgeaxFramePhaseDiagnostics?: unknown };
-    const previous = globalState.__forgeaxFramePhaseDiagnostics;
-    delete globalState.__forgeaxFramePhaseDiagnostics;
-    try {
-      const profiler = createFramePhaseProfiler({
-        onPhaseEnd: (event) => events.push(`${event.source}:${event.phase}`),
-      });
-      expect(profiler).toBeDefined();
-      const session = profiler?.activeSession();
-      session?.beginFrame(1);
-      session?.beginPhase({ source: 'render', phase: 'features' });
-      session?.endPhase();
-      expect(events).toEqual(['render:features']);
-    } finally {
-      if (previous === undefined) delete globalState.__forgeaxFramePhaseDiagnostics;
-      else globalState.__forgeaxFramePhaseDiagnostics = previous;
-    }
-  });
 });

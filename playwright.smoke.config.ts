@@ -18,6 +18,7 @@ const createGameMode = process.env.FORGEAX_SMOKE_CREATE_GAME === '1';
 const requestedGame = process.env.FORGEAX_SMOKE_GAME ?? (createGameMode ? 'game-default' : 'sample');
 const gameSources: Record<string, string> = {
   'game-default': resolve(root, 'packages/engine/templates/game-default'),
+  'gameplay-gate': resolve(root, 'e2e/fixtures/gameplay-gate'),
   sample: resolve(root, 'games/sample'),
 };
 // Playwright reloads the config in worker processes. In create mode the
@@ -63,6 +64,8 @@ if (inheritedCreateGameDir === undefined) {
 
 const defaultPorts = gameId === 'game-default'
   ? { host: '15590', edit: '15580', api: '15581', engine: '15573' }
+  : gameId === 'gameplay-gate'
+  ? { host: '15790', edit: '15780', api: '15781', engine: '15773' }
   : { host: '15690', edit: '15680', api: '15681', engine: '15673' };
 const hostPort = process.env.FORGEAX_SMOKE_HOST_PORT ?? defaultPorts.host;
 const editPort = process.env.FORGEAX_SMOKE_EDIT_PORT ?? defaultPorts.edit;
@@ -144,7 +147,7 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: `bunx vite --port ${enginePort} --strictPort`,
+      command: `bun x vite --port ${enginePort} --strictPort`,
       cwd: resolve(root, 'packages/play-runtime'),
       env: {
         ...process.env,

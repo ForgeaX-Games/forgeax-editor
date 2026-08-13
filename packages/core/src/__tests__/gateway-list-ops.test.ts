@@ -153,6 +153,25 @@ describe('listOps builtin full coverage (m4-w1, RED)', () => {
       expect(op?.domain).toBe('transient');
     }
   });
+
+  it('exposes gridVisible on the existing session preference operation', () => {
+    const matches = gw.listOps().filter((op) => op.id === 'setViewportPreferences');
+    expect(matches).toHaveLength(1);
+
+    const op = matches[0]!;
+    expect(op.domain).toBe('session');
+    const patch = op.argsSchema?.properties?.patch;
+    expect(patch).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        gridVisible: {
+          type: 'boolean',
+          description: expect.stringMatching(/defaults to true/i),
+        },
+      },
+    });
+  });
 });
 
 // ── (d) Session/transient counts match M2 consolidation surface ──

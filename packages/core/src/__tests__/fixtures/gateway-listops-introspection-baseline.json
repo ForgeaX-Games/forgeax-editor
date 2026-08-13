@@ -2963,7 +2963,12 @@
         "patch": {
           "type": "object",
           "description": "Partial viewport-preferences patch; every field optional. Numbers are clamped to their valid range by the applier.",
+          "additionalProperties": false,
           "properties": {
+            "gridVisible": {
+              "type": "boolean",
+              "description": "Show the infinite grid in the Edit viewport; defaults to true and is session-only."
+            },
             "mouseSensitivity": {
               "type": "number",
               "description": "Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05–5)."

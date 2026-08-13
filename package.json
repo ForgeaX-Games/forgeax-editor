@@ -91,6 +91,7 @@
     "ci:fast": "bun fx ci --fast",
     "ci:full": "bun fx ci --full",
     "ci:contract": "bun scripts/ci/editor-ci-contract.mjs",
+    "ci:prerequisite": "node scripts/ci/prerequisite-release.mjs",
     "ci:delivery": "bun scripts/ci/editor-ci-contract.mjs --delivery",
     "ci:browser-release": "bun scripts/ci/browser-release-measurement.mjs",
     "ci:engine-prior-art-transfer": "bun scripts/ci/engine-prior-art-transfer.mjs",

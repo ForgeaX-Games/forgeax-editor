@@ -2,6 +2,32 @@
 
 > forgeax editor 核心逻辑层 — EditSession 单一真相源（scene-as-asset）、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
 
+## Viewport grid preference
+
+The Edit main viewport grid is editor chrome. It is not scene-pack data, a document undo
+entry, or a Play-world component. Human View and Settings controls, plus AI callers, use
+the existing Gateway session operation:
+
+```ts
+gateway.dispatch({
+  kind: 'setViewportPreferences',
+  patch: { gridVisible: true },
+}, 'ai');
+```
+
+The minimal discoverable schema is `patch.gridVisible: boolean`. The default is `true`;
+the value is a session preference and does not create a grid-specific action, catalog, or
+shadow store. `gateway.listOps()` is the live discovery surface, so callers should read
+the current `setViewportPreferences` descriptor before dispatching and use the same
+operation from View, Settings, or AI.
+
+If the argument is invalid, the renderer is unavailable, or the carrier is recovering,
+the Gateway returns the existing structured error envelope (`code`, `expected`, `actual`,
+`hint`, `retryable`, and `recoveryActions`). Recovery is to rediscover the live operation,
+read the diagnostics snapshot, wait for the published ready state, and retry through the
+same operation. Do not infer readiness from a screenshot or create a second operation
+catalog.
+
 ## Minimal AI path
 
 Asset capabilities flow through one discoverable path: producer token →
@@ -109,6 +135,27 @@ error `code`, `phase`, `expected`, `actual`, `retryable`, and `recoveryActions`;
 | `asset-validation-failed`, `asset-cook-failed`, `run-cancelled-before-cas` | Retry with a new request id when `retryable` |
 | `asset-publish-observation-timeout`, `asset-catalog-subscription-gap` | Reconcile Catalog, then read the existing run |
 | `asset-operation-cas-committed` | Read the terminal run; do not duplicate the mutation |
+
+## Carrier evidence and phase isolation
+
+The grid is projected only by the authoritative Edit Viewport Runtime. Game display,
+Clean Preview, Play, and asset preview derive a hidden grid phase without changing
+`gridVisible`; returning to Edit reuses the user's preference. Play uses a fresh Play World
+and Stop returns to the persistent Edit World, so the grid never enters authored content.
+
+Carrier evidence is independent per product path. The standalone hard gate is
+`http://localhost:15290`; its authoritative runtime is the visible shell's
+`iframe[title="ForgeaX Viewport Runtime"]`, with the `/editor/` frame owning Gateway,
+World, Registry, and canvas. The Studio hard gate is `http://localhost:18920`; its
+evidence must resolve the same kind of authoritative `/editor/` runtime frame inside the
+Studio shell and must not reuse standalone artifacts. Each report records the candidate
+Editor SHA, Engine pin, operation schema, diagnostics, visible action trace, and separate
+PNG/log/metrics paths. A reachable port or a raw preview is not carrier evidence.
+
+The M0 Engine seam is conditional: only a reproducible public no-vertex seam failure
+authorizes an Engine-owned generic fix, Engine remote-main reachability, and then an
+Editor pin update. When M0 passes, Engine remains unchanged. The Editor must not add a
+backend-specific or raw-device workaround for either carrier.
 
 ## troubleshooting
 

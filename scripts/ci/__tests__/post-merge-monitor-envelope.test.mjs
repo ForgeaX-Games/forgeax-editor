@@ -5,8 +5,10 @@ import { test } from 'node:test';
 import {
   POST_MERGE_CONTRACT_VERSION,
   buildPostMergeEnvelope,
+  buildPostMergeDeliveryEnvelope,
   validatePostMergeEnvelope,
 } from '../post-merge-monitor.mjs';
+import { LANDED_REQUIRED_CONTEXTS } from '../editor-ci-contract-envelope.mjs';
 
 const fixturePath = resolve('scripts/ci/fixtures/post-merge-target-sha.json');
 
@@ -37,6 +39,44 @@ function inputFor(mutation) {
       jobId: mutation.envelopeJobId,
       targetSha: mutation.envelopeTargetSha,
     },
+  };
+}
+
+function producerRelease() {
+  return {
+    schemaVersion: 'forgeax-prerequisite-release/v1',
+    artifactId: 'prerequisite-release-100-1',
+    releaseDigest: `sha256:${'1'.repeat(64)}`,
+    inventory: [{payloadClass: 'engine-dist', path: 'payload/engine-dist/index.js', sha256: '2'.repeat(64)}],
+    producerRunId: '100',
+    producerAttempt: 1,
+    sourceSha: 'a'.repeat(40),
+    recursivePins: [{path: 'packages/engine', pin: 'b'.repeat(40)}],
+    producerSuccess: true,
+    producerEnvironmentFingerprint: 'linux-x64-standard',
+    compatibility: {os: 'linux', architecture: 'x64', capacityPool: ['standard', 'heavy']},
+  };
+}
+
+function landedDelivery(overrides = {}) {
+  const landedSha = 'c'.repeat(40);
+  return {
+    landedSha,
+    remoteMain: {
+      sha: 'd'.repeat(40),
+      ancestorSha: landedSha,
+      ancestor: true,
+      method: 'git-merge-base-is-ancestor',
+      source: 'remote-main',
+      repository: 'origin',
+    },
+    contexts: LANDED_REQUIRED_CONTEXTS.map((context) => ({
+      context,
+      sha: landedSha,
+      conclusion: 'success',
+      provenance: {kind: 'cloud', timingDomain: 'workflow-execution'},
+    })),
+    ...overrides,
   };
 }
 
@@ -73,4 +113,69 @@ test('monitor checkout SHA is never accepted as target provenance', () => {
   const result = buildPostMergeEnvelope(inputFor(mutation));
   assert.equal(result.ok, false);
   assert.equal(result.error.code, 'target-sha-mismatch');
+});
+
+test('delivery envelope joins workflow target SHA to exact landed evidence', () => {
+  const landed = landedDelivery();
+  const result = buildPostMergeDeliveryEnvelope({
+    workflowRun: {
+      id: 801,
+      run_attempt: 2,
+      head_sha: landed.landedSha,
+      html_url: 'https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801',
+    },
+    producer: producerRelease(),
+    landed,
+    monitorSha: 'e'.repeat(40),
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.envelope.producer.artifactId, 'prerequisite-release-100-1');
+  assert.equal(result.envelope.landed.landedSha, landed.landedSha);
+  assert.equal(result.envelope.provenance.targetSha, landed.landedSha);
+  assert.equal(result.envelope.provenance.monitorSha, 'e'.repeat(40));
+});
+
+test('delivery envelope rejects target, context, and producer join drift before pass', () => {
+  const landed = landedDelivery();
+  const cases = [
+    {
+      name: 'workflow target SHA differs from landed SHA',
+      mutate: (input) => { input.workflowRun.head_sha = 'f'.repeat(40); },
+      code: 'post-merge-target-sha-mismatch',
+    },
+    {
+      name: 'required landed context is missing',
+      mutate: (input) => { input.landed.contexts = input.landed.contexts.slice(0, -1); },
+      code: 'landed-required-contexts-missing',
+    },
+    {
+      name: 'producer identity is missing',
+      mutate: (input) => { delete input.producer; },
+      code: 'producer-identity-missing',
+    },
+    {
+      name: 'producer identity cannot alias landed SHA',
+      mutate: (input) => { input.producer.landedSha = input.landed.landedSha; },
+      code: 'producer-landed-sha-alias',
+    },
+  ];
+  for (const candidate of cases) {
+    const input = {
+      workflowRun: {
+        id: 801,
+        run_attempt: 2,
+        head_sha: landed.landedSha,
+        html_url: 'https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801',
+      },
+      producer: producerRelease(),
+      landed: structuredClone(landed),
+      monitorSha: 'e'.repeat(40),
+    };
+    candidate.mutate(input);
+    const result = buildPostMergeDeliveryEnvelope(input);
+    assert.equal(result.ok, false, candidate.name);
+    assert.equal(result.error.code, candidate.code, candidate.name);
+    assert.notEqual(result.handoff, undefined, candidate.name);
+  }
 });

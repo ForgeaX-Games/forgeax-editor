@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { CONTRACT_SCHEMA_VERSION } from './editor-ci-contract.mjs';
+import {
+  createDeliveryEnvelope,
+  LANDED_REQUIRED_CONTEXTS,
+} from './editor-ci-contract-envelope.mjs';
 
 const MAX_EVIDENCE = 4;
 const MAX_DETAIL_LENGTH = 220;
@@ -395,6 +399,181 @@ function admissionFailure({ workflowRun, targetSha, monitorSha, failureClass, co
   return { ok: false, envelope: admissionEnvelope({ workflowRun, targetSha, monitorSha, failureClass, code, observed, hint }) };
 }
 
+function deliveryFailure(status, code, expected, observed, hint, blocker, requiredEvidence, nextAction, extra = {}) {
+  return {
+    ok: false,
+    status,
+    error: structuredError(code, expected, observed, hint).error,
+    handoff: {
+      blocker,
+      owner: 'release owner',
+      requiredEvidence,
+      nextAction,
+    },
+    ...extra,
+  };
+}
+
+function validateDeliveryWorkflowRun(workflowRun, landed) {
+  if (!workflowRun || workflowRun.id === undefined || workflowRun.run_attempt === undefined || !workflowRun.html_url) {
+    return deliveryFailure(
+      'pending',
+      'workflow-run-identity-missing',
+      'workflow_run id, run_attempt, head_sha, and html_url',
+      workflowRun ?? 'missing',
+      'Preserve the triggering workflow_run identity before classifying post-merge delivery.',
+      'workflow run identity is incomplete',
+      ['workflow_run.id', 'workflow_run.run_attempt', 'workflow_run.head_sha', 'workflow_run.html_url'],
+      'Re-run the monitor from the completed workflow_run event.',
+    );
+  }
+  if (!landed || workflowRun.head_sha !== landed.landedSha) {
+    return deliveryFailure(
+      'nonpass',
+      'post-merge-target-sha-mismatch',
+      landed?.landedSha ?? 'landedSha',
+      workflowRun.head_sha ?? 'missing',
+      'Use workflow_run.head_sha as the target identity and compare it with the exact landed SHA; never use monitor checkout SHA.',
+      'workflow target SHA does not equal landed SHA',
+      ['workflow_run.head_sha', 'landedSha'],
+      'Collect delivery evidence for the exact workflow_run.head_sha.',
+    );
+  }
+  return null;
+}
+
+/**
+ * Build the post-merge join envelope. Producer identity and landed delivery
+ * remain separate objects so a monitor checkout cannot impersonate either one.
+ */
+export function buildPostMergeDeliveryEnvelope({
+  workflowRun,
+  producer,
+  landed,
+  consumerReports = [],
+  monitorSha = null,
+  expectedAdmissionGeneration,
+} = {}) {
+  const workflowIssue = validateDeliveryWorkflowRun(workflowRun, landed);
+  if (workflowIssue) return workflowIssue;
+  const joined = createDeliveryEnvelope({
+    producer,
+    landed,
+    consumerReports,
+    expectedAdmissionGeneration,
+  });
+  if (!joined.ok) return joined;
+  const envelope = {
+    contractVersion: POST_MERGE_CONTRACT_VERSION,
+    checkId: 'post-merge-delivery',
+    owner: 'editor-ci',
+    profile: 'post-merge',
+    executionHome: POST_MERGE_EXECUTION_HOME,
+    provenance: postMergeProvenance({
+      workflowRun,
+      targetSha: workflowRun.head_sha,
+      monitorSha,
+    }),
+    terminalStatus: 'pass',
+    failureClass: null,
+    code: null,
+    expected: 'exact landed delivery joins the producer release identity',
+    observed: 'producer and landed evidence validated',
+    hint: 'No recovery action is required.',
+    firstFailure: null,
+    attempts: [{
+      attempt: workflowRun.run_attempt,
+      attemptId: `run-${workflowRun.id}-attempt-${workflowRun.run_attempt}`,
+      status: 'pass',
+      transient: false,
+    }],
+    sloClaim: null,
+    producer: joined.producer,
+    landed: joined.landed,
+    consumerReports: joined.consumerReports,
+  };
+  return {ok: true, status: 'pass', envelope};
+}
+
+/**
+ * Classify a completed post-merge delivery using exact target-SHA and join evidence.
+ * Missing evidence remains pending; deterministic mismatches remain nonpass.
+ */
+export function classifyPostMergeDelivery({
+  workflowRun,
+  relatedRuns = [],
+  producer,
+  landed,
+  consumerReports = [],
+  monitorSha = null,
+  expectedAdmissionGeneration,
+} = {}) {
+  if (producer === undefined || producer === null) {
+    return deliveryFailure(
+      'pending',
+      'producer-identity-missing',
+      'producer release identity',
+      'missing',
+      'Obtain the immutable producer release report before classifying landed delivery.',
+      'producer release evidence is missing',
+      ['artifactId', 'releaseDigest', 'producerRunId', 'producerAttempt', 'sourceSha', 'recursivePins'],
+      'Download or query the producer release report for this workflow run.',
+      {classification: 'landed-delivery-pending'},
+    );
+  }
+  const workflowIssue = validateDeliveryWorkflowRun(workflowRun, landed);
+  if (workflowIssue) return workflowIssue;
+  const duplicate = duplicateRun(workflowRun, Array.isArray(relatedRuns) ? relatedRuns : []);
+  if (duplicate) {
+    return deliveryFailure(
+      'nonpass',
+      'duplicate-same-sha-delivery',
+      'one current delivery for the target SHA',
+      {currentRunId: workflowRun.id, earlierRunId: duplicate.id},
+      'Keep the current target-SHA delivery record and do not promote an earlier duplicate run.',
+      'duplicate same-SHA delivery',
+      [`workflow run ${workflowRun.id}`, `workflow run ${duplicate.id}`],
+      'Classify the newest target-SHA run and retain the duplicate as diagnostic evidence.',
+      {classification: 'duplicate-same-sha-delivery'},
+    );
+  }
+  if (workflowRun.conclusion !== undefined && workflowRun.conclusion !== 'success') {
+    return deliveryFailure(
+      'nonpass',
+      'post-merge-run-nonpass',
+      'success',
+      workflowRun.conclusion,
+      'A non-success target workflow run cannot establish landed delivery even when some contexts are present.',
+      'target post-merge workflow is not successful',
+      LANDED_REQUIRED_CONTEXTS.map((context) => `${context} on ${workflowRun.head_sha}`),
+      'Resolve the target workflow run and collect a new exact-SHA delivery record.',
+      {classification: 'post-merge-run-nonpass'},
+    );
+  }
+  const result = buildPostMergeDeliveryEnvelope({
+    workflowRun,
+    producer,
+    landed,
+    consumerReports,
+    monitorSha,
+    expectedAdmissionGeneration,
+  });
+  if (!result.ok) {
+    return {
+      ...result,
+      classification: result.error?.code === 'duplicate-same-sha-delivery'
+        ? 'duplicate-same-sha-delivery'
+        : result.status === 'pending' ? 'landed-delivery-pending' : 'landed-delivery-nonpass',
+    };
+  }
+  return {
+    ok: true,
+    status: 'pass',
+    classification: 'landed-delivery-success',
+    envelope: result.envelope,
+  };
+}
+
 export function classifyPostMergeAdmission({
   workflowRun = { id: 1, run_attempt: 1, head_sha: '', html_url: '' },
   targetSha,
@@ -611,6 +790,67 @@ function writeSummary(finding) {
   appendFileSync(summaryPath, `${lines.join('\n')}\n`);
 }
 
+function readDeliveryManifest(path) {
+  if (!path) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    return {__readError: error.message ?? String(error)};
+  }
+}
+
+function deliveryInputFromWorkflow({workflowRun, jobs, producer, remoteMainSha, ancestor}) {
+  const contexts = LANDED_REQUIRED_CONTEXTS
+    .map((context) => {
+      const job = jobs.find((candidate) => (
+        candidate?.id === context
+        || candidate?.name === context
+        || String(candidate?.name ?? '').toLowerCase().includes(context)
+      ));
+      if (!job) return null;
+      return {
+        context,
+        sha: job.head_sha ?? null,
+        conclusion: job.conclusion ?? null,
+        provenance: {kind: 'cloud', timingDomain: 'workflow-execution'},
+        source: 'required-context',
+      };
+    })
+    .filter(Boolean);
+  return {
+    producer,
+    landed: {
+      landedSha: workflowRun.head_sha,
+      remoteMain: remoteMainSha
+        ? {
+            sha: remoteMainSha,
+            ancestorSha: workflowRun.head_sha,
+            ancestor: ancestor === 'true',
+            method: 'git-merge-base-is-ancestor',
+            source: 'remote-main',
+            repository: 'origin',
+          }
+        : null,
+      contexts,
+    },
+  };
+}
+
+function deliveryFinding(result, workflowRun) {
+  const evidence = result.ok
+    ? [{code: 'landed-delivery-validated', detail: 'producer identity and exact landed delivery joined'}]
+    : [{code: result.error?.code ?? 'landed-delivery-unclassified', detail: result.error?.hint ?? 'landed delivery did not pass'}];
+  return {
+    classification: result.classification ?? (result.ok ? 'landed-delivery-success' : 'landed-delivery-nonpass'),
+    red: !result.ok,
+    actionable: !result.ok,
+    evidence,
+    head_sha: workflowRun.head_sha,
+    html_url: workflowRun.html_url,
+    delivery: result,
+  };
+}
+
 async function main() {
   const token = nonEmptyString(process.env.GITHUB_TOKEN);
   const repository = nonEmptyString(process.env.GITHUB_REPOSITORY);
@@ -670,22 +910,43 @@ async function main() {
   }
 
   const finding = classifyWorkflowRun({ run: workflowRun, relatedRuns, jobs, logText });
+  const producerManifest = readDeliveryManifest(process.env.PREREQUISITE_RELEASE_MANIFEST);
+  const deliveryMode = Boolean(process.env.PREREQUISITE_RELEASE_MANIFEST);
+  let finalFinding = finding;
+  if (deliveryMode) {
+    const deliveryInput = deliveryInputFromWorkflow({
+      workflowRun,
+      jobs,
+      producer: producerManifest?.__readError ? null : producerManifest,
+      remoteMainSha: nonEmptyString(process.env.REMOTE_MAIN_SHA),
+      ancestor: process.env.LANDED_ANCESTOR,
+    });
+    finalFinding = deliveryFinding(classifyPostMergeDelivery({
+      workflowRun,
+      relatedRuns,
+      ...deliveryInput,
+      monitorSha: nonEmptyString(process.env.GITHUB_SHA),
+    }), workflowRun);
+    if (producerManifest?.__readError) {
+      finalFinding.evidence.push({code: 'producer-manifest-unreadable', detail: 'the downloaded producer manifest could not be parsed'});
+    }
+  }
   if (externalTransportUnavailable) {
-    finding.classification = 'external-transport-failure';
-    finding.failureClass = 'external-transport';
-    finding.red = true;
-    finding.actionable = true;
-    addEvidence(finding.evidence, 'github-api-unavailable', 'live GitHub workflow evidence could not be read');
-    finalizeFinding(finding, workflowRun);
+    finalFinding.classification = 'external-transport-failure';
+    finalFinding.failureClass = 'external-transport';
+    finalFinding.red = true;
+    finalFinding.actionable = true;
+    addEvidence(finalFinding.evidence, 'github-api-unavailable', 'live GitHub workflow evidence could not be read');
+    if (!deliveryMode) finalizeFinding(finalFinding, workflowRun);
   }
-  writeSummary(finding);
+  writeSummary(finalFinding);
   if (reportPath) {
-    writeFileSync(reportPath, `${JSON.stringify({ contractVersion: POST_MERGE_CONTRACT_VERSION, ...finding }, null, 2)}\n`);
+    writeFileSync(reportPath, `${JSON.stringify({ contractVersion: POST_MERGE_CONTRACT_VERSION, ...finalFinding }, null, 2)}\n`);
   }
-  console.log(JSON.stringify(finding));
-  process.exitCode = exitCodeForFinding(finding);
-  if (finding.red) {
-    console.error(`Post-merge CI remains red: ${finding.classification} ${finding.html_url}`);
+  console.log(JSON.stringify(finalFinding));
+  process.exitCode = exitCodeForFinding(finalFinding);
+  if (finalFinding.red) {
+    console.error(`Post-merge CI remains red: ${finalFinding.classification} ${finalFinding.html_url}`);
   }
 }
 

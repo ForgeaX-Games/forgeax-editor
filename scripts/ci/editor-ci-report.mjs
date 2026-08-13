@@ -20,6 +20,7 @@ export const REPORT_FIELDS = Object.freeze([
   'firstFailure',
   'attempts',
   'sloClaim',
+  'prerequisiteRelease',
 ]);
 
 const FAILURE_CLASSES = new Set(['admission', 'environment', 'source', 'external-transport']);
@@ -36,6 +37,47 @@ function isObject(value) {
 function requiredString(report, field) {
   if (typeof report[field] !== 'string' || report[field].length === 0) {
     return reportError('report-field-missing', `non-empty ${field}`, report[field], `Include ${field} as a stable machine-readable field.`);
+  }
+  return null;
+}
+
+function validatePrerequisiteRelease(value) {
+  if (value === null) return null;
+  if (!isObject(value)) {
+    return reportError(
+      'report-prerequisite-release-invalid',
+      'null or a prerequisite release object',
+      value,
+      'Project the producer release identity and validation outcome as structured fields.',
+    );
+  }
+  for (const field of ['artifactId', 'releaseDigest', 'schemaVersion', 'producerRunId', 'sourceSha']) {
+    const error = requiredString(value, field);
+    if (error) return reportError('report-prerequisite-release-invalid', field, error.error.observed, error.error.hint);
+  }
+  if (!Number.isInteger(value.producerAttempt) || value.producerAttempt < 1) {
+    return reportError('report-prerequisite-release-invalid', 'positive integer producerAttempt', value.producerAttempt, 'Preserve the producer run attempt as a numeric join field.');
+  }
+  if (typeof value.producerSuccess !== 'boolean') {
+    return reportError('report-prerequisite-release-invalid', 'boolean producerSuccess', value.producerSuccess, 'Preserve whether the immutable producer completed successfully.');
+  }
+  if (!Array.isArray(value.recursivePins)) {
+    return reportError('report-prerequisite-release-invalid', 'recursivePins array', value.recursivePins, 'Preserve recursive submodule pins without converting them into the landed SHA.');
+  }
+  if (!isObject(value.compatibility) || typeof value.compatibility.status !== 'string') {
+    return reportError('report-prerequisite-release-invalid', 'compatibility.status', value.compatibility, 'Project compatibility as a structured validation outcome.');
+  }
+  if (!isObject(value.validation) || !['pass', 'failure'].includes(value.validation.status)) {
+    return reportError('report-prerequisite-release-invalid', 'validation.status pass or failure', value.validation, 'Project the consumer validation result before the check body.');
+  }
+  if (typeof value.validation.consumer !== 'string' || value.validation.consumer.length === 0) {
+    return reportError('report-prerequisite-release-invalid', 'validation.consumer', value.validation.consumer, 'Keep the request-scoped consumer identity in the report.');
+  }
+  if (value.validation.status === 'failure') {
+    for (const field of ['code', 'expected', 'observed', 'affectedConsumer', 'hint']) {
+      const error = requiredString(value.validation, field);
+      if (error) return reportError('report-prerequisite-release-invalid', `validation.${field}`, error.error.observed, error.error.hint);
+    }
   }
   return null;
 }
@@ -58,6 +100,9 @@ export function projectEditorCiReport(envelope) {
     attempts: Array.isArray(envelope?.attempts) ? structuredClone(envelope.attempts) : [],
     provenance: isObject(envelope?.provenance) ? structuredClone(envelope.provenance) : envelope?.provenance ?? null,
     sloClaim: envelope?.sloClaim ?? null,
+    prerequisiteRelease: isObject(envelope?.prerequisiteRelease)
+      ? structuredClone(envelope.prerequisiteRelease)
+      : envelope?.prerequisiteRelease ?? null,
   };
   return report;
 }
@@ -66,7 +111,12 @@ export function validateEditorCiReport(report) {
   if (!isObject(report)) return reportError('report-root-invalid', 'an object', report, 'Return one JSON report object.');
   for (const field of REPORT_FIELDS) {
     if (!Object.hasOwn(report, field)) {
-      return reportError('report-field-missing', field, 'missing', `Include ${field} in the JSON report.`);
+      return reportError(
+        field === 'prerequisiteRelease' ? 'report-prerequisite-release-missing' : 'report-field-missing',
+        field,
+        'missing',
+        `Include ${field} in the JSON report.`,
+      );
     }
   }
   for (const field of ['contractVersion', 'checkId', 'owner', 'profile', 'executionHome']) {
@@ -97,6 +147,8 @@ export function validateEditorCiReport(report) {
   if (report.sloClaim !== null && typeof report.sloClaim !== 'string') {
     return reportError('report-slo-claim-invalid', 'null or a string claim', report.sloClaim, 'Do not derive a cloud SLO from local duration.');
   }
+  const prerequisiteError = validatePrerequisiteRelease(report.prerequisiteRelease);
+  if (prerequisiteError) return prerequisiteError;
   return { ok: true };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyResourceRequest, normalizeTraceUrl, parseCli, parseTraceText, percentile, readTraceStream, summarizeTrace, validateEvidence, withTimeout } from '../chrome-performance.mjs';
+import { classifyResourceRequest, normalizeTraceUrl, parseCli, parseEditCameraJson, parseTraceText, percentile, readTraceStream, summarizeTrace, validateEvidence, withTimeout } from '../chrome-performance.mjs';
 
 describe('chrome performance trace summary', () => {
   test('uses a fixed 20s warmup and measurement contract in benchmark mode', () => {
@@ -10,6 +10,38 @@ describe('chrome performance trace summary', () => {
     });
     expect(() => parseCli(['--benchmark', '--warmup', '19999'])).toThrow('warmup >= 20000ms');
     expect(() => parseCli(['--benchmark', '--duration', '19999'])).toThrow('duration >= 20000ms');
+  });
+
+  test('supports a marks-off trace for diagnostic overhead A/B', () => {
+    expect(parseCli(['--headed', '--no-diagnostics', '--surface', 'edit'])).toMatchObject({
+      headed: true,
+      diagnostics: false,
+      surface: 'edit',
+    });
+  });
+
+  test('supports a bounded render-pass trace without per-draw nested marks', () => {
+    expect(parseCli(['--headed', '--passes', '--surface', 'edit'])).toMatchObject({
+      headed: true,
+      passes: true,
+      nested: false,
+      detail: 'passes',
+      surface: 'edit',
+    });
+    expect(() => parseCli(['--passes', '--nested'])).toThrow('mutually exclusive');
+  });
+
+  test('accepts only an explicit finite Edit camera pose', () => {
+    const camera = { pos: [0, 180, 200], lookAt: [0, 0, 0] };
+    expect(parseEditCameraJson(JSON.stringify(camera))).toEqual(camera);
+    expect(parseCli(['--edit-camera-json', JSON.stringify(camera)]).editCamera).toEqual(camera);
+    expect(() => parseEditCameraJson('{')).toThrow('valid JSON');
+    expect(() => parseEditCameraJson('{"pos":[0,1],"lookAt":[0,0,0]}')).toThrow(
+      'finite numbers',
+    );
+    expect(() => parseEditCameraJson('{"pos":[0,1,2],"lookAt":[0,0,null]}')).toThrow(
+      'finite numbers',
+    );
   });
 
   test('extracts frame pacing, target interval, long tasks, GPU, and present signals', () => {
@@ -26,6 +58,8 @@ describe('chrome performance trace summary', () => {
     };
     const summary = summarizeTrace(trace);
     expect(summary.frame.intervals?.p50Ms).toBeCloseTo(16.667, 3);
+    expect(summary.frame.intervals?.averageFps).toBeCloseTo(59.999, 3);
+    expect(summary.frame.intervals?.medianFps).toBeCloseTo(59.999, 3);
     expect(summary.beginFrame.intervalMs).toEqual([8.333]);
     expect(summary.beginFrame.unthrottledIntervalMs).toEqual([8.333]);
     expect(summary.longTasks).toEqual({ count: 1, totalMs: 60, maxMs: 60 });
@@ -193,6 +227,106 @@ describe('chrome performance trace summary', () => {
       maxMs: 0.1,
     });
     expect(summary.framePhases.invalidReasons).toContain('missingEnd:2:renderer-draw');
+  });
+
+  test('uses engine frame markers instead of stale page-start trace events for the sample window', () => {
+    const phaseNames = ['frame-total', 'world-update-primary', 'draw-source', 'world-update-injected', 'renderer-draw'];
+    const frame = (seq, startUs) => phaseNames.flatMap((phase) => [
+      { name: `forgeax.frame.phase.${seq}.${phase}.begin`, cat: 'blink.user_timing', ph: 'I', ts: startUs },
+      { name: `forgeax.frame.phase.${seq}.${phase}.end`, cat: 'blink.user_timing', ph: 'I', ts: startUs + 1000 },
+    ]);
+    const summary = summarizeTrace([
+      { name: 'firstMeaningfulPaint', ts: -12000000, ph: 'R' },
+      ...frame(1, 0),
+      ...frame(2, 2000000),
+      { name: 'Display::FrameDisplayed', ts: 2100000, ph: 'I' },
+    ]);
+
+    expect(summary.windowMs).toBe(2001);
+  });
+
+  test('uses harness capture markers for the same diagnostics-on/off window contract', () => {
+    const summary = summarizeTrace([
+      { name: 'firstMeaningfulPaint', ts: -12000000, ph: 'R' },
+      { name: 'forgeax.capture.window.begin', ts: 500000, ph: 'I', cat: 'blink.user_timing' },
+      { name: 'FireAnimationFrame', ts: 100000, dur: 1000, pid: 1, tid: 10, ph: 'X' },
+      { name: 'RunTask', ts: 200000, dur: 60000, pid: 1, tid: 10, ph: 'X' },
+      { name: 'forgeax.frame.phase.1.frame-total.begin', ts: 750000, ph: 'I' },
+      { name: 'forgeax.frame.phase.1.frame-total.end', ts: 751000, ph: 'I' },
+      { name: 'forgeax.capture.window.end', ts: 8500000, ph: 'I', cat: 'blink.user_timing' },
+      { name: 'FireAnimationFrame', ts: 9000000, dur: 1000, pid: 1, tid: 10, ph: 'X' },
+    ]);
+
+    expect(summary.windowMs).toBe(8000);
+    expect(summary.eventCount).toBe(4);
+    expect(summary.longTasks.count).toBe(0);
+  });
+
+  test('clips duration events that cross either capture-window boundary', () => {
+    const summary = summarizeTrace([
+      { name: 'forgeax.capture.window.begin', ts: 100_000, ph: 'I', cat: 'blink.user_timing' },
+      { name: 'RunTask', ts: 60_000, dur: 100_000, pid: 1, tid: 10, ph: 'X' },
+      { name: 'Task', ts: 180_000, dur: 80_000, pid: 1, tid: 10, ph: 'X' },
+      { name: 'forgeax.capture.window.end', ts: 200_000, ph: 'I', cat: 'blink.user_timing' },
+    ]);
+
+    expect(summary.longTasks).toEqual({ count: 1, totalMs: 60, maxMs: 60 });
+    expect(summary.windowMs).toBe(100);
+  });
+
+  test('attributes application FPS to the rAF frame that owns engine phase marks', () => {
+    const phase = (seq, ts) => ({
+      name: `forgeax.frame.phase.${seq}.frame-total.begin`,
+      cat: 'blink.user_timing',
+      ph: 'I',
+      pid: 7,
+      tid: 70,
+      ts,
+    });
+    const summary = summarizeTrace([
+      { name: 'forgeax.capture.window.begin', ts: 0, ph: 'I', cat: 'blink.user_timing' },
+      { name: 'FireAnimationFrame', ts: 1000, dur: 100, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'parent-a' } } },
+      { name: 'FireAnimationFrame', ts: 1100, dur: 4000, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'child-a' } } },
+      phase(1, 1200),
+      { name: 'FireAnimationFrame', ts: 9300, dur: 100, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'parent-b' } } },
+      { name: 'FireAnimationFrame', ts: 9400, dur: 4000, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'child-b' } } },
+      phase(2, 9500),
+      { name: 'forgeax.capture.window.end', ts: 20000, ph: 'I', cat: 'blink.user_timing' },
+    ]);
+
+    expect(summary.frame.count).toBe(2);
+    expect(summary.frame.intervals?.p50Ms).toBeCloseTo(8.3, 3);
+    expect(summary.frame.owner).toMatchObject({
+      pid: 7,
+      tid: 70,
+      frameIds: ['child-a', 'child-b'],
+      evidence: 'frame-total-mark-contained-by-rAF',
+    });
+  });
+
+  test('uses an explicit CDP frame identity when diagnostics marks are disabled', () => {
+    const summary = summarizeTrace([
+      { name: 'forgeax.capture.window.begin', ts: 0, ph: 'I', cat: 'blink.user_timing' },
+      { name: 'FireAnimationFrame', ts: 1000, dur: 100, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'parent' } } },
+      { name: 'FireAnimationFrame', ts: 1100, dur: 100, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'child' } } },
+      { name: 'FireAnimationFrame', ts: 9300, dur: 100, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'parent' } } },
+      { name: 'FireAnimationFrame', ts: 9400, dur: 100, pid: 7, tid: 70, ph: 'X', args: { data: { frame: 'child' } } },
+      { name: 'forgeax.capture.window.end', ts: 10000, ph: 'I', cat: 'blink.user_timing' },
+    ], { applicationFrameId: 'child' });
+
+    expect(summary.frame.count).toBe(2);
+    expect(summary.frame.intervals?.p50Ms).toBeCloseTo(8.3, 3);
+    expect(summary.frame.owner).toMatchObject({ frameIds: ['child'], evidence: 'cdp-frame-tree-rAF-ticks' });
+  });
+
+  test('does not claim application FPS for a real diagnostics-off capture without owner marks', () => {
+    const summary = summarizeTrace([
+      { name: 'forgeax.capture.window.begin', ts: 0, ph: 'I', cat: 'blink.user_timing' },
+      { name: 'FireAnimationFrame', ts: 1000, dur: 100, pid: 7, tid: 70, ph: 'X' },
+      { name: 'FireAnimationFrame', ts: 9000, dur: 100, pid: 7, tid: 70, ph: 'X' },
+      { name: 'forgeax.capture.window.end', ts: 10000, ph: 'I', cat: 'blink.user_timing' },
+    ]);
+    expect(summary.frame).toEqual({ count: 0, intervals: null, owner: null });
   });
 
   test('requires frame phase evidence when the real browser harness opts in', () => {
@@ -422,6 +556,16 @@ describe('chrome performance trace summary', () => {
     }).category).toBe('background-control-plane');
     expect(classifyResourceRequest({
       url: 'http://localhost:15290/api/workbench/games',
+      method: 'GET',
+      resourceType: 'fetch',
+    }).category).toBe('background-control-plane');
+    expect(classifyResourceRequest({
+      url: 'http://localhost:15290/api/extensions/list?kind=tool',
+      method: 'GET',
+      resourceType: 'fetch',
+    }).category).toBe('background-control-plane');
+    expect(classifyResourceRequest({
+      url: 'http://localhost:15290/api/health',
       method: 'GET',
       resourceType: 'fetch',
     }).category).toBe('background-control-plane');

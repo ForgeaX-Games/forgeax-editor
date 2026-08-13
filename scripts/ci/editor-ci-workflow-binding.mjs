@@ -16,6 +16,8 @@ const CAPACITY_BY_CHECK = Object.freeze({
   'submodule-pin': 'standard',
   'smoke-play': 'heavy',
 });
+const PRODUCER_JOB_ID = 'prerequisite-release';
+const PRODUCER_POOL = 'standard';
 
 function issue(code, expected, observed, hint) {
   return { code, expected, observed, hint };
@@ -31,6 +33,83 @@ function checksById(contract) {
 
 function allJobs(graph) {
   return (graph.workflows ?? []).flatMap((workflow) => workflow.jobs ?? []);
+}
+
+function findJob(graph, jobId) {
+  return (graph.workflows ?? [])
+    .flatMap((workflow) => (workflow.jobs ?? []).map((job) => ({workflow: workflow.file, job})))
+    .find(({job}) => job.id === jobId || job.name === jobId) ?? null;
+}
+
+function profileName(value) {
+  return value === 'complete' ? 'PR' : value ?? 'PR';
+}
+
+function prerequisiteProfileIssue(contract, profile) {
+  const release = contract.prerequisiteRelease;
+  if (!release || typeof release !== 'object') {
+    return issue('producer-contract-missing', 'prerequisiteRelease contract', release, 'Declare the producer-owned prerequisiteRelease contract before wiring a producer job.');
+  }
+  const selectedProfile = profileName(profile);
+  const activeConsumers = release.activeProfiles?.[selectedProfile];
+  const expectedConsumers = contract.profiles?.[selectedProfile];
+  if (!Array.isArray(activeConsumers) || !Array.isArray(expectedConsumers) ||
+      JSON.stringify([...activeConsumers].sort()) !== JSON.stringify([...expectedConsumers].sort())) {
+    return issue(
+      'producer-payload-binding-drift',
+      expectedConsumers ?? `contract profile ${selectedProfile}`,
+      activeConsumers ?? null,
+      `Keep prerequisiteRelease.activeProfiles.${selectedProfile} aligned with the existing ${selectedProfile} check profile.`,
+    );
+  }
+  const payloadClasses = new Set(Object.keys(release.payloadClasses ?? {}));
+  for (const consumer of activeConsumers) {
+    const declared = release.consumers?.[consumer];
+    if (!Array.isArray(declared) || declared.some((payloadClass) => !payloadClasses.has(payloadClass))) {
+      return issue(
+        'producer-payload-binding-drift',
+        `declared payload classes for ${consumer}`,
+        declared ?? null,
+        `Declare ${consumer}'s payload classes in the producer-owned payloadClasses map.`,
+      );
+    }
+  }
+  return null;
+}
+
+function bindSupportingProducer(contract, graph, profile) {
+  const producer = findJob(graph, PRODUCER_JOB_ID);
+  if (!producer) return {ok: false, error: issue('producer-job-missing', PRODUCER_JOB_ID, null, 'Add one supporting prerequisite-release producer job before binding consumers.')};
+  const profileIssue = prerequisiteProfileIssue(contract, profile);
+  if (profileIssue) return {ok: false, error: profileIssue};
+  if (producer.job.runner?.kind === 'self-hosted' && producer.job.runner.pool !== PRODUCER_POOL) {
+    return {ok: false, error: issue('producer-runner-capacity-drift', PRODUCER_POOL, producer.job.runner.pool ?? null, 'Keep the prerequisite producer on the standard self-hosted capacity pool.')};
+  }
+
+  const selectedProfile = profileName(profile);
+  const consumers = contract.prerequisiteRelease.activeProfiles[selectedProfile]
+    .filter((consumer) => (contract.prerequisiteRelease.consumers[consumer] ?? []).length > 0);
+  for (const consumerId of consumers) {
+    const consumer = findJob(graph, consumerId);
+    if (!consumer) return {ok: false, error: issue('producer-consumer-missing', consumerId, null, `Bind the prerequisite release to the ${consumerId} workflow job.`)};
+    const needs = Array.isArray(consumer.job.needs) ? consumer.job.needs : [];
+    if (!needs.includes(PRODUCER_JOB_ID)) {
+      return {ok: false, error: issue('producer-dependency-missing', PRODUCER_JOB_ID, needs, `Add ${PRODUCER_JOB_ID} to ${consumerId}.needs so it can consume one published release.`)};
+    }
+    if (typeof consumer.job.condition !== 'string' || !consumer.job.condition.includes('always()')) {
+      return {ok: false, error: issue('producer-condition-missing', 'always()', consumer.job.condition ?? null, `Guard ${consumerId} with if: always() so producer failure is observed explicitly.`)};
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      jobId: producer.job.id,
+      workflow: producer.workflow,
+      runnerPool: producer.job.runner?.pool ?? null,
+      consumerIds: [...consumers],
+      payloadClasses: [...new Set(consumers.flatMap((consumer) => contract.prerequisiteRelease.consumers[consumer]))],
+    },
+  };
 }
 
 function validateRequiredContextNames(contract) {
@@ -49,7 +128,7 @@ function validateRequiredContextNames(contract) {
   return null;
 }
 
-export function validateWorkflowBinding(contract, graph, { docOnly = false } = {}) {
+export function validateWorkflowBinding(contract, graph, { docOnly = false, profile, requireProducer } = {}) {
   if (!contract || typeof contract !== 'object' || !Array.isArray(contract.checks)) {
     return failure(issue('contract-invalid', 'a producer-owned contract object', contract, 'Load the contract before binding workflow jobs.'));
   }
@@ -74,13 +153,25 @@ export function validateWorkflowBinding(contract, graph, { docOnly = false } = {
   const bindings = [];
   const boundJobs = new Set();
 
+  const hasProducer = Boolean(findJob(graph, PRODUCER_JOB_ID));
+  if (requireProducer === true || profile !== undefined || hasProducer) {
+    const producerBinding = bindSupportingProducer(contract, graph, profile);
+    if (!producerBinding.ok) return failure(producerBinding.error);
+    graph.producerBinding = producerBinding.value;
+  }
+
   for (const required of contract.requiredContexts) {
     const binding = bindContext(required, graphContexts, jobs, checks, boundJobs);
     if (!binding.ok) return failure(binding.error);
     bindings.push(binding.value);
   }
 
-  return { ok: true, errors: [], bindings };
+  return {
+    ok: true,
+    errors: [],
+    bindings,
+    ...(graph.producerBinding ? {producerBinding: graph.producerBinding} : {}),
+  };
 }
 
 function bindContext(required, graphContexts, jobs, checks, boundJobs) {

@@ -20,6 +20,7 @@ import {
   type PlayExecutionRealmMessage,
   type PlayExecutionRuntimeDiagnostics,
 } from './execution-contract';
+import { installCompletedFrameHeartbeat } from './completed-frame-heartbeat';
 
 const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
 
@@ -29,27 +30,16 @@ function post(port: MessagePort | undefined, message: PlayExecutionRealmMessage)
 
 export interface PlayExecutionPulse {
   readonly diagnosticsDue: boolean;
-  readonly heartbeat?: { readonly fps: number; readonly sentinel: number };
 }
 
-/** Deterministic timing state shared by Host and Worker bootstrap lanes. */
+/** Deterministic low-rate diagnostics clock; FPS is renderer-completion-owned. */
 export function createPlayExecutionPulse(): (delta: number) => PlayExecutionPulse {
-  let frames = 0;
-  let elapsed = 0;
-  let sentinel = 0;
   let diagnosticsElapsed = 0;
   return (delta): PlayExecutionPulse => {
-    frames += 1;
-    elapsed += delta;
     diagnosticsElapsed += delta;
     const diagnosticsDue = diagnosticsElapsed >= 0.5;
     if (diagnosticsDue) diagnosticsElapsed = 0;
-    if (elapsed < 0.1) return { diagnosticsDue };
-    const fps = Math.round(frames / elapsed);
-    frames = 0;
-    elapsed = 0;
-    sentinel += 1;
-    return { diagnosticsDue, heartbeat: { fps, sentinel } };
+    return { diagnosticsDue };
   };
 }
 
@@ -172,9 +162,20 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
       });
 
       const pulse = createPlayExecutionPulse();
+      context.registerCleanup(installCompletedFrameHeartbeat({
+        subscribe: (listener) => context.renderer.subscribeFrameEnd(listener),
+        now: () => performance.now(),
+        publish: (heartbeat) => {
+          post(context.port, {
+            protocol: PLAY_EXECUTION_PROTOCOL,
+            kind: 'heartbeat',
+            ...heartbeat,
+          });
+        },
+      }));
       context.world
         .addSystem(Update, {
-          name: 'play-execution-heartbeat',
+          name: 'play-execution-diagnostics',
           queries: [],
           fn: () => {
             const delta = context.world.getResource(Time).delta;
@@ -186,12 +187,6 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
                 diagnostics: projectRuntimeDiagnostics(context),
               });
             }
-            if (next.heartbeat === undefined) return;
-            post(context.port, {
-              protocol: PLAY_EXECUTION_PROTOCOL,
-              kind: 'heartbeat',
-              ...next.heartbeat,
-            });
           },
         })
         .unwrap();

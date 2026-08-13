@@ -136,11 +136,13 @@ export type BuiltinEditorOp =
   | { kind: 'cameraAdjustFov'; delta: number }
   | { kind: 'cameraZoom'; delta: number }
   | { kind: 'cameraBookmark'; action: 'save' | 'recall' | 'clear'; slot: number }
-  // Viewport interaction preferences (mouse/wheel/fly sensitivity + view-scale
-  // defaults). Editor chrome session state — the applier + reactive store live
-  // in core (store/viewport-preferences.ts, gizmo-pivot pattern); partial patch,
-  // every field optional, values clamped by the applier (fail-closed normalize).
+  // Viewport interaction preferences (including gridVisible, default true).
+  // This is Editor chrome session state — the applier + reactive store live in
+  // core (store/viewport-preferences.ts, gizmo-pivot pattern); every patch
+  // field is optional, values are normalized by the applier, and the operation
+  // never enters scene-pack or document undo.
   | { kind: 'setViewportPreferences'; patch: {
+      gridVisible?: boolean;
       mouseSensitivity?: number;
       invertY?: boolean;
       wheelDirection?: 1 | -1;

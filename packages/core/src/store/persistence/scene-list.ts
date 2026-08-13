@@ -601,12 +601,14 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       let want: string | null = null;
       try { want = localStorage.getItem(sceneFileStorageKey()); } catch { /* unavailable */ }
       const def = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
-      // forge.json.defaultScene is a scene GUID; resolve it to the pack that
-      // DECLARES that scene asset and prefer that entry, so ✎ Edit opens the SAME
-      // scene ▶ Play boots (not merely the alphabetically-first level).
-      const defPack = def ? await findScenePackByGuid(ctx.currentSceneId, def) : null;
-      const defId = defPack
-        ? (ctx.sceneList.find((s) => s.pack === defPack)?.id ?? null)
+      // forge.json.defaultScene is a scene GUID. The completed manifest scan
+      // above already records the pack that DECLARES that GUID, so resolve the
+      // binding from that in-memory manifest instead of issuing a second
+      // network scan. Besides removing redundant I/O, this closes a reopen
+      // race where the second read could fail after discovery had succeeded and
+      // incorrectly leave an otherwise authoritative default scene unbound.
+      const defId = def
+        ? (ctx.sceneList.find((s) => s.guid === def)?.id ?? null)
         : null;
       // NO alphabetical `firstScene` fallback (#98): binding must come from an
       // EXPLICIT, authoritative signal (per-game localStorage / defaultScene GUID).

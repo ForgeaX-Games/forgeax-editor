@@ -81,7 +81,9 @@ const enginePreset = engineVitePreset({
 export default defineConfig({
   root: here,
   base: BASE,
-  cacheDir: resolve(here, '.vite'),
+  cacheDir: process.env.FORGEAX_VITE_CACHE_ROOT
+    ? resolve(process.env.FORGEAX_VITE_CACHE_ROOT, 'edit-runtime')
+    : resolve(here, '.vite'),
   publicDir: resolve(here, 'public'),
   // Expose the standalone `--game DIR` abs path to the client so the Play
   // resolver builds its `@fs<abs>` game-entry URL without the studio-only

@@ -94,6 +94,19 @@ test('generic lint provisions the pinned parser before its admission tests run',
   assert.match(text, /echo \"\$actionlint_dir\" >> \"\$GITHUB_PATH\"/);
 });
 
+test('self-hosted wasm-pack provisioning accepts only an exact host version before downloading', () => {
+  const text = readFileSync(ciWorkflowPath, 'utf8');
+  const start = text.indexOf('name: Setup wasm-pack (self-hosted Linux)');
+  const end = text.indexOf('name: Setup pnpm', start);
+  assert.ok(start >= 0, 'CI must provision wasm-pack for self-hosted Linux');
+  assert.ok(end > start, 'wasm-pack setup must precede pnpm setup');
+  const block = text.slice(start, end);
+  assert.match(block, /CI_TRUSTED_WASM_PACK_PATH/);
+  assert.match(block, /wasm-pack \$CI_WASM_PACK_VERSION/);
+  assert.match(block, /cp -- "\$trusted_wasm_pack_path" "\$dir\/wasm-pack"/);
+  assert.match(block, /curl --fail --location --retry 3/);
+});
+
 test('the admission gate uses the pinned actionlint executable, not a skipped parser path', () => {
   const actionlintBin = process.env.ACTIONLINT_BIN ?? 'actionlint';
   const result = spawnSync(actionlintBin, ['-version'], {
@@ -120,6 +133,51 @@ test('base workflow inventory is non-empty and has no unvalidated suffix', () =>
   const files = enumerateWorkflowFiles(workflowRoot);
   assert.ok(files.length >= 2);
   assert.ok(files.every((file) => /\.ya?ml$/.test(file)));
+});
+
+test('cloud producer and requesting consumers use an always-run producer edge', () => {
+  const text = readFileSync(ciWorkflowPath, 'utf8');
+  const blockFor = (jobId) => {
+    const start = text.indexOf(`  ${jobId}:`);
+    assert.ok(start >= 0, `ci workflow must declare ${jobId}`);
+    const remainder = text.slice(start + 3);
+    const nextJob = remainder.search(/\n  [A-Za-z0-9_.-]+:\s*\n/);
+    return remainder.slice(0, nextJob < 0 ? remainder.length : nextJob);
+  };
+  const producerBlock = blockFor('prerequisite-release');
+  assert.match(producerBlock, /name:\s+prerequisite-release/);
+  assert.match(producerBlock, /ci:prerequisite\s+--\s+produce/);
+  assert.match(producerBlock, /actions\/upload-artifact@v4/);
+  assert.match(producerBlock, /include-hidden-files:\s*true/);
+
+  for (const jobId of ['b2-self-boot', 'typecheck', 'smoke-play']) {
+    const block = blockFor(jobId);
+    assert.match(block, /needs:/, `${jobId} must wait for producer publication`);
+    assert.match(block, /always\(\)/, `${jobId} must inspect producer failure explicitly`);
+    assert.match(block, /download-artifact@v5/, `${jobId} must consume the immutable release`);
+  }
+});
+
+test('request-scoped release validation precedes every consumer body', () => {
+  const text = readFileSync(ciWorkflowPath, 'utf8');
+  const consumers = [
+    ['b2-self-boot', 'Self-boot B2 (read + write, no studio server)'],
+    ['typecheck', 'Run script and contract tests'],
+    ['smoke-play', 'Boot + Play + Content Browser + Save + Mesh Preview smoke (games/sample)'],
+  ];
+  for (const [consumer, bodyName] of consumers) {
+    const blockStart = text.indexOf(`  ${consumer}:`);
+    const bodyStart = text.indexOf(`name: ${bodyName}`, blockStart);
+    const validationStart = text.indexOf(`--consumer ${consumer}`, blockStart);
+    assert.ok(blockStart >= 0, `${consumer} job is present`);
+    assert.ok(validationStart >= 0, `${consumer} validates its requested payloads`);
+    assert.ok(bodyStart >= 0, `${consumer} check body is present`);
+    assert.ok(validationStart < bodyStart, `${consumer} validates before its check body`);
+    const beforeBody = text.slice(blockStart, bodyStart);
+    assert.match(beforeBody, /ci:prerequisite\s+--\s+validate/);
+    assert.match(beforeBody, /--manifest\s+\.ci\/prerequisite-release\/manifest\.json/);
+    assert.doesNotMatch(beforeBody.slice(validationStart - blockStart), /Build wgpu-wasm|Build engine library|Ensure FBX wasm/);
+  }
 });
 
 test('contract fixture is a workflow-only sparse input with no executable PR payload', () => {

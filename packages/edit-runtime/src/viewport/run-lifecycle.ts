@@ -119,6 +119,9 @@ export interface RunGateway {
 export interface RemotePlayCarrier {
   start(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
   stop(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
+  pause(): void;
+  resume(): void;
+  state(): 'edit' | 'entering-play' | 'play' | 'stopping';
 }
 
 /** Optional OperationRun projection supplied by the product host. */
@@ -477,6 +480,12 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   }
 
   function getPlayPauseHandle(): { pause(): void; resume(): void } | null {
+    if (deps.remoteCarrier !== undefined && deps.remoteCarrier.state() !== 'edit') {
+      return {
+        pause() { deps.remoteCarrier!.pause(); },
+        resume() { deps.remoteCarrier!.resume(); },
+      };
+    }
     if (!active) return null;
     const pa = active.playApp;
     return {

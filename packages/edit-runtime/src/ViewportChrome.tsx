@@ -52,6 +52,7 @@ export function ViewportChrome({ fps, onPlay, onStop, onToggleDisplay, onControl
     <>
       <PlayTerminal onPlay={onPlay} onStop={onStop} />
       <ViewportViewMenu />
+      <span className="vp-fps" data-testid="vp-fps">{fps} FPS</span>
       <div className="vp-quality-control" data-testid="vp-visual-quality-control">
         <label htmlFor="vp-visual-quality">Visual quality</label>
         <select

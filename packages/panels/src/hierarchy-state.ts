@@ -7,13 +7,16 @@ import {
   listComponentSchemas,
   readEntityVisibility,
   resolveVisibility,
+  Visibility,
   worldComponentNames,
   worldEntityHandles,
   type EntityHandle,
   type RuntimeUiGraph,
 } from '@forgeax/editor-core';
+import { ChildOf, Children, Name } from '@forgeax/engine-scene';
 
 export const HIERARCHY_SCENE_FOLDER_ID = -1 as EntityHandle;
+const EMPTY_ENTITY_IDS: readonly EntityHandle[] = Object.freeze([]);
 
 export interface HierarchyColumns {
   readonly type: boolean;
@@ -48,6 +51,8 @@ export interface HierarchyEntitySummary {
 
 export interface HierarchyStructureProjection {
   readonly structureEpoch: number;
+  /** Monotonic content revision owned by the selector, for cross-carrier dedupe. */
+  readonly projectionRevision?: number;
   readonly rows: readonly HierarchyEntitySummary[];
 }
 
@@ -91,6 +96,28 @@ export interface HierarchyStructureSelector {
 }
 
 type StructureReader = (world: unknown) => HierarchyStructureProjection;
+
+type HierarchyProjectionCacheEntry = {
+  readonly structureEpoch: number;
+  readonly componentMutationEpochs: readonly number[];
+  readonly projection: HierarchyStructureProjection;
+};
+
+// The hierarchy reader is called from the editor's FrameEnd publisher, not
+// only when the panel is visible. The projection depends on the structural
+// layout plus Name / Visibility / ChildOf / Children values. Use those
+// component-owned epochs instead of the global mutation epoch: animation,
+// input, and other runtime-only writes must not rebuild 3,535 hierarchy rows.
+// A WeakMap keeps the cache scoped to the live World realm.
+const HIERARCHY_PROJECTION_CACHE = new WeakMap<object, HierarchyProjectionCacheEntry>();
+
+const HIERARCHY_COMPONENTS = [Name, Visibility, ChildOf, Children] as const;
+
+function componentMutationEpochs(world: object): readonly number[] | undefined {
+  const readEpoch = (world as { _getComponentMutationEpoch?: unknown })._getComponentMutationEpoch;
+  if (typeof readEpoch !== 'function') return undefined;
+  return HIERARCHY_COMPONENTS.map((component) => Number(readEpoch.call(world, component.id)));
+}
 
 function sameHierarchyRows(
   left: readonly HierarchyEntitySummary[],
@@ -146,6 +173,18 @@ function readWorldStructure(world: unknown): HierarchyStructureProjection {
   const structureEpoch = typeof (typedWorld as { getStructureEpoch?: unknown }).getStructureEpoch === 'function'
     ? Number((typedWorld as { getStructureEpoch: () => number }).getStructureEpoch())
     : 0;
+  const componentEpochs = typeof typedWorld === 'object' && typedWorld !== null
+    ? componentMutationEpochs(typedWorld)
+    : undefined;
+  if (componentEpochs !== undefined && typeof typedWorld === 'object' && typedWorld !== null) {
+    const cached = HIERARCHY_PROJECTION_CACHE.get(typedWorld);
+    if (cached?.structureEpoch === structureEpoch
+      && cached.componentMutationEpochs.length === componentEpochs.length
+      && cached.componentMutationEpochs.every((epoch, index) => epoch === componentEpochs[index])
+    ) {
+      return cached.projection;
+    }
+  }
   const namesByEntity = worldComponentNames(typedWorld);
   const visibility = resolveVisibility(typedWorld);
   const rows = worldEntityHandles(typedWorld).map((id) => {
@@ -158,13 +197,27 @@ function readWorldStructure(world: unknown): HierarchyStructureProjection {
       hidden: resolution.intent === 'hidden',
       ancestorHidden: resolution.effective === 'hidden' && resolution.intent !== 'hidden',
       mobility: hierarchyMobility(entComponentsPresent(typedWorld, id, names)),
-      childIds: childrenOf(typedWorld, id),
+      // `worldComponentNames` is the structural presence index. Avoid asking
+      // the result-returning `childrenOf` helper for the overwhelmingly common
+      // leaf case; a missing Children component would otherwise allocate a
+      // ComponentNotPresentError on every row publish.
+      childIds: names.includes(CHILDREN_COMPONENT)
+        ? childrenOf(typedWorld, id)
+        : EMPTY_ENTITY_IDS,
     };
   });
-  return {
+  const projection = {
     structureEpoch,
     rows: Object.freeze(rows),
   };
+  if (componentEpochs !== undefined && typeof typedWorld === 'object' && typedWorld !== null) {
+    HIERARCHY_PROJECTION_CACHE.set(typedWorld, {
+      structureEpoch,
+      componentMutationEpochs: componentEpochs,
+      projection,
+    });
+  }
+  return projection;
 }
 
 export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: StructureReader = readWorldStructure): HierarchyStructureSelector {
@@ -177,6 +230,10 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
       kind: 'pod',
       fields: {
         structureEpoch: { kind: 'primitive' },
+        // Keep the selector-owned content revision in the normalized snapshot
+        // so a cross-carrier panel can deduplicate a fresh wire envelope
+        // without scanning/rebuilding every hierarchy row.
+        projectionRevision: { kind: 'primitive' },
         rows: { kind: 'array', item: { kind: 'pod', fields: {
           id: { kind: 'primitive' }, name: { kind: 'primitive' }, typeId: { kind: 'primitive' }, hidden: { kind: 'primitive' },
           ancestorHidden: { kind: 'primitive' },
@@ -187,12 +244,17 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
     read: (world) => {
       const next = reader(world);
       if (projection?.structureEpoch === next.structureEpoch
-        && sameHierarchyRows(projection.rows, next.rows)
+        && (projection.rows === next.rows || sameHierarchyRows(projection.rows, next.rows))
       ) return projection;
-      projection = { structureEpoch: next.structureEpoch, rows: next.rows };
       projectionRebuilds += 1;
+      projection = {
+        structureEpoch: next.structureEpoch,
+        projectionRevision: projectionRebuilds,
+        rows: next.rows,
+      };
       return projection;
     },
+    valueEqual: Object.is,
   });
   return {
     mount() {
@@ -496,7 +558,11 @@ export function getHierarchyEntityType(
     const id = intent.reduce((best, name) => (compareComponentNames(name, best) < 0 ? name : best));
     return { id, label: id };
   }
-  if (componentNames.includes(CHILDREN_COMPONENT) || childrenOf(world, entity).length > 0) {
+  // The caller supplies the complete structural component-name index. A live
+  // child relationship is represented by Children, so probing every
+  // infra-only row through childrenOf would turn a cheap projection into one
+  // missing-component Result/Error allocation per row.
+  if (componentNames.includes(CHILDREN_COMPONENT)) {
     return { id: HIERARCHY_GROUP_TYPE_ID, label: 'Group' };
   }
   return { id: HIERARCHY_ENTITY_TYPE_ID, label: 'Entity' };

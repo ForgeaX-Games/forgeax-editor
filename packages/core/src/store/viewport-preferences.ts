@@ -69,6 +69,8 @@ export interface CameraBookmark {
 }
 
 export interface ViewportPreferences {
+  /** Whether the Edit viewport's infinite grid is visible; session chrome only. */
+  gridVisible: boolean;
   /** Mouse delta multiplier for orbit, pan, dolly, and fly look. */
   mouseSensitivity: number;
   /** Reverse vertical mouse look for users who prefer inverted Y. */
@@ -189,6 +191,7 @@ function parseBookmark(value: unknown): CameraBookmark | null {
 
 export function defaultViewportPreferences(): ViewportPreferences {
   return {
+    gridVisible: true,
     mouseSensitivity: 1,
     invertY: false,
     wheelDirection: 1,
@@ -209,6 +212,7 @@ export function normalizeViewportPreferences(value: unknown): ViewportPreference
   if (!isRecord(value)) return defaults;
 
   const preferences: ViewportPreferences = {
+    gridVisible: typeof value.gridVisible === 'boolean' ? value.gridVisible : defaults.gridVisible,
     mouseSensitivity: clamp(
       value.mouseSensitivity,
       defaults.mouseSensitivity,
@@ -299,9 +303,12 @@ export function writeViewportPreferences(
 // also work headless (no viewport mounted) so AI/eval can read-modify
 // preferences.
 
-/** Partial patch accepted by the `setViewportPreferences` op. Numbers are
- *  clamped to their valid range (fail-closed) rather than rejected. */
+/** Partial session patch accepted by `setViewportPreferences`. `gridVisible`
+ * defaults to true and controls Edit chrome only; numbers are clamped to their
+ * valid range (fail-closed) rather than rejected. The public Gateway schema
+ * rejects unknown keys with INVALID_ARGS and a field-path hint. */
 export interface ViewportPreferencesPatch {
+  gridVisible?: boolean;
   mouseSensitivity?: number;
   invertY?: boolean;
   wheelDirection?: 1 | -1;

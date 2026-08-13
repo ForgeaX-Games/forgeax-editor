@@ -47,7 +47,11 @@ export function readEntityVisibility(
   if (resolved !== undefined) return resolved;
   const effective = snapshot.effective(entity);
   return {
-    intent: readVisibilityIntent(world, entity),
+    // `snapshot.get()` is intentionally undefined for the common case where
+    // the entity has no authored Visibility component. The resolver already
+    // encoded that fact as inherited; probing `world.get()` here only creates
+    // a ComponentNotPresentError for every ordinary hierarchy row.
+    intent: 'inherited',
     effective,
     source: effective === 'hidden' ? 'parent' : 'default',
   };

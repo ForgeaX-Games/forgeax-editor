@@ -61,7 +61,7 @@
 //     Finding 2 (GUID path is pure read, sidesteps fidelity hazards)
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
 
-import { createApp, inputPlugin } from '@forgeax/engine-app';
+import { createApp, ensureFallbackCamera, inputPlugin } from '@forgeax/engine-app';
 import type { GamePluginInstallResult, GameProjectionRegistrar } from '@forgeax/engine-app';
 import {
   World,
@@ -72,7 +72,7 @@ import {
 } from '@forgeax/engine-ecs';
 import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
 import { animationPlugin } from '@forgeax/engine-animation';
-import { Camera, CAMERA_PROJECTION_PERSPECTIVE, perspective } from '@forgeax/engine-render';
+import { Camera, CAMERA_PROJECTION_PERSPECTIVE } from '@forgeax/engine-render';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
 import {
@@ -243,7 +243,6 @@ export interface AssemblePlayWorldDeps {
   /** Whether the shared renderer accepted the optional GPU particle feature. */
   readonly vfxRenderFeatureEnabled?: boolean;
   /** Observe render phases through the current profiler owner. */
-  readonly onRenderPhaseEnd?: (phase: string) => void;
 }
 
 /**
@@ -476,11 +475,7 @@ export async function assemblePlayWorld(
       plugins: plugins as never,
       ...(vfxFeatureEnabled ? { features: [deps.vfxRuntimeHost!.feature] } : {}),
       ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
-      profiler: createFramePhaseProfiler({
-        onPhaseEnd: ({ source, phase }) => {
-          if (source === 'render') deps.onRenderPhaseEnd?.(phase);
-        },
-      }),
+      profiler: createFramePhaseProfiler({ enableCpuCapture: true }),
     });
   } catch (error) {
     detachHostResources();
@@ -791,26 +786,10 @@ export async function assemblePlayWorld(
     }
   } else {
     console.warn('[editor] ▶ Play: no bootstrap entry resolved — game logic will not run');
-  }
-
-  // Fallback camera: if the play world has no Camera entity after bootstrap
-  // (or bootstrap was skipped), spawn a default one so the renderer doesn't
-  // fire render-system-no-camera every frame. Aligned with the play-runtime
-  // preview fallback (play-runtime/src/main.ts). The fallback uses a safe
-  // perspective projection; games that spawn their own camera are unaffected
-  // (their camera takes precedence via the renderer's first-hit behavior).
-  let hasCameraInPlayWorld = false;
-  const cameraQuery = (playWorld as World).query({ with: [Camera] }).unwrap();
-  for (const _row of cameraQuery) {
-    hasCameraInPlayWorld = true;
-    break;
-  }
-  if (!hasCameraInPlayWorld) {
-    console.warn('[editor] ▶ Play: no Camera entity in play world — spawning fallback camera');
-    (playWorld as { spawn(...args: unknown[]): { unwrap(): number } }).spawn(
-      { component: Transform, data: { pos: [0, 0.6, 5] } },
-      { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: 1, far: 1000 }) },
-    );
+    // Preserve the documented empty-world fallback without masking a real
+    // game's missing authored Camera: this branch is reached only when no game
+    // bootstrap exists.
+    ensureFallbackCamera(playWorld as World);
   }
 
   const detach = (): void => { detachHostResources(); };

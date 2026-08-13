@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   defaultViewportPreferences,
+  normalizeViewportPreferences,
   readViewportPreferences,
   writeViewportPreferences,
   VIEWPORT_PREFERENCES_STORAGE_KEY,
@@ -41,6 +42,7 @@ describe('viewport preferences persistence', () => {
     const preferences = defaultViewportPreferences();
     expect(preferences.projection).toBe('perspective');
     expect(preferences.activeView).toBe('perspective');
+    expect(preferences.gridVisible).toBe(true);
     expect(preferences.flySpeed).toBe(8);
     expect(preferences.orthoHalfHeight).toBeNull();
     expect(preferences.bookmarks).toEqual({});
@@ -81,6 +83,7 @@ describe('viewport preferences persistence', () => {
     preferences.wheelSpeedScalar = 1.25;
     preferences.flyBoostMultiplier = 3;
     preferences.projection = 'orthographic';
+    preferences.gridVisible = false;
     preferences.fov = Math.PI / 2;
     preferences.orthoHalfHeight = 4;
     preferences.bookmarks[3] = makeBookmark();
@@ -96,8 +99,20 @@ describe('viewport preferences persistence', () => {
     expect(restored.wheelSpeedScalar).toBe(1.25);
     expect(restored.flyBoostMultiplier).toBe(3);
     expect(restored.projection).toBe('orthographic');
+    expect(restored.gridVisible).toBe(false);
     expect(restored.orthoHalfHeight).toBe(4);
     expect(restored.bookmarks[3]).toEqual(makeBookmark());
+  });
+
+  it('fills gridVisible=true for old stored preferences and keeps boolean boundaries', () => {
+    const storage = new MemoryStorage();
+    storage.setItem(VIEWPORT_PREFERENCES_STORAGE_KEY, JSON.stringify({ v: 1, invertY: true }));
+
+    expect(readViewportPreferences(storage).gridVisible).toBe(true);
+    expect(normalizeViewportPreferences({ gridVisible: false }).gridVisible).toBe(false);
+    expect(normalizeViewportPreferences({ gridVisible: true }).gridVisible).toBe(true);
+    expect(normalizeViewportPreferences({ gridVisible: 'false' }).gridVisible).toBe(true);
+    expect(normalizeViewportPreferences({ gridVisible: 0 }).gridVisible).toBe(true);
   });
 
   it('clamps unsafe values and drops malformed bookmark slots', () => {

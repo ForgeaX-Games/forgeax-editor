@@ -10,6 +10,11 @@
 //   bun scripts/chrome-performance.mjs --headed --surface all
 //   bun scripts/chrome-performance.mjs --url http://localhost:15290/ --duration 8000
 //   bun scripts/chrome-performance.mjs --benchmark --headed --surface edit
+//   bun scripts/chrome-performance.mjs --headed --nested --surface edit
+//   bun scripts/chrome-performance.mjs --headed --passes --surface edit
+//   bun scripts/chrome-performance.mjs --headed --no-diagnostics --surface edit
+//   bun scripts/chrome-performance.mjs --headed --surface edit \
+//     --edit-camera-json '{"pos":[0,180,200],"lookAt":[0,0,0]}'
 //
 // The default is headless so the tool is usable in CI. For a root-cause trace,
 // use --headed and verify the window is visible/focused; the summary records both
@@ -47,6 +52,8 @@ const BACKGROUND_REQUEST_PATTERNS = [
   /^\/api\/logs$/,
   /^\/api\/bus\/ui\/surfaces\/[^/]+\/pending$/,
   /^\/api\/workbench\/games$/,
+  /^\/api\/extensions\/list$/,
+  /^\/api\/health$/,
 ];
 
 export function classifyResourceRequest(request) {
@@ -134,15 +141,31 @@ function eventTimestamps(events, predicate) {
 function intervalSummary(timestamps) {
   const intervals = timestamps.slice(1).map((ts, index) => ts - timestamps[index]);
   if (intervals.length === 0) return { count: timestamps.length, intervals: null };
+  const spanMs = timestamps[timestamps.length - 1] - timestamps[0];
+  const p50Ms = percentile(intervals, 0.5);
   return {
     count: timestamps.length,
     intervals: {
       count: intervals.length,
-      p50Ms: percentile(intervals, 0.5),
+      p50Ms,
       p95Ms: percentile(intervals, 0.95),
       maxMs: Math.max(...intervals),
+      // N timestamps contain N-1 frame intervals. Dividing event count by
+      // the capture window under-reports a refresh-locked stream because the
+      // first/last partial capture intervals are not frames.
+      averageFps: spanMs > 0 ? (intervals.length * 1000) / spanMs : null,
+      medianFps: p50Ms > 0 ? 1000 / p50Ms : null,
     },
   };
+}
+
+function coalesceAnimationFrameTicks(timestamps, thresholdMs = 2) {
+  const ticks = [];
+  for (const timestamp of timestamps) {
+    const previousTick = ticks[ticks.length - 1];
+    if (previousTick === undefined || timestamp - previousTick > thresholdMs) ticks.push(timestamp);
+  }
+  return ticks;
 }
 
 /**
@@ -177,10 +200,12 @@ function slowestIntervals(events, predicate, limit = 5) {
 
 function aggregateDuration(events) {
   const durations = events.map(durationMs).filter((value) => value > 0);
+  let maxMs = 0;
+  for (const duration of durations) maxMs = Math.max(maxMs, duration);
   return {
     count: events.length,
     totalMs: durations.reduce((sum, value) => sum + value, 0),
-    maxMs: durations.length > 0 ? Math.max(...durations) : 0,
+    maxMs,
   };
 }
 
@@ -359,15 +384,138 @@ function functionCallLabel(event) {
   return typeof functionName === 'string' && functionName !== '' ? functionName : eventName(event);
 }
 
+function captureWindowBounds(events) {
+  const captureBegin = events.find((event) =>
+    event?.name === 'forgeax.capture.window.begin' &&
+    typeof event?.ts === 'number' && Number.isFinite(event.ts),
+  );
+  const captureEnd = [...events].reverse().find((event) =>
+    event?.name === 'forgeax.capture.window.end' &&
+    typeof event?.ts === 'number' && Number.isFinite(event.ts),
+  );
+  return captureBegin !== undefined && captureEnd !== undefined && captureEnd.ts >= captureBegin.ts
+    ? { startUs: captureBegin.ts, endUs: captureEnd.ts }
+    : null;
+}
+
+function eventsInsideCaptureWindow(events) {
+  const bounds = captureWindowBounds(events);
+  if (bounds === null) return { events, bounds };
+  return {
+    bounds,
+    events: events.flatMap((event) => {
+      // Metadata is needed to interpret the bounded tracks, even though Chrome
+      // emits it before the harness measurement window.
+      if (event?.ph === 'M') return [event];
+      if (typeof event?.ts !== 'number' || !Number.isFinite(event.ts)) return [];
+      if (typeof event.dur !== 'number' || !Number.isFinite(event.dur) || event.dur <= 0) {
+        return event.ts >= bounds.startUs && event.ts <= bounds.endUs ? [event] : [];
+      }
+      const startUs = Math.max(bounds.startUs, event.ts);
+      const endUs = Math.min(bounds.endUs, event.ts + event.dur);
+      return endUs > startUs ? [{ ...event, ts: startUs, dur: endUs - startUs }] : [];
+    }),
+  };
+}
+
+function applicationFrameEvents(events, hasCaptureWindow, explicitFrameId) {
+  const phaseBegins = events.filter((event) =>
+    typeof event?.name === 'string'
+    && /^forgeax\.frame\.phase\.\d+\.frame-total\.begin$/.test(event.name)
+    && typeof event?.ts === 'number'
+    && Number.isFinite(event.ts),
+  );
+  const animationFrames = events.filter((event) =>
+    eventName(event) === 'FireAnimationFrame'
+    && typeof event?.ts === 'number'
+    && Number.isFinite(event.ts),
+  );
+  if (explicitFrameId !== undefined) {
+    const owned = animationFrames.filter((event) => event?.args?.data?.frame === explicitFrameId);
+    return {
+      events: owned,
+      owner: owned.length === 0 ? null : {
+        pid: owned[0]?.pid ?? null,
+        tid: owned[0]?.tid ?? null,
+        frameIds: [explicitFrameId],
+        evidence: 'cdp-frame-tree-rAF-ticks',
+      },
+    };
+  }
+  if (phaseBegins.length === 0) {
+    // Synthetic/legacy traces without the harness window retain the old
+    // diagnostic fallback. A real bounded capture must never mix parent and
+    // child rAF streams when owner markers are disabled.
+    return hasCaptureWindow ? { events: [], owner: null } : { events: animationFrames, owner: null };
+  }
+
+  const ownedEvents = new Set();
+  const ownedFrameIds = new Set();
+  let ownerPid = null;
+  let ownerTid = null;
+  for (const phase of phaseBegins) {
+    const containingFrame = animationFrames.find((event) => {
+      if (event.pid !== phase.pid || event.tid !== phase.tid) return false;
+      const endUs = event.ts + (typeof event.dur === 'number' ? event.dur : 0);
+      return event.ts <= phase.ts && phase.ts <= endUs;
+    });
+    const frameId = containingFrame?.args?.data?.frame;
+    if (containingFrame === undefined) continue;
+    ownedEvents.add(containingFrame);
+    if (typeof frameId === 'string') ownedFrameIds.add(frameId);
+    ownerPid = phase.pid ?? null;
+    ownerTid = phase.tid ?? null;
+  }
+  const owned = animationFrames.filter((event) => ownedEvents.has(event));
+  return {
+    events: owned,
+    owner: owned.length === 0 ? null : {
+      pid: ownerPid,
+      tid: ownerTid,
+      frameIds: [...ownedFrameIds],
+      evidence: 'frame-total-mark-contained-by-rAF',
+    },
+  };
+}
+
 function traceWindowMs(events) {
+  // Chrome may retain page-start timeline events outside the requested
+  // measurement window (notably `firstMeaningfulPaint`) when Tracing is
+  // attached after navigation. The engine-owned frame markers are the
+  // authoritative sample boundary, so prefer them whenever present; this
+  // keeps startup noise from falsely invalidating an otherwise complete A/B.
+  const captureBounds = captureWindowBounds(events);
+  if (captureBounds !== null) {
+    return (captureBounds.endUs - captureBounds.startUs) / 1000;
+  }
+  const phaseMarkers = events.filter((event) =>
+    typeof event?.name === 'string' &&
+    event.name.startsWith('forgeax.frame.phase.') &&
+    typeof event?.ts === 'number' &&
+    Number.isFinite(event.ts),
+  );
+  const boundsOf = (candidates) => {
+    let startUs = Number.POSITIVE_INFINITY;
+    let endUs = Number.NEGATIVE_INFINITY;
+    for (const event of candidates) {
+      const ts = event.ts;
+      const end = ts + (typeof event.dur === 'number' ? event.dur : 0);
+      if (ts < startUs) startUs = ts;
+      if (end > endUs) endUs = end;
+    }
+    return startUs === Number.POSITIVE_INFINITY ? null : { startUs, endUs };
+  };
+  if (phaseMarkers.length > 1) {
+    const bounds = boundsOf(phaseMarkers);
+    return bounds === null ? null : (bounds.endUs - bounds.startUs) / 1000;
+  }
   const timelineEvents = events.filter((event) => {
     if (event?.ph === 'M' || event?.ph === 's' || event?.ph === 'f' || event?.ph === 't') return false;
     return typeof event?.ts === 'number' && Number.isFinite(event.ts);
   });
   if (timelineEvents.length === 0) return null;
-  const startUs = Math.min(...timelineEvents.map((event) => event.ts));
-  const endUs = Math.max(...timelineEvents.map((event) => event.ts + (typeof event.dur === 'number' ? event.dur : 0)));
-  return (endUs - startUs) / 1000;
+  const bounds = boundsOf(timelineEvents);
+  return bounds === null ? null : (bounds.endUs - bounds.startUs) / 1000;
 }
 
 function traceThreadInventory(events) {
@@ -809,12 +957,19 @@ export function validateEvidence({
   };
 }
 
-export function summarizeTrace(traceInput) {
-  const events = traceEvents(traceInput);
-  const fireAnimationFrame = eventTimestamps(
+export function summarizeTrace(traceInput, options = {}) {
+  const allEvents = traceEvents(traceInput);
+  const captureWindow = eventsInsideCaptureWindow(allEvents);
+  const events = captureWindow.events;
+  const applicationFrames = applicationFrameEvents(
     events,
-    (event) => eventName(event) === 'FireAnimationFrame',
+    captureWindow.bounds !== null,
+    options.applicationFrameId,
   );
+  const fireAnimationFrame = coalesceAnimationFrameTicks(eventTimestamps(
+    applicationFrames.events,
+    () => true,
+  ));
   const beginFrameArgsEvents = events.filter((event) => eventName(event) === 'BeginFrameArgs');
   const externalBeginFrameEvents = events.filter((event) => eventName(event) === 'ExternalBeginFrameSource::OnBeginFrame');
   const beginFrameEvents = [...beginFrameArgsEvents, ...externalBeginFrameEvents];
@@ -839,10 +994,13 @@ export function summarizeTrace(traceInput) {
   if (presentEvents.length === 0) missingSignals.push('Present/Graphics.Pipeline');
 
   return {
-    eventCount: events.length,
+    eventCount: events.filter((event) => event?.ph !== 'M').length,
     windowMs: traceWindowMs(events),
     threadInventory: traceThreadInventory(events),
-    frame: intervalSummary(fireAnimationFrame),
+    frame: {
+      ...intervalSummary(fireAnimationFrame),
+      owner: applicationFrames.owner,
+    },
     beginFrame: {
       eventCount: beginFrameEvents.length,
       sources: {
@@ -925,7 +1083,13 @@ async function captureTrace(client, page, durationMs, maxBytes, categories) {
     transferMode: 'ReturnAsStream',
   }), TRACE_START_TIMEOUT_MS, 'Tracing.start');
   const tracingStartMs = performance.now() - startedAt;
+  await page.evaluate(() => {
+    performance.clearMarks('forgeax.capture.window.begin');
+    performance.clearMarks('forgeax.capture.window.end');
+    performance.mark('forgeax.capture.window.begin');
+  });
   await page.waitForTimeout(durationMs);
+  await page.evaluate(() => performance.mark('forgeax.capture.window.end'));
   const endingAt = performance.now();
   await withTimeout(client.send('Tracing.end'), TRACE_END_TIMEOUT_MS, 'Tracing.end');
   const tracingEndMs = performance.now() - endingAt;
@@ -941,7 +1105,7 @@ async function captureTrace(client, page, durationMs, maxBytes, categories) {
   };
 }
 
-async function gatewayEval(page, snippet) {
+export async function gatewayEval(page, snippet) {
   return page.evaluate(async (code) => {
     const channel = globalThis.__forgeaxEval;
     if (!channel) return { ok: false, error: { code: 'GATEWAY_UNAVAILABLE', hint: '__forgeaxEval is not mounted' } };
@@ -953,7 +1117,7 @@ async function gatewayEval(page, snippet) {
   }, snippet);
 }
 
-async function waitForPlay(page) {
+export async function waitForPlay(page) {
   let last;
   for (let i = 0; i < 120; i += 1) {
     last = await gatewayEval(page, '({phase:gateway.playPhase,error:gateway.lastPlayError})');
@@ -1014,6 +1178,27 @@ function parseNumber(value, fallback, label) {
   return parsed;
 }
 
+export function parseEditCameraJson(value) {
+  if (value === undefined) return undefined;
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('--edit-camera-json must be valid JSON');
+  }
+  const vector = (candidate) =>
+    Array.isArray(candidate) &&
+    candidate.length === 3 &&
+    candidate.every((entry) => typeof entry === 'number' && Number.isFinite(entry));
+  if (!parsed || typeof parsed !== 'object' || !vector(parsed.pos) || !vector(parsed.lookAt)) {
+    throw new Error('--edit-camera-json must be {"pos":[x,y,z],"lookAt":[x,y,z]} with finite numbers');
+  }
+  return {
+    pos: [...parsed.pos],
+    lookAt: [...parsed.lookAt],
+  };
+}
+
 export function parseCli(argv) {
   const flags = {
     url: DEFAULT_URL,
@@ -1023,6 +1208,16 @@ export function parseCli(argv) {
     surface: 'all',
     headed: false,
     deepGpu: false,
+    nested: false,
+    passes: false,
+    detail: 'owner',
+    width: 1280,
+    height: 720,
+    diagnostics: true,
+    editCamera: undefined,
+    playClickText: undefined,
+    playReadySelector: undefined,
+    playBlockingSelector: undefined,
     out: undefined,
     maxTraceMb: 128,
   };
@@ -1033,6 +1228,15 @@ export function parseCli(argv) {
     if (arg === '--benchmark') flags.benchmark = true;
     else if (arg === '--headed') flags.headed = true;
     else if (arg === '--deep-gpu') flags.deepGpu = true;
+    else if (arg === '--nested') {
+      flags.nested = true;
+      flags.detail = 'nested';
+    }
+    else if (arg === '--passes') {
+      flags.passes = true;
+      flags.detail = 'passes';
+    }
+    else if (arg === '--no-diagnostics') flags.diagnostics = false;
     else if (arg === '--url') flags.url = argv[++i];
     else if (arg === '--duration') {
       flags.duration = parseNumber(argv[++i], DEFAULT_DURATION_MS, '--duration');
@@ -1043,14 +1247,21 @@ export function parseCli(argv) {
       warmupProvided = true;
     }
     else if (arg === '--surface') flags.surface = argv[++i];
+    else if (arg === '--width') flags.width = parseNumber(argv[++i], 1280, '--width');
+    else if (arg === '--height') flags.height = parseNumber(argv[++i], 720, '--height');
+    else if (arg === '--edit-camera-json') flags.editCamera = parseEditCameraJson(argv[++i]);
+    else if (arg === '--play-click-text') flags.playClickText = argv[++i];
+    else if (arg === '--play-ready-selector') flags.playReadySelector = argv[++i];
+    else if (arg === '--play-blocking-selector') flags.playBlockingSelector = argv[++i];
     else if (arg === '--out') flags.out = argv[++i];
     else if (arg === '--max-trace-mb') flags.maxTraceMb = parseNumber(argv[++i], 128, '--max-trace-mb');
     else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: bun scripts/chrome-performance.mjs [--benchmark] [--headed] [--deep-gpu] [--surface all|edit|play-scene|play-game] [--warmup ms] [--duration ms] [--url url] [--out dir] [--max-trace-mb mb]');
+      console.log('Usage: bun scripts/chrome-performance.mjs [--benchmark] [--headed] [--passes|--nested] [--no-diagnostics] [--deep-gpu] [--surface all|edit|play-scene|play-game] [--width px] [--height px] [--edit-camera-json json] [--play-click-text text] [--play-ready-selector css] [--play-blocking-selector css] [--warmup ms] [--duration ms] [--url url] [--out dir] [--max-trace-mb mb]');
       process.exit(0);
     } else throw new Error(`unknown argument: ${arg}`);
   }
   if (!SURFACES.includes(flags.surface) && flags.surface !== 'all') throw new Error(`--surface must be all or one of ${SURFACES.join(', ')}`);
+  if (flags.passes && flags.nested) throw new Error('--passes and --nested are mutually exclusive');
   if (flags.benchmark) {
     if (!durationProvided) flags.duration = DEFAULT_BENCHMARK_DURATION_MS;
     if (!warmupProvided) flags.warmup = DEFAULT_BENCHMARK_WARMUP_MS;
@@ -1062,6 +1273,54 @@ export function parseCli(argv) {
     }
   }
   return flags;
+}
+
+async function clickVisibleTextInAnyFrame(page, label) {
+  for (let attempt = 0; attempt < 1200; attempt += 1) {
+    for (const frame of page.frames()) {
+      const target = frame.getByText(label, { exact: true }).first();
+      if (await target.isVisible().catch(() => false)) {
+        await target.click();
+        return;
+      }
+    }
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`visible Play action not found: ${JSON.stringify(label)}`);
+}
+
+async function waitForSelectorAcrossFrames(page, selector, visible) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const states = await Promise.all(page.frames().map((frame) =>
+      frame.locator(selector).first().isVisible().catch(() => false),
+    ));
+    if (states.some(Boolean) === visible) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Play selector ${JSON.stringify(selector)} did not become ${visible ? 'visible' : 'hidden'}`);
+}
+
+async function applicationFrameIdForSurface(client, surface) {
+  const { frameTree } = await client.send('Page.getFrameTree');
+  const rows = [];
+  const visit = (node) => {
+    rows.push({ id: node.frame.id, url: node.frame.url });
+    for (const child of node.childFrames ?? []) visit(child);
+  };
+  visit(frameTree);
+  const candidates = rows.filter((row) => {
+    try {
+      const path = new URL(row.url).pathname;
+      return surface === 'edit' ? path.startsWith('/editor/') : path.startsWith('/preview/');
+    } catch {
+      return false;
+    }
+  });
+  if (candidates.length !== 1) {
+    throw new Error(`expected one Chrome frame for ${surface}, found ${JSON.stringify(candidates)}`);
+  }
+  return candidates[0].id;
 }
 
 async function main() {
@@ -1083,18 +1342,26 @@ async function main() {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,WebGPU',
       '--ignore-gpu-blocklist',
-      '--window-size=1280,720',
+      `--window-size=${flags.width},${flags.height}`,
     ],
   });
   const consoleErrors = [];
   let context;
   let client;
   try {
-    context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      globalThis.__forgeaxFramePhaseDiagnostics = { enabled: true };
+    context = await browser.newContext({
+      viewport: { width: flags.width, height: flags.height },
+      deviceScaleFactor: 1,
     });
+    const page = await context.newPage();
+    if (flags.diagnostics) {
+      await page.addInitScript(({ detail }) => {
+        globalThis.__forgeaxFramePhaseDiagnostics = {
+          enabled: true,
+          detail,
+        };
+      }, { detail: flags.detail });
+    }
     const pageErrors = [];
     let activeSample = null;
     page.on('console', (message) => {
@@ -1111,6 +1378,7 @@ async function main() {
       if (activeSample) activeSample.resourceRequests.push(classifyResourceRequest(request));
     });
     await page.goto(flags.url, { waitUntil: 'domcontentloaded' });
+    if (flags.headed) await page.bringToFront();
     await page.waitForFunction(() => !!globalThis.__forgeaxEval, { timeout: 30000 });
     await page.waitForTimeout(5000);
     client = await context.newCDPSession(page);
@@ -1121,6 +1389,15 @@ async function main() {
       if (surface === 'edit') {
         const state = await gatewayEval(page, "gateway.playPhase === 'edit' ? {ok:true} : gateway.dispatch({kind:'stop'},'ai')");
         if (!state?.ok) throw new Error(`cannot enter edit: ${JSON.stringify(state)}`);
+        if (flags.editCamera !== undefined) {
+          const cameraResult = await gatewayEval(
+            page,
+            `gateway.dispatch(${JSON.stringify({ kind: 'cameraLookAt', ...flags.editCamera })},'ai')`,
+          );
+          if (!cameraResult?.ok) {
+            throw new Error(`edit camera dispatch failed: ${JSON.stringify(cameraResult)}`);
+          }
+        }
       } else {
         const accepted = await gatewayEval(page, "gateway.playPhase === 'play' ? {ok:true} : gateway.dispatch({kind:'play',dirtyPolicy:'last-saved'},'ai')");
         if (!accepted?.ok) throw new Error(`play dispatch failed: ${JSON.stringify(accepted)}`);
@@ -1129,6 +1406,20 @@ async function main() {
         const display = surface === 'play-game' ? 'game' : 'scene';
         const displayResult = await gatewayEval(page, `gateway.dispatch({kind:'setDisplay',display:'${display}'},'ai')`);
         if (!displayResult?.ok) throw new Error(`display dispatch failed: ${JSON.stringify(displayResult)}`);
+        if (surface === 'play-game') {
+          if (flags.playClickText !== undefined) {
+            await clickVisibleTextInAnyFrame(page, flags.playClickText);
+          }
+          if (flags.playBlockingSelector !== undefined) {
+            await waitForSelectorAcrossFrames(page, flags.playBlockingSelector, true);
+          }
+          if (flags.playReadySelector !== undefined) {
+            await waitForSelectorAcrossFrames(page, flags.playReadySelector, true);
+          }
+          if (flags.playBlockingSelector !== undefined) {
+            await waitForSelectorAcrossFrames(page, flags.playBlockingSelector, false);
+          }
+        }
       }
 
       await page.waitForTimeout(1000);
@@ -1139,12 +1430,13 @@ async function main() {
       const matrix = preparation.matrix;
       const sample = { consoleErrors: [], pageErrors: [], resourceRequests: [] };
       activeSample = sample;
+      const applicationFrameId = await applicationFrameIdForSurface(client, surface);
       const traceResult = await captureTrace(client, page, flags.duration, flags.maxTraceMb * 1024 * 1024, traceCategories);
       activeSample = null;
       const postMatrix = await pageMatrix(page, surface);
       const tracePath = join(outDir, `${surface}.trace.json`);
       const summaryPath = join(outDir, `${surface}.summary.json`);
-      const trace = summarizeTrace(parseTraceText(traceResult.text));
+      const trace = summarizeTrace(parseTraceText(traceResult.text), { applicationFrameId });
       const evidence = validateEvidence({
         trace,
         traceDataLoss: traceResult.dataLossOccurred,
@@ -1155,8 +1447,8 @@ async function main() {
         consoleErrors: sample.consoleErrors,
         pageErrors: sample.pageErrors,
         resourceRequests: sample.resourceRequests,
-        requireFramePhases: true,
-        requireRenderPhases: true,
+        requireFramePhases: flags.diagnostics,
+        requireRenderPhases: flags.diagnostics,
       });
       const summary = {
         surface,
@@ -1165,12 +1457,16 @@ async function main() {
           browserVersion: browser.version(),
           url: page.url(),
           headed: flags.headed,
+          diagnostics: flags.diagnostics,
+          detail: flags.detail,
           traceCategories,
           traceDataLoss: traceResult.dataLossOccurred,
           traceTimingsMs: traceResult.timingsMs,
+          applicationFrameId,
           preparation,
           warmupRequestedMs: flags.warmup,
           warmupObservedMs,
+          editCamera: surface === 'edit' ? flags.editCamera : undefined,
         },
         postMatrix,
         requests: sample.resourceRequests,
@@ -1190,6 +1486,9 @@ async function main() {
       warmupMs: flags.warmup,
       durationMs: flags.duration,
       headed: flags.headed,
+      diagnostics: flags.diagnostics,
+      detail: flags.detail,
+      editCamera: flags.editCamera,
       traceCategories,
       browserVersion: browser.version(),
       editorCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),

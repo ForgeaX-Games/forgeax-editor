@@ -22,18 +22,6 @@ describe("createFramePhaseProfiler", () => {
 		expect(createFramePhaseProfiler()).toBeUndefined();
 	});
 
-	it("keeps production phase observation active without User Timing", () => {
-		const ended: string[] = [];
-		const profiler = createFramePhaseProfiler({
-			onPhaseEnd: ({ source, phase }) => ended.push(`${source}:${phase}`),
-		});
-		const session = profiler?.activeSession();
-		session?.beginFrame(1);
-		session?.beginPhase({ source: "render", phase: "features" });
-		session?.endPhase();
-		expect(ended).toEqual(["render:features"]);
-	});
-
 	it("preserves the stable app and render User Timing vocabulary", () => {
 		const marks: string[] = [];
 		Object.defineProperty(globalThis, "performance", {
@@ -66,6 +54,28 @@ describe("createFramePhaseProfiler", () => {
 			"forgeax.render.phase.7.bind-groups.skip.feature-host-empty",
 			"forgeax.frame.phase.7.frame-total.end",
 		]);
+	});
+
+	it("keeps CPU capture available through an explicit capability opt-in", async () => {
+		const profiler = createFramePhaseProfiler({ enableCpuCapture: true });
+		expect(profiler).toBeDefined();
+		expect(profiler?.activeSession()).toBeDefined();
+		profiler?.registerPhaseCatalog("app", ["frame-total"]);
+
+		const capture = captureCpuProfile(profiler!, {
+			frameLimit: 1,
+			eventLimit: 8,
+			timeoutMs: 100,
+			pollIntervalMs: 1,
+		});
+		const session = profiler?.activeSession();
+		session?.beginFrame(1);
+		session?.beginPhase({ source: "app", phase: "frame-total" });
+		session?.endPhase();
+		session?.endFrame();
+
+		const result = await capture;
+		expect(result.ok).toBe(true);
 	});
 
 	it("delegates bounded captures to the Engine and publishes real records", async () => {

@@ -62,6 +62,7 @@
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-project": "workspace:*",
+    "@forgeax/engine-profiler": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-font": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",

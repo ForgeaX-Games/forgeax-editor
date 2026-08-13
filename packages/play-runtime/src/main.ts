@@ -1,5 +1,6 @@
 import {
   createApp,
+  ensureFallbackCamera,
   addGamePluginSystems,
   describeGamePluginSystems,
   installGamePluginProducers,
@@ -10,8 +11,6 @@ import {
   type GamePluginLoad,
   type BootstrapEntry,
 } from '@forgeax/engine-app';
-import { perspective, Camera } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
 // engine #610 (Tier-1 decomposition) moved procedural geometry out of
 // engine-runtime into the @forgeax/engine-geometry leaf package.
 import { createCylinderGeometry } from '@forgeax/engine-geometry';
@@ -32,6 +31,7 @@ import {
   VAG_CARRIER_PROTOCOL_VERSION,
   type VagCarrierFailureDetail,
 } from '@forgeax/editor-core/protocol';
+import { createUserTimingProfiler } from '@forgeax/engine-profiler/browser-user-timing';
 import {
   loadGameProject,
   resolveDefaultScene,
@@ -40,7 +40,7 @@ import {
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { isRuntimeCatalogRoots, type SceneAsset, type AssetError, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
-import { Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
@@ -52,6 +52,7 @@ import {
   isPlayExecutionRealmMessage,
 } from './execution-contract';
 import { supportsVfxRenderFeature } from './vfx-render-capability';
+import { installCompletedFrameHeartbeat } from './completed-frame-heartbeat';
 import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
 import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
 
@@ -335,6 +336,7 @@ const executionEntry = !__FORGEAX_STATIC_BUILD__ && gpResult?.ok
   : null;
 let playApp: App | ExecutionApp | undefined;
 let playWorld: World | undefined;
+let subscribePlayFrameEnd: ((listener: () => void) => () => void) | undefined;
 let executionHost: StartedPlayExecution | undefined;
 const playExecutionDiagnostics = createPlayExecutionDiagnosticsStore();
 
@@ -409,6 +411,7 @@ const app = await createApp(canvas, {
     requestLock: () => post(true),
     exitLock: () => post(false),
   },
+  profiler: createUserTimingProfiler({ captureId: 'play-user-timing' }),
 }, {
   shaderManifestUrl: '/preview/shaders/manifest.json',
   ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
@@ -423,6 +426,7 @@ if (!app.ok) {
 const { world, renderer } = app.value;
 playApp = app.value;
 playWorld = world;
+subscribePlayFrameEnd = (listener) => renderer.subscribeFrameEnd(listener);
 if (supportsVfxRenderFeature(renderer.device.caps)) {
   try {
     const installed = await renderer.installRenderFeature(vfxRuntime.host.feature);
@@ -730,12 +734,8 @@ if (entry) {
   await entry(world, ctx);
 } else {
   console.log('[engine] using fallback scene; write games/<id>/main.ts to override');
-  world.spawn(
-    { component: Transform, data: { pos: [0, 0.6, 5] } },
-    { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: window.innerWidth / window.innerHeight, far: 1000 }) },
-  );
+  ensureFallbackCamera(world, window.innerWidth / window.innerHeight);
 }
-
 // Match editor ▶ Play: plugin systems are attached only to the live runtime
 // world, after bootstrap has had a chance to register its own systems. Edit and
 // preview still share the same component/system registration facts, while the
@@ -770,6 +770,30 @@ if (playApp === undefined) {
 (window as unknown as {
   __forgeaxExecutionDiagnostics?: () => ReturnType<typeof playExecutionDiagnostics.snapshot>;
 }).__forgeaxExecutionDiagnostics = () => playExecutionDiagnostics.snapshot();
+
+// ── Completed-frame FPS + liveness ──
+// VAG_FPS_STATS is rendering evidence, so it must be produced only after
+// renderer.draw reaches queue submission. An Update system can keep ticking
+// after draw fails and would make both the UI and CI smoke report a false FPS.
+if (subscribePlayFrameEnd !== undefined) {
+  const unsubscribe = installCompletedFrameHeartbeat({
+    subscribe: (listener) => subscribePlayFrameEnd(() => {
+      hideLoadingOverlay();
+      listener();
+    }),
+    now: () => performance.now(),
+    publish: (heartbeat) => {
+      carrierSentinel = heartbeat.sentinel;
+      try {
+        sendVagMessage(window.parent, VagFpsStatsSchema, { fps: heartbeat.fps });
+        sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(
+          carrierFailure ? 'unavailable' : 'ready',
+        ));
+      } catch { /* parent might be cross-origin */ }
+    },
+  });
+  window.addEventListener('pagehide', unsubscribe, { once: true });
+}
 
 // ── Start the frame loop ──
 playApp.start();
@@ -814,57 +838,6 @@ playApp.onError((err) => {
     sendVagMessage(window.parent, VagDeviceLostSchema, {});
   }
 });
-
-// ── FPS reporting + throttled liveness heartbeat ──
-// Studio's PreviewMode treats every VAG_FPS_STATS message as "still rendering"
-// evidence: a longer-than-FPS_STALL_MS gap hides the iframe behind the loading
-// overlay (vite mid-restart, engine threw, …). Emit the heartbeat at HEARTBEAT_MS
-// cadence — a 1 Hz emit would oscillate the parent's 500 ms FPS_STALL_MS gate
-// every second on a perfectly-rendering scene (overlay-on / overlay-off flicker).
-// Per-frame 60 Hz postMessage across the iframe boundary pressures browser GC
-// enough to crash the renderer over time when paired with chat output churn
-// (Chrome OUT_OF_MEMORY / error code 5), so throttle to 100 ms — still 5× below
-// the parent's 500 ms stall threshold. fps averaging itself stays at 1 Hz; only
-// the emit rate is gated.
-//
-// History: this got lost in 5d4cc4f when engine-src moved out of packages/build
-// into this package. Restored from packages/build@22ba730 + 471de60.
-const HEARTBEAT_MS = 100;
-let frames = 0;
-let fpsAccum = 0;
-let lastFps = 0;
-let lastHeartbeat = 0;
-if (playWorld !== undefined) {
-const heartbeatWorld = playWorld;
-heartbeatWorld.addSystem(Update, {
-  name: 'play-runtime-fps-heartbeat',
-  queries: [],
-  fn: () => {
-    const dt = heartbeatWorld.getResource(Time).delta;
-    // First frame rendered (scene was instantiated during the awaited entry() above,
-    // so frame 1 already shows it) → fade out the loading overlay.
-    hideLoadingOverlay();
-    frames++;
-    fpsAccum += dt;
-    if (fpsAccum >= 1) {
-      lastFps = Math.round(frames / fpsAccum);
-      frames = 0;
-      fpsAccum = 0;
-    }
-    const now = performance.now();
-    if (now - lastHeartbeat >= HEARTBEAT_MS) {
-      lastHeartbeat = now;
-      try {
-        sendVagMessage(window.parent, VagFpsStatsSchema, { fps: lastFps });
-        carrierSentinel++;
-        sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(
-          carrierFailure ? 'unavailable' : 'ready',
-        ));
-      } catch { /* parent might be cross-origin */ }
-    }
-  },
-}).unwrap();
-}
 
 // ── Console bridge (VAG_CONSOLE postMessage) ──
 // Render errors / AppError / RhiError / EcsError verbosely so the bridged

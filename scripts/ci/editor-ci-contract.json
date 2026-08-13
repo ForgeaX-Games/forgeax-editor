@@ -149,6 +149,46 @@
     "sourceRepository": "editor",
     "harnessRepository": "floating-harness"
   },
+  "prerequisiteRelease": {
+    "schemaVersion": "forgeax-prerequisite-release/v1",
+    "owner": "editor-ci",
+    "producer": "prerequisite-release",
+    "payloadClasses": {
+      "engine-dist": {"paths": ["payload/engine-dist"], "optional": false},
+      "wgpu-wasm": {"paths": ["payload/wgpu-wasm"], "optional": false},
+      "fbx-wasm": {"paths": ["payload/fbx-wasm"], "optional": true},
+      "bun-install-facts": {"paths": ["payload/bun-install-facts"], "optional": false},
+      "editor-generated-inputs": {"paths": [], "optional": true}
+    },
+    "consumers": {
+      "b2-self-boot": ["engine-dist", "wgpu-wasm", "bun-install-facts"],
+      "typecheck": ["engine-dist", "wgpu-wasm", "bun-install-facts"],
+      "smoke-play": ["engine-dist", "wgpu-wasm", "fbx-wasm", "bun-install-facts"],
+      "submodule-pin": []
+    },
+    "activeProfiles": {
+      "PR": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+      "main": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+      "nightly/scheduled": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
+      "post-merge": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"]
+    },
+    "identity": {
+      "fields": ["artifactId", "releaseDigest", "schemaVersion", "inventory", "producerRunId", "producerAttempt", "sourceSha", "recursivePins", "producerSuccess"]
+    },
+    "manifest": {
+      "requiredFields": ["schemaVersion", "artifactId", "releaseDigest", "inventory", "producerRunId", "producerAttempt", "sourceSha", "recursivePins", "producerSuccess", "producerEnvironmentFingerprint", "compatibility"],
+      "digestAlgorithm": "sha256",
+      "inventoryFields": ["payloadClass", "path", "sha256"]
+    },
+    "compatibility": {
+      "fields": ["os", "architecture", "bunVersion", "nodeVersion", "pnpmVersion", "rustVersion", "wasmPackVersion", "capacityPool"],
+      "rules": {
+        "os": ["linux"],
+        "architecture": ["x64"],
+        "capacityPool": ["standard", "heavy"]
+      }
+    }
+  },
   "browserReleasePortfolio": {
     "schemaVersion": "forgeax-browser-release-portfolio/v1",
     "owner": "editor-ci",

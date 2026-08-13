@@ -1378,6 +1378,7 @@ export function childrenOf(world: World, parent: EntityHandle | null): EntityHan
   // Cross-game realm gap: doc.world may be briefly undefined — empty tree, no throw.
   if (world == null) return [];
   if (parent !== null) {
+    if (!world.hasComponent(parent, Children)) return [];
     const ch = world.get(parent, Children);
     if (ch.ok) {
       const val = ch.value as { entities: number[] | Uint32Array };

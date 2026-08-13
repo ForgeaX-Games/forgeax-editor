@@ -41,5 +41,47 @@
       "expectedClass": "external-transport",
       "expectedCode": "live-evidence-unavailable"
     }
+  ],
+  "deliveryBase": {
+    "producer": {
+      "schemaVersion": "forgeax-prerequisite-release/v1",
+      "artifactId": "prerequisite-release-801-2",
+      "releaseDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}],
+      "producerRunId": "100",
+      "producerAttempt": 1,
+      "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "producerSuccess": true,
+      "producerEnvironmentFingerprint": "linux-x64-standard",
+      "compatibility": {"os": "linux", "architecture": "x64", "capacityPool": ["standard", "heavy"]}
+    },
+    "admission": {"generation": 1},
+    "landed": {
+      "landedSha": "cccccccccccccccccccccccccccccccccccccccc",
+      "remoteMain": {
+        "sha": "dddddddddddddddddddddddddddddddddddddddd",
+        "ancestorSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "ancestor": true,
+        "method": "git-merge-base-is-ancestor",
+        "source": "remote-main",
+        "repository": "origin"
+      },
+      "contexts": [
+        {"context": "b2-self-boot", "sha": "cccccccccccccccccccccccccccccccccccccccc", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+        {"context": "typecheck", "sha": "cccccccccccccccccccccccccccccccccccccccc", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+        {"context": "submodule-pin", "sha": "cccccccccccccccccccccccccccccccccccccccc", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}},
+        {"context": "smoke-play", "sha": "cccccccccccccccccccccccccccccccccccccccc", "conclusion": "success", "provenance": {"kind": "cloud", "timingDomain": "workflow-execution"}}
+      ]
+    }
+  },
+  "deliveryCases": [
+    {"name": "exact four contexts and ancestry pass", "expectedStatus": "pass", "expectedCode": null},
+    {"name": "missing context stays pending", "mutation": {"kind": "missing-context"}, "expectedStatus": "pending", "expectedCode": "landed-required-contexts-missing"},
+    {"name": "wrong context SHA stays nonpass", "mutation": {"kind": "wrong-context-sha", "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}, "expectedStatus": "nonpass", "expectedCode": "landed-context-sha-mismatch"},
+    {"name": "non-cloud evidence stays nonpass", "mutation": {"kind": "non-cloud-context"}, "expectedStatus": "nonpass", "expectedCode": "landed-context-provenance-invalid"},
+    {"name": "remote main ancestry stays nonpass", "mutation": {"kind": "remote-ancestry", "value": false}, "expectedStatus": "nonpass", "expectedCode": "landed-remote-main-ancestry-invalid"},
+    {"name": "required context contract drift stays nonpass", "mutation": {"kind": "required-context-drift", "value": ["b2-self-boot", "typecheck"]}, "expectedStatus": "nonpass", "expectedCode": "landed-required-context-contract-invalid"},
+    {"name": "stale admission generation stays nonpass", "mutation": {"kind": "stale-generation", "value": 2}, "expectedStatus": "nonpass", "expectedCode": "admission-generation-drift"}
   ]
 }

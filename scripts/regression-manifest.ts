@@ -45,6 +45,9 @@ interface ContractDocument {
   readonly checks: readonly ContractCheck[];
   readonly profiles: Readonly<Record<string, readonly string[]>>;
   readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+  readonly prerequisiteRelease?: {
+    readonly consumers: Readonly<Record<string, readonly string[]>>;
+  };
 }
 
 export const REGRESSION_MANIFEST_VERSION = 'forgeax-regression/v1';
@@ -118,6 +121,21 @@ export function selectRegressionChecks(
   return REGRESSION_CHECKS.filter((check) =>
     check.profiles.includes(profile) && (fixtureLayer === undefined || check.fixtureLayer === fixtureLayer),
   );
+}
+
+/** Return the prerequisite consumers represented by a local profile. */
+export function selectPrerequisiteConsumers(profile: RegressionProfile): readonly string[] {
+  const contractProfile = profileNames[profile];
+  const consumers = CONTRACT.prerequisiteRelease?.consumers ?? {};
+  return (CONTRACT.profiles[contractProfile] ?? []).filter((checkId) => (
+    Array.isArray(consumers[checkId]) && consumers[checkId].length > 0
+  ));
+}
+
+/** Resolve the request-scoped payload union without duplicating contract names. */
+export function selectPrerequisitePayloadClasses(profile: RegressionProfile): readonly string[] {
+  const consumers = CONTRACT.prerequisiteRelease?.consumers ?? {};
+  return [...new Set(selectPrerequisiteConsumers(profile).flatMap((consumer) => consumers[consumer] ?? []))];
 }
 
 export function parseFixtureLayer(value: string | undefined): FixtureLayer | undefined {

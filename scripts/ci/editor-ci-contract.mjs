@@ -34,6 +34,7 @@ export const EXECUTION_HOMES = [
 export const REQUIRED_CONTEXTS = LANDED_REQUIRED_CONTEXTS;
 export const FAILURE_CLASSES = ['admission', 'environment', 'source', 'external-transport'];
 export const PORTFOLIO_SCHEMA_VERSION = 'forgeax-browser-release-portfolio/v1';
+export const PORTFOLIO_SOURCE_PATH_PATTERN = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9_][a-z0-9._-]*)*$/;
 export const PORTFOLIO_EVIDENCE_FIELDS = [
   'sourceSha',
   'contractDigest',
@@ -41,6 +42,54 @@ export const PORTFOLIO_EVIDENCE_FIELDS = [
   'terminalStatus',
   'expected',
   'observed',
+];
+export const PREREQUISITE_RELEASE_SCHEMA_VERSION = 'forgeax-prerequisite-release/v1';
+export const PREREQUISITE_PAYLOAD_CLASSES = [
+  'engine-dist',
+  'wgpu-wasm',
+  'fbx-wasm',
+  'bun-install-facts',
+  'editor-generated-inputs',
+];
+export const PREREQUISITE_CONSUMERS = [
+  'b2-self-boot',
+  'typecheck',
+  'smoke-play',
+  'submodule-pin',
+];
+export const PREREQUISITE_IDENTITY_FIELDS = [
+  'artifactId',
+  'releaseDigest',
+  'schemaVersion',
+  'inventory',
+  'producerRunId',
+  'producerAttempt',
+  'sourceSha',
+  'recursivePins',
+  'producerSuccess',
+];
+export const PREREQUISITE_MANIFEST_FIELDS = [
+  'schemaVersion',
+  'artifactId',
+  'releaseDigest',
+  'inventory',
+  'producerRunId',
+  'producerAttempt',
+  'sourceSha',
+  'recursivePins',
+  'producerSuccess',
+  'producerEnvironmentFingerprint',
+  'compatibility',
+];
+export const PREREQUISITE_COMPATIBILITY_FIELDS = [
+  'os',
+  'architecture',
+  'bunVersion',
+  'nodeVersion',
+  'pnpmVersion',
+  'rustVersion',
+  'wasmPackVersion',
+  'capacityPool',
 ];
 
 export const DEFAULT_ADMISSION_ALLOWLIST = [
@@ -555,12 +604,225 @@ function validatePortfolioSchema(portfolio) {
   if (!Array.isArray(portfolio.discovery.ownedSources)) return issue('portfolio-source-list-invalid', 'an array of owned source paths', portfolio.discovery.ownedSources, 'Let dynamic census resolve the producer-owned source paths.');
   const sourceSet = new Set(portfolio.discovery.ownedSources);
   if (sourceSet.size !== portfolio.discovery.ownedSources.length) return issue('portfolio-source-duplicate', 'six unique producer-owned source paths', portfolio.discovery.ownedSources, 'Remove duplicate source bindings instead of adding a second unit roster.');
-  if (portfolio.discovery.ownedSources.length !== 6 || portfolio.discovery.ownedSources.some((source) => !/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9_][a-z0-9._-]*)*$/.test(source))) return issue('portfolio-source-list-invalid', 'six stable repository-relative source paths with path-safe directory names', portfolio.discovery.ownedSources, 'Keep the six current sources discoverable from the candidate census.');
+  if (portfolio.discovery.ownedSources.length !== 6 || portfolio.discovery.ownedSources.some((source) => !PORTFOLIO_SOURCE_PATH_PATTERN.test(source))) return issue('portfolio-source-list-invalid', 'six stable repository-relative source paths with path-safe directory names', portfolio.discovery.ownedSources, 'Keep the six current sources discoverable from the candidate census.');
   for (const field of ['unmatchedDisposition', 'exclusionClass', 'exclusionOwner']) {
     if (typeof portfolio.discovery[field] !== 'string' || portfolio.discovery[field].length === 0) return issue('portfolio-discovery-field-invalid', `discovery.${field} is a non-empty string`, portfolio.discovery[field], `Declare discovery.${field} so every unmatched candidate has an explicit disposition.`);
   }
   if (!isObject(portfolio.profiles) || !isObject(portfolio.profiles['browser-journey']) || !isObject(portfolio.profiles['release-script'])) return issue('portfolio-profiles-invalid', 'browser-journey and release-script profile objects', portfolio.profiles, 'Declare profile-owned unit and evidence fields without creating a second roster.');
   return null;
+}
+
+function validatePrerequisitePayloadClasses(payloadClasses) {
+  if (!isObject(payloadClasses)) {
+    return issue(
+      'prerequisite-release-payload-classes-invalid',
+      'payloadClasses is an object',
+      payloadClasses,
+      'Declare one logical payload class map inside prerequisiteRelease.',
+    );
+  }
+  const unknownPayload = Object.keys(payloadClasses).find(
+    (payloadClass) => !PREREQUISITE_PAYLOAD_CLASSES.includes(payloadClass),
+  );
+  if (unknownPayload) {
+    return issue(
+      'prerequisite-release-payload-unknown',
+      PREREQUISITE_PAYLOAD_CLASSES,
+      unknownPayload,
+      'Use a declared logical payload class instead of inventing a release inventory key.',
+    );
+  }
+  const missingPayload = PREREQUISITE_PAYLOAD_CLASSES.find(
+    (payloadClass) => !Object.hasOwn(payloadClasses, payloadClass),
+  );
+  if (missingPayload) {
+    return issue(
+      'prerequisite-release-payload-missing',
+      PREREQUISITE_PAYLOAD_CLASSES,
+      missingPayload,
+      'Declare every supported logical payload class, including optional editor-generated-inputs.',
+    );
+  }
+  for (const payloadClass of PREREQUISITE_PAYLOAD_CLASSES) {
+    const definition = payloadClasses[payloadClass];
+    if (!isObject(definition) || !Array.isArray(definition.paths) || typeof definition.optional !== 'boolean') {
+      return issue(
+        'prerequisite-release-payload-definition-invalid',
+        `${payloadClass} has paths and optional fields`,
+        definition,
+        `Declare ${payloadClass} with repository-relative paths and an explicit optional flag.`,
+      );
+    }
+  }
+  return null;
+}
+
+function validatePrerequisiteConsumers(consumers) {
+  if (!isObject(consumers)) {
+    return issue(
+      'prerequisite-release-consumers-invalid',
+      'consumers is an object',
+      consumers,
+      'Declare the active consumer-to-payload map inside prerequisiteRelease.',
+    );
+  }
+  const unknownConsumer = Object.keys(consumers).find(
+    (consumer) => !PREREQUISITE_CONSUMERS.includes(consumer),
+  );
+  if (unknownConsumer) {
+    return issue(
+      'prerequisite-release-consumer-unknown',
+      PREREQUISITE_CONSUMERS,
+      unknownConsumer,
+      'Map only named required checks to release payload classes.',
+    );
+  }
+  const missingConsumer = PREREQUISITE_CONSUMERS.find(
+    (consumer) => !Object.hasOwn(consumers, consumer),
+  );
+  if (missingConsumer) {
+    return issue(
+      'prerequisite-release-consumer-missing',
+      PREREQUISITE_CONSUMERS,
+      missingConsumer,
+      'Declare every existing required check, including consumers with no release dependency.',
+    );
+  }
+  for (const consumer of PREREQUISITE_CONSUMERS) {
+    const requested = consumers[consumer];
+    if (!Array.isArray(requested) || requested.some((payloadClass) => typeof payloadClass !== 'string')) {
+      return issue(
+        'prerequisite-release-consumer-map-invalid',
+        `${consumer} maps to an array of payload class IDs`,
+        requested,
+        `Declare ${consumer}'s release dependency as a payload class array.`,
+      );
+    }
+    if (new Set(requested).size !== requested.length) {
+      return issue(
+        'prerequisite-release-consumer-duplicate-payload',
+        'each consumer requests each payload class once',
+        requested,
+        `Remove repeated payload classes from ${consumer}'s declaration.`,
+      );
+    }
+    const unknownPayload = requested.find(
+      (payloadClass) => !PREREQUISITE_PAYLOAD_CLASSES.includes(payloadClass),
+    );
+    if (unknownPayload) {
+      return issue(
+        'prerequisite-release-payload-unknown',
+        PREREQUISITE_PAYLOAD_CLASSES,
+        unknownPayload,
+        `Use a declared payload class in ${consumer}'s dependency map.`,
+      );
+    }
+  }
+  return null;
+}
+
+function validatePrerequisiteReleaseMaps(prerequisiteRelease) {
+  for (const profile of ['PR', 'main', 'nightly/scheduled', 'post-merge']) {
+    const consumers = prerequisiteRelease.activeProfiles[profile];
+    if (!Array.isArray(consumers) || consumers.some((consumer) => !PREREQUISITE_CONSUMERS.includes(consumer))) {
+      return issue(
+        'prerequisite-release-profile-map-invalid',
+        `${profile} maps to named consumers`,
+        consumers,
+        `Declare the ${profile} active release consumers without adding a required context.`,
+      );
+    }
+  }
+  return null;
+}
+
+function validatePrerequisiteReleaseFieldLists(prerequisiteRelease) {
+  if (JSON.stringify(prerequisiteRelease.identity.fields) !== JSON.stringify(PREREQUISITE_IDENTITY_FIELDS)) {
+    return issue(
+      'prerequisite-release-identity-fields',
+      PREREQUISITE_IDENTITY_FIELDS,
+      prerequisiteRelease.identity.fields,
+      'Keep producer identity fields complete and separate from compatibility and landed delivery identity.',
+    );
+  }
+  if (JSON.stringify(prerequisiteRelease.manifest.requiredFields) !== JSON.stringify(PREREQUISITE_MANIFEST_FIELDS)) {
+    return issue(
+      'prerequisite-release-manifest-fields',
+      PREREQUISITE_MANIFEST_FIELDS,
+      prerequisiteRelease.manifest.requiredFields,
+      'Declare every manifest provenance field required before a consumer uses payload bytes.',
+    );
+  }
+  if (prerequisiteRelease.manifest.digestAlgorithm !== 'sha256') {
+    return issue(
+      'prerequisite-release-digest-algorithm',
+      'sha256',
+      prerequisiteRelease.manifest.digestAlgorithm,
+      'Use SHA-256 for release and payload integrity evidence.',
+    );
+  }
+  if (JSON.stringify(prerequisiteRelease.compatibility.fields) !== JSON.stringify(PREREQUISITE_COMPATIBILITY_FIELDS)) {
+    return issue(
+      'prerequisite-release-compatibility-fields',
+      PREREQUISITE_COMPATIBILITY_FIELDS,
+      prerequisiteRelease.compatibility.fields,
+      'Keep runner and toolchain facts as explicit compatibility constraints, not artifact identity.',
+    );
+  }
+  return null;
+}
+
+function validatePrerequisiteReleaseSchema(prerequisiteRelease) {
+  if (prerequisiteRelease === undefined) {
+    return issue(
+      'prerequisite-release-missing',
+      'prerequisiteRelease is present',
+      'missing',
+      'Add the versioned prerequisiteRelease surface to the existing editor CI contract.',
+    );
+  }
+  if (!isObject(prerequisiteRelease)) {
+    return issue(
+      'prerequisite-release-type-invalid',
+      'prerequisiteRelease is an object',
+      prerequisiteRelease,
+      'Keep prerequisiteRelease nested in the producer-owned contract.',
+    );
+  }
+  if (prerequisiteRelease.schemaVersion !== PREREQUISITE_RELEASE_SCHEMA_VERSION) {
+    return issue(
+      'prerequisite-release-schema-version',
+      PREREQUISITE_RELEASE_SCHEMA_VERSION,
+      prerequisiteRelease.schemaVersion,
+      'Use the supported versioned prerequisite release schema.',
+    );
+  }
+  if (prerequisiteRelease.owner !== 'editor-ci' || prerequisiteRelease.producer !== 'prerequisite-release') {
+    return issue(
+      'prerequisite-release-owner-invalid',
+      {owner: 'editor-ci', producer: 'prerequisite-release'},
+      {owner: prerequisiteRelease.owner, producer: prerequisiteRelease.producer},
+      'Keep one editor-ci-owned prerequisite release producer in the existing contract.',
+    );
+  }
+  for (const [field, expected] of [
+    ['payloadClasses', 'object'],
+    ['consumers', 'object'],
+    ['activeProfiles', 'object'],
+    ['identity', 'object'],
+    ['manifest', 'object'],
+    ['compatibility', 'object'],
+  ]) {
+    const fieldIssue = firstIssueForField(prerequisiteRelease[field], `prerequisiteRelease.${field}`, expected);
+    if (fieldIssue) return fieldIssue;
+  }
+  const payloadIssue = validatePrerequisitePayloadClasses(prerequisiteRelease.payloadClasses);
+  if (payloadIssue) return payloadIssue;
+  const consumerIssue = validatePrerequisiteConsumers(prerequisiteRelease.consumers);
+  if (consumerIssue) return consumerIssue;
+  const mapIssue = validatePrerequisiteReleaseMaps(prerequisiteRelease);
+  if (mapIssue) return mapIssue;
+  return validatePrerequisiteReleaseFieldLists(prerequisiteRelease);
 }
 
 function validateSchema(contract) {
@@ -729,6 +991,8 @@ export function validateContract(contract) {
   if (identityIssue) return result([identityIssue]);
   const policyIssue = validatePolicy(contract);
   if (policyIssue) return result([policyIssue]);
+  const prerequisiteIssue = validatePrerequisiteReleaseSchema(contract.prerequisiteRelease);
+  if (prerequisiteIssue) return result([prerequisiteIssue]);
   const portfolioIssue = validatePortfolioSchema(contract.browserReleasePortfolio);
   if (portfolioIssue) return result([portfolioIssue]);
   return result();
@@ -749,6 +1013,7 @@ export function projectContract(contract) {
     roster: checks,
     profiles: structuredClone(contract.profiles),
     requiredContexts: structuredClone(contract.requiredContexts),
+    prerequisiteRelease: structuredClone(contract.prerequisiteRelease),
     browserReleasePortfolio: projectBrowserReleasePortfolio(contract),
     resultEnvelope: {
       failureClass: 'admission',
@@ -765,6 +1030,31 @@ export function projectContract(contract) {
 export function validateProjection(contract, projection) {
   const contractResult = validateContract(contract);
   if (!contractResult.ok) return contractResult;
+  if (!Object.hasOwn(projection ?? {}, 'prerequisiteRelease')) {
+    return result([
+      issue(
+        'projection-prerequisite-release-missing',
+        'prerequisiteRelease is projected from the contract',
+        'missing',
+        'Regenerate the projection with the producer-owned prerequisiteRelease discovery index.',
+      ),
+    ]);
+  }
+  const projectedConsumers = projection.prerequisiteRelease?.consumers;
+  if (isObject(projectedConsumers)) {
+    const duplicateConsumerPayload = Object.entries(projectedConsumers).find(([, payloadClasses]) => (
+      Array.isArray(payloadClasses) && new Set(payloadClasses).size !== payloadClasses.length
+    ));
+    if (duplicateConsumerPayload) {
+      const error = issue(
+        'projection-prerequisite-release-duplicate-payload',
+        'each projected consumer requests each payload class once',
+        duplicateConsumerPayload,
+        'Regenerate the projection from the single prerequisiteRelease contract map.',
+      );
+      return result([error]);
+    }
+  }
   if (!isObject(projection) || !Array.isArray(projection.roster) || projection.roster.length === 0) {
     return result([issue('zero-job', 'a non-empty projected roster', projection?.roster?.length ?? 'missing', 'Restore at least one projected job from the contract.')] );
   }

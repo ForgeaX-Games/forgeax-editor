@@ -1,0 +1,109 @@
+{
+  "schemaVersion": "forgeax-prerequisite-release-evidence/v1",
+  "cases": [
+    {
+      "name": "cold release has one physical production",
+      "expectation": "one successful producer creates one shared release identity",
+      "observation": {
+        "physicalProductionCount": 1,
+        "materializedPayloadCount": 4,
+        "sharedArtifactIdentity": true,
+        "sharedReleaseDigest": true,
+        "checkBodyEntered": false
+      },
+      "verdict": "pass",
+      "code": "cold-one-physical-production",
+      "validation": "required"
+    },
+    {
+      "name": "warm release reuses eligible payloads",
+      "expectation": "warm reuse publishes and validates a release without repeated eligible materialization",
+      "observation": {
+        "materializedPayloadCount": 0,
+        "reusedPayloadCount": 4,
+        "releaseIdentityValidated": true,
+        "checkBodyEntered": false
+      },
+      "verdict": "pass",
+      "code": "warm-zero-rematerialization",
+      "validation": "required"
+    },
+    {
+      "name": "concurrent consumers share one release",
+      "expectation": "three requesting consumers join one artifact ID and release digest",
+      "observation": {
+        "consumerCount": 3,
+        "distinctArtifactIds": 1,
+        "distinctReleaseDigests": 1,
+        "producerCount": 1,
+        "checkBodyEntered": false
+      },
+      "verdict": "pass",
+      "code": "concurrent-single-release-identity",
+      "validation": "required"
+    },
+    {
+      "name": "digest corruption is rejected before use",
+      "expectation": "a published payload mutation fails integrity validation before the check body",
+      "observation": {"checkBodyEntered": false, "integrity": "mismatch"},
+      "mutation": {"kind": "file", "path": "payload/fbx-wasm/fbx-wasm.json", "value": "corrupted-after-publication"},
+      "verdict": "nonpass",
+      "code": "release-integrity-invalid",
+      "validation": "required"
+    },
+    {
+      "name": "inventory mismatch is rejected before use",
+      "expectation": "an unmanifested file cannot enter a consumer check body",
+      "observation": {"checkBodyEntered": false, "integrity": "inventory-mismatch"},
+      "mutation": {"kind": "add-file", "path": "payload/extra/index.js", "value": "unmanifested"},
+      "verdict": "nonpass",
+      "code": "release-integrity-invalid",
+      "validation": "required"
+    },
+    {
+      "name": "wrong source SHA is scoped to the requesting consumer",
+      "expectation": "a release from another source revision is rejected",
+      "observation": {"checkBodyEntered": false, "identity": "source-mismatch"},
+      "mutation": {"kind": "input", "field": "sourceSha", "value": "c"},
+      "verdict": "nonpass",
+      "code": "source-mismatch",
+      "validation": "required"
+    },
+    {
+      "name": "wrong recursive pin is rejected",
+      "expectation": "a release with another recursive submodule pin is rejected",
+      "observation": {"checkBodyEntered": false, "identity": "pin-mismatch"},
+      "mutation": {"kind": "pin", "value": "d"},
+      "verdict": "nonpass",
+      "code": "pin-mismatch",
+      "validation": "required"
+    },
+    {
+      "name": "incompatible environment is rejected",
+      "expectation": "an incompatible consumer environment cannot use the release",
+      "observation": {"checkBodyEntered": false, "compatibility": "mismatch"},
+      "mutation": {"kind": "environment", "field": "os", "value": "darwin"},
+      "verdict": "nonpass",
+      "code": "compatibility-mismatch",
+      "validation": "required"
+    },
+    {
+      "name": "producer failure is terminal",
+      "expectation": "a failed producer cannot be substituted by a consumer rebuild",
+      "observation": {"checkBodyEntered": false, "producerSuccess": false},
+      "mutation": {"kind": "manifest", "field": "producerSuccess", "value": false},
+      "verdict": "nonpass",
+      "code": "producer-failure",
+      "validation": "required"
+    },
+    {
+      "name": "post-publication mutation is not accepted as warm reuse",
+      "expectation": "mutation after publication invalidates the immutable release",
+      "observation": {"checkBodyEntered": false, "releaseImmutable": false},
+      "mutation": {"kind": "file", "path": "payload/engine-dist/engine-dist.json", "value": "mutated-after-publication"},
+      "verdict": "nonpass",
+      "code": "release-integrity-invalid",
+      "validation": "required"
+    }
+  ]
+}

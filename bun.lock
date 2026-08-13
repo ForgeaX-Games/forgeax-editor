@@ -1127,6 +1127,7 @@
         "@forgeax/engine-physics-rapier2d": "workspace:*",
         "@forgeax/engine-physics-rapier3d": "workspace:*",
         "@forgeax/engine-picking": "workspace:*",
+        "@forgeax/engine-profiler": "workspace:*",
         "@forgeax/engine-project": "workspace:*",
         "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",

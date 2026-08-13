@@ -388,6 +388,16 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo {
    *  derives a STABLE GUID from the scene path (NOT doc.order). */
   function sceneGuidForSave(): string | undefined {
     if (ctx.currentSceneGuid) return ctx.currentSceneGuid;
+    // The scene manifest is an authoritative identity source even before the
+    // first load finishes (for example, an early dirty flush during boot). If
+    // we fall straight through to stableGuid(path) here, saving an existing
+    // pack silently mints a new scene GUID while forge.json.defaultScene still
+    // points at the original one; the next reopen then discovers the pack but
+    // cannot bind or load it as the default scene.
+    if (ctx.currentSceneFile) {
+      const entry = ctx.sceneList.find((s) => s.id === ctx.currentSceneFile);
+      if (entry?.guid) return entry.guid;
+    }
     const p = scenePath();
     return p ? stableGuid('scene|' + p) : undefined;
   }

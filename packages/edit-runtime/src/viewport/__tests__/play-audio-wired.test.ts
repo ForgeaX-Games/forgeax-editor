@@ -22,13 +22,16 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { AUDIO_ENGINE_RESOURCE_KEY, AUDIO_TICK_SYSTEM_NAME } from '@forgeax/engine-audio';
+import { Camera, perspective } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { assemblePlayWorld } from '../play-assemble';
 
-function makeFakeRenderer() {
+function makeFakeRenderer(onInstantiate?: () => void) {
   return {
     ready: Promise.resolve({ ok: true }),
     assets: {
       instantiate() {
+        onInstantiate?.();
         return { ok: true as const, value: 1 };
       },
     },
@@ -73,5 +76,41 @@ describe('solo round-17 — editor ▶ Play wires the audio subsystem (P8)', () 
     }).inspect();
     const names = insp.systems.map((s) => s.name);
     expect(names).toContain(AUDIO_TICK_SYSTEM_NAME);
+    expect([...playWorld.query({ with: [Camera] }).unwrap()]).toHaveLength(1);
+  });
+
+  it('does not inject a camera when a real game bootstrap owns the scene', async () => {
+    const playWorld = new World();
+    const res = await assemblePlayWorld({
+      renderer: makeFakeRenderer() as never,
+      loadDefaultScene: async () => null,
+      resolveBootstrap: async () => (() => undefined) as never,
+      attachInput: () => undefined,
+      newWorld: () => playWorld as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect([...playWorld.query({ with: [Camera] }).unwrap()]).toHaveLength(0);
+  });
+
+  it('preserves an authored default-scene camera when no bootstrap exists', async () => {
+    const playWorld = new World();
+    const res = await assemblePlayWorld({
+      renderer: makeFakeRenderer(() => {
+        playWorld.spawn(
+          { component: Transform, data: { pos: [4, 5, 6] } },
+          { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: 2 }) },
+        );
+      }) as never,
+      loadDefaultScene: async () => ({ guid: 'scene-with-camera' }) as never,
+      resolveBootstrap: async () => null,
+      attachInput: () => undefined,
+      newWorld: () => playWorld as never,
+    });
+
+    expect(res.ok).toBe(true);
+    const cameras = [...playWorld.query({ with: [Camera] }).unwrap()];
+    expect(cameras).toHaveLength(1);
+    expect(playWorld.get(cameras[0]!.entity, Camera).unwrap().aspect).toBeCloseTo(2);
   });
 });

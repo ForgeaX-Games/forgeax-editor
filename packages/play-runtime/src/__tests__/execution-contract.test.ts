@@ -173,18 +173,12 @@ describe('Play thick execution contract', () => {
     expect(store.snapshot()).toBe(diagnostics.diagnostics);
   });
 
-  test('publishes bounded diagnostics and monotonic heartbeats from one pulse clock', () => {
+  test('publishes bounded diagnostics independently of renderer heartbeat', () => {
     const pulse = createPlayExecutionPulse();
 
     expect(pulse(0.04)).toEqual({ diagnosticsDue: false });
-    expect(pulse(0.06)).toEqual({
-      diagnosticsDue: false,
-      heartbeat: { fps: 20, sentinel: 1 },
-    });
-    expect(pulse(0.5)).toEqual({
-      diagnosticsDue: true,
-      heartbeat: { fps: 2, sentinel: 2 },
-    });
+    expect(pulse(0.06)).toEqual({ diagnosticsDue: false });
+    expect(pulse(0.5)).toEqual({ diagnosticsDue: true });
     expect(pulse(0.05)).toEqual({ diagnosticsDue: false });
   });
 });

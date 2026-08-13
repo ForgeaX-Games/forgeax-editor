@@ -291,10 +291,12 @@ export function worldRootHandles(world: World): EntityHandle[] {
   const live = new Set<number>(all as unknown as number[]);
   const roots: EntityHandle[] = [];
   for (const h of all) {
-    const co = world.get(h, ChildOf);
-    if (!co.ok || !live.has((co.value as { parent: number }).parent)) {
+    if (!world.hasComponent(h, ChildOf)) {
       roots.push(h);
+      continue;
     }
+    const co = world.get(h, ChildOf);
+    if (co.ok && !live.has((co.value as { parent: number }).parent)) roots.push(h);
   }
   return roots;
 }
@@ -306,7 +308,7 @@ export function worldRootHandles(world: World): EntityHandle[] {
  *  Missing world (cross-game gap) → false. */
 export function entExists(world: World, handle: EntityHandle): boolean {
   if (!hasWorld(world)) return false;
-  return world.get(handle, Name).ok;
+  return world.hasComponent(handle, Name);
 }
 
 /** Get entity name from the world (SSOT). Returns a `#<handle>` fallback for a
@@ -315,6 +317,7 @@ export function entExists(world: World, handle: EntityHandle): boolean {
  *  error). Missing world → same `#<handle>` fallback. */
 export function entName(world: World, handle: EntityHandle): string {
   if (!hasWorld(world)) return `#${handle}`;
+  if (!world.hasComponent(handle, Name)) return `#${handle}`;
   const r = world.get(handle, Name);
   if (r.ok) return r.value.value;
   return `#${handle}`;
@@ -324,11 +327,12 @@ export function entName(world: World, handle: EntityHandle): string {
  *  Missing world → null. */
 export function entParent(world: World, handle: EntityHandle): EntityHandle | null {
   if (!hasWorld(world)) return null;
+  if (!world.hasComponent(handle, ChildOf)) return null;
   const r = world.get(handle, ChildOf);
   if (!r.ok) return null;
   const parent = (r.value as { parent: number }).parent as EntityHandle;
   // A ChildOf whose parent is dead is treated as a root (matches worldRootHandles).
-  return world.get(parent, Name).ok ? parent : null;
+  return world.hasComponent(parent, Name) ? parent : null;
 }
 
 /** Optional super handle-pair inputs (w27). When BOTH are supplied, entComponent /

@@ -143,6 +143,7 @@ export interface HostSessionContext {
   /** The play world is now active; host commits its matching viewport quadrant. */
   readonly onPlayStarted: (playWorld: unknown) => void;
   readonly onRemotePlayStarted?: () => void;
+  readonly onRemotePlayFps?: (fps: number, generation: number) => void;
   /** Play assembly failed and the gateway has returned to its edit-side state. */
   readonly onPlayFailed: () => void;
 }
@@ -761,6 +762,7 @@ export function createHostSession(deps: HostSessionDeps): {
           const execution = (payload as { execution?: { requestedTier?: unknown; actualTier?: unknown; engine?: { realm?: unknown } } } | null)?.execution;
           emitBoot(`play ▸ child ready; execution requested=${String(execution?.requestedTier ?? 'unreported')} actual=${String(execution?.actualTier ?? 'unreported')} realm=${String(execution?.engine?.realm ?? 'unreported')}`);
         },
+        ...(ctx.onRemotePlayFps ? { onFps: ctx.onRemotePlayFps } : {}),
       })
       : undefined;
 
@@ -857,11 +859,6 @@ export function createHostSession(deps: HostSessionDeps): {
           ...(ctx.physics ? { physics: ctx.physics } : {}),
           vfxRuntimeHost: ctx.vfxRuntimeHost,
           vfxRenderFeatureEnabled: ctx.vfxRenderFeatureEnabled,
-          ...(ctx.onVfxDiagnosticsChanged
-            ? { onRenderPhaseEnd: (phase: string) => {
-              if (phase === 'features') ctx.onVfxDiagnosticsChanged?.();
-            } }
-            : {}),
           ...(ctx.onPlayFrame ? { onPlayFrame: ctx.onPlayFrame } : {}),
         });
         // PLAY-only: add the plugin systems into the fresh play world so game

@@ -64,6 +64,8 @@ import {
 import {
   REGRESSION_CONTRACT_VERSION,
   parseFixtureLayer,
+  selectPrerequisiteConsumers,
+  selectPrerequisitePayloadClasses,
   selectRegressionChecks,
   type FixtureLayer,
   type RegressionCheck,
@@ -959,6 +961,7 @@ type CiReport = {
   readonly hint: string;
   readonly attempts: readonly { readonly attempt: number; readonly attemptId: string; readonly status: 'pass' | 'failure' }[];
   readonly sloClaim: null;
+  readonly prerequisiteRelease: CiPrerequisiteRelease | null;
   readonly fixtureLayer: FixtureLayer | 'all';
   readonly editorCommit: string;
   readonly checks: readonly CiCheckResult[];
@@ -976,6 +979,30 @@ type CiReport = {
     readonly fixtureLayer: FixtureLayer;
     readonly exitCode: number;
   } | null;
+};
+
+type CiPrerequisiteRelease = {
+  readonly artifactId: string;
+  readonly releaseDigest: string;
+  readonly schemaVersion: string;
+  readonly producerRunId: string;
+  readonly producerAttempt: number;
+  readonly sourceSha: string;
+  readonly recursivePins: readonly { readonly path: string; readonly pin: string }[];
+  readonly producerSuccess: boolean;
+  readonly compatibility: { readonly status: string; readonly expected?: unknown; readonly observed?: unknown };
+  readonly validation: {
+    readonly status: 'pass' | 'failure';
+    readonly consumer: string;
+    readonly payloadClasses?: readonly string[];
+    readonly code?: string;
+    readonly failedField?: string;
+    readonly expected?: unknown;
+    readonly observed?: unknown;
+    readonly affectedConsumer?: string;
+    readonly artifactId?: string | null;
+    readonly hint?: string;
+  };
 };
 
 const CI_CONTEXT = 'epic=R3-07 work package=R3-07E gates=C1,C2,C3,C4,C5,C6,C7';
@@ -1039,11 +1066,196 @@ function ciExecutionHome(profile: CiProfile): 'local-fast' | 'local-full' {
   return profile === 'fast' ? 'local-fast' : 'local-full';
 }
 
+function displayValue(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function prerequisiteFailureClass(code: string): CiFailureClass {
+  if (code === 'compatibility-mismatch') return 'environment';
+  if (code === 'source-mismatch' || code === 'pin-mismatch' || code === 'attempt-mismatch') return 'source';
+  return 'admission';
+}
+
+function projectLocalPrerequisiteRelease(
+  manifest: Record<string, unknown> | null,
+  validation: { readonly ok: boolean; readonly error?: Record<string, unknown>; readonly consumer?: string; readonly payloadClasses?: readonly string[] },
+  profile: CiProfile,
+  payloadClasses: readonly string[],
+): CiPrerequisiteRelease | null {
+  if (!manifest || typeof manifest.artifactId !== 'string' || typeof manifest.releaseDigest !== 'string' ||
+      typeof manifest.schemaVersion !== 'string' || typeof manifest.producerRunId !== 'string' ||
+      !Number.isInteger(manifest.producerAttempt) || typeof manifest.sourceSha !== 'string' ||
+      !Array.isArray(manifest.recursivePins) || typeof manifest.producerSuccess !== 'boolean' ||
+      !manifest.compatibility || typeof manifest.compatibility !== 'object') return null;
+  const error = validation.ok ? {} : (validation.error ?? {});
+  return {
+    artifactId: manifest.artifactId,
+    releaseDigest: manifest.releaseDigest,
+    schemaVersion: manifest.schemaVersion,
+    producerRunId: manifest.producerRunId,
+    producerAttempt: manifest.producerAttempt as number,
+    sourceSha: manifest.sourceSha,
+    recursivePins: manifest.recursivePins as { readonly path: string; readonly pin: string }[],
+    producerSuccess: manifest.producerSuccess,
+    compatibility: {
+      status: validation.ok ? 'compatible' : 'rejected',
+      expected: error.expected ?? null,
+      observed: error.observed ?? null,
+    },
+    validation: validation.ok
+      ? { status: 'pass', consumer: profile, payloadClasses: validation.payloadClasses ?? payloadClasses }
+      : {
+          status: 'failure',
+          consumer: profile,
+          payloadClasses,
+          code: String(error.code ?? 'prerequisite-validation-failed'),
+          failedField: error.failedField as string | undefined,
+          expected: error.expected,
+          observed: error.observed,
+          affectedConsumer: error.affectedConsumer as string | undefined,
+          artifactId: error.artifactId as string | null | undefined,
+          hint: String(error.hint ?? 'Fix the prerequisite release before rerunning local CI.'),
+        },
+  };
+}
+
+function runLocalPrerequisiteRelease(profile: CiProfile, editorCommit: string): {
+  readonly ok: true;
+  readonly report: CiPrerequisiteRelease;
+} | {
+  readonly ok: false;
+  readonly failure: CiFailure;
+  readonly report: CiPrerequisiteRelease | null;
+} {
+  const consumers = selectPrerequisiteConsumers(profile);
+  const payloadClasses = selectPrerequisitePayloadClasses(profile);
+  const outputDir = mkdtempSync(join(tmpdir(), 'forgeax-local-prerequisite-'));
+  const producerRunId = `local-${editorCommit.slice(0, 12)}`;
+  const bun = resolveBunExecutable('bun');
+  const command = (args: readonly string[]) => spawnSync(bun, [...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: process.env,
+  });
+  try {
+    const producer = command([
+      'scripts/ci/prerequisite-release.mjs',
+      'produce',
+      '--output', outputDir,
+      '--profile', 'complete',
+      '--source-sha', editorCommit,
+      '--run-id', producerRunId,
+      '--attempt', '1',
+    ]);
+    let producerSummary: Record<string, unknown>;
+    try {
+      producerSummary = JSON.parse(producer.stdout) as Record<string, unknown>;
+    } catch (error) {
+      return {
+        ok: false,
+        report: null,
+        failure: {
+          failureClass: 'environment',
+          code: 'prerequisite-producer-output-invalid',
+          expected: 'JSON producer summary',
+          observed: error instanceof Error ? error.message : String(error),
+          hint: 'Inspect the local prerequisite producer output before running local CI checks.',
+          exitCode: producer.status ?? 1,
+        },
+      };
+    }
+    if (producer.status !== 0 || producerSummary.ok !== true) {
+      const error = (producerSummary.error ?? {}) as Record<string, unknown>;
+      return {
+        ok: false,
+        report: null,
+        failure: {
+          failureClass: prerequisiteFailureClass(String(error.code ?? 'producer-failure')),
+          code: String(error.code ?? 'producer-failure'),
+          expected: displayValue(error.expected ?? 'complete local prerequisite release'),
+          observed: displayValue(error.observed ?? (producer.stderr.trim() || 'producer exited unsuccessfully')),
+          hint: String(error.hint ?? 'Fix local prerequisite materialization and rerun the selected profile.'),
+          exitCode: producer.status ?? 1,
+        },
+      };
+    }
+    const manifest = JSON.parse(readFileSync(join(outputDir, 'manifest.json'), 'utf8')) as Record<string, unknown>;
+    let lastValidation: Record<string, unknown> | null = null;
+    for (const consumer of consumers) {
+      const validation = command([
+        'scripts/ci/prerequisite-release.mjs',
+        'validate',
+        '--manifest', join(outputDir, 'manifest.json'),
+        '--consumer', consumer,
+        '--source-sha', editorCommit,
+        '--run-id', producerRunId,
+        '--attempt', '1',
+      ]);
+      let result: Record<string, unknown>;
+      try {
+        result = JSON.parse(validation.stdout) as Record<string, unknown>;
+      } catch (error) {
+        return {
+          ok: false,
+          report: projectLocalPrerequisiteRelease(manifest, {ok: false, error: {code: 'prerequisite-validator-output-invalid', observed: error instanceof Error ? error.message : String(error), hint: 'Inspect the local validator output.'}}, profile, payloadClasses),
+          failure: {
+            failureClass: 'environment',
+            code: 'prerequisite-validator-output-invalid',
+            expected: 'JSON validator result',
+            observed: error instanceof Error ? error.message : String(error),
+            hint: 'Inspect the local prerequisite validator output before running local CI checks.',
+            exitCode: validation.status ?? 1,
+          },
+        };
+      }
+      if (validation.status !== 0 || result.ok !== true) {
+        const error = (result.error ?? {}) as Record<string, unknown>;
+        const report = projectLocalPrerequisiteRelease(manifest, {ok: false, error}, profile, payloadClasses);
+        return {
+          ok: false,
+          report,
+          failure: {
+            failureClass: prerequisiteFailureClass(String(error.code ?? 'prerequisite-validation-failed')),
+            code: String(error.code ?? 'prerequisite-validation-failed'),
+            expected: displayValue(error.expected ?? 'validated local prerequisite payloads'),
+            observed: displayValue(error.observed ?? 'validation failed'),
+            hint: String(error.hint ?? 'Fix the local prerequisite release before running the consumer.'),
+            exitCode: validation.status ?? 1,
+          },
+        };
+      }
+      lastValidation = result;
+    }
+    const report = projectLocalPrerequisiteRelease(manifest, {
+      ok: true,
+      consumer: profile,
+      payloadClasses: payloadClasses,
+    }, profile, payloadClasses);
+    if (!report || !lastValidation) {
+      return {
+        ok: false,
+        report,
+        failure: {
+          failureClass: 'environment',
+          code: 'prerequisite-validation-empty',
+          expected: 'at least one local prerequisite consumer validation',
+          observed: displayValue(consumers),
+          hint: 'Keep local profile prerequisite consumers aligned with the producer-owned contract.',
+        },
+      };
+    }
+    return {ok: true, report};
+  } finally {
+    rmSync(outputDir, {recursive: true, force: true});
+  }
+}
+
 function makeCiReport(
   profile: CiProfile,
   editorCommit: string,
   checks: readonly CiCheckResult[],
   failure?: CiFailure & { readonly check?: RegressionCheck },
+  prerequisiteRelease: CiPrerequisiteRelease | null = null,
 ): CiReport {
   const attemptId = `local-${editorCommit.slice(0, 12)}-${checks.length + 1}`;
   const firstFailure = failure
@@ -1078,6 +1290,7 @@ function makeCiReport(
     hint: failure?.hint ?? 'No recovery action is required.',
     attempts: [{ attempt: 1, attemptId, status: failure ? 'failure' : 'pass' }],
     sloClaim: null,
+    prerequisiteRelease,
     fixtureLayer: 'all',
     editorCommit,
     checks,
@@ -1120,12 +1333,14 @@ function discoverContract(): void {
     }[];
     readonly profiles: Readonly<Record<string, readonly string[]>>;
     readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+    readonly prerequisiteRelease: unknown;
   };
   console.log(JSON.stringify({
     schemaVersion: contract.version,
     checks: contract.checks,
     profiles: contract.profiles,
     requiredContexts: contract.requiredContexts,
+    prerequisiteRelease: contract.prerequisiteRelease,
     recovery: {
       dirtyWorktree: 'commit or stash changes before executing a local CI profile',
       missingSetup: 'run bun fx setup before executing engine-backed checks',
@@ -1313,13 +1528,14 @@ function runCiProfile(
   checks: readonly RegressionCheck[],
   editorCommit: string,
   reportPath: string,
+  prerequisiteRelease: CiPrerequisiteRelease,
 ): readonly CiCheckResult[] {
   const results: CiCheckResult[] = [];
   const route = ciRoute(profile, checks[0]);
   step(`CI: ${route} stage=fresh-clone ...`);
   const freshFailure = verifyFreshFrozenInstall(profile);
   if (freshFailure) {
-    writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], freshFailure));
+    writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], freshFailure, prerequisiteRelease));
     die(`CI failure: ${route} stage=${freshFailure.code} report=${reportPath}`);
   }
   for (const check of checks) {
@@ -1335,7 +1551,7 @@ function runCiProfile(
         observed: `${check.id} exited with code ${result.exitCode}`,
         hint: 'Inspect the first failed check and follow its structured recovery boundary.',
         check,
-      });
+      }, prerequisiteRelease);
       writeCiReport(reportPath, report);
       die(`CI failure: ${stepRoute} stage=${check.name} command=${check.command} ${check.args.join(' ')} report=${reportPath}`);
     }
@@ -1361,8 +1577,13 @@ function ci(argv: string[]): void {
   const editorCommit = gitOut(['rev-parse', 'HEAD']);
   const reportPath = options.reportPath ?? defaultCiReportPath(profile, editorCommit);
   ensureCiAdmission(profile, reportPath, editorCommit);
-  const results = runCiProfile(profile, checks, editorCommit, reportPath);
-  const report = makeCiReport(profile, editorCommit, results);
+  const prerequisite = runLocalPrerequisiteRelease(profile, editorCommit);
+  if (!prerequisite.ok) {
+    writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], prerequisite.failure, prerequisite.report));
+    die(`CI prerequisite failure: code=${prerequisite.failure.code} report=${reportPath}`);
+  }
+  const results = runCiProfile(profile, checks, editorCommit, reportPath, prerequisite.report);
+  const report = makeCiReport(profile, editorCommit, results, undefined, prerequisite.report);
   writeCiReport(reportPath, report);
   ok(`local CI passed: ${route} checks=${results.length} report=${reportPath}`);
 }

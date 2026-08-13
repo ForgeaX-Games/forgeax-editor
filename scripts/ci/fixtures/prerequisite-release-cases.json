@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "forgeax-prerequisite-release-cases/v1",
+  "rejectionCases": [
+    {
+      "name": "missing requested fbx payload",
+      "input": {
+        "manifest": {
+          "schemaVersion": "forgeax-prerequisite-release/v1",
+          "artifactId": "prerequisite-release-100-1",
+          "releaseDigest": "sha256:fixture-release-digest",
+          "producerRunId": "100",
+          "producerAttempt": 1,
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+          "producerSuccess": true,
+          "producerEnvironmentFingerprint": "producer-linux-x64",
+          "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]},
+          "inventory": [
+            {"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"},
+            {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"},
+            {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"},
+            {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}
+          ]
+        },
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "smoke-play",
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+        "producerRunId": "100",
+        "producerAttempt": 1,
+        "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "heavy"}
+      },
+      "expected": {"code": "missing-payload", "payloadClass": "fbx-wasm", "expected": "payload class fbx-wasm is present", "observed": "missing"}
+    },
+    {
+      "name": "payload digest is corrupted",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-corrupted", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "smoke-play", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "heavy"}
+      },
+      "expected": {"code": "release-integrity-invalid", "failedField": "payloadDigest", "expected": "sha256:fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7", "observed": "sha256:15f8e15b86031669879722a3208d7131d76a3ac4a24877db0c569c0c61ce8fd4"}
+    },
+    {
+      "name": "unmanifested extra payload is rejected",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes", "payload/extra/index.js": "extra-bytes"},
+        "consumer": "typecheck", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "release-integrity-invalid", "failedField": "inventory", "expected": "manifest inventory matches files", "observed": "payload/extra/index.js"}
+    },
+    {
+      "name": "truncated payload is rejected",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-truncated", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "b2-self-boot", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "release-integrity-invalid", "failedField": "payloadDigest", "expected": "sha256:1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9", "observed": "sha256:4400d27ecd6f0d42d6c8facb76a48258525f6a9bfa8efafd12849401401e732b"}
+    },
+    {
+      "name": "consumer requests an undeclared payload",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "typecheck", "requestedPayloadClasses": ["engine-dist", "editor-generated-inputs"], "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "undeclared-payload", "payloadClass": "editor-generated-inputs", "expected": "typecheck declares engine-dist, wgpu-wasm, bun-install-facts", "observed": "editor-generated-inputs"}
+    },
+    {
+      "name": "source identity differs",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "typecheck", "sourceSha": "cccccccccccccccccccccccccccccccccccccccc", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "source-mismatch", "failedField": "sourceSha", "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "observed": "cccccccccccccccccccccccccccccccccccccccc"}
+    },
+    {
+      "name": "recursive pin differs",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "typecheck", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "dddddddddddddddddddddddddddddddddddddddd"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "pin-mismatch", "failedField": "recursivePins", "expected": "packages/engine=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "observed": "packages/engine=dddddddddddddddddddddddddddddddddddddddd"}
+    },
+    {
+      "name": "producer reports failure",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": false, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "typecheck", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "producer-failure", "failedField": "producerSuccess", "expected": true, "observed": false}
+    },
+    {
+      "name": "consumer environment is incompatible",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "smoke-play", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 1, "environment": {"os": "darwin", "architecture": "arm64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "heavy"}
+      },
+      "expected": {"code": "compatibility-mismatch", "failedField": "os", "expected": "linux", "observed": "darwin"}
+    },
+    {
+      "name": "producer attempt is stale",
+      "input": {
+        "manifest": {"schemaVersion": "forgeax-prerequisite-release/v1", "artifactId": "prerequisite-release-100-1", "releaseDigest": "sha256:fixture-release-digest", "producerRunId": "100", "producerAttempt": 1, "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerSuccess": true, "producerEnvironmentFingerprint": "producer-linux-x64", "compatibility": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": ["standard", "heavy"]}, "inventory": [{"payloadClass": "engine-dist", "path": "payload/engine-dist/index.js", "sha256": "1323e37b50368b524dce4918769a75954343316a4193e0e292476448abdac7e9"}, {"payloadClass": "wgpu-wasm", "path": "payload/wgpu-wasm/index.wasm", "sha256": "fbe872c18b025fd5a9657136a8181099fa88020f514fbf177fc5d5176e1e7d1e"}, {"payloadClass": "fbx-wasm", "path": "payload/fbx-wasm/index.wasm", "sha256": "fcbe4714c28981f4b78eded31c3d3a664a6110dcd2b954ff5275abade9cb93f7"}, {"payloadClass": "bun-install-facts", "path": "payload/bun-install-facts/install.json", "sha256": "bb6769cccf2a08b9b34d297b8fed8ceb4073c129b493c7ec0823bad31b30951f"}]},
+        "files": {"payload/engine-dist/index.js": "engine-dist-bytes", "payload/wgpu-wasm/index.wasm": "wgpu-wasm-bytes", "payload/fbx-wasm/index.wasm": "fbx-wasm-bytes", "payload/bun-install-facts/install.json": "bun-install-facts-bytes"},
+        "consumer": "typecheck", "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "recursivePins": [{"path": "packages/engine", "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}], "producerRunId": "100", "producerAttempt": 2, "environment": {"os": "linux", "architecture": "x64", "bunVersion": "1.3.14", "nodeVersion": "22", "pnpmVersion": "10", "rustVersion": "1.88", "wasmPackVersion": "0.13.1", "capacityPool": "standard"}
+      },
+      "expected": {"code": "attempt-mismatch", "failedField": "producerAttempt", "expected": 1, "observed": 2}
+    }
+  ]
+}

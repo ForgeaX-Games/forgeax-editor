@@ -47,6 +47,22 @@ export const ENVELOPE_FIELDS = [
   'sloClaim',
 ];
 
+export const DELIVERY_PRODUCER_FIELDS = Object.freeze([
+  'artifactId',
+  'releaseDigest',
+  'schemaVersion',
+  'inventory',
+  'producerRunId',
+  'producerAttempt',
+  'sourceSha',
+  'recursivePins',
+  'producerSuccess',
+  'producerEnvironmentFingerprint',
+  'compatibility',
+]);
+
+export const DELIVERY_ENVELOPE_SCHEMA_VERSION = 'forgeax-editor-ci-delivery/v1';
+
 function envelopeIssue(code, expected, observed, hint) {
   return { code, expected, observed, hint };
 }
@@ -583,6 +599,191 @@ export function validateAdmissionEnvelope(expected, observed = expected) {
     return { ok: false, error: admissionIssue('admission-digest-invalid', digestAdmissionValue(material), observed.admissionDigest, 'Recreate the envelope instead of editing an admitted snapshot.') };
   }
   return { ok: true, envelope: observed };
+}
+
+function producerDeliveryHandoff(status, code, expected, observed, hint, blocker, requiredEvidence, nextAction, extra = {}) {
+  return deliveryHandoff(
+    status,
+    deliveryIssue(code, expected, observed, hint),
+    blocker,
+    'release owner',
+    requiredEvidence,
+    nextAction,
+    extra,
+  );
+}
+
+function producerIdentityIssue(code, expected, observed, hint, status = 'nonpass', field = null) {
+  return producerDeliveryHandoff(
+    status,
+    code,
+    expected,
+    observed,
+    hint,
+    field ? `producer ${field} is invalid` : 'producer release identity is invalid',
+    field ? [`producer.${field}`] : [...DELIVERY_PRODUCER_FIELDS],
+    field ? `Recreate the producer release with a valid ${field}.` : 'Recreate the immutable producer release and preserve its identity fields.',
+  );
+}
+
+function validReleaseDigest(value) {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
+function projectProducerIdentity(producer) {
+  return Object.fromEntries(DELIVERY_PRODUCER_FIELDS.map((field) => [field, structuredClone(producer[field])]));
+}
+
+function compareRecursivePins(expected, observed) {
+  const canonicalPins = (pins) => (Array.isArray(pins) ? pins : [])
+    .map((pin) => `${pin?.path ?? ''}=${pin?.pin ?? ''}`)
+    .sort();
+  return canonicalize(canonicalPins(expected)) === canonicalize(canonicalPins(observed));
+}
+
+/**
+ * Validate the producer-owned release identity before joining it to landed evidence.
+ * Producer fields remain distinct from landedSha and remote-main ancestry.
+ */
+export function validateProducerReleaseIdentity(producer, expected = {}) {
+  if (!isObject(producer)) {
+    return producerIdentityIssue(
+      'producer-identity-missing',
+      'a producer release manifest object',
+      producer ?? 'missing',
+      'Attach the immutable prerequisite producer release before evaluating delivery.',
+      'pending',
+    );
+  }
+  for (const alias of ['landedSha', 'targetSha', 'remoteMainSha']) {
+    if (hasOwn(producer, alias)) {
+      return producerIdentityIssue(
+        'producer-landed-sha-alias',
+        'producer identity without landed or remote-main SHA aliases',
+        {[alias]: producer[alias]},
+        'Keep producer execution identity separate from the later landed-main delivery record.',
+        'nonpass',
+        alias,
+      );
+    }
+  }
+  if (producer.schemaVersion !== 'forgeax-prerequisite-release/v1') {
+    return producerIdentityIssue('producer-schema-invalid', 'forgeax-prerequisite-release/v1', producer.schemaVersion, 'Use the producer-owned prerequisite release schema.', 'nonpass', 'schemaVersion');
+  }
+  if (typeof producer.artifactId !== 'string' || producer.artifactId.length === 0) {
+    return producerIdentityIssue('producer-identity-field-missing', 'non-empty artifactId', producer.artifactId ?? 'missing', 'Preserve the immutable producer artifact identity.', 'pending', 'artifactId');
+  }
+  if (!validReleaseDigest(producer.releaseDigest)) {
+    return producerIdentityIssue('producer-release-digest-invalid', 'sha256:<64 lowercase hex characters>', producer.releaseDigest ?? 'missing', 'Preserve the release digest produced with the immutable manifest.', 'nonpass', 'releaseDigest');
+  }
+  if (!Array.isArray(producer.inventory) || producer.inventory.length === 0) {
+    return producerIdentityIssue('producer-identity-field-missing', 'a non-empty inventory array', producer.inventory ?? 'missing', 'Preserve every published payload inventory entry.', 'pending', 'inventory');
+  }
+  const inventoryPaths = new Set();
+  for (const entry of producer.inventory) {
+    if (!isObject(entry) || typeof entry.payloadClass !== 'string' || typeof entry.path !== 'string' || !/^[0-9a-f]{64}$/.test(entry.sha256 ?? '')) {
+      return producerIdentityIssue('producer-inventory-invalid', 'payloadClass, path, and 64-character SHA-256 entries', entry, 'Rebuild the producer inventory from the immutable release files.', 'nonpass', 'inventory');
+    }
+    if (inventoryPaths.has(entry.path)) {
+      return producerIdentityIssue('producer-inventory-duplicate', 'unique inventory paths', entry.path, 'Publish each payload path exactly once.', 'nonpass', 'inventory');
+    }
+    inventoryPaths.add(entry.path);
+  }
+  if (typeof producer.producerRunId !== 'string' || producer.producerRunId.length === 0) {
+    return producerIdentityIssue('producer-run-id-missing', 'non-empty producerRunId', producer.producerRunId ?? 'missing', 'Preserve the workflow run identity that created the release.', 'pending', 'producerRunId');
+  }
+  if (!Number.isInteger(producer.producerAttempt) || producer.producerAttempt < 1) {
+    return producerIdentityIssue('producer-attempt-invalid', 'positive integer producerAttempt', producer.producerAttempt ?? 'missing', 'Preserve the producer workflow attempt paired with the release.', 'nonpass', 'producerAttempt');
+  }
+  if (!validSha(producer.sourceSha)) {
+    return producerIdentityIssue('producer-source-sha-invalid', '40-character lowercase source SHA', producer.sourceSha ?? 'missing', 'Bind the release to the exact editor source checkout.', 'nonpass', 'sourceSha');
+  }
+  if (!Array.isArray(producer.recursivePins) || producer.recursivePins.length === 0) {
+    return producerIdentityIssue('producer-recursive-pins-missing', 'non-empty recursive pin list', producer.recursivePins ?? 'missing', 'Preserve every recursive submodule pin used by the producer.', 'pending', 'recursivePins');
+  }
+  const pinPaths = new Set();
+  for (const pin of producer.recursivePins) {
+    if (!isObject(pin) || typeof pin.path !== 'string' || !validSha(pin.pin)) {
+      return producerIdentityIssue('producer-recursive-pin-invalid', 'recursive pin path and 40-character SHA', pin, 'Recreate the release from the observed recursive submodule pins.', 'nonpass', 'recursivePins');
+    }
+    if (pinPaths.has(pin.path)) {
+      return producerIdentityIssue('producer-recursive-pin-duplicate', 'unique recursive pin paths', pin.path, 'Record each recursive submodule path once.', 'nonpass', 'recursivePins');
+    }
+    pinPaths.add(pin.path);
+  }
+  if (producer.producerSuccess !== true) {
+    return producerIdentityIssue('producer-failure', true, producer.producerSuccess, 'Do not promote a failed producer attempt; rerun the producer and publish a complete release.', 'nonpass', 'producerSuccess');
+  }
+  if (typeof producer.producerEnvironmentFingerprint !== 'string' || producer.producerEnvironmentFingerprint.length === 0) {
+    return producerIdentityIssue('producer-compatibility-missing', 'non-empty producerEnvironmentFingerprint', producer.producerEnvironmentFingerprint ?? 'missing', 'Preserve the producer toolchain fingerprint as compatibility evidence.', 'pending', 'producerEnvironmentFingerprint');
+  }
+  if (!isObject(producer.compatibility) || typeof producer.compatibility.os !== 'string' || typeof producer.compatibility.architecture !== 'string' || !Array.isArray(producer.compatibility.capacityPool)) {
+    return producerIdentityIssue('producer-compatibility-missing', 'compatibility with os, architecture, and capacityPool', producer.compatibility ?? 'missing', 'Preserve the normalized producer compatibility constraints.', 'pending', 'compatibility');
+  }
+  if (expected.sourceSha !== undefined && producer.sourceSha !== expected.sourceSha) {
+    return producerIdentityIssue('producer-source-sha-mismatch', expected.sourceSha, producer.sourceSha, 'Join only the producer release for the admitted source SHA.', 'nonpass', 'sourceSha');
+  }
+  if (expected.recursivePins !== undefined && !compareRecursivePins(expected.recursivePins, producer.recursivePins)) {
+    return producerIdentityIssue('producer-recursive-pin-mismatch', expected.recursivePins, producer.recursivePins, 'Join only the producer release built from the admitted recursive pins.', 'nonpass', 'recursivePins');
+  }
+  return {ok: true, status: 'pass', producer: projectProducerIdentity(producer)};
+}
+
+/**
+ * Project producer and landed evidence into one joinable envelope without aliasing their identities.
+ */
+export function createDeliveryEnvelope({producer, landed, consumerReports = [], admission, expectedAdmissionGeneration} = {}) {
+  const producerResult = validateProducerReleaseIdentity(producer);
+  if (!producerResult.ok) return producerResult;
+  if (expectedAdmissionGeneration !== undefined && admission?.generation !== expectedAdmissionGeneration) {
+    return producerIdentityIssue(
+      'admission-generation-drift',
+      expectedAdmissionGeneration,
+      admission?.generation ?? 'missing',
+      'Join delivery evidence to the current immutable admission generation; stale generations cannot be promoted.',
+      'nonpass',
+      'admissionGeneration',
+    );
+  }
+  if (!isObject(landed)) {
+    return producerDeliveryHandoff(
+      'pending',
+      'landed-delivery-missing',
+      'landed delivery evidence object',
+      landed ?? 'missing',
+      'A producer release cannot be promoted to landed evidence without exact SHA contexts and ancestry.',
+      'landed delivery evidence is missing',
+      ['landedSha', 'four exact landed contexts', 'origin/main ancestry'],
+      'Collect the post-merge exact-SHA delivery record and join it without changing producer identity.',
+      {producer: producerResult.producer},
+    );
+  }
+  if (landed.requiredContexts !== undefined) {
+    const observedContexts = Array.isArray(landed.requiredContexts) ? [...landed.requiredContexts].sort() : landed.requiredContexts;
+    const expectedContexts = [...LANDED_REQUIRED_CONTEXTS].sort();
+    if (canonicalize(observedContexts) !== canonicalize(expectedContexts)) {
+      return producerIdentityIssue(
+        'landed-required-context-contract-invalid',
+        expectedContexts,
+        observedContexts,
+        'Reuse the existing four required contexts; delivery evidence cannot define a parallel context set.',
+        'nonpass',
+        'requiredContexts',
+      );
+    }
+  }
+  const landedResult = validateLandedDelivery(landed);
+  if (!landedResult.ok) return {...landedResult, producer: producerResult.producer};
+  if (!Array.isArray(consumerReports)) {
+    return producerIdentityIssue('consumer-reports-invalid', 'an array of consumer reports', consumerReports, 'Preserve consumer reports as a separate projection of the producer release.', 'nonpass', 'consumerReports');
+  }
+  const envelope = {
+    schemaVersion: DELIVERY_ENVELOPE_SCHEMA_VERSION,
+    producer: producerResult.producer,
+    landed: landedResult,
+    consumerReports: structuredClone(consumerReports),
+  };
+  return {ok: true, status: 'pass', ...envelope, envelope};
 }
 
 export function normalizeEnvelope(input) {

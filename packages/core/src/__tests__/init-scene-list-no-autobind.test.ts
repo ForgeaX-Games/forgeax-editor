@@ -42,6 +42,17 @@ const PACKS: Record<string, string> = {
 // forge.json with NO defaultScene (the shoot-opt case).
 const FORGE_JSON_CONTENT = JSON.stringify({ id: 'shoot-opt', name: 'shoot-opt', schemaVersion: '1.0.0', entry: 'src/main.ts' });
 
+// A canonical default points at the first scene GUID. The binding regression
+// below deliberately makes any redundant pack read fail after the manifest
+// scan, proving initSceneList consumes the scan it already completed.
+const DEFAULT_FORGE_JSON_CONTENT = JSON.stringify({
+  id: 'sample',
+  name: 'sample',
+  schemaVersion: '1.0.0',
+  entry: 'src/main.ts',
+  defaultScene: 'aaaa1111-0000-4000-8000-000000000001',
+});
+
 // A files tree exposing exactly the two enemy packs under the game root '/game'.
 const TREE = {
   tree: {
@@ -102,5 +113,47 @@ describe('initSceneList — no auto-bind to an unmarked scene pack (shoot-opt re
     expect(getSceneList().map((s) => s.id).sort()).toEqual(['assassin', 'bomber']);
     // …but NONE is auto-bound as the editable scene (the corruption trigger).
     expect(getSceneFile()).toBeNull();
+  });
+});
+
+describe('initSceneList — default binding uses the completed manifest scan', () => {
+  const realFetch = globalThis.fetch;
+  let packReads = 0;
+
+  beforeEach(() => {
+    setPathResolver((rel: string) => (rel ? `/game/${rel}` : '/game'));
+    packReads = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.startsWith('/api/files/tree?root=')) return jsonResponse(TREE);
+      if (url.startsWith('/api/files?path=')) {
+        const path = decodeURIComponent(url.slice('/api/files?path='.length));
+        if (path === '/game/forge.json') return jsonResponse({ content: DEFAULT_FORGE_JSON_CONTENT });
+        if (path in PACKS) {
+          packReads += 1;
+          // findAllScenePacks needs exactly one read per pack. A third read is
+          // the old redundant findScenePackByGuid path and must not be needed.
+          if (packReads > 2) return new Response('transient pack read failure', { status: 503 });
+          return jsonResponse({ content: PACKS[path] });
+        }
+        return new Response('not found', { status: 404 });
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    gateway.dispatch({ kind: 'setSceneId', id: 'sample' } as EditorOp);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    setPathResolver(null);
+    gateway.dispatch({ kind: 'setSceneId', id: null } as EditorOp);
+    try { localStorage.clear(); } catch { /* no localStorage in this env */ }
+  });
+
+  it('binds forge.json.defaultScene without a second pack scan', async () => {
+    await initSceneList();
+    expect(getSceneList().map((s) => s.id).sort()).toEqual(['assassin', 'bomber']);
+    expect(getSceneFile()).toBe('assassin');
+    expect(packReads).toBe(2);
   });
 });

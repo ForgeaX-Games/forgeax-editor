@@ -10,6 +10,12 @@ export interface MountedSelector<T> {
   readonly schema: SelectorValueSchema;
   readonly read: (world: unknown) => T;
   readonly normalize?: (value: T) => NormalizedSelectorValue;
+  /**
+   * Optional identity/equality gate for immutable read models. When it says
+   * the raw value is unchanged, normalization and snapshot comparison are
+   * skipped. Do not use this for mutable views such as TypedArrays.
+   */
+  readonly valueEqual?: (left: T, right: T) => boolean;
   readonly equal?: (left: unknown, right: unknown) => boolean;
 }
 
@@ -35,6 +41,8 @@ type Entry = {
   readonly subscriptions: Set<() => void>;
   refs: number;
   normalized?: NormalizedSelectorValue;
+  hasValue: boolean;
+  value?: unknown;
 };
 
 export type PublishResult = 'published' | 'unbound' | 'stale' | 'disposed';
@@ -75,7 +83,7 @@ export class LiveWorldSelectorGraph {
     }
     let entry = this.entries.get(selector.key);
     if (!entry) {
-      entry = { selector: selector as MountedSelector<unknown>, subscriptions: new Set(), refs: 0 };
+      entry = { selector: selector as MountedSelector<unknown>, subscriptions: new Set(), refs: 0, hasValue: false };
       this.entries.set(selector.key, entry);
     }
     entry.refs += 1;
@@ -117,9 +125,15 @@ export class LiveWorldSelectorGraph {
 
     this.publishCount += 1;
     for (const entry of this.entries.values()) {
+      let value: unknown;
+      try {
+        value = entry.selector.read(this.activeWorld);
+        if (entry.hasValue && entry.selector.valueEqual?.(entry.value, value)) continue;
+      } catch {
+        continue;
+      }
       let normalized: NormalizedSelectorValue;
       try {
-        const value = entry.selector.read(this.activeWorld);
         normalized = entry.selector.normalize
           ? entry.selector.normalize(value)
           : normalizeSelectorValue(value, entry.selector.schema);
@@ -129,6 +143,8 @@ export class LiveWorldSelectorGraph {
       const changed = entry.normalized === undefined || !(entry.selector.equal
         ? entry.selector.equal(entry.normalized.snapshot, normalized.snapshot)
         : selectorValuesEqual(entry.normalized.snapshot, normalized.snapshot, entry.selector.schema));
+      entry.value = value;
+      entry.hasValue = true;
       if (!changed) continue;
       entry.normalized = normalized;
       for (const listener of [...entry.subscriptions]) {

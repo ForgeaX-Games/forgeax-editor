@@ -1,9 +1,10 @@
 // scan/integrity-scan.ts — startup asset integrity scanner.
 //
-// Detects "half-imported" assets: source files on disk without a corresponding
-// .meta.json sidecar. This happens when a previous import failed mid-pipeline
-// (e.g. cook error, network drop, fbx-wasm unavailable) — the source bytes
-// were uploaded but the sidecar was never written.
+// Observes source/meta pairs in the game's assets tree. A source file without
+// a .meta.json sidecar is a normal source-only/pending state for game-owned
+// runtime files (HUD, loading screens, etc.); it is not proof that an import
+// failed. Recovery is represented as an intent and must not be surfaced as a
+// startup warning or mutate the game implicitly.
 //
 // The scanner uses the assetIO.listSourceFiles() gate (GET /api/files/tree) to
 // enumerate the assets/ directory, then cross-references source files against
@@ -38,7 +39,7 @@ export interface OrphanedSidecarEntry {
 }
 
 export interface IntegrityScanResult {
-  /** Source files on disk with no .meta.json sidecar — need import. */
+  /** Source files on disk with no .meta.json sidecar — recovery candidates. */
   needsMeta: NeedsMetaEntry[];
   /** .meta.json files whose declared source doesn't exist — orphaned.
    *  (Note: engine-side cleanOrphanMetas may have already removed some.) */
@@ -125,16 +126,8 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
     if (metaFiles.has(expectedMeta)) {
       result.ok.push(sourcePath);
     } else {
-      console.warn('[integrity-scan] source without sidecar:', { sourcePath, expectedMeta });
       result.needsMeta.push({ sourcePath, sourceName: basename });
       result.observations.push({ kind: 'source-meta', sourcePath, sourcePresent: true, metaPresent: false, logicalBatchId: `scan:${sourcePath}` });
-      result.diagnostics.push({
-        file: sourcePath,
-        severity: 'warn',
-        code: 'missing-meta',
-        message: `Source file "${basename}" has no .meta.json sidecar — import was incomplete`,
-        suggestion: 'Will be auto-repaired by re-importing from disk.',
-      });
     }
   }
 

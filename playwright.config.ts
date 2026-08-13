@@ -45,6 +45,13 @@ const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
 // The copy is exact, isolated to this Playwright process, and removed only at
 // process exit; the browser still addresses it as the game slug "sample".
 const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
+// Each webServer below is a real, concurrent Vite process. Vite's default
+// cache directories live beside the shared package sources, so the sample and
+// template stacks can otherwise race while writing the same optimized React /
+// Zod modules and serve a transient 504 (Outdated Optimize Dep). Give each
+// stack one private root; the three configs split that root by Vite role.
+const e2eSampleViteCacheRoot = join(e2eTempRoot, 'vite-cache', 'sample');
+const e2eTemplateViteCacheRoot = join(e2eTempRoot, 'vite-cache', 'template');
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, {
   recursive: true,
@@ -126,6 +133,7 @@ export default defineConfig({
         FORGEAX_STANDALONE_PORT: e2eHostPort,
         FORGEAX_EDIT_RUNTIME_PORT: e2eEditPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
+        FORGEAX_VITE_CACHE_ROOT: e2eSampleViteCacheRoot,
         FORGEAX_BRIDGE_PORT: e2eBridgePort,
         FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
         FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
@@ -149,6 +157,7 @@ export default defineConfig({
         FORGEAX_ENGINE_PORT: e2eEnginePort,
         FORGEAX_PLAY_RUNTIME_PORT: e2eEnginePort,
         FORGEAX_GAME_DIR: e2eGameDir,
+        FORGEAX_VITE_CACHE_ROOT: e2eSampleViteCacheRoot,
         FORGEAX_GAME_ID: 'sample',
         FORGEAX_RUNTIME_SCOPE_ID: 'e2e-sample',
         FORGEAX_RUNTIME_GENERATION: '1',
@@ -190,6 +199,7 @@ export default defineConfig({
         FORGEAX_STANDALONE_PORT: e2eTemplateHostPort,
         FORGEAX_EDIT_RUNTIME_PORT: e2eTemplateEditPort,
         FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
+        FORGEAX_VITE_CACHE_ROOT: e2eTemplateViteCacheRoot,
         FORGEAX_BRIDGE_PORT: e2eTemplateBridgePort,
         FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
         FORGEAX_RUNTIME_GENERATION: '1',
@@ -213,6 +223,7 @@ export default defineConfig({
         FORGEAX_ENGINE_PORT: e2eTemplateEnginePort,
         FORGEAX_PLAY_RUNTIME_PORT: e2eTemplateEnginePort,
         FORGEAX_GAME_DIR: e2eTemplateGameDir,
+        FORGEAX_VITE_CACHE_ROOT: e2eTemplateViteCacheRoot,
         FORGEAX_GAME_ID: 'new-game-template',
         FORGEAX_RUNTIME_SCOPE_ID: 'e2e-new-game-template',
         FORGEAX_RUNTIME_GENERATION: '1',

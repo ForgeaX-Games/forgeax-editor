@@ -56,6 +56,7 @@ import {
   gateway,
   panelBridge,
   getSceneId,
+  getViewportPreferences,
   getSelection,
   entComponent,
   entComponents,
@@ -129,7 +130,7 @@ import {
   installErrorOverlay,
   paintDiagnosticMessage,
 } from './viewport-runtime-bridges';
-import { setFps } from '../fps-store';
+import { getFps, setFps } from '../fps-store';
 import {
   getInputTarget,
   getViewportQuadrant,
@@ -143,7 +144,10 @@ import { registerEditorVisualHost } from './visual-source';
 import { _syncDisplayMode, isAuxVisible } from './display-bus';
 import { installAssetSpawnBridge, installViewportDropZone } from '../asset-spawn-bridge';
 import { ViewportChrome } from '../ViewportChrome';
-import { validatePerspectiveFov } from './render-diagnostics';
+import {
+  createInfiniteGridDiagnosticsProvider,
+  validatePerspectiveFov,
+} from './render-diagnostics';
 import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
 import { registerViewportSessionAppliers } from './viewport-session-appliers';
 import { createEditVfxRuntimeBridge, createParticleCameraSource } from './vfx-runtime-bridge';
@@ -152,6 +156,7 @@ import { createBootLease } from './boot-lease';
 import { resolveViewportShaderManifestUrl } from './shader-manifest-url';
 import { createAnimationDiagnosticsProvider } from './animation-diagnostics-provider';
 import { createEngineExecutionDiagnostics } from './execution-diagnostics-provider';
+import { createInfiniteGridFeature, installInfiniteGridShader } from './infinite-grid-feature';
 import '../theme.css';
 
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
@@ -172,6 +177,16 @@ let currentResetOptions: ResetEditRealmOptions = {};
 let activeRealmTeardown: (() => void) | undefined;
 function registerRealmTeardown(fn: () => void): void {
   teardownFns.push(fn);
+}
+
+export type InfiniteGridPlayPhase = 'edit' | 'starting' | 'play' | 'failed';
+
+export function deriveInfiniteGridVisibility(input: {
+  readonly gridVisible: boolean;
+  readonly display: 'scene' | 'game';
+  readonly playPhase: InfiniteGridPlayPhase;
+}): boolean {
+  return input.gridVisible && input.display === 'scene' && input.playPhase === 'edit';
 }
 
 async function loadRuntimeAssetPayload(renderer: Renderer, guid: string): Promise<unknown> {
@@ -592,15 +607,10 @@ async function bootViewport(
     }),
     renderFeatureDiagnostics: () => vfxRenderer?.renderFeatureDiagnostics() ?? [],
   });
-  // Main's profiler is the single owner of app/render phase observation. Keep
-  // VFX diagnostics on that owner even when User Timing diagnostics are off.
-  const profiler = createFramePhaseProfiler({
-    onPhaseEnd: (event) => {
-      if (event.source === 'render' && event.phase === 'features') {
-        vfxBridge.notifyDiagnosticsChanged();
-      }
-    },
-  });
+  // Diagnostics are producer-driven through subscribeRenderFeatureDiagnostics
+  // below. The optional profiler therefore disappears entirely unless a CPU
+  // capture/User Timing session was explicitly enabled before boot.
+  const profiler = createFramePhaseProfiler({ enableCpuCapture: true });
   // Keep the AI/panel diagnostics surface on the same engine-owned feature
   // facts used by the renderer; the Gateway owns only the bounded projection.
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(vfxBridge.diagnosticsProvider));
@@ -705,6 +715,32 @@ async function bootViewport(
   });
   activeRealmTeardown = closeEditorRealm;
   registerTeardown(closeEditorRealm);
+  const infiniteGridDiagnostics = createInfiniteGridDiagnosticsProvider({
+    readFeatureDiagnostics: () => renderer.renderFeatureDiagnostics(),
+  });
+  registerTeardown(gateway.registerRuntimeDiagnosticsProvider(infiniteGridDiagnostics));
+  registerTeardown(renderer.onHealthChange(() => infiniteGridDiagnostics.notify()));
+  try {
+    await installInfiniteGridShader(renderer);
+    if (!isCurrentBoot()) {
+      teardownIfStale(isCurrentBoot, closeEditorRealm);
+      return null;
+    }
+    const installedGrid = await renderer.installRenderFeature(
+      createInfiniteGridFeature({
+        isVisible: () => deriveInfiniteGridVisibility({
+          gridVisible: getViewportPreferences().gridVisible,
+          display: getViewportQuadrant().display,
+          playPhase: gateway.playPhase,
+        }),
+      }),
+    );
+    if (!installedGrid.ok) {
+      console.warn('[editor] infinite grid render feature disabled:', installedGrid.error);
+    }
+  } catch (error) {
+    console.warn('[editor] infinite grid render feature installation failed:', error);
+  }
   let vfxRenderFeatureEnabled = false;
   if (supportsVfxRenderFeature(renderer.device.caps)) {
     try {
@@ -727,6 +763,9 @@ async function bootViewport(
   const executionDiagnostics = createEngineExecutionDiagnostics(editorApp.execution);
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(executionDiagnostics.provider));
   vfxRenderer = renderer;
+  registerTeardown(
+    renderer.subscribeRenderFeatureDiagnostics(vfxBridge.notifyDiagnosticsChanged),
+  );
   if (gameSession.runtimeBinding !== undefined) {
     renderer.assets.configureRuntimeBinding(gameSession.runtimeBinding);
   }
@@ -1072,6 +1111,8 @@ async function bootViewport(
   // camera owner unselected and turns a second authored Camera into a real
   // render-system-multi-camera failure after reload.
   let livePlayWorld: World | undefined;
+  let remotePlayFpsActive = false;
+  let refreshVisibilityTarget = () => {};
   const applyActiveCamera = (): void => {
     const camEnt = deriveActiveCameraEntity();
     if (camEnt === undefined) return;
@@ -1128,35 +1169,44 @@ async function bootViewport(
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
       onPlayStarted: (playWorld) => {
+        remotePlayFpsActive = false;
         // The lifecycle has already atomically moved gateway.activeWorld to the
         // play world. Publish the matching UI state only now, never during async
         // assembly, so Hierarchy cannot claim Play while showing the edit tree.
-        // The editor App is paused for Play, so the FPS reporter installed on
-        // the editor world would otherwise leave the toolbar showing its stale
-        // pre-Play value. Attach the reporter to the actual live play world.
+        // Reset the display while the play world is being handed over; the
+        // browser-frame reporter remains the single FPS source for both modes.
         setFps(0);
         onFps(0);
-        installFpsReport(playWorld as World, onFps);
         vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = playWorld as World;
         canvas.focus({ preventScroll: true });
         canvasInput.grantGame();
         setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
+        refreshVisibilityTarget();
       },
       onRemotePlayStarted: () => {
+        remotePlayFpsActive = true;
         setFps(0);
         onFps(0);
         vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = undefined;
         canvasInput.revokeGame();
         setViewportQuadrant({ run: 'play', display: 'game', control: 'game' });
+        refreshVisibilityTarget();
+      },
+      onRemotePlayFps: (fps) => {
+        if (!remotePlayFpsActive) return;
+        setFps(fps);
+        onFps(fps);
       },
       onPlayFailed: () => {
+        remotePlayFpsActive = false;
         // Degrade back to a coherent edit viewport if fresh-world assembly fails.
         vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = undefined;
         canvasInput.revokeGame();
         setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
+        refreshVisibilityTarget();
       },
     });
   } catch (err) {
@@ -1249,8 +1299,10 @@ async function bootViewport(
     },
     stopSimulation: () => {
       revokeGameControl();
+      remotePlayFpsActive = false;
       session!.stopSimulation();
       setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
+      refreshVisibilityTarget();
     },
   };
 
@@ -1365,6 +1417,14 @@ async function bootViewport(
   // start the live render loop + reporters (was :895). The host error listener
   // is installed immediately after createApp so an in-flight HMR/page reload
   // cannot leave a live renderer without its structured error owner.
+  // Register the telemetry system before arming the App loop. World schedules
+  // are consumed by the first running frame; installing this after start can
+  // leave the live carrier rendering while the FPS publisher never runs.
+  registerTeardown(installFpsReport(
+    (listener) => renderer.subscribeFrameEnd(listener),
+    onFps,
+    () => !remotePlayFpsActive,
+  ));
   editorApp.start();
   // Cross-realm M1 boundary: the Runtime owns Gateway/World/Registry and serves
   // their typed operation/projection surface over one transferred MessagePort.
@@ -1387,6 +1447,7 @@ async function bootViewport(
         quadrant: getViewportQuadrant(),
         playPhase: gateway.playPhase,
         lastPlayError: gateway.lastPlayError,
+        fps: getFps(),
         canUndo: gateway.canUndo(),
         canRedo: gateway.canRedo(),
       }),
@@ -1418,6 +1479,7 @@ async function bootViewport(
         quadrant: getViewportQuadrant(),
         playPhase: gateway.playPhase,
         lastPlayError: gateway.lastPlayError,
+        fps: getFps(),
         canUndo: gateway.canUndo(),
         canRedo: gateway.canRedo(),
       }),
@@ -1464,6 +1526,7 @@ async function bootViewport(
         quadrant: getViewportQuadrant(),
         playPhase: gateway.playPhase,
         lastPlayError: gateway.lastPlayError,
+        fps: getFps(),
         canUndo: gateway.canUndo(),
         canRedo: gateway.canRedo(),
       }),
@@ -1509,12 +1572,17 @@ async function bootViewport(
       });
     })
     .catch((error) => console.warn('[editor] managed carrier health unavailable:', error));
-  installFpsReport(world, onFps);
   registerTeardown(installAssetSpawnBridge());
   // Single-realm drag-to-viewport + pause-when-hidden live on the viewport's own
   // container (drop → gateway spawn; visibility → editorApp.pause/resume).
   registerTeardown(installViewportDropZone(container));
-  registerTeardown(installVisibilityPause(container, editorApp, () => session?.getPlayPauseHandle() ?? null));
+  const visibilityPause = installVisibilityPause(
+    container,
+    editorApp,
+    () => session?.getPlayPauseHandle() ?? null,
+  );
+  refreshVisibilityTarget = visibilityPause.refresh;
+  registerTeardown(visibilityPause);
   registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');

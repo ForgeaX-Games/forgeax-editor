@@ -36,7 +36,7 @@ import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import { MeshFilter } from '@forgeax/engine-render';
 import type { Handle } from '@forgeax/engine-runtime';
 import { applyCommand, createEditSession } from '../session/document';
-import { Visibility, VisibilityStateValue, resolveVisibility } from '../visibility';
+import { Visibility, VisibilityStateValue, readEntityVisibility, resolveVisibility } from '../visibility';
 import { worldEntityHandles } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 
@@ -206,6 +206,19 @@ describe('applyCommand world assertions (GREEN)', () => {
     expect(visibility.effective(grandchild.engineHandle)).toBe('hidden');
     expect(session.world.get(child.engineHandle, Visibility).ok).toBe(false);
     expect(session.world.get(grandchild.engineHandle, Visibility).ok).toBe(false);
+  });
+
+  it('readEntityVisibility derives inherited intent without probing an absent component', () => {
+    const session = createSession();
+    const parent = spawnEngineHandle(session, 'Parent');
+    const child = spawnEngineHandle(session, 'Child', parent.legacyId);
+    applyCommand(session, { kind: 'setVisibility', entity: parent.legacyId, state: 'hidden' });
+
+    const snapshot = resolveVisibility(session.world);
+    const resolution = readEntityVisibility(session.world, child.engineHandle, snapshot);
+
+    expect(resolution).toEqual({ intent: 'inherited', effective: 'hidden', source: 'parent' });
+    expect(session.world.get(child.engineHandle, Visibility).ok).toBe(false);
   });
 
   it('setVisibility visible on the parent makes inherited descendants visible', () => {

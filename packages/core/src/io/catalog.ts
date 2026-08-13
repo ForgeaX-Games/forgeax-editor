@@ -1213,11 +1213,11 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Camera bookmark',
   },
-  // Viewport interaction preferences — session domain, ledger-only. The applier
-  // lives in core (store/viewport-preferences.ts, next to gizmo-pivot); numeric
-  // ranges are intentionally NOT enforced here — the applier clamps via
-  // normalizeViewportPreferences so out-of-range input degrades to the nearest
-  // valid value instead of an INVALID_ARGS rejection.
+  // Viewport interaction preferences — session domain, ledger-only. The
+  // gridVisible field defaults to true and remains Edit chrome state. The
+  // nested patch schema is the machine-readable contract exposed by listOps;
+  // unknown keys return INVALID_ARGS with a field-path hint, while numeric
+  // ranges are clamped by normalizeViewportPreferences in the applier.
   { id: 'setViewportPreferences', domain: 'session',
     argsSchema: {
       type: 'object',
@@ -1225,7 +1225,9 @@ const builtinOps: ReadonlyArray<{
         patch: {
           type: 'object',
           description: 'Partial viewport-preferences patch; every field optional. Numbers are clamped to their valid range by the applier.',
+          additionalProperties: false,
           properties: {
+            gridVisible: { type: 'boolean', description: 'Show the infinite grid in the Edit viewport; defaults to true and is session-only.' },
             mouseSensitivity: { type: 'number', description: 'Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05–5).' },
             invertY: { type: 'boolean', description: 'Reverse vertical mouse look.' },
             wheelDirection: { type: 'number', enum: [1, -1], description: 'Wheel direction multiplier; 1 is the editor default.' },

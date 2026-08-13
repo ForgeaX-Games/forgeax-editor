@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useReducer, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, useEffect, useReducer, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import {
   Axis3d,
   Box,
@@ -74,20 +74,37 @@ interface ViewportStatusProjection {
     readonly display: DisplayMode;
     readonly control: 'editor' | 'game';
   };
+  readonly fps: number;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
 }
 
 const DISCONNECTED_VIEWPORT_STATUS: ViewportStatusProjection = {
   quadrant: { run: 'edit', display: 'scene', control: 'editor' },
+  fps: 0,
   canUndo: false,
   canRedo: false,
 };
 const viewportContextSignatures = new WeakMap<AppHost, string>();
+let projectedFps = 0;
+const projectedFpsListeners = new Set<() => void>();
+
+function subscribeProjectedFps(listener: () => void): () => void {
+  projectedFpsListeners.add(listener);
+  return () => projectedFpsListeners.delete(listener);
+}
+
+function readProjectedFps(): number {
+  return projectedFps;
+}
 
 function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mounted: boolean): void {
   const q = status.quadrant;
-  const signature = `${mounted}:${q.run}:${q.display}:${q.control}:${status.canUndo}:${status.canRedo}`;
+  const signature = `${mounted}:${q.run}:${q.display}:${q.control}:${status.fps}:${status.canUndo}:${status.canRedo}`;
+  if (projectedFps !== status.fps) {
+    projectedFps = status.fps;
+    for (const listener of projectedFpsListeners) listener();
+  }
   if (viewportContextSignatures.get(host) === signature) return;
   viewportContextSignatures.set(host, signature);
   const running = q.run !== 'edit';
@@ -108,6 +125,7 @@ function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mo
     'panel.viewport.hasGameControl': q.control === 'game',
     'panel.viewport.canUndo': status.canUndo,
     'panel.viewport.canRedo': status.canRedo,
+    'panel.viewport.fps': status.fps,
   });
 }
 
@@ -517,17 +535,20 @@ function PopToggle({
   label,
   checked = false,
   disabled = false,
+  testId,
   onChange,
 }: {
   label: string;
   checked?: boolean;
   disabled?: boolean;
+  testId?: string;
   onChange?: (next: boolean) => void;
 }): ReactNode {
   return (
     <button
       type="button"
       className="fx-vp-pop-toggle"
+      data-testid={testId}
       data-checked={checked ? 'true' : 'false'}
       disabled={disabled}
       aria-disabled={disabled ? 'true' : undefined}
@@ -684,7 +705,7 @@ function SceneStatusControl(): ReactNode {
 }
 
 function FpsStatusControl(): ReactNode {
-  const fps = usePanelContext<number>('panel.viewport.fps', 0);
+  const fps = useSyncExternalStore(subscribeProjectedFps, readProjectedFps, () => 0);
 
   return (
     <div className="fx-viewport-panel-toolbar" data-zone="right">
@@ -818,6 +839,7 @@ function CameraMenuControl(): ReactNode {
 function ViewMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
+  const prefs = useViewportPreferences();
   const run = usePanelContext<RunMode>('panel.viewport.run', 'edit');
 
   return (
@@ -838,6 +860,13 @@ function ViewMenuControl(): ReactNode {
             disabled
           />
         ))}
+        <PopToggle
+          testId="vp-grid-toggle"
+          label={pickText(L('Grid', 'Grid'), locale)}
+          checked={prefs.gridVisible}
+          onChange={(gridVisible) => patchViewportPreferences({ gridVisible })}
+        />
+        <PopSeparator />
         {run === 'edit' && (
           <PopItem
             icon={<Eye size={14} />}

@@ -220,7 +220,9 @@ export default defineConfig({
   // (notably play-runtime). Keep its optimizer output separate so an update in
   // one entry point cannot invalidate dependency URLs while the other is serving
   // a page. The directory is covered by the repository-wide `.vite/` ignore.
-  cacheDir: resolve(PACKAGE_DIR, '.vite/standalone-host'),
+  cacheDir: process.env.FORGEAX_VITE_CACHE_ROOT
+    ? resolve(process.env.FORGEAX_VITE_CACHE_ROOT, 'standalone-host')
+    : resolve(PACKAGE_DIR, '.vite/standalone-host'),
   // react() + the D7 engine-serve plugins (shader manifest emit + optional
   // self-hosted pluginPack catalog). This is what lets the engine boot
   // in-process in this host window (no /editor proxy).

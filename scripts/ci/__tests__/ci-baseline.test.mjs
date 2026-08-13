@@ -83,6 +83,7 @@ test('the admitted editor workflow emits live job, needs, runner, timeout, and c
   const graph = buildWorkflowGraph([{ file: '.github/workflows/ci.yml', text }], LIVE_CONTEXTS);
   const jobs = graph.workflows[0].jobs;
   assert.deepEqual(jobs.map((job) => job.id), [
+    'prerequisite-release',
     'docs-policy',
     'submodule-pin',
     'b2-self-boot',
@@ -92,6 +93,7 @@ test('the admitted editor workflow emits live job, needs, runner, timeout, and c
   assert.deepEqual(
     Object.fromEntries(jobs.map((job) => [job.id, job.runner.pool ?? job.runner.kind])),
     {
+      'prerequisite-release': 'standard',
       'docs-policy': 'standard',
       'submodule-pin': 'standard',
       'b2-self-boot': 'standard',

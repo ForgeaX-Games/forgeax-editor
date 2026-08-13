@@ -42,7 +42,6 @@
 
 import { gateway, panelBridge, broadcastAssetsChanged, type EditorOp } from '@forgeax/editor-core';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import { Time, Update, type World } from '@forgeax/engine-ecs';
 import { setFps } from '../fps-store';
 import {
   createSourcePublicationObserver,
@@ -52,24 +51,33 @@ import {
 
 // ── FPS report ────────────────────────────────────────────────────────────────
 export function installFpsReport(
-  world: World,
+  subscribeFrameEnd: (listener: () => void) => () => void,
   onFps: (fps: number) => void,
-): void {
-  let frames = 0, accum = 0;
-  world.addSystem(Update, {
-    name: 'editor-fps-report',
-    queries: [],
-    fn: () => {
-      const dt = world.getResource(Time).delta;
-      frames++; accum += dt;
-      if (accum >= 1) {
-        const fps = Math.round(frames / accum);
-        setFps(fps);   // feed the shared fps-store (GameOverlay reads it too)
-        onFps(fps);    // feed this component's local state (ViewportChrome prop)
-        frames = 0; accum = 0;
+  shouldPublish: () => boolean = () => true,
+): () => void {
+  // Count the renderer's producer-owned completion signal. A separate rAF can
+  // keep firing after App/update/draw stalls and would make the smoke lie.
+  let frames = 0;
+  let lastSampleMs = readClockMs();
+  return subscribeFrameEnd(() => {
+    frames++;
+    const nowMs = readClockMs();
+    const elapsedMs = nowMs - lastSampleMs;
+    if (elapsedMs >= 1000) {
+      const fps = Math.round((frames * 1000) / elapsedMs);
+      if (shouldPublish()) {
+        setFps(fps);
+        onFps(fps);
       }
-    },
-  }).unwrap();
+      frames = 0;
+      lastSampleMs = nowMs;
+    }
+  });
+}
+
+function readClockMs(): number {
+  const clock = globalThis.performance;
+  return typeof clock?.now === 'function' ? clock.now() : Date.now();
 }
 
 // These two bridges monkeypatch process-global surfaces (console methods,
@@ -350,7 +358,7 @@ export function installVisibilityPause(
   container: HTMLElement,
   editorApp: { pause(): void; resume(): void },
   getPlayApp?: () => { pause(): void; resume(): void } | null,
-): () => void {
+): (() => void) & { refresh(): void } {
   let hiddenByViewport = false;
   let hiddenByDocument = false;
   const apply = (): void => {
@@ -376,10 +384,11 @@ export function installVisibilityPause(
   };
   document.addEventListener('visibilitychange', onVisibility);
 
-  return () => {
+  const dispose = () => {
     try { io?.disconnect(); } catch { /* already gone */ }
     document.removeEventListener('visibilitychange', onVisibility);
   };
+  return Object.assign(dispose, { refresh: apply });
 }
 
 /** Returns a disposer that restores console.error, removes the window listeners,

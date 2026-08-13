@@ -96,6 +96,14 @@ export interface RuntimeDiagnosticFact {
   readonly objectRefs?: ErrorObjectRefs;
   readonly retryable: boolean;
   readonly recoveryActions: readonly string[];
+  /** Optional producer-owned lifecycle stage for structured runtime failures. */
+  readonly stage?: string;
+  /** Optional renderer or subsystem generation associated with this fact. */
+  readonly generation?: number;
+  /** Optional target identity associated with this fact. */
+  readonly target?: string;
+  /** Optional producer-owned recovery policy. */
+  readonly recovery?: string;
   /** Producer-owned JSON-safe facts; consumers must not use this as control. */
   readonly detail: Readonly<Record<string, unknown>>;
 }
@@ -185,6 +193,10 @@ export interface DiagnosticsQueryItem {
   readonly objectRefs?: ErrorObjectRefs;
   readonly retryable: boolean;
   readonly recoveryActions: readonly string[];
+  readonly stage?: string;
+  readonly generation?: number;
+  readonly target?: string;
+  readonly recovery?: string;
   /** Source-owned JSON-safe facts; consumers must not use detail as a control signal. */
   readonly detail: Readonly<Record<string, unknown>>;
 }
@@ -423,6 +435,10 @@ function runtimeQueryItems(snapshot: DiagnosticsSnapshot): DiagnosticsQueryItem[
     ...(fact.objectRefs === undefined ? {} : { objectRefs: fact.objectRefs }),
     retryable: fact.retryable,
     recoveryActions: Object.freeze([...fact.recoveryActions]),
+    ...(fact.stage === undefined ? {} : { stage: fact.stage }),
+    ...(fact.generation === undefined ? {} : { generation: fact.generation }),
+    ...(fact.target === undefined ? {} : { target: fact.target }),
+    ...(fact.recovery === undefined ? {} : { recovery: fact.recovery }),
     detail: Object.freeze({ source: 'runtime', providerId: fact.providerId, fact: fact.detail }),
   }));
 }
@@ -440,6 +456,9 @@ function queryText(item: DiagnosticsQueryItem): readonly string[] {
     item.traceId,
     item.providerId,
     item.assetGuid,
+    item.stage,
+    item.target,
+    item.recovery,
     item.subjectRef?.id,
     ...Object.values(item.objectRefs ?? {}).map((ref): string | undefined => ref?.id),
     ...item.recoveryActions,

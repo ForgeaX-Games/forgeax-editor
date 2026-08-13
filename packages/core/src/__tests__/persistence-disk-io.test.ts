@@ -328,6 +328,7 @@ function saveFixture(options: {
   readonly fetchImpl?: (path: string, init?: RequestInit) => Promise<Response>;
   readonly transaction?: DiskIoDeps['prepareResourceTransaction'];
   readonly serializerThrows?: boolean;
+  readonly onSerialize?: (sceneGuid?: string) => void;
 }): {
   readonly io: ReturnType<typeof createDiskIo>;
   readonly ctx: ScenePersistenceContext;
@@ -354,7 +355,8 @@ function saveFixture(options: {
     fetchWithTimeout: async () => new Response('{}', { status: 200 }),
     resolveGamePath: (rel) => `/games/g1/${rel}`,
     notifyDocChanged: () => {},
-    serializeForSave: () => {
+    serializeForSave: (_doc, sceneGuid) => {
+      options.onSerialize?.(sceneGuid);
       if (options.serializerThrows) throw new Error('serializer fixture exploded');
       return options.serialized;
     },
@@ -381,6 +383,21 @@ function expectSaveFailure(
 }
 
 describe('M2-T1 structured save failures preserve bytes and dirty state', () => {
+  it('reuses the discovered scene GUID when an early save has no loaded GUID yet', async () => {
+    let serializedGuid: string | undefined;
+    const fixture = saveFixture({
+      serialized: validPack(),
+      ctx: {
+        currentSceneFile: 'scene',
+        currentSceneGuid: null,
+        sceneList: [{ id: 'scene', pack: 'assets/scene.pack.json', guid: 'authored-scene-guid' }],
+      },
+      onSerialize: (sceneGuid) => { serializedGuid = sceneGuid; },
+    });
+    expect(await fixture.io.doSaveDocToDisk()).toMatchObject({ ok: true });
+    expect(serializedGuid).toBe('authored-scene-guid');
+  });
+
   it('classifies serializer failure before any write', async () => {
     const fixture = saveFixture({ serialized: null });
     const result = await fixture.io.doSaveDocToDisk({ acceptedRevision: 1 });

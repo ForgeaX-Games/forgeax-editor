@@ -171,29 +171,22 @@ export async function configureHostSession(session: HostGameSession = { slug: nu
   // load so paths/storage keys resolve to the active scene file (UE level model).
   await initSceneList();
 
-  // ── Startup asset integrity scan (dev-plan §4.3) ──────────────────────────
-  // Detect "half-imported" source files (e.g. .fbx on disk without .meta.json)
-  // and auto-repair them by re-running the import pipeline. Runs AFTER
-  // initSceneList (path resolver is ready) and BEFORE the viewport boots
-  // (so pluginPack picks up the newly created sidecars). Non-fatal: scan/repair
-  // failures are logged but never block boot.
+  // ── Startup asset integrity observation (dev-plan §4.3) ───────────────────
+  // Observe source/meta state AFTER initSceneList (path resolver is ready) and
+  // BEFORE the viewport boots. Source-only files are normal for game-owned
+  // runtime content, so recovery is deferred and never mutates disk during
+  // bootstrap. Non-fatal: observation failures never block boot.
   if (slug && slug !== 'default') {
     try {
       const scanResult = await scanAssetsIntegrity();
       if (scanResult.needsMeta.length > 0) {
-        console.info('[host-boot] integrity scan found', scanResult.needsMeta.length,
-          'source files without sidecars — starting auto-repair');
+        console.info('[host-boot] integrity scan observed', scanResult.needsMeta.length,
+          'source-only files; deferring sidecar recovery');
         const report = await repairAssets(scanResult);
-        console.info('[host-boot] integrity repair complete:', {
-          repaired: report.repaired.length,
-          failed: report.failed.length,
+        console.info('[host-boot] integrity recovery intents prepared:', {
+          intents: report.recoveryIntents.length,
           elapsedMs: Math.round(report.elapsedMs),
         });
-        // Give pluginPack's debounced watcher time to pick up the new sidecars
-        // before the viewport boots and tries to loadByGuid.
-        if (report.repaired.length > 0) {
-          await new Promise<void>(r => setTimeout(r, 300));
-        }
       } else {
         console.info('[host-boot] integrity scan: all source files have sidecars ✓');
       }

@@ -75,3 +75,46 @@ test('dirty checkout is admitted before execution and writes only the requested 
     rmSync(reportDir, { recursive: true, force: true });
   }
 });
+
+test('local profiles expose the shared prerequisite vocabulary without cloud provenance', async () => {
+  const contractResult = runFx(['ci', 'contract', '--json']);
+  expect(contractResult.status).toBe(0);
+  const contract = JSON.parse(contractResult.stdout);
+  expect(contract.prerequisiteRelease.schemaVersion).toBe('forgeax-prerequisite-release/v1');
+  expect(contract.prerequisiteRelease.consumers['b2-self-boot']).toEqual([
+    'engine-dist',
+    'wgpu-wasm',
+    'bun-install-facts',
+  ]);
+  expect(contract.prerequisiteRelease.consumers['smoke-play']).toEqual([
+    'engine-dist',
+    'wgpu-wasm',
+    'fbx-wasm',
+    'bun-install-facts',
+  ]);
+  expect(contract.requiredContexts.map((entry: { context: string }) => entry.context)).toEqual([
+    'b2-self-boot',
+    'typecheck',
+    'submodule-pin',
+    'smoke-play',
+  ]);
+
+  for (const profile of ['fast', 'full'] as const) {
+    const marker = join(root, `scripts/ci/.fx-contract-${profile}-marker`);
+    const reportDir = mkdtempSync(join(tmpdir(), `forgeax-fx-${profile}-parity-`));
+    const reportPath = join(reportDir, 'report.json');
+    writeFileSync(marker, 'temporary dirty state\n');
+    try {
+      const result = runFx(['ci', `--${profile}`, '--report', reportPath]);
+      expect(result.status).not.toBe(0);
+      const report = await Bun.file(reportPath).json();
+      expect(report.executionHome).toBe(`local-${profile}`);
+      expect(report.provenance).toMatchObject({kind: 'local', timingDomain: 'local-execution'});
+      expect(report).toHaveProperty('prerequisiteRelease');
+      expect(report.prerequisiteRelease).toBeNull();
+    } finally {
+      rmSync(marker, {force: true});
+      rmSync(reportDir, {recursive: true, force: true});
+    }
+  }
+});

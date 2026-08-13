@@ -491,7 +491,9 @@ export default defineConfig({
   // The interface studio is at :18920 and proxies /preview → :15173/preview, so
   // engine's deps don't collide with interface's own /node_modules deps.
   base: '/preview/',
-  cacheDir: resolve(here, '.vite'),
+  cacheDir: process.env.FORGEAX_VITE_CACHE_ROOT
+    ? resolve(process.env.FORGEAX_VITE_CACHE_ROOT, 'play-runtime')
+    : resolve(here, '.vite'),
   publicDir: resolve(here, 'public'),
   // Inject the host-owned URL-space games prefix so the client builds game URLs
   // without a baked layout literal. '' → game served directly under base.

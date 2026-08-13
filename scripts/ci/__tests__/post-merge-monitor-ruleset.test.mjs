@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { classifyPostMergeAdmission } from '../post-merge-monitor.mjs';
+import { createDeliveryEnvelope } from '../editor-ci-contract-envelope.mjs';
 
 const fixturePath = resolve('scripts/ci/fixtures/post-merge-ruleset-cases.json');
 
@@ -42,4 +43,27 @@ test('unavailable live ruleset is not converted into a fixture-backed green resu
   assert.equal(result.ok, false);
   assert.notEqual(result.envelope.failureClass, null);
   assert.equal(result.envelope.terminalStatus, 'failure');
+});
+
+function applyDeliveryMutation(input, mutation) {
+  const next = structuredClone(input);
+  if (!mutation) return next;
+  if (mutation.kind === 'missing-context') next.landed.contexts = next.landed.contexts.slice(0, -1);
+  if (mutation.kind === 'wrong-context-sha') next.landed.contexts[0].sha = mutation.value;
+  if (mutation.kind === 'non-cloud-context') next.landed.contexts[0].provenance = {kind: 'local', timingDomain: 'local-execution'};
+  if (mutation.kind === 'remote-ancestry') next.landed.remoteMain.ancestor = mutation.value;
+  if (mutation.kind === 'required-context-drift') next.landed.requiredContexts = mutation.value;
+  if (mutation.kind === 'stale-generation') next.expectedAdmissionGeneration = mutation.value;
+  return next;
+}
+
+test('delivery ruleset accepts only the exact four cloud contexts on landed SHA', () => {
+  const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
+  for (const mutation of fixture.deliveryCases) {
+    const input = applyDeliveryMutation(fixture.deliveryBase, mutation.mutation);
+    const result = createDeliveryEnvelope(input);
+    assert.equal(result.status, mutation.expectedStatus, mutation.name);
+    assert.equal(result.ok, mutation.expectedStatus === 'pass', mutation.name);
+    if (mutation.expectedCode) assert.equal(result.error.code, mutation.expectedCode, mutation.name);
+  }
 });

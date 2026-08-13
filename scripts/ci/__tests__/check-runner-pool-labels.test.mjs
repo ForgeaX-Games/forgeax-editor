@@ -28,6 +28,7 @@ test('editor CI routes ordinary jobs to standard and browser smoke to heavy', ()
   );
   assert.deepEqual(pools, {
     'docs-policy': 'standard',
+    'prerequisite-release': 'standard',
     'submodule-pin': 'standard',
     'b2-self-boot': 'standard',
     typecheck: 'standard',
@@ -76,4 +77,15 @@ test('a second capacity label is rejected even when the selector is otherwise se
   const result = classifyRunnerSelector('[self-hosted, Linux, X64, standard, heavy]');
   assert.equal(result.kind, 'error');
   assert.match(result.message, /exactly one/);
+});
+
+test('producer and each consumer have exactly one explicit capacity label', () => {
+  const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
+  const selectors = checkWorkflowText(workflow, 'ci.yml').selectors;
+  for (const jobId of ['prerequisite-release', 'b2-self-boot', 'typecheck', 'smoke-play']) {
+    const selector = selectors.find(({ job }) => job === jobId);
+    assert.ok(selector, `${jobId} must have a statically classified runner`);
+    assert.equal(selector.kind, 'self-hosted');
+    assert.ok(['standard', 'heavy'].includes(selector.pool));
+  }
 });

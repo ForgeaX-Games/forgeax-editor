@@ -83,3 +83,78 @@ test('parent projection mutations are structured and fail closed', () => {
     assert.equal(typeof result.errors[0].hint, 'string', operation);
   }
 });
+
+test('projection exposes the prerequisite release discovery index separately', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const projection = projectContract(contract);
+  const result = validateProjection(contract, projection);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    projection.requiredContexts.map((entry) => entry.context).sort(),
+    ['b2-self-boot', 'smoke-play', 'submodule-pin', 'typecheck'],
+  );
+  assert.ok(projection.prerequisiteRelease);
+  assert.deepEqual(
+    Object.keys(projection.prerequisiteRelease.payloadClasses).sort(),
+    ['bun-install-facts', 'editor-generated-inputs', 'engine-dist', 'fbx-wasm', 'wgpu-wasm'],
+  );
+  assert.deepEqual(projection.prerequisiteRelease.consumers.typecheck, [
+    'engine-dist',
+    'wgpu-wasm',
+    'bun-install-facts',
+  ]);
+  assert.deepEqual(projection.prerequisiteRelease.identity.fields, [
+    'artifactId',
+    'releaseDigest',
+    'schemaVersion',
+    'inventory',
+    'producerRunId',
+    'producerAttempt',
+    'sourceSha',
+    'recursivePins',
+    'producerSuccess',
+  ]);
+  assert.deepEqual(projection.prerequisiteRelease.compatibility.fields, [
+    'os',
+    'architecture',
+    'bunVersion',
+    'nodeVersion',
+    'pnpmVersion',
+    'rustVersion',
+    'wasmPackVersion',
+    'capacityPool',
+  ]);
+});
+
+test('projection rejects missing or repeated prerequisite declarations', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const projection = projectContract(contract);
+  const cases = [
+    {
+      name: 'missing prerequisite release projection',
+      mutate(candidate) {
+        delete candidate.prerequisiteRelease;
+      },
+      expectedCode: 'projection-prerequisite-release-missing',
+    },
+    {
+      name: 'repeated payload declaration',
+      mutate(candidate) {
+        candidate.prerequisiteRelease.consumers.typecheck.push('engine-dist');
+      },
+      expectedCode: 'projection-prerequisite-release-duplicate-payload',
+    },
+  ];
+
+  for (const mutation of cases) {
+    const candidate = structuredClone(projection);
+    mutation.mutate(candidate);
+    const result = validateProjection(contract, candidate);
+    assert.equal(result.ok, false, mutation.name);
+    assert.equal(result.errors[0].code, mutation.expectedCode, mutation.name);
+    assert.notEqual(result.errors[0].expected, undefined, mutation.name);
+    assert.notEqual(result.errors[0].observed, undefined, mutation.name);
+    assert.equal(typeof result.errors[0].hint, 'string', mutation.name);
+  }
+});

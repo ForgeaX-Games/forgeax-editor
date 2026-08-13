@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
-import { validateContract } from '../editor-ci-contract.mjs';
+import { PORTFOLIO_SOURCE_PATH_PATTERN, validateContract } from '../editor-ci-contract.mjs';
 
 const contractPath = resolve('scripts/ci/editor-ci-contract.json');
 const fixturePath = resolve('scripts/ci/fixtures/editor-ci-contract-invalid-schema.json');
@@ -84,7 +84,7 @@ test('browser release portfolio is a nested producer-owned contract', () => {
   assert.equal(portfolio.parentCheckId, 'smoke-play');
   assert.equal(portfolio.discovery.ownedSources.length, 6);
   assert.equal(new Set(portfolio.discovery.ownedSources).size, 6);
-  assert.ok(portfolio.discovery.ownedSources.every((source) => /^[a-z0-9./-]+$/.test(source)));
+  assert.ok(portfolio.discovery.ownedSources.every((source) => PORTFOLIO_SOURCE_PATH_PATTERN.test(source)));
   assert.deepEqual(portfolio.evidence.requiredFields, [
     'sourceSha',
     'contractDigest',
@@ -95,4 +95,105 @@ test('browser release portfolio is a nested producer-owned contract', () => {
   ]);
   assert.equal(portfolio.requiredContextsRef, 'requiredContexts');
   assert.equal(portfolio.measurement.required, false);
+});
+
+test('prerequisite release contract is versioned and preserves four required contexts', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const result = validateContract(contract);
+  assert.equal(result.ok, true);
+
+  assert.deepEqual(
+    contract.requiredContexts.map((entry) => entry.context).sort(),
+    ['b2-self-boot', 'smoke-play', 'submodule-pin', 'typecheck'],
+  );
+
+  const prerequisiteRelease = contract.prerequisiteRelease;
+  assert.ok(prerequisiteRelease);
+  assert.equal(prerequisiteRelease.schemaVersion, 'forgeax-prerequisite-release/v1');
+  assert.deepEqual(Object.keys(prerequisiteRelease.payloadClasses).sort(), [
+    'bun-install-facts',
+    'editor-generated-inputs',
+    'engine-dist',
+    'fbx-wasm',
+    'wgpu-wasm',
+  ]);
+  assert.deepEqual(prerequisiteRelease.consumers, {
+    'b2-self-boot': ['engine-dist', 'wgpu-wasm', 'bun-install-facts'],
+    typecheck: ['engine-dist', 'wgpu-wasm', 'bun-install-facts'],
+    'smoke-play': ['engine-dist', 'wgpu-wasm', 'fbx-wasm', 'bun-install-facts'],
+    'submodule-pin': [],
+  });
+  assert.deepEqual(prerequisiteRelease.identity.fields, [
+    'artifactId',
+    'releaseDigest',
+    'schemaVersion',
+    'inventory',
+    'producerRunId',
+    'producerAttempt',
+    'sourceSha',
+    'recursivePins',
+    'producerSuccess',
+  ]);
+  assert.deepEqual(prerequisiteRelease.compatibility.fields, [
+    'os',
+    'architecture',
+    'bunVersion',
+    'nodeVersion',
+    'pnpmVersion',
+    'rustVersion',
+    'wasmPackVersion',
+    'capacityPool',
+  ]);
+});
+
+test('prerequisite release schema mutations fail with stable fields', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const cases = [
+    {
+      name: 'missing prerequisite release',
+      mutate(candidate) {
+        delete candidate.prerequisiteRelease;
+      },
+      expectedCode: 'prerequisite-release-missing',
+    },
+    {
+      name: 'prerequisite release version drift',
+      mutate(candidate) {
+        candidate.prerequisiteRelease.schemaVersion = 'forgeax-prerequisite-release/v2';
+      },
+      expectedCode: 'prerequisite-release-schema-version',
+    },
+    {
+      name: 'consumer declares an unknown payload',
+      mutate(candidate) {
+        candidate.prerequisiteRelease.consumers.typecheck.push('unknown-payload');
+      },
+      expectedCode: 'prerequisite-release-payload-unknown',
+    },
+    {
+      name: 'contract declares an unknown consumer',
+      mutate(candidate) {
+        candidate.prerequisiteRelease.consumers['unknown-consumer'] = ['engine-dist'];
+      },
+      expectedCode: 'prerequisite-release-consumer-unknown',
+    },
+    {
+      name: 'required context is removed',
+      mutate(candidate) {
+        candidate.requiredContexts = candidate.requiredContexts.filter((entry) => entry.context !== 'smoke-play');
+      },
+      expectedCode: 'required-context-missing',
+    },
+  ];
+
+  for (const mutation of cases) {
+    const candidate = structuredClone(contract);
+    mutation.mutate(candidate);
+    const result = validateContract(candidate);
+    assert.equal(result.ok, false, mutation.name);
+    assert.equal(result.errors[0].code, mutation.expectedCode, mutation.name);
+    assert.notEqual(result.errors[0].expected, undefined, mutation.name);
+    assert.notEqual(result.errors[0].observed, undefined, mutation.name);
+    assert.equal(typeof result.errors[0].hint, 'string', mutation.name);
+  }
 });

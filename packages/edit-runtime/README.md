@@ -172,3 +172,32 @@ messages.
 | VFX readiness 显示不可用 | host 没有绑定当前 World，或 renderer assets 尚未就绪 | 检查 `createApp(features)`、Edit `attachWorld` 和 Play `attachWorld` 的诊断结果；不要在 UI 侧创建第二个 host |
 | Stop 后出现 stale/cross-world handle | 代码保存了旧的 Play handle | 重新查询 `gateway.activeWorld` / selection；不要尝试把数字 handle 转换成另一个 World 的实体 |
 | 剪贴板操作报错 `undefined` | `copySelected` 依赖 DOM `navigator.clipboard` | 确保在安全上下文（HTTPS 或 localhost）中运行 |
+
+## Infinite grid carrier evidence
+
+The infinite grid is an Edit-only RenderFeature projection. `gridVisible` is read from
+the core Viewport Preferences projection and discovered through the live
+`setViewportPreferences` descriptor in `gateway.listOps()`. The runtime does not add a
+grid action, a second capability catalog, a scene entity, or a preview-world copy.
+
+Game display, Clean Preview, Play, and asset preview are derived non-Edit phases. They
+hide the feature without changing the authored or session preference. Play attaches the
+same runtime host to a fresh Play World; Stop detaches it before destroying that world
+and returns to Edit. A disconnected, stale, or recovering carrier reports the existing
+structured diagnostic envelope and recovery actions; callers rediscover operations,
+read diagnostics, wait for the ready generation, and retry through Gateway.
+
+The two visible hard gates have separate evidence paths:
+
+| Carrier | Authoritative locator | Evidence boundary |
+|:--|:--|:--|
+| Standalone `:15290` | `iframe[title="ForgeaX Viewport Runtime"]` with an `/editor/` URL | Visible shell actions and this frame's canvas, Gateway, diagnostics, and artifacts |
+| Studio `:18920` | The existing Editor Runtime `/editor/` frame inside the Studio shell | Studio-visible actions and Studio-owned canvas, diagnostics, and artifacts; never standalone evidence |
+
+Evidence is DOM-first for controls and records the candidate Editor SHA, Engine pin,
+operation schema, structured diagnostics, action locators, expectation IDs, and separate
+PNG/log/metrics paths. PNG capture is allowed only after the authoritative carrier and
+real UI action path are established. Port readiness, API-only dispatch, raw preview, and
+shell mirrors do not prove the grid. The M0 Engine seam remains conditional: only a
+reproducible public seam failure can route to an Engine-owned generic fix; Editor-side
+raw-device or backend-specific workarounds are not valid recovery.

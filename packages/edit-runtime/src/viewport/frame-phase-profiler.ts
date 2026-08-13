@@ -32,6 +32,8 @@ type OpenPhase = {
 export interface FramePhaseProfilerOptions {
 	/** Production observer invoked from the same profiler phase owner. */
 	readonly onPhaseEnd?: (phase: OpenPhase) => void;
+	/** Keep the Engine profiler available for the explicit CPU capture operation. */
+	readonly enableCpuCapture?: boolean;
 }
 
 export interface CpuProfileCaptureOptions {
@@ -193,18 +195,18 @@ function decorateSession(
 /**
  * Creates the browser-side profiler used by the performance evidence tool.
  *
- * Normal editor and game sessions still receive an observer session so the
- * existing VFX phase callback and optional User Timing marks remain live. That
- * observer records nothing. A requested CPU capture is delegated to the
- * Engine-owned profiler, whose session is decorated only with those same
- * Editor-side observations.
+ * Normal editor and game sessions return `undefined` when neither User Timing
+ * nor an explicit phase callback is enabled, so the frame loop has no profiler
+ * adapter to invoke. Opted-in diagnostics receive a non-recording observer;
+ * bounded captures are delegated to the Engine-owned profiler and decorated
+ * only with those same Editor-side observations.
  */
 export function createFramePhaseProfiler(
 	options: FramePhaseProfilerOptions = {},
 ): Profiler | undefined {
 	const diagnosticGlobal = globalThis as DiagnosticGlobal;
 	const timingEnabled = diagnosticGlobal[DIAGNOSTICS_KEY]?.enabled === true;
-	if (!timingEnabled && options.onPhaseEnd === undefined) return undefined;
+	if (!timingEnabled && options.onPhaseEnd === undefined && options.enableCpuCapture !== true) return undefined;
 
 	const performanceApi = timingEnabled ? globalThis.performance : undefined;
 	if (

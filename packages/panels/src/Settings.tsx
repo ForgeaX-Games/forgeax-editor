@@ -166,6 +166,12 @@ export function SettingsPanel(): ReactNode {
           checked={prefs.wheelDirection === -1}
           onChange={(inverted) => patch({ wheelDirection: inverted ? -1 : 1 })}
         />
+        <ToggleRow
+          testId="set-grid"
+          label="Show grid"
+          checked={prefs.gridVisible}
+          onChange={(gridVisible) => patch({ gridVisible })}
+        />
       </div>
 
       <div className="fx-set-section" style={sectionStyle}>
@@ -256,6 +262,7 @@ export function SettingsPanel(): ReactNode {
           type="button"
           data-testid="set-reset-defaults"
           onClick={() => patch({
+            gridVisible: defaults.gridVisible,
             mouseSensitivity: defaults.mouseSensitivity,
             invertY: defaults.invertY,
             wheelDirection: defaults.wheelDirection,

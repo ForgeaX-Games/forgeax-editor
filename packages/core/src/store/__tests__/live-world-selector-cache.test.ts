@@ -41,4 +41,30 @@ describe('live world selector graph cache', () => {
     }
     expect(graph.stats()).toMatchObject({ cacheEntries: 0, listeners: 0, snapshotBytes: 0 });
   });
+
+  it('skips normalization for an explicitly stable immutable read model', () => {
+    const graph = new LiveWorldSelectorGraph();
+    graph.bindWorld({ id: 'world' });
+    let value: Readonly<{ x: number }> = Object.freeze({ x: 1 });
+    let normalizeCalls = 0;
+    const mounted = graph.mount({
+      key: 'stable-model',
+      schema: { kind: 'pod', fields: { x: { kind: 'primitive' } } },
+      read: () => value,
+      valueEqual: Object.is,
+      normalize: (next) => {
+        normalizeCalls += 1;
+        return { snapshot: next, bytes: 8 };
+      },
+    });
+
+    graph.publish();
+    graph.publish();
+    expect(normalizeCalls).toBe(1);
+
+    value = Object.freeze({ x: 2 });
+    graph.publish();
+    expect(normalizeCalls).toBe(2);
+    expect(mounted.getSnapshot()).toEqual({ x: 2 });
+  });
 });

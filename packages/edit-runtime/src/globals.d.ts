@@ -17,3 +17,8 @@ declare const __FORGEAX_GAME_SLUG__: string | null;
 // Standalone --game hosts inject one fixed scoped binding. Embedded Studio
 // supplies its binding through ViewportComponent props instead.
 declare const __FORGEAX_RUNTIME_BINDING__: import('@forgeax/engine-types').RuntimeAssetBinding | null;
+
+declare module '*.wgsl' {
+  const artifact: { readonly hash: string; readonly wgsl: string };
+  export default artifact;
+}

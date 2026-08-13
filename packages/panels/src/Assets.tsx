@@ -30,19 +30,36 @@ const ContentBrowser = lazy(() =>
   })
 );
 
-class CBErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+class CBErrorBoundary extends Component<
+  { children: ReactNode; onRetry: () => void },
+  { error: string | null }
+> {
   state: { error: string | null } = { error: null };
   static getDerivedStateFromError(e: Error) { return { error: e.message + '\n' + e.stack }; }
   componentDidCatch(e: Error, info: ErrorInfo) { console.error('[ContentBrowser]', e, info); }
   render() {
-    if (this.state.error) return <div style={{ padding: 12, color: '#f88', whiteSpace: 'pre-wrap', fontSize: 11 }}>Content Browser error:\n{this.state.error}</div>;
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 12, color: '#f88', whiteSpace: 'pre-wrap', fontSize: 11 }}>
+          <div>Content Browser error:</div>
+          <div>{this.state.error}</div>
+          <button
+            type="button"
+            onClick={this.props.onRetry}
+            style={{ marginTop: 8, color: 'inherit' }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
     return this.props.children;
   }
 }
 
 export function AssetsPanel() {
   return (
-    <CBErrorBoundary>
+    <CBErrorBoundary onRetry={() => window.location.reload()}>
       <Suspense fallback={<div style={{ padding: 16, opacity: 0.5 }}>Loading Content Browser...</div>}>
         <ContentBrowser operationRuns={operationRuns} />
       </Suspense>
