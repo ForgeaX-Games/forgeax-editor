@@ -91,6 +91,8 @@ function makeFakeGateway(): {
     engineFacade(): never { return {} as never; },
     enterPlay(_w: unknown): void {},
     exitPlay(): void {},
+    beginPlayAttempt(): void {},
+    failPlayAttempt(): void {},
     createGameProjectionRegistry() {
       return { registrar: {} as never, clear(): void {} };
     },

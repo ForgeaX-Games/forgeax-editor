@@ -1,6 +1,7 @@
-import { memo, useCallback, type MouseEvent } from 'react';
+import { memo, useCallback, type CSSProperties, type MouseEvent } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { ContentBrowserIcon } from './content-browser-icons';
+import { ContentBrowserIcon, FILE_FAMILY_COLORS } from './content-browser-icons';
+import { CBInlineRename } from './CBInlineRename';
 import type { CBFolder } from './types';
 
 interface Props {
@@ -16,6 +17,10 @@ interface Props {
   onToggleFavorite: (item: CBFolder) => void;
   onClickIndex: (index: number, e: MouseEvent) => void;
   onFocusItem: (item: CBFolder) => void;
+  renaming?: boolean;
+  renameValidate?: (value: string) => string | null;
+  onRenameCommit?: (item: CBFolder, value: string) => void;
+  onRenameCancel?: () => void;
 }
 
 function CBFolderItemImpl({
@@ -30,11 +35,19 @@ function CBFolderItemImpl({
   onToggleFavorite,
   onClickIndex,
   onFocusItem,
+  renaming = false,
+  renameValidate,
+  onRenameCommit,
+  onRenameCancel,
 }: Props) {
   const { t } = useTranslation();
   const fav = favorite ?? folder.isFavorite;
 
   const handleClick = useCallback((e: MouseEvent) => {
+    // Focus the card so the grid's focused-item ref updates — this is what lets
+    // F2 (and other focused-item commands) act on THIS folder, mirroring the
+    // asset/file cards.
+    (e.currentTarget as HTMLDivElement).focus();
     onSelect(folder);
     onClickIndex(index, e);
   }, [onSelect, onClickIndex, folder, index]);
@@ -42,6 +55,7 @@ function CBFolderItemImpl({
   return (
     <div
       className={`cb-grid-item cb-fe-card cb-grid-folder${selected ? ' sel' : ''}`}
+      style={{ '--cb-type-color': FILE_FAMILY_COLORS.dir } as CSSProperties}
       data-testid="cb-folder-item"
       data-folder-path={folder.path}
       tabIndex={tabIndex}
@@ -59,10 +73,22 @@ function CBFolderItemImpl({
       <div className="cb-grid-thumb cb-fe-thumb cb-folder-thumb">
         <span className="cb-grid-icon cb-folder-icon"><ContentBrowserIcon name="folder" /></span>
       </div>
-      <div className="cb-grid-label cb-fe-name" title={folder.name}>{folder.name}</div>
-      {/* Folders have no type; keep the type row's height so the name stays
-        * vertically aligned with file/asset cards (no collapse). */}
-      <div className="cb-card-meta cb-card-kind" aria-hidden="true">&nbsp;</div>
+      {/* Folders have no type, so the name is free to use the full fixed-height
+        * label block (4 lines) instead of the 3 lines file/asset cards leave
+        * for their type row. The block height is identical either way. */}
+      {renaming ? (
+        <CBInlineRename
+          initial={folder.name}
+          validate={renameValidate}
+          onCommit={(value) => onRenameCommit?.(folder, value)}
+          onCancel={() => onRenameCancel?.()}
+          ariaLabel={t('editor.contentBrowser.contextMenu.rename')}
+        />
+      ) : (
+        <div className="cb-fe-label">
+          <div className="cb-grid-label cb-fe-name" title={folder.name}>{folder.name}</div>
+        </div>
+      )}
     </div>
   );
 }

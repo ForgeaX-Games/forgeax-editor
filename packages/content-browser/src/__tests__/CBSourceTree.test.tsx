@@ -65,7 +65,10 @@ function Harness({ children }: { children?: ReactNode }) {
         onFocusItem={() => {}}
         nav={{ currentPath: '', navigate: (path) => { navigated.push(path); } }}
         openFolderContextMenu={() => {}}
-        openFileContextMenu={() => {}}
+        renamingKey={null}
+        renameValidate={() => null}
+        onRenameCommit={() => {}}
+        onRenameCancel={() => {}}
       />
     </HostProvider>
   );
@@ -93,18 +96,21 @@ describe('Content Browser source tree interaction', () => {
     expect(heads.length).toBe(2);
   });
 
-  it('expands project folders by default, collapses on double-click, and keeps leaf folders non-expandable', () => {
+  it('lists directories only (files never appear), expands by default, collapses on double-click, and keeps leaf folders non-expandable', () => {
     const assets = container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets"]');
     expect(assets).not.toBeNull();
-    // Nested children are visible without any interaction (default-expanded).
+    // Sub-folders are visible without any interaction (default-expanded).
     expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets/hello"]')).not.toBeNull();
-    expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets/readme.md"]')).not.toBeNull();
-    // Leaf folders carry no disclosure chevron.
-    expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets/hello"] .cb-source-chev')?.className).toContain('hidden');
-
-    // A double-click collapses the folder, hiding its children.
-    act(() => assets!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    // Files live in the right-hand grid — the tree never renders them.
     expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets/readme.md"]')).toBeNull();
+    // A folder holding only files (no sub-folders) is a non-expandable leaf; a
+    // folder with sub-folders is expandable.
+    expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets/hello"] .cb-source-chev')?.className).toContain('hidden');
+    expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets"] .cb-source-chev')?.className).not.toContain('hidden');
+
+    // A double-click collapses the folder, hiding its sub-folders.
+    act(() => assets!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    expect(container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets/hello"]')).toBeNull();
   });
 
   it('flat-lists favorited directories under the Favorites group and navigates on click', () => {

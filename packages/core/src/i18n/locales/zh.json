@@ -59,6 +59,10 @@
     "hierarchy": {
       "outliner": "场景物",
       "sceneRoot": "场景",
+      "editorWorldRoot": "编辑器世界",
+      "showEditorWorld": "显示编辑器世界",
+      "hideEditorWorld": "隐藏编辑器世界",
+      "editorCameraChrome": "编辑器相机（不随场景保存）",
       "switchingGame": "正在切换游戏…",
       "noMatch": "无匹配",
       "childCount": "{{count}} 个子节点",
@@ -206,6 +210,8 @@
       "copyJson": "复制 JSON",
       "trackChannels": "channels: {{count}}（keys/tracks 在 Timeline 编辑）",
       "noSelection": "未选中 — 在大纲或视口中选择一个对象。",
+      "editorCameraTitle": "编辑器相机",
+      "editorCameraHint": "只读视口 chrome。此相机位于编辑器世界，不会写入场景包。",
       "searchPlaceholder": "搜索属性...",
       "noMatch": "没有匹配 \"{{query}}\" 的属性",
       "components": "组件",
@@ -303,7 +309,10 @@
         "all": "全部",
         "editPath": "点击输入路径",
         "editPathPlaceholder": "输入文件夹路径并回车",
-        "openSubfolders": "{{name}} 的子文件夹"
+        "openSubfolders": "{{name}} 的子文件夹",
+        "settings": "视图设置",
+        "thumbnailSizeLabel": "缩略图大小",
+        "detailPanel": "详情面板"
       },
       "sourceTree": {
         "favorites": "收藏夹",
@@ -426,6 +435,7 @@
         "assetMeta": "{{kind}} · {{path}}",
         "emptyFolder": "空文件夹",
         "noTextPreview": "此文件类型暂无文本预览",
+        "nothingSelected": "选择一个项目查看详情",
         "items": "{{count}} 项",
         "assetCount": "→ {{count}} 资产",
         "uiPreview": "UI 预览",

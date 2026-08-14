@@ -16,7 +16,7 @@
 //     instantiateScene + bootstrap (level-load, single path).
 //   - AC-05: play->stop->play is idempotent; after stop the lifecycle holds NO
 //     reference to the discarded play world (GC-reachability proxy = currentPlayWorld()
-//     returns null); the shared renderer is NOT disposed on stop (dispose-shield).
+//     returns null); the host-owned shared renderer is NOT disposed on stop.
 //   - AC-06/07: editorApp.pause() on play (editWorld zero tick) + resume() on stop.
 //   - AC-05 dead-concept sweep: `epoch` and the 4-layer undo vocabulary are gone
 //     from run-lifecycle.ts source (grep zero hits).
@@ -89,7 +89,7 @@ function installFakeRaf() {
 function makeFakeRenderer() {
   const drawWorlds: unknown[] = [];
   const instantiateCalls: Array<{ handle: unknown; world: unknown }> = [];
-  const destroyedWorlds: unknown[] = [];
+  const detachedWorlds: unknown[] = [];
   let disposeCalls = 0;
   let onErrorUnsubscribeCalls = 0;
   const renderer = {
@@ -100,10 +100,11 @@ function makeFakeRenderer() {
         return { ok: true as const, value: 1 };
       },
     },
-    store: {
-      destroyWorld(world: unknown) {
-        destroyedWorlds.push(world);
-      },
+    attachWorld() {
+      return { ok: true } as const;
+    },
+    detachWorld(world: unknown) {
+      detachedWorlds.push(world);
     },
     // Engine #643 migrated the frame loop to composited multi-world rendering:
     // renderer.draw(worlds, { owner }) takes an ARRAY of worlds. Record each
@@ -124,7 +125,7 @@ function makeFakeRenderer() {
     renderer,
     drawWorlds,
     instantiateCalls,
-    destroyedWorlds,
+    detachedWorlds,
     get disposeCalls() {
       return disposeCalls;
     },
@@ -308,7 +309,7 @@ describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () =>
     }
   });
 
-  it('(AC-05) stop does NOT dispose the shared renderer (dispose-shield)', async () => {
+  it('(AC-05) stop does NOT dispose the host-owned shared renderer', async () => {
     const fakeRaf = installFakeRaf();
     try {
       const t = buildRealAssembleLifecycle();
@@ -341,10 +342,12 @@ describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () =>
       const t = buildRealAssembleLifecycle();
       await t.lifecycle.playSimulation();
       const w1 = t.lifecycle.currentPlayWorld();
+      fakeRaf.step();
       t.lifecycle.stopSimulation();
 
       await t.lifecycle.playSimulation();
       const w2 = t.lifecycle.currentPlayWorld();
+      fakeRaf.step();
       t.lifecycle.stopSimulation();
 
       expect(w1).not.toBeNull();
@@ -356,7 +359,7 @@ describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () =>
       expect(t.gateway.events.filter((e) => e.kind === 'exitPlay').length).toBe(2);
       // renderer survived both cycles.
       expect(t.fr.disposeCalls).toBe(0);
-      expect(t.fr.destroyedWorlds).toEqual([w1, w2]);
+      expect(t.fr.detachedWorlds).toEqual([w1, w2]);
     } finally {
       fakeRaf.restore();
     }
@@ -1120,7 +1123,6 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
                 stop: () => ({ ok: true }),
               },
               playWorld: {},
-              disposeWorld: () => {},
               detach: () => {},
             } as never,
           };
@@ -1161,7 +1163,6 @@ describe('▶ Play attempt observability (round-8 #3)', () => {
               stop: () => ({ ok: true }),
             },
             playWorld: {},
-            disposeWorld: () => {},
             detach: () => { detached++; },
           } as never,
         }),

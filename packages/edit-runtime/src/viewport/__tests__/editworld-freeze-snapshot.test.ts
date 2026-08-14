@@ -62,6 +62,9 @@ function installFakeRaf() {
 
 function makeFakeRenderer() {
   let disposeCalls = 0;
+  const attachedWorlds = new Set<World>();
+  const attachCalls: World[] = [];
+  const detachCalls: World[] = [];
   const renderer = {
     ready: Promise.resolve({ ok: true }),
     // assets is the AssetRegistry seam play-assemble routes defaultScene
@@ -75,6 +78,15 @@ function makeFakeRenderer() {
     draw() {
       return { ok: true } as const;
     },
+    attachWorld(world: World) {
+      attachCalls.push(world);
+      attachedWorlds.add(world);
+      return { ok: true as const, value: undefined };
+    },
+    detachWorld(world: World) {
+      detachCalls.push(world);
+      attachedWorlds.delete(world);
+    },
     dispose() {
       disposeCalls += 1;
     },
@@ -84,6 +96,9 @@ function makeFakeRenderer() {
   };
   return {
     renderer,
+    attachedWorlds,
+    attachCalls,
+    detachCalls,
     get disposeCalls() {
       return disposeCalls;
     },
@@ -141,15 +156,16 @@ describe('w9 — editWorld freeze + snapshot (AC-06/AC-07)', () => {
 
     editorApp.start();
 
-    const playRenderer = makeFakeRenderer();
     const gatewayEvents: string[] = [];
     const gateway = {
+      beginPlayAttempt: () => gatewayEvents.push('beginPlayAttempt'),
+      failPlayAttempt: () => gatewayEvents.push('failPlayAttempt'),
       enterPlay: (_w: unknown) => gatewayEvents.push('enterPlay'),
       exitPlay: () => gatewayEvents.push('exitPlay'),
     };
     const assemble = async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> =>
       assemblePlayWorld({
-        renderer: playRenderer.renderer as never,
+        renderer: editRenderer.renderer as never,
         loadDefaultScene: async () => makeSceneAsset(),
         resolveBootstrap: async () => (() => {}) as never,
         attachInput: () => undefined,
@@ -167,6 +183,7 @@ describe('w9 — editWorld freeze + snapshot (AC-06/AC-07)', () => {
       editWorld,
       editorApp,
       lifecycle,
+      rendererState: editRenderer,
       get editTicks() {
         return editTicks;
       },
@@ -197,6 +214,32 @@ describe('w9 — editWorld freeze + snapshot (AC-06/AC-07)', () => {
       rig.fakeRaf.step();
       rig.fakeRaf.step();
       expect(rig.editTicks).toBeGreaterThan(atPlayStart);
+    } finally {
+      rig.fakeRaf.restore();
+    }
+  });
+
+  it('shares one Renderer and gives each App sole ownership of its World attachment', async () => {
+    const rig = await buildRig();
+    try {
+      rig.fakeRaf.step();
+      expect(rig.rendererState.attachedWorlds).toEqual(new Set([rig.editWorld]));
+
+      await rig.lifecycle.playSimulation();
+      const playWorld = rig.lifecycle.currentPlayWorld() as World;
+      rig.fakeRaf.step();
+      expect(rig.rendererState.attachedWorlds).toEqual(new Set([rig.editWorld, playWorld]));
+      expect(rig.rendererState.attachCalls).toEqual([rig.editWorld, playWorld]);
+
+      const playPauseHandle = rig.lifecycle.getPlayPauseHandle();
+      expect(playPauseHandle).not.toBeNull();
+      playPauseHandle!.pause();
+      rig.lifecycle.stopSimulation();
+
+      expect(rig.rendererState.detachCalls).toEqual([playWorld]);
+      expect(rig.rendererState.attachedWorlds).toEqual(new Set([rig.editWorld]));
+      rig.fakeRaf.step();
+      expect(rig.editTicks).toBeGreaterThan(1);
     } finally {
       rig.fakeRaf.restore();
     }

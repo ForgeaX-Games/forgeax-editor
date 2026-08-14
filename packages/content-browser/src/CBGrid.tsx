@@ -23,6 +23,14 @@ interface Props {
   /** Toggle the item's favorite state (drives both the card ⭐ and the
    *  header "favorites only" filter's contents). */
   onToggleFavorite?: (item: CBViewItem) => void;
+  /** viewItemKey of the item currently being inline-renamed, or null. */
+  renamingKey?: string | null;
+  /** Basename validator forwarded to the inline editor. */
+  renameValidate?: (value: string) => string | null;
+  /** Commit an inline rename (shared pipeline in ContentBrowser). */
+  onRenameCommit?: (item: CBViewItem, value: string) => void;
+  /** Abandon the in-flight inline rename. */
+  onRenameCancel?: () => void;
 }
 
 // No-op fallbacks so the memo'd leaves always receive a STABLE function
@@ -30,8 +38,10 @@ interface Props {
 const NOOP_ITEM = (_item: CBViewItem) => {};
 const NOOP_CTX = (_e: React.MouseEvent, _item: CBViewItem) => {};
 const NOOP_PATH = (_path: string) => {};
+const NOOP_RENAME = (_item: CBViewItem, _value: string) => {};
+const NOOP_VOID = () => {};
 
-export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, onFocusItem, isItemFavorite, onToggleFavorite }: Props) {
+export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPacks, onTogglePackExpansion, onSelect, onDoubleClick, onContextMenu, onFocusItem, isItemFavorite, onToggleFavorite, renamingKey, renameValidate, onRenameCommit, onRenameCancel }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   useKeybindingScope(rootRef, 'editor.contentBrowser.grid');
   // Pull the two stable members off the multiSelect API. `isSelected` is read
@@ -57,6 +67,8 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
   const favoriteCb = onToggleFavorite ?? NOOP_ITEM;
   const focusCb = onFocusItem ?? NOOP_ITEM;
   const expandCb = onTogglePackExpansion ?? NOOP_PATH;
+  const renameCommitCb = onRenameCommit ?? NOOP_RENAME;
+  const renameCancelCb = onRenameCancel ?? NOOP_VOID;
   const selectedTabStop = multiSelect.selection.items[0];
   const tabStopKey = selectedTabStop
     ? (selectedTabStop.type === 'asset' ? selectedTabStop.guid : selectedTabStop.path)
@@ -74,6 +86,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
         const itemKey = item.type === 'asset' ? item.guid : item.path;
         const tabIndex = itemKey === tabStopKey ? 0 : -1;
         const favorite = isItemFavorite?.(item) ?? false;
+        const renaming = renamingKey != null && renamingKey === itemKey;
         if (item.type === 'folder') {
           return (
             <CBFolderItem
@@ -90,6 +103,10 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
               onToggleFavorite={favoriteCb}
               onClickIndex={handleClick}
               onFocusItem={focusCb}
+              renaming={renaming}
+              renameValidate={renameValidate}
+              onRenameCommit={renameCommitCb}
+              onRenameCancel={renameCancelCb}
             />
           );
         }
@@ -112,6 +129,10 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
               onToggleExpand={expandCb}
               onClickIndex={handleClick}
               onFocusItem={focusCb}
+              renaming={renaming}
+              renameValidate={renameValidate}
+              onRenameCommit={renameCommitCb}
+              onRenameCancel={renameCancelCb}
             />
           );
         }
@@ -130,6 +151,10 @@ export function CBGrid({ items, thumbnailSize, multiSelect, viewMode, expandedPa
             onToggleFavorite={favoriteCb}
             onClickIndex={handleClick}
             onFocusItem={focusCb}
+            renaming={renaming}
+            renameValidate={renameValidate}
+            onRenameCommit={renameCommitCb}
+            onRenameCancel={renameCancelCb}
           />
         );
       })}

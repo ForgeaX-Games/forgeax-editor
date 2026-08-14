@@ -88,18 +88,31 @@ describe('tree selection sync — CBSourceTree click wiring contract', () => {
     expect(fnBody).toContain('assets: []');
   });
 
-  it('tree clicks dispatch for BOTH branches (file + folder)', () => {
-    expect(tsx).toContain("selectTreePath(file.path, 'file')");
+  it('is a directories-only tree: clicks dispatch the folder branch and files are never rendered', () => {
     expect(tsx).toContain("selectTreePath(folder.path, 'dir')");
+    // Files live in the right-hand grid — the tree neither renders them nor
+    // dispatches a file selection.
+    expect(tsx).not.toContain("selectTreePath(file.path, 'file')");
+    expect(tsx).toContain("nodes.filter(node => node.type === 'folder')");
   });
 
-  it('keeps the exact subject selection separate from its ancestor path chain', () => {
+  it('paints the browsed folder (is-sel) + its ancestor chain (is-path)', () => {
     expect(tsx).toContain('selectedPath: string | null');
     expect(tsx).toContain('isPathInSelectionChain(selectedPath, node.path)');
     expect(tsx).toContain("' is-path'");
     expect(tsx).toContain("' is-sel'");
-    expect(contentBrowser).toContain('selectedPath={selectedSourcePath}');
     expect(css).toContain('.cb-source-row.is-path:not(.is-sel)');
+  });
+
+  it('drives the tree by the BROWSED folder (nav.currentPath), not the right-panel subject', () => {
+    // UE-parity: selecting an asset/file card in the Asset View must NEVER
+    // auto-locate/expand the tree. The tree is a "you are here" that only moves
+    // on navigation (tree click, folder double-click, breadcrumb, explicit
+    // reveal — all of which write nav.currentPath). Coupling it to
+    // `selectedSourcePath` (derived from every card click) was the regression.
+    expect(contentBrowser).toContain('const treeCurrentPath = nav.currentPath || null;');
+    expect(contentBrowser).toContain('selectedPath={treeCurrentPath}');
+    expect(contentBrowser).not.toContain('selectedPath={selectedSourcePath}');
   });
 
   it('single-click selects without changing disclosure, while double-click owns folder toggle', () => {
@@ -120,8 +133,8 @@ describe('tree selection sync — CBSourceTree click wiring contract', () => {
     expect(tsx).toContain('style={{ paddingLeft: `${16 + depth * 14}px` }}');
   });
 
-  it('does not expose disclosure UI or toggling for leaf folders', () => {
-    expect(tsx).toContain("const expandable = node.type === 'folder' && node.children.length > 0;");
+  it('does not expose disclosure UI or toggling for leaf folders (folders with only files are leaves)', () => {
+    expect(tsx).toContain("const expandable = node.children.some(child => child.type === 'folder');");
     expect(tsx).toContain('if (!expandable) return;');
     expect(tsx).toContain("${expandable ? '' : ' hidden'}");
     expect(tsx).toContain("expandable && open ? 'folder-open' : 'folder'");
@@ -141,8 +154,8 @@ describe('tree selection sync — CBSourceTree click wiring contract', () => {
     expect(tsx).not.toContain('assetCount');
   });
 
-  it('keeps folder cards borderless until hover', () => {
-    expect(css).toContain('.cb-grid-folder { border-color: transparent; }');
+  it('keeps folder cards borderless and tile-less until hover', () => {
+    expect(css).toContain('.cb-grid-folder { background: transparent; border-color: transparent; }');
     expect(css).toContain('.cb-grid-folder:hover { border-color: var(--color-border-subtle');
   });
 

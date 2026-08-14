@@ -31,7 +31,7 @@
 // (single world), AC-04 (engine boots once in host), AC-12 (active-camera cut).
 
 import { useEffect, useRef } from 'react';
-import { Transform } from '@forgeax/engine-scene';
+import { Name, Transform } from '@forgeax/engine-scene';
 import {
   Camera,
   CAMERA_PROJECTION_PERSPECTIVE,
@@ -58,6 +58,8 @@ import {
   getSelection,
   entComponent,
   entComponents,
+  entName,
+  registerEditorWorldProjectionProvider,
   notifyDocChanged,
   switchSceneFile,
   createEvalChannel,
@@ -135,6 +137,7 @@ import {
   setViewportQuadrant,
   onViewportQuadrantChange,
   setEditorCameraEntity,
+  getEditorCameraEntity,
   setGameCameraEntity,
   deriveActiveCameraEntity,
 } from './viewport-quadrant';
@@ -882,10 +885,34 @@ async function bootViewport(
   // the only write path onto editorWorld is this facade (plan-strategy §2 D-2/D-5).
   const aspect = canvas.width / canvas.height || 1;
   cameraEntity = worldManager.editorFacade.spawn(
+    { component: Name, data: { value: 'Editor Camera' } },
     { component: Transform, data: { pos: [0, 1.5, 9] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] } },
   ).unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);
+  // Hierarchy/Inspector chrome: Camera-only projection of editorWorld. Panels
+  // read this seam instead of minting a scene HandlePair for the orbit camera
+  // (pack-play litmus — editor camera must not enter the scene pack).
+  registerTeardown(registerEditorWorldProjectionProvider(() => {
+    const world = worldManager.editorWorld;
+    const cameraId = getEditorCameraEntity();
+    if (cameraId === undefined) return { cameraId: null, rows: [] };
+    const handle = cameraId as EntityHandle;
+    const cam = entComponent(world, handle, 'Camera');
+    if (!cam.ok) return { cameraId: handle, rows: [] };
+    const tr = entComponent(world, handle, 'Transform');
+    const name = entName(world, handle);
+    return {
+      cameraId: handle,
+      rows: [{
+        id: handle,
+        name: name.startsWith('#') ? 'Editor Camera' : name,
+        typeId: 'Camera',
+        camera: cam.value,
+        transform: tr.ok ? tr.value : null,
+      }],
+    };
+  }));
 
   // viewport interaction: orbit/pan/zoom, click-to-select, drag-to-move (was :591).
   // M4 (w19/w20): the viewport receives TWO facades — `editorEngine`

@@ -27,7 +27,7 @@ import { entExists, entName, entParent, entComponents, entComponentsPresent, wor
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getSelection, getSelectionList, onSelectionChange, onRenameRequest, readEntityVisibility, readVisibilityIntent, requestRefEntity, resolveVisibility, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, subscribeViewportRuntimeClient } from '@forgeax/editor-core';
+import { dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getEditorWorldProjection, getSelection, getSelectionList, onSelectionChange, onRenameRequest, readEntityVisibility, readVisibilityIntent, requestRefEntity, resolveVisibility, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, subscribeViewportRuntimeClient } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EntityHandle, VisibilitySnapshot } from '@forgeax/editor-core';
 import {
@@ -39,6 +39,7 @@ import {
   componentTypeLabel,
   HIERARCHY_GROUP_TYPE_ID,
   HIERARCHY_SCENE_FOLDER_ID,
+  HIERARCHY_EDITOR_FOLDER_ID,
   expandHierarchyAll,
   expandHierarchySceneFolder,
   getHierarchyPanelSnapshot,
@@ -51,6 +52,8 @@ import {
   resolveHierarchyRuntimeAccess,
   subscribeHierarchyPanelState,
   toggleHierarchyCollapsed,
+  setHierarchyEditorInspection,
+  clearHierarchyEditorInspection,
   type HierarchyColumns,
   type HierarchyRuntimeProjection,
 } from './hierarchy-state';
@@ -141,7 +144,19 @@ interface RemoteHierarchyContextValue {
 const RemoteHierarchyContext = createContext<RemoteHierarchyContextValue | null>(null);
 
 function dispatchHierarchyOperation(operation: HierarchyOperation): void {
+  if (
+    operation.kind === 'setSelection'
+    || operation.kind === 'setSelectionMany'
+    || operation.kind === 'toggleSelection'
+  ) {
+    clearHierarchyEditorInspection();
+  }
   void dispatchActiveEditorOperation(operation);
+}
+
+function inspectEditorEntity(id: EntityHandle): void {
+  setHierarchyEditorInspection(id);
+  void dispatchActiveEditorOperation({ kind: 'setSelection', id: null });
 }
 
 // A referentially STABLE callback that always invokes the latest closure — the
@@ -991,6 +1006,102 @@ const SceneFolderRow = memo(function SceneFolderRow({
   );
 });
 
+const EditorEntityRow = memo(function EditorEntityRow({
+  id,
+  name,
+  typeId,
+  columns,
+}: {
+  id: EntityHandle;
+  name: string;
+  typeId: string;
+  columns: HierarchyColumns;
+}) {
+  const { t } = useTranslation();
+  const view = useSyncExternalStore(
+    subscribeHierarchyPanelState,
+    getHierarchyPanelSnapshot,
+    getHierarchyPanelSnapshot,
+  );
+  const isSelected = view.editorInspectionId === id;
+  const typeLabel = componentTypeLabel(typeId, t);
+  const TypeIcon = hierarchyTypeIcon(typeId);
+  return (
+    <div
+      className={`tn k-camera${isSelected ? ' sel' : ''}`}
+      data-testid={`hier-row-editor-${id}`}
+      tabIndex={isSelected ? 0 : -1}
+      title={`${name} · ${t('editor.hierarchy.editorCameraChrome')}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.currentTarget.focus();
+        inspectEditorEntity(id);
+      }}
+    >
+      <span className="eye" aria-hidden="true" />
+      <span className="name-cell" style={{ paddingLeft: 15 }}>
+        <span className="caret" />
+        <span className="ico" aria-hidden="true">
+          <TypeIcon size={15} />
+        </span>
+        <span className="nm">{name}</span>
+      </span>
+      {columns.type && <span className="cell type col-type"><span className="kind">{typeLabel}</span></span>}
+      {columns.mobility && <span className="cell mob col-mob" />}
+      {columns.id && <span className="cell id col-id">{String(id)}</span>}
+    </div>
+  );
+});
+
+const EditorFolderRow = memo(function EditorFolderRow({
+  rows,
+  columns,
+}: {
+  rows: readonly { id: EntityHandle; name: string; typeId: string }[];
+  columns: HierarchyColumns;
+}) {
+  const { t } = useTranslation();
+  const folderCollapsed = useIsHierarchyCollapsed(HIERARCHY_EDITOR_FOLDER_ID);
+  const folderLabel = t('editor.hierarchy.editorWorldRoot');
+  const folderTypeLabel = t('editor.hierarchy.types.folder');
+  return (
+    <>
+      <div
+        className="tn k-folder"
+        data-testid="hier-row-editor-folder"
+        title={folderLabel}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleHierarchyCollapsed(HIERARCHY_EDITOR_FOLDER_ID);
+        }}
+      >
+        <span className="eye" aria-hidden="true" />
+        <span className="name-cell">
+          <span className="caret" data-testid="hier-toggle-editor-folder">
+            {folderCollapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+          </span>
+          <span className="ico" aria-hidden="true">
+            <Video size={15} />
+          </span>
+          <span className="nm">{folderLabel}</span>
+        </span>
+        {columns.type && <span className="cell type col-type"><span className="kind">{folderTypeLabel}</span></span>}
+        {columns.mobility && <span className="cell mob col-mob" />}
+        {columns.id && <span className="cell id col-id" />}
+      </div>
+      {!folderCollapsed && rows.map((row) => (
+        <EditorEntityRow
+          key={row.id}
+          id={row.id}
+          name={row.name}
+          typeId={row.typeId}
+          columns={columns}
+        />
+      ))}
+    </>
+  );
+});
+
 const HIERARCHY_ROW_HEIGHT = 25;
 
 function VirtualizedRows({
@@ -1328,6 +1439,17 @@ export function HierarchyPanel() {
     () => filtering && worldReady ? stableDisplayOrder(getHierarchyVisibleMatches()) : [],
     [filtering, view.filters, view.searchQuery, worldReady, activeWorld],
   );
+  const editorRows = (() => {
+    if (!view.showEditorWorld) return [];
+    const rows = getEditorWorldProjection().rows;
+    if (!filtering) return rows;
+    const q = view.searchQuery.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (view.filters.size > 0 && !view.filters.has(row.typeId)) return false;
+      if (!q) return true;
+      return row.name.toLowerCase().includes(q) || row.typeId.toLowerCase().includes(q);
+    });
+  })();
   useEffect(() => {
     hierarchyCommandActions = createHierarchyCommandActions({
       readOnly,
@@ -1411,11 +1533,14 @@ export function HierarchyPanel() {
             openBlankMenu(e.clientX, e.clientY);
           }}
         >
-          {matches.length === 0 ? (
+          {editorRows.length > 0 && (
+            <EditorFolderRow rows={editorRows} columns={view.columns} />
+          )}
+          {matches.length === 0 && editorRows.length === 0 ? (
             <div className="muted" style={{ padding: '4px 10px' }} data-testid="hier-no-match">
               {t('editor.hierarchy.noMatch')}
             </div>
-          ) : (
+          ) : matches.length === 0 ? null : (
             <SceneFolderRow
               childrenIds={matches}
               visibilityIds={roots}
@@ -1474,6 +1599,9 @@ export function HierarchyPanel() {
             openBlankMenu(e.clientX, e.clientY);
           }}
         >
+          {view.showEditorWorld && (
+            <EditorFolderRow rows={editorRows} columns={view.columns} />
+          )}
           <SceneFolderRow
             childrenIds={roots}
             visibilityIds={roots}

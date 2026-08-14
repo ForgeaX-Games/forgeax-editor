@@ -54,6 +54,7 @@ import {
   subscribeHierarchyPanelState,
   toggleHierarchyColumn,
   toggleHierarchyFilter,
+  toggleHierarchyShowEditorWorld,
   type HierarchyColumns,
 } from './hierarchy-state';
 import { getHierarchyCommandActions, type HierarchyCommandActions } from './Hierarchy';
@@ -101,6 +102,7 @@ function syncHierarchyContext(host: AppHost): void {
     'panel.hierarchy.column.type': state.columns.type,
     'panel.hierarchy.column.mobility': state.columns.mobility,
     'panel.hierarchy.column.id': state.columns.id,
+    'panel.hierarchy.showEditorWorld': state.showEditorWorld,
   };
   for (const option of filterOptions) keys[filterKey(option.id)] = state.filters.has(option.id);
   setContextKeys(host, keys);
@@ -277,6 +279,11 @@ function registerHierarchyCommands(host: AppHost): Array<() => void> {
       title: 'Hierarchy: Collapse all',
       execute: () => { collapseHierarchyAll(); return commandResult(); },
     }),
+    host.commands.register({
+      id: 'hierarchy.editorWorld.toggle',
+      title: 'Hierarchy: Toggle Editor World',
+      execute: () => { toggleHierarchyShowEditorWorld(); return commandResult(); },
+    }),
   ];
 }
 
@@ -421,6 +428,7 @@ function HierarchySettingsControl(): ReactNode {
   const typeColumn = usePanelContextKey<boolean>('panel.hierarchy.column.type') ?? true;
   const mobilityColumn = usePanelContextKey<boolean>('panel.hierarchy.column.mobility') ?? true;
   const idColumn = usePanelContextKey<boolean>('panel.hierarchy.column.id') ?? false;
+  const showEditorWorld = usePanelContextKey<boolean>('panel.hierarchy.showEditorWorld') ?? false;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -469,6 +477,20 @@ function HierarchySettingsControl(): ReactNode {
         >
           <Checkbox className="hierarchy-dd-checkbox" size="menu" checked={idColumn} tabIndex={-1} aria-hidden="true" />
           {t('editor.hierarchy.columns.id')}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="hierarchy-dd-sep" />
+        <DropdownMenuItem
+          className="hierarchy-dd-item"
+          size="sm"
+          data-testid="hier-editor-world-toggle"
+          onSelect={(event) => {
+            event.preventDefault();
+            executeHierarchyCommand(host, 'hierarchy.editorWorld.toggle');
+          }}
+        >
+          <Checkbox className="hierarchy-dd-checkbox" size="menu" checked={showEditorWorld} tabIndex={-1} aria-hidden="true" />
+          <span className="hierarchy-dd-tico"><Video size={14} /></span>
+          <span>{showEditorWorld ? t('editor.hierarchy.hideEditorWorld') : t('editor.hierarchy.showEditorWorld')}</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="hierarchy-dd-sep" />
         <DropdownMenuItem className="hierarchy-dd-item hierarchy-dd-action" size="sm" onSelect={() => executeHierarchyCommand(host, 'hierarchy.expandAll')}>

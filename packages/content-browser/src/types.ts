@@ -12,6 +12,11 @@
 
 // ── Core data models ─────────────────────────────────────────────────────────
 
+/** Which widget an inline rename was triggered on. A folder can appear in BOTH
+ *  the grid and the (folders-only) source tree simultaneously, so the rename
+ *  state carries its origin surface to keep exactly one inline editor live. */
+export type RenameSurface = 'grid' | 'tree';
+
 export interface CBItem {
   type: 'asset' | 'folder' | 'file';
 }

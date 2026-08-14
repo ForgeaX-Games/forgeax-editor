@@ -12,6 +12,7 @@
 //   bun scripts/chrome-performance.mjs --benchmark --headed --surface edit
 //   bun scripts/chrome-performance.mjs --headed --nested --surface edit
 //   bun scripts/chrome-performance.mjs --headed --passes --surface edit
+//   bun scripts/chrome-performance.mjs --headed --cpu-profile --surface play-game
 //   bun scripts/chrome-performance.mjs --headed --no-diagnostics --surface edit
 //   bun scripts/chrome-performance.mjs --headed --surface edit \
 //     --edit-camera-json '{"pos":[0,180,200],"lookAt":[0,0,0]}'
@@ -24,6 +25,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium as defaultChromium } from '@playwright/test';
+import {
+  disableSurfaceProfiler,
+  selectedSurfaceFrame,
+  startSurfaceProfiler,
+} from '../skills/forgeax-editor-performance/scripts/cpu-profile-attribution.mjs';
 
 const DEFAULT_URL = process.env.FORGEAX_GATEWAY_URL ?? 'http://localhost:15290/';
 const DEFAULT_DURATION_MS = 8000;
@@ -244,6 +250,58 @@ export function normalizeTraceUrl(url) {
     return relative.replace(/^\.worktrees\/[^/]+\//, '');
   }
   return path.replace(/^\//, '');
+}
+
+/**
+ * Summarize a CDP V8 CPU profile by exclusive sampled time. This intentionally
+ * uses samples/timeDeltas rather than inclusive stack sums: one sample has one
+ * owner, so percentages remain additive and useful for deciding where to add
+ * the next narrow probe. CPU profiling is opt-in and diagnostic-only.
+ */
+export function summarizeCpuProfile(profile, limit = 40) {
+  const nodes = new Map((profile?.nodes ?? []).map((node) => [node.id, node]));
+  const samples = Array.isArray(profile?.samples) ? profile.samples : [];
+  const timeDeltas = Array.isArray(profile?.timeDeltas) ? profile.timeDeltas : [];
+  const groups = new Map();
+  let sampledUs = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const node = nodes.get(samples[index]);
+    if (node === undefined) continue;
+    const deltaUs = Number.isFinite(timeDeltas[index]) ? Math.max(0, timeDeltas[index]) : 0;
+    sampledUs += deltaUs;
+    const callFrame = node.callFrame ?? {};
+    const functionName = callFrame.functionName || '(anonymous)';
+    const url = normalizeTraceUrl(callFrame.url) ?? '';
+    const lineNumber = Number.isFinite(callFrame.lineNumber) ? callFrame.lineNumber + 1 : null;
+    const columnNumber = Number.isFinite(callFrame.columnNumber) ? callFrame.columnNumber + 1 : null;
+    const key = `${functionName}|${url}|${lineNumber ?? ''}|${columnNumber ?? ''}`;
+    const row = groups.get(key) ?? {
+      functionName,
+      url,
+      lineNumber,
+      columnNumber,
+      sampleCount: 0,
+      selfUs: 0,
+    };
+    row.sampleCount += 1;
+    row.selfUs += deltaUs;
+    groups.set(key, row);
+  }
+  const rows = [...groups.values()]
+    .sort((a, b) => b.selfUs - a.selfUs || b.sampleCount - a.sampleCount)
+    .slice(0, limit)
+    .map((row) => ({
+      ...row,
+      selfMs: Number((row.selfUs / 1000).toFixed(3)),
+      selfPercent: sampledUs > 0 ? Number(((row.selfUs / sampledUs) * 100).toFixed(2)) : 0,
+    }));
+  return {
+    diagnosticOnly: true,
+    sampleCount: samples.length,
+    sampledMs: Number((sampledUs / 1000).toFixed(3)),
+    note: 'Exclusive V8 sampling time; profiling overhead means this is hotspot evidence, not an FPS benchmark.',
+    hotspots: rows,
+  };
 }
 
 function sourceLocation(event) {
@@ -553,6 +611,7 @@ function matrixFingerprint(matrix) {
     innerWidth: matrix?.dom?.innerWidth ?? null,
     innerHeight: matrix?.dom?.innerHeight ?? null,
     canvases: matrix?.dom?.canvases ?? [],
+    runtimeDom: matrix?.state?.value?.runtimeDom ?? null,
   });
 }
 
@@ -566,6 +625,7 @@ const FRAME_PHASES = [
 const FRAME_PHASE_MARK = /^forgeax\.frame\.phase\.(\d+)\.(frame-total|world-update-primary|draw-source|world-update-injected|renderer-draw)\.(begin|end)$/;
 const RENDER_PHASES = ['extract', 'bind-groups', 'features', 'sort', 'record'];
 const RENDER_PHASE_MARK = /^forgeax\.render\.phase\.(\d+)\.(extract|bind-groups|features|sort|record)\.(begin|end|skip)(?:\.([a-z-]+))?$/;
+const RENDER_PASS_MARK = /^forgeax\.render\.phase\.(\d+)\.record\/graph-execute\/(.+)\.(begin|end)$/;
 
 function phaseDistribution(values) {
   if (values.length === 0) return { count: 0, p50Ms: null, p95Ms: null, maxMs: null };
@@ -574,6 +634,16 @@ function phaseDistribution(values) {
     p50Ms: Number(percentile(values, 0.5).toFixed(3)),
     p95Ms: Number(percentile(values, 0.95).toFixed(3)),
     maxMs: Number(Math.max(...values).toFixed(3)),
+  };
+}
+
+function countDistribution(values) {
+  if (values.length === 0) return { sampleCount: 0, p50: null, p95: null, max: null };
+  return {
+    sampleCount: values.length,
+    p50: percentile(values, 0.5),
+    p95: percentile(values, 0.95),
+    max: Math.max(...values),
   };
 }
 
@@ -849,6 +919,81 @@ function summarizeRenderPhases(events) {
   };
 }
 
+/** Summarize the CPU command-recording boundary for each render-graph pass.
+ * These durations do not claim GPU execution time; they make pass topology and
+ * repeated pass recording visible before a GPU-timestamp capture is needed. */
+function summarizeRenderPasses(events) {
+  const open = new Map();
+  const durations = new Map();
+  const perFrameTotals = new Map();
+  const perFrameCounts = new Map();
+  const invalidReasons = [];
+  let markerCount = 0;
+  const addReason = (reason) => {
+    if (invalidReasons.length < 20) invalidReasons.push(reason);
+  };
+
+  for (const event of events) {
+    const match = eventName(event).match(RENDER_PASS_MARK);
+    if (!match || !eventCategory(event).includes('blink.user_timing')) continue;
+    const ts = event?.ts;
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
+    markerCount += 1;
+    const frameSeq = Number(match[1]);
+    const pass = match[2];
+    const boundary = match[3];
+    const key = `${frameSeq}\0${pass}`;
+    const stack = open.get(key) ?? [];
+    if (boundary === 'begin') {
+      stack.push(ts);
+      open.set(key, stack);
+      continue;
+    }
+    const begin = stack.pop();
+    if (begin === undefined) {
+      addReason(`missingBegin:${frameSeq}:${pass}`);
+      continue;
+    }
+    if (stack.length === 0) open.delete(key);
+    const elapsedMs = (ts - begin) / 1000;
+    if (elapsedMs < 0) {
+      addReason(`negativeDuration:${frameSeq}:${pass}`);
+      continue;
+    }
+    const passDurations = durations.get(pass) ?? [];
+    passDurations.push(elapsedMs);
+    durations.set(pass, passDurations);
+    perFrameTotals.set(frameSeq, (perFrameTotals.get(frameSeq) ?? 0) + elapsedMs);
+    const counts = perFrameCounts.get(frameSeq) ?? new Map();
+    counts.set(pass, (counts.get(pass) ?? 0) + 1);
+    perFrameCounts.set(frameSeq, counts);
+  }
+  for (const [key, stack] of open) {
+    const [frameSeq, pass] = key.split('\0');
+    for (let index = 0; index < stack.length; index += 1) addReason(`missingEnd:${frameSeq}:${pass}`);
+  }
+
+  const frameCount = perFrameTotals.size;
+  const passes = Object.fromEntries([...durations.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([pass, values]) => {
+      const occurrences = [...perFrameCounts.values()].map((counts) => counts.get(pass) ?? 0);
+      return [pass, {
+        ...phaseDistribution(values),
+        occurrencesPerFrame: countDistribution(occurrences),
+      }];
+    }));
+  return {
+    present: markerCount > 0,
+    note: 'Durations measure CPU command recording inside RenderGraph.execute, not GPU execution.',
+    markerCount,
+    frameCount,
+    invalidReasons,
+    perFrameTotal: phaseDistribution([...perFrameTotals.values()]),
+    passes,
+  };
+}
+
 export function validateEvidence({
   trace,
   traceDataLoss = false,
@@ -1026,6 +1171,7 @@ export function summarizeTrace(traceInput, options = {}) {
     present: aggregateDuration(presentEvents),
     framePhases: summarizeFramePhases(events),
     renderPhases: summarizeRenderPhases(events),
+    renderPasses: summarizeRenderPasses(events),
     hotspots: {
       note: 'Hotspot durations are inclusive trace-event sums; nested events and tracks overlap, so they are not utilization or exclusive time.',
       rendererFunctionCalls: durationHotspots(
@@ -1128,7 +1274,7 @@ export async function waitForPlay(page) {
 }
 
 async function pageMatrix(page, surface) {
-  const state = await gatewayEval(page, "(async()=>{const t=query({with:['Transform']});const m=query({with:['MeshRenderer']});const r=await gateway.readGameState('rendererStats');return {phase:gateway.playPhase,mode:gateway.mode,transformRows:t.ok?t.rows.length:null,meshRows:m.ok?m.rows.length:null,rendererStats:r.ok?r.value:null}})()");
+  const state = await gatewayEval(page, "(async()=>{const t=query({with:['Transform']});const m=query({with:['MeshRenderer']});const r=await gateway.readGameState('rendererStats');return {phase:gateway.playPhase,mode:gateway.mode,transformRows:t.ok?t.rows.length:null,meshRows:m.ok?m.rows.length:null,rendererStats:r.ok?r.value:null,runtimeDom:{visible:document.visibilityState,focused:document.hasFocus(),dpr:devicePixelRatio,innerWidth,innerHeight,canvases:[...document.querySelectorAll('canvas')].map(canvas=>({width:canvas.width,height:canvas.height,cssWidth:canvas.clientWidth,cssHeight:canvas.clientHeight}))}}})()");
   const dom = await page.evaluate(() => ({
     visible: document.visibilityState,
     focused: document.hasFocus(),
@@ -1199,6 +1345,25 @@ export function parseEditCameraJson(value) {
   };
 }
 
+export function parseEditPatchJson(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('--edit-patch-json must be valid JSON');
+  }
+  const plainObject = (candidate) => candidate !== null
+    && typeof candidate === 'object'
+    && !Array.isArray(candidate);
+  if (!plainObject(parsed)
+    || typeof parsed.component !== 'string'
+    || parsed.component.length === 0
+    || !plainObject(parsed.patch)) {
+    throw new Error('--edit-patch-json must be {"component":"Name","patch":{...}} with a plain object patch');
+  }
+  return { component: parsed.component, patch: { ...parsed.patch } };
+}
+
 export function parseCli(argv) {
   const flags = {
     url: DEFAULT_URL,
@@ -1213,8 +1378,11 @@ export function parseCli(argv) {
     detail: 'owner',
     width: 1280,
     height: 720,
+    dpr: 1,
     diagnostics: true,
+    cpuProfile: false,
     editCamera: undefined,
+    editPatch: undefined,
     playClickText: undefined,
     playReadySelector: undefined,
     playBlockingSelector: undefined,
@@ -1237,6 +1405,7 @@ export function parseCli(argv) {
       flags.detail = 'passes';
     }
     else if (arg === '--no-diagnostics') flags.diagnostics = false;
+    else if (arg === '--cpu-profile') flags.cpuProfile = true;
     else if (arg === '--url') flags.url = argv[++i];
     else if (arg === '--duration') {
       flags.duration = parseNumber(argv[++i], DEFAULT_DURATION_MS, '--duration');
@@ -1249,19 +1418,22 @@ export function parseCli(argv) {
     else if (arg === '--surface') flags.surface = argv[++i];
     else if (arg === '--width') flags.width = parseNumber(argv[++i], 1280, '--width');
     else if (arg === '--height') flags.height = parseNumber(argv[++i], 720, '--height');
+    else if (arg === '--dpr') flags.dpr = parseNumber(argv[++i], 1, '--dpr');
     else if (arg === '--edit-camera-json') flags.editCamera = parseEditCameraJson(argv[++i]);
+    else if (arg === '--edit-patch-json') flags.editPatch = parseEditPatchJson(argv[++i]);
     else if (arg === '--play-click-text') flags.playClickText = argv[++i];
     else if (arg === '--play-ready-selector') flags.playReadySelector = argv[++i];
     else if (arg === '--play-blocking-selector') flags.playBlockingSelector = argv[++i];
     else if (arg === '--out') flags.out = argv[++i];
     else if (arg === '--max-trace-mb') flags.maxTraceMb = parseNumber(argv[++i], 128, '--max-trace-mb');
     else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: bun scripts/chrome-performance.mjs [--benchmark] [--headed] [--passes|--nested] [--no-diagnostics] [--deep-gpu] [--surface all|edit|play-scene|play-game] [--width px] [--height px] [--edit-camera-json json] [--play-click-text text] [--play-ready-selector css] [--play-blocking-selector css] [--warmup ms] [--duration ms] [--url url] [--out dir] [--max-trace-mb mb]');
+      console.log('Usage: bun scripts/chrome-performance.mjs [--benchmark] [--headed] [--passes|--nested] [--no-diagnostics] [--cpu-profile] [--deep-gpu] [--surface all|edit|play-scene|play-game] [--width px] [--height px] [--dpr ratio] [--edit-camera-json json] [--edit-patch-json json] [--play-click-text text] [--play-ready-selector css] [--play-blocking-selector css] [--warmup ms] [--duration ms] [--url url] [--out dir] [--max-trace-mb mb]');
       process.exit(0);
     } else throw new Error(`unknown argument: ${arg}`);
   }
   if (!SURFACES.includes(flags.surface) && flags.surface !== 'all') throw new Error(`--surface must be all or one of ${SURFACES.join(', ')}`);
   if (flags.passes && flags.nested) throw new Error('--passes and --nested are mutually exclusive');
+  if (flags.editPatch !== undefined && flags.surface !== 'edit') throw new Error('--edit-patch-json requires --surface edit');
   if (flags.benchmark) {
     if (!durationProvided) flags.duration = DEFAULT_BENCHMARK_DURATION_MS;
     if (!warmupProvided) flags.warmup = DEFAULT_BENCHMARK_WARMUP_MS;
@@ -1342,17 +1514,34 @@ async function main() {
       '--enable-unsafe-webgpu',
       '--enable-features=Vulkan,WebGPU',
       '--ignore-gpu-blocklist',
-      `--window-size=${flags.width},${flags.height}`,
+      ...(flags.headed ? ['--start-maximized'] : [`--window-size=${flags.width},${flags.height}`]),
     ],
   });
+  const browserClient = await browser.newBrowserCDPSession();
+  const browserGpuInfo = await (async () => {
+    try {
+      const info = await browserClient.send('SystemInfo.getInfo');
+      return {
+        devices: info.gpu?.devices ?? [],
+        auxAttributes: info.gpu?.auxAttributes ?? {},
+        featureStatus: info.gpu?.featureStatus ?? {},
+      };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  })();
   const consoleErrors = [];
   let context;
   let client;
   try {
-    context = await browser.newContext({
-      viewport: { width: flags.width, height: flags.height },
-      deviceScaleFactor: 1,
-    });
+    context = await browser.newContext(
+      flags.headed
+        ? { viewport: null }
+        : {
+            viewport: { width: flags.width, height: flags.height },
+            deviceScaleFactor: flags.dpr,
+          },
+    );
     const page = await context.newPage();
     if (flags.diagnostics) {
       await page.addInitScript(({ detail }) => {
@@ -1386,6 +1575,29 @@ async function main() {
     const results = [];
 
     for (const surface of surfaces) {
+      let editPatchEvidence;
+      let editPatchRestorePending = false;
+      const restoreEditPatch = async () => {
+        if (!editPatchRestorePending || editPatchEvidence === undefined) return;
+        const componentJson = JSON.stringify(editPatchEvidence.requested.component);
+        const restored = await gatewayEval(
+          page,
+          `({undone:gateway.undo(),after:query({with:[${componentJson}]})})`,
+        );
+        const undoExecuted = restored?.ok === true && restored.value?.undone === true;
+        if (undoExecuted) editPatchRestorePending = false;
+        const matchesBefore = undoExecuted
+          && JSON.stringify(restored.value.after) === JSON.stringify(editPatchEvidence.before);
+        editPatchEvidence = {
+          ...editPatchEvidence,
+          restoration: restored,
+          restored: matchesBefore,
+        };
+        if (!matchesBefore) {
+          throw new Error(`edit patch did not restore the original component snapshot: ${JSON.stringify(editPatchEvidence)}`);
+        }
+      };
+      try {
       if (surface === 'edit') {
         const state = await gatewayEval(page, "gateway.playPhase === 'edit' ? {ok:true} : gateway.dispatch({kind:'stop'},'ai')");
         if (!state?.ok) throw new Error(`cannot enter edit: ${JSON.stringify(state)}`);
@@ -1397,6 +1609,22 @@ async function main() {
           if (!cameraResult?.ok) {
             throw new Error(`edit camera dispatch failed: ${JSON.stringify(cameraResult)}`);
           }
+        }
+        if (flags.editPatch !== undefined) {
+          const componentJson = JSON.stringify(flags.editPatch.component);
+          const patchJson = JSON.stringify(flags.editPatch.patch);
+          const applied = await gatewayEval(
+            page,
+            `(async()=>{const before=query({with:[${componentJson}]});if(!before.ok||before.rows.length===0)return {ok:false,error:{code:'ABLATION_TARGET_MISSING',hint:'component query returned no rows',detail:before}};const result=gateway.dispatch({kind:'transaction',label:'Temporary performance ablation',commands:before.rows.map(row=>({kind:'setComponent',entity:row.entity,component:${componentJson},patch:${patchJson}}))},'ai');return {ok:result.ok,result,before}})()`,
+          );
+          if (!applied?.ok || applied.value?.ok !== true) {
+            throw new Error(`edit patch failed: ${JSON.stringify(applied)}`);
+          }
+          editPatchEvidence = {
+            requested: flags.editPatch,
+            before: applied.value.before,
+          };
+          editPatchRestorePending = true;
         }
       } else {
         const accepted = await gatewayEval(page, "gateway.playPhase === 'play' ? {ok:true} : gateway.dispatch({kind:'play',dirtyPolicy:'last-saved'},'ai')");
@@ -1431,12 +1659,33 @@ async function main() {
       const sample = { consoleErrors: [], pageErrors: [], resourceRequests: [] };
       activeSample = sample;
       const applicationFrameId = await applicationFrameIdForSurface(client, surface);
-      const traceResult = await captureTrace(client, page, flags.duration, flags.maxTraceMb * 1024 * 1024, traceCategories);
+      const cpuProfiler = flags.cpuProfile
+        ? await startSurfaceProfiler(
+            context,
+            await selectedSurfaceFrame(page, surface),
+            100,
+          )
+        : undefined;
+      let cpuProfile;
+      let traceResult;
+      try {
+        traceResult = await captureTrace(client, page, flags.duration, flags.maxTraceMb * 1024 * 1024, traceCategories);
+        cpuProfile = await cpuProfiler?.stop();
+      } finally {
+        await disableSurfaceProfiler(cpuProfiler);
+      }
+      if (traceResult === undefined) throw new Error('trace capture did not complete');
       activeSample = null;
       const postMatrix = await pageMatrix(page, surface);
+      await restoreEditPatch();
       const tracePath = join(outDir, `${surface}.trace.json`);
       const summaryPath = join(outDir, `${surface}.summary.json`);
+      const cpuProfilePath = cpuProfile === undefined ? undefined : join(outDir, `${surface}.cpuprofile`);
+      const rawCpuProfilePath = cpuProfile === undefined ? undefined : join(outDir, `${surface}.raw.cpuprofile`);
       const trace = summarizeTrace(parseTraceText(traceResult.text), { applicationFrameId });
+      const cpuProfileSummary = cpuProfile === undefined
+        ? undefined
+        : { ...summarizeCpuProfile(cpuProfile.profile), ownership: cpuProfile.evidence };
       const evidence = validateEvidence({
         trace,
         traceDataLoss: traceResult.dataLossOccurred,
@@ -1455,6 +1704,7 @@ async function main() {
         matrix: {
           ...matrix,
           browserVersion: browser.version(),
+          browserGpuInfo,
           url: page.url(),
           headed: flags.headed,
           diagnostics: flags.diagnostics,
@@ -1467,16 +1717,25 @@ async function main() {
           warmupRequestedMs: flags.warmup,
           warmupObservedMs,
           editCamera: surface === 'edit' ? flags.editCamera : undefined,
+          editPatch: surface === 'edit' ? editPatchEvidence : undefined,
         },
         postMatrix,
         requests: sample.resourceRequests,
         trace,
+        cpuProfile: cpuProfileSummary,
         evidence,
         tracePath,
+        cpuProfilePath,
+        rawCpuProfilePath,
       };
       await writeFile(tracePath, traceResult.text);
+      if (cpuProfilePath !== undefined) await writeFile(cpuProfilePath, JSON.stringify(cpuProfile.profile));
+      if (rawCpuProfilePath !== undefined) await writeFile(rawCpuProfilePath, JSON.stringify(cpuProfile.rawProfile));
       await writeFile(summaryPath, JSON.stringify(summary, null, 2));
       results.push({ surface, summaryPath, tracePath, evidence, summary: summary.trace });
+      } finally {
+        await restoreEditPatch();
+      }
     }
 
     const manifest = {
@@ -1487,10 +1746,14 @@ async function main() {
       durationMs: flags.duration,
       headed: flags.headed,
       diagnostics: flags.diagnostics,
+      cpuProfile: flags.cpuProfile,
       detail: flags.detail,
+      dpr: flags.dpr,
       editCamera: flags.editCamera,
+      editPatch: flags.editPatch,
       traceCategories,
       browserVersion: browser.version(),
+      browserGpuInfo,
       editorCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
       consoleErrors: [...new Set(consoleErrors)],
       pageErrors: [...new Set(pageErrors)],
@@ -1512,6 +1775,7 @@ async function main() {
         console.error(`[chrome-performance] ${error instanceof Error ? error.message : String(error)}`);
       });
     }
+    await browserClient.detach().catch(() => {});
     try {
       await withTimeout(browser.close(), BROWSER_CLOSE_TIMEOUT_MS, 'browser.close');
     } catch (error) {

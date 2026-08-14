@@ -37,6 +37,8 @@ function createGateway(events: string[]): RunGateway {
   return {
     enterPlay(world) { events.push(`enter:${String(world)}`); },
     exitPlay() { events.push('exit'); },
+    beginPlayAttempt() {},
+    failPlayAttempt() {},
   };
 }
 
@@ -77,7 +79,6 @@ describe('VFX Stop restore projection', () => {
             events.push('play-detach');
             bridge.detachWorld(playWorld);
           },
-          disposeWorld() {},
           detach() {},
         };
         return { ok: true as const, value: assembly };

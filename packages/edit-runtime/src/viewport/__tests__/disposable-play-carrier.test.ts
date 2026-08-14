@@ -117,6 +117,7 @@ describe('disposable Play carrier', () => {
         enterRemotePlay: () => { calls.enter++; },
         exitPlay: () => { calls.exit++; },
         beginPlayAttempt: () => {},
+        failPlayAttempt: () => {},
       },
       remoteCarrier: {
         start: async () => { calls.start++; return { ok: true }; },

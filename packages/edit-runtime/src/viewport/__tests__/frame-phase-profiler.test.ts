@@ -7,7 +7,10 @@ const originalPerformance = Object.getOwnPropertyDescriptor(
 	"performance",
 );
 const diagnosticGlobal = globalThis as typeof globalThis & {
-	__forgeaxFramePhaseDiagnostics?: { enabled?: boolean };
+	__forgeaxFramePhaseDiagnostics?: {
+		enabled?: boolean;
+		detail?: "owner" | "passes" | "nested";
+	};
 };
 
 afterEach(() => {
@@ -59,7 +62,7 @@ describe("createFramePhaseProfiler", () => {
 	it("keeps CPU capture available through an explicit capability opt-in", async () => {
 		const profiler = createFramePhaseProfiler({ enableCpuCapture: true });
 		expect(profiler).toBeDefined();
-		expect(profiler?.activeSession()).toBeDefined();
+		expect(profiler?.activeSession()).toBeUndefined();
 		profiler?.registerPhaseCatalog("app", ["frame-total"]);
 
 		const capture = captureCpuProfile(profiler!, {
@@ -76,6 +79,19 @@ describe("createFramePhaseProfiler", () => {
 
 		const result = await capture;
 		expect(result.ok).toBe(true);
+	});
+
+	it("propagates the requested render detail to the observer session", () => {
+		Object.defineProperty(globalThis, "performance", {
+			configurable: true,
+			value: { mark: () => undefined },
+		});
+		diagnosticGlobal.__forgeaxFramePhaseDiagnostics = {
+			enabled: true,
+			detail: "passes",
+		};
+
+		expect(createFramePhaseProfiler()?.activeSession()?.detail).toBe("passes");
 	});
 
 	it("delegates bounded captures to the Engine and publishes real records", async () => {

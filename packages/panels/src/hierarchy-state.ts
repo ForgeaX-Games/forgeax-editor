@@ -16,6 +16,8 @@ import {
 import { ChildOf, Children, Name } from '@forgeax/engine-scene';
 
 export const HIERARCHY_SCENE_FOLDER_ID = -1 as EntityHandle;
+/** Virtual folder for editorWorld chrome (orbit camera). Not an authored entity. */
+export const HIERARCHY_EDITOR_FOLDER_ID = -2 as EntityHandle;
 const EMPTY_ENTITY_IDS: readonly EntityHandle[] = Object.freeze([]);
 
 export interface HierarchyColumns {
@@ -29,6 +31,10 @@ export interface HierarchySnapshot {
   readonly filters: ReadonlySet<string>;
   readonly columns: HierarchyColumns;
   readonly collapsed: ReadonlySet<EntityHandle>;
+  /** Session chrome: project editorWorld Camera rows into the Outliner. */
+  readonly showEditorWorld: boolean;
+  /** Chrome inspection target — never a scene-world selection HandlePair. */
+  readonly editorInspectionId: EntityHandle | null;
 }
 
 export interface HierarchyFilterOption {
@@ -394,6 +400,8 @@ let snapshot: HierarchySnapshot = {
   filters: new Set(),
   columns: DEFAULT_COLUMNS,
   collapsed: loadCollapsed(),
+  showEditorWorld: false,
+  editorInspectionId: null,
 };
 
 const listeners = new Set<() => void>();
@@ -453,7 +461,27 @@ export function resetHierarchyViewState(): void {
     filters: new Set(),
     columns: DEFAULT_COLUMNS,
     collapsed: snapshot.collapsed,
+    showEditorWorld: false,
+    editorInspectionId: null,
   });
+}
+
+export function toggleHierarchyShowEditorWorld(): void {
+  const showEditorWorld = !snapshot.showEditorWorld;
+  nextSnapshot({
+    ...snapshot,
+    showEditorWorld,
+    editorInspectionId: showEditorWorld ? snapshot.editorInspectionId : null,
+  });
+}
+
+export function setHierarchyEditorInspection(id: EntityHandle | null): void {
+  if (snapshot.editorInspectionId === id) return;
+  nextSnapshot({ ...snapshot, editorInspectionId: id });
+}
+
+export function clearHierarchyEditorInspection(): void {
+  setHierarchyEditorInspection(null);
 }
 
 export function toggleHierarchyCollapsed(id: EntityHandle): void {

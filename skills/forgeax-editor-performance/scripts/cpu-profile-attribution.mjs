@@ -82,7 +82,7 @@ export async function startSurfaceProfiler(context, frame, samplingIntervalUs) {
     sessionScope = 'page-target-execution-context-filtered';
   }
   const executionContextFrames = new Map();
-  const scriptContexts = new Map();
+  const scriptFrames = new Map();
   client.on('Runtime.executionContextCreated', ({ context: created }) => {
     const frameId = created.auxData?.frameId;
     if (typeof frameId === 'string') executionContextFrames.set(created.id, frameId);
@@ -91,7 +91,7 @@ export async function startSurfaceProfiler(context, frame, samplingIntervalUs) {
     executionContextFrames.delete(executionContextId);
   });
   client.on('Debugger.scriptParsed', ({ scriptId, executionContextId }) => {
-    scriptContexts.set(String(scriptId), executionContextId);
+    scriptFrames.set(String(scriptId), executionContextFrames.get(executionContextId));
   });
 
   await client.send('Runtime.enable');
@@ -125,12 +125,20 @@ export async function startSurfaceProfiler(context, frame, samplingIntervalUs) {
     },
     async stop() {
       const { profile } = await client.send('Profiler.stop');
-      const frameByContext = new Map(
-        [...scriptContexts].map(([scriptId, contextId]) => [scriptId, executionContextFrames.get(contextId)]),
-      );
-      const attribution = sampleAttribution(profile, frameByContext, selectedFrameId);
+      const attribution = sampleAttribution(profile, scriptFrames, selectedFrameId);
       if (attribution.evidence.selectedSamples === 0) {
         throw new Error(`CPU profile has no samples attributable to selected frame ${selectedFrameId}`);
+      }
+      const attributedSamples =
+        attribution.evidence.selectedSamples + attribution.evidence.otherFrameSamples;
+      const attributedRatio =
+        attribution.evidence.totalSamples === 0
+          ? 0
+          : attributedSamples / attribution.evidence.totalSamples;
+      if (attributedRatio < 0.8 || attribution.evidence.selectedRatio < 0.5) {
+        throw new Error(
+          `CPU profile attribution coverage is insufficient: attributed=${attributedRatio.toFixed(3)}, selected=${attribution.evidence.selectedRatio.toFixed(3)}`,
+        );
       }
       return {
         rawProfile: profile,

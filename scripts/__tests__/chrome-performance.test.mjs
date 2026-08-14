@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifyResourceRequest, normalizeTraceUrl, parseCli, parseEditCameraJson, parseTraceText, percentile, readTraceStream, summarizeTrace, validateEvidence, withTimeout } from '../chrome-performance.mjs';
+import { classifyResourceRequest, normalizeTraceUrl, parseCli, parseEditCameraJson, parseEditPatchJson, parseTraceText, percentile, readTraceStream, summarizeCpuProfile, summarizeTrace, validateEvidence, withTimeout } from '../chrome-performance.mjs';
 
 describe('chrome performance trace summary', () => {
   test('uses a fixed 20s warmup and measurement contract in benchmark mode', () => {
@@ -18,6 +18,32 @@ describe('chrome performance trace summary', () => {
       diagnostics: false,
       surface: 'edit',
     });
+  });
+
+  test('keeps V8 CPU sampling explicit and summarizes exclusive owners', () => {
+    expect(parseCli([]).cpuProfile).toBe(false);
+    expect(parseCli(['--cpu-profile']).cpuProfile).toBe(true);
+    expect(summarizeCpuProfile({
+      nodes: [
+        { id: 1, callFrame: { functionName: 'update', url: 'http://localhost:15290/@fs/Users/you/projects/ForgeaX-Games/forgeax-editor/packages/engine/update.ts', lineNumber: 9, columnNumber: 2 } },
+        { id: 2, callFrame: { functionName: 'draw', url: 'http://localhost:15290/@fs/Users/you/projects/ForgeaX-Games/forgeax-editor/packages/engine/draw.ts', lineNumber: 19, columnNumber: 4 } },
+      ],
+      samples: [1, 2, 2],
+      timeDeltas: [100, 200, 300],
+    })).toMatchObject({
+      diagnosticOnly: true,
+      sampleCount: 3,
+      sampledMs: 0.6,
+      hotspots: [
+        { functionName: 'draw', url: 'packages/engine/draw.ts', lineNumber: 20, columnNumber: 5, sampleCount: 2, selfMs: 0.5, selfPercent: 83.33 },
+        { functionName: 'update', url: 'packages/engine/update.ts', lineNumber: 10, columnNumber: 3, sampleCount: 1, selfMs: 0.1, selfPercent: 16.67 },
+      ],
+    });
+  });
+
+  test('defaults to DPR 1 and accepts an explicit Retina scale', () => {
+    expect(parseCli([]).dpr).toBe(1);
+    expect(parseCli(['--dpr', '2']).dpr).toBe(2);
   });
 
   test('supports a bounded render-pass trace without per-draw nested marks', () => {
@@ -41,6 +67,16 @@ describe('chrome performance trace summary', () => {
     );
     expect(() => parseEditCameraJson('{"pos":[0,1,2],"lookAt":[0,0,null]}')).toThrow(
       'finite numbers',
+    );
+  });
+
+  test('accepts a bounded Edit-only component ablation patch', () => {
+    const ablation = { component: 'DirectionalLight', patch: { cascadeCount: 2 } };
+    expect(parseEditPatchJson(JSON.stringify(ablation))).toEqual(ablation);
+    expect(parseCli(['--surface', 'edit', '--edit-patch-json', JSON.stringify(ablation)]).editPatch).toEqual(ablation);
+    expect(() => parseEditPatchJson('{"component":"DirectionalLight","patch":[]}')).toThrow('plain object');
+    expect(() => parseCli(['--surface', 'play-game', '--edit-patch-json', JSON.stringify(ablation)])).toThrow(
+      'requires --surface edit',
     );
   });
 
@@ -361,6 +397,45 @@ describe('chrome performance trace summary', () => {
       skippedCount: 0,
       skipReasons: {},
     });
+  });
+
+  test('summarizes repeated render-graph pass recording without calling it GPU time', () => {
+    const mark = (frameSeq, pass, boundary, ts) => ({
+      name: `forgeax.render.phase.${frameSeq}.record/graph-execute/${pass}.${boundary}`,
+      cat: 'blink.user_timing',
+      ph: 'I',
+      ts,
+    });
+    const summary = summarizeTrace([
+      mark(1, 'shadow', 'begin', 0),
+      mark(1, 'shadow', 'end', 100),
+      mark(1, 'shadow', 'begin', 110),
+      mark(1, 'shadow', 'end', 310),
+      mark(1, 'main', 'begin', 320),
+      mark(1, 'main', 'end', 720),
+      mark(2, 'shadow', 'begin', 1000),
+      mark(2, 'shadow', 'end', 1100),
+      mark(2, 'main', 'begin', 1120),
+      mark(2, 'main', 'end', 1620),
+    ]);
+
+    expect(summary.renderPasses.present).toBe(true);
+    expect(summary.renderPasses.frameCount).toBe(2);
+    expect(summary.renderPasses.invalidReasons).toEqual([]);
+    expect(summary.renderPasses.note).toContain('not GPU execution');
+    expect(summary.renderPasses.passes.shadow).toEqual({
+      count: 3,
+      p50Ms: 0.1,
+      p95Ms: 0.2,
+      maxMs: 0.2,
+      occurrencesPerFrame: {
+        sampleCount: 2,
+        p50: 2,
+        p95: 2,
+        max: 2,
+      },
+    });
+    expect(summary.renderPasses.perFrameTotal.p50Ms).toBe(0.7);
   });
 
   test('accepts an engine-declared skipped renderer phase with a reason', () => {

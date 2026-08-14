@@ -16,7 +16,7 @@ import type { FilterAPI } from './useFilter';
 import type { SortAPI } from './useSort';
 import type { NavHistoryAPI } from './useNavHistory';
 import { requestSaveAll } from '../save-all-bus';
-import type { CBViewItem } from '../types';
+import type { CBViewItem, RenameSurface } from '../types';
 
 export interface CBCommandsDeps {
   host: AppHost;
@@ -37,7 +37,7 @@ export interface CBCommandsDeps {
   setThumbnailSize: Dispatch<SetStateAction<number>>;
   getFocusedSourceTreeItem: () => CBViewItem | null;
   getFocusedGridItem: () => CBViewItem | null;
-  renameItem: (item: CBViewItem) => void;
+  renameItem: (item: CBViewItem, surface: RenameSurface) => void;
   deleteItem: (item: CBViewItem) => void;
   selectAllGridItems: () => void;
 }
@@ -45,7 +45,7 @@ export interface CBCommandsDeps {
 export interface ContentBrowserScopedCommandActions {
   readonly getSourceTreeItem: () => CBViewItem | null;
   readonly getGridItem: () => CBViewItem | null;
-  readonly renameItem: (item: CBViewItem) => void;
+  readonly renameItem: (item: CBViewItem, surface: RenameSurface) => void;
   readonly deleteItem: (item: CBViewItem) => void;
   readonly selectAllGridItems: () => void;
 }
@@ -70,7 +70,7 @@ export function registerContentBrowserScopedCommands(
       when: () => actions.getSourceTreeItem() !== null,
       execute: () => {
         const item = actions.getSourceTreeItem();
-        if (item) actions.renameItem(item);
+        if (item) actions.renameItem(item, 'tree');
         return { status: 'completed' as const };
       },
     }),
@@ -98,7 +98,7 @@ export function registerContentBrowserScopedCommands(
       when: () => actions.getGridItem() !== null,
       execute: () => {
         const item = actions.getGridItem();
-        if (item) actions.renameItem(item);
+        if (item) actions.renameItem(item, 'grid');
         return { status: 'completed' as const };
       },
     }),

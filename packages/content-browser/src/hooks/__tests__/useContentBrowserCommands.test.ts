@@ -36,7 +36,7 @@ describe('Content Browser contextual commands', () => {
     const tree = document.createElement('div');
     const grid = document.createElement('div');
     document.body.append(tree, grid);
-    const renamed: CBViewItem[] = [];
+    const renamed: Array<{ item: CBViewItem; surface: 'grid' | 'tree' }> = [];
     const deleted: CBViewItem[] = [];
     let selectAllCount = 0;
     let sourceTreeItem: CBViewItem | null = null;
@@ -48,7 +48,7 @@ describe('Content Browser contextual commands', () => {
       ...registerContentBrowserScopedCommands(host, {
         getSourceTreeItem: () => sourceTreeItem,
         getGridItem: () => gridItem,
-        renameItem: item => renamed.push(item),
+        renameItem: (item, surface) => renamed.push({ item, surface }),
         deleteItem: item => deleted.push(item),
         selectAllGridItems: () => { selectAllCount += 1; },
       }),
@@ -73,7 +73,12 @@ describe('Content Browser contextual commands', () => {
     dispatch(grid, { key: 'a', ctrlKey: true });
     await Promise.resolve();
 
-    expect(renamed).toEqual([folder, file]);
+    // F2 routes to the focused widget's item AND tags the originating surface, so
+    // only that surface's inline editor mounts (a folder is visible in both).
+    expect(renamed).toEqual([
+      { item: folder, surface: 'tree' },
+      { item: file, surface: 'grid' },
+    ]);
     expect(deleted).toEqual([folder, file]);
     expect(selectAllCount).toBe(1);
   });

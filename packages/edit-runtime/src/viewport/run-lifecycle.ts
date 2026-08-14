@@ -10,11 +10,11 @@
 //
 // ── The whole model in one paragraph ──
 // play = editorApp.pause() (edit world zero tick, AC-07) → assemblePlayWorld
-// (fresh new World() + shared renderer via dispose-shield + disk defaultScene →
+// (fresh new World() + host-owned shared renderer + disk defaultScene →
 // instantiateScene → bootstrap, see play-assemble.ts) → playApp.start() (the one
 // live rAF) → gateway.enterPlay(playWorld) (switch the single active-world pointer
-// + clear selection + emit). stop = playApp.stop() (dispose-shield keeps the shared
-// renderer alive; rAF cancel + renderer.onError unsubscribe → detach play-side
+// + clear selection + emit). stop = playApp.stop() (rAF cancel +
+// renderer.onError unsubscribe → detach play-side
 // backends → destroy the play World's GPU residency once → gateway.exitPlay()
 // (pointer back to edit world + clear selection + emit) → editorApp.resume().
 //
@@ -25,8 +25,7 @@
 // D-2 alt (c): ■ uses playApp.stop(), NOT pause() — pause() would leave the
 // renderer.onError subscription live, pinning every play world through
 // listener→cleanupFunnel→loop→world and breaking the AC-05 GC promise.
-// The dispose-shield (play-assemble.ts) is what makes stop() safe for a SHARED
-// renderer (R-N2).
+// Assemble-form App does not own the renderer, so stop is safe for a shared host.
 //
 // ── What is deliberately GONE vs the old original-in-place ▶ Play ──
 // The old four-layer stop-time undo (a system-name diff, a run-generation frame
@@ -41,7 +40,7 @@
 // play→stop→play cycle deterministically (bun has no rAF).
 //
 // Anchors:
-//   plan-strategy D-2 (dual-App pause<->start/stop; alt (c) stop()+shield rationale)
+//   plan-strategy D-2 (dual-App pause<->start/stop)
 //   plan-strategy D-1 (single renderer, draw(world) per-call)
 //   requirements AC-04 (level-load play path) / AC-05 (idempotent + GC, dead
 //     undo concepts removed) / AC-06 / AC-07 (edit world frozen during play)
@@ -106,14 +105,12 @@ export interface RunGateway {
   enterPlay(playWorld: unknown): void;
   enterRemotePlay?(): void;
   exitPlay(): void;
-  // Play-attempt observability (solo round-8 #3). Optional so the headless test's
-  // fake gateway (and any older caller) stays compatible — the real EditGateway
-  // implements both. beginPlayAttempt marks the async assemble in flight
+  // Play-attempt observability. beginPlayAttempt marks the async assemble in flight
   // (playPhase → 'starting'); failPlayAttempt records a degraded attempt
   // (playPhase → 'failed' + lastPlayError) so a front-door poller sees a TERMINAL
   // state instead of a mode flip that never comes.
-  beginPlayAttempt?(): void;
-  failPlayAttempt?(error: { code: string; hint?: string }): void;
+  beginPlayAttempt(): void;
+  failPlayAttempt(error: { code: string; hint?: string }): void;
 }
 
 export interface RemotePlayCarrier {
@@ -252,11 +249,6 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     } catch (err) {
       console.warn(`[editor] ${label} detach() threw:`, err);
     }
-    try {
-      assembly.disposeWorld();
-    } catch (err) {
-      console.warn(`[editor] ${label} GPU world cleanup threw:`, err);
-    }
   }
 
   function reportPlayFailure(error: unknown): void {
@@ -267,7 +259,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     const code = structured && typeof structured.code === 'string'
       ? structured.code
       : 'play-assemble-failed';
-    deps.gateway.failPlayAttempt?.({ code, hint });
+    deps.gateway.failPlayAttempt({ code, hint });
     if (playRunId !== null) {
       deps.runProjection?.failed(playRunId, { code, hint, retryable: true, recoveryActions: ['operation.retry'] });
       playRunId = null;
@@ -288,7 +280,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // playPhase reads 'starting' — a front-door poller can distinguish
     // "still assembling" from "failed, will never flip". Cleared on success
     // (enterPlay) or set to 'failed' below.
-    deps.gateway.beginPlayAttempt?.();
+    deps.gateway.beginPlayAttempt();
 
     // D-10: if the doc has unsaved edits, hint that play uses the last-saved
     // scene (disk re-instantiate does not see in-memory edits).
@@ -427,9 +419,8 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     active = null;
 
     // D-2 alt (c): stop() (NOT pause()) — cancels the rAF AND unsubscribes
-    // renderer.onError, so nothing pins the play world (AC-05 GC). The
-    // dispose-shield (play-assemble.ts) keeps the SHARED renderer alive through
-    // stop()'s unconditional renderer.dispose() (R-N2).
+    // renderer.onError, so nothing pins the play world (AC-05 GC). Assemble-form
+    // App owns the loop but not the shared renderer.
     stopAssembly(assembly, '■ Stop');
     deps.publisher?.unbind(assembly.playWorld as LiveWorldFrameEndWorld);
     if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);

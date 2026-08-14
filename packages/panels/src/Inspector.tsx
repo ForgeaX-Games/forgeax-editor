@@ -4,11 +4,11 @@ import { showContextMenu } from '@forgeax/editor-core';
 import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, isComponentHidden, listComponentSchemas, planArrayEdit, quatToEuler, type ArrayEditAction, type FieldSchema } from '@forgeax/editor-core';
 // Shared component-name localization (SSOT with the hierarchy type column/filter):
 // engine component names → per-name i18n label, raw English fallback for unmapped.
-import { componentTypeLabel } from './hierarchy-state';
+import { componentTypeLabel, getHierarchyPanelSnapshot, subscribeHierarchyPanelState } from './hierarchy-state';
 // M3 (AC-03, plan-strategy §2 D-6): mutations + view-intent ops go through the
 // one gateway door — gateway.dispatch({ kind, … }) — replacing the direct setters
 // (setSelectionMany / requestFrame) and the origin-less `dispatch` wrapper.
-import { createInspectorFieldSelector, dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, requestRefComponent, subscribeViewportRuntimeClient, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
+import { createInspectorFieldSelector, dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getEditorWorldProjection, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, requestRefComponent, subscribeViewportRuntimeClient, useDocVersion, useFieldPreview, useSelection, useSelectionList } from '@forgeax/editor-core';
 import { entExists, entName, entComponent, entComponents } from '@forgeax/editor-core';
 // VERIFY finding-3 (defense-in-depth): the world-bound handle-pair + the live
 // active-read-world binding, so the primary Inspector reads run the three-layer
@@ -1285,6 +1285,57 @@ function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProj
   );
 }
 
+function fmtChromeNum(value: unknown, digits = 3): string {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+
+function fmtChromeVec(value: unknown, digits = 3): string {
+  if (Array.isArray(value)) {
+    return value.map((n) => fmtChromeNum(n, digits)).join(', ');
+  }
+  if (value instanceof Float32Array) {
+    return Array.from(value).map((n) => fmtChromeNum(n, digits)).join(', ');
+  }
+  return '—';
+}
+
+function EditorWorldChromeInspector({
+  name,
+  id,
+  camera,
+  transform,
+}: {
+  name: string;
+  id: number;
+  camera: Record<string, unknown>;
+  transform: Record<string, unknown> | null;
+}): ReactNode {
+  const { t } = useTranslation();
+  const fovRad = typeof camera.fov === 'number' ? camera.fov : null;
+  const fovDeg = fovRad !== null ? (fovRad * 180 / Math.PI).toFixed(1) : '—';
+  const projection = camera.projection === 1 ? 'Orthographic' : 'Perspective';
+  return (
+    <div className="fx-inspector" data-testid="panel-inspector">
+      <div className="dp-name">
+        <span className="tico"><ForgeaxIcon name="video" size={14} /></span>
+        <input className="ninput" value={name} disabled readOnly />
+        <span className="badge">{t('editor.inspector.editorCameraTitle')}</span>
+        <span className="idbadge">#{id}</span>
+      </div>
+      <div className="dp-note" data-testid="inspector-editor-world-chrome">
+        {t('editor.inspector.editorCameraHint')}
+      </div>
+      <div className="f-row"><span className="f-name">Projection</span><span className="f-val">{projection}</span></div>
+      <div className="f-row"><span className="f-name">Field Of View</span><span className="f-val">{fovDeg}°</span></div>
+      <div className="f-row"><span className="f-name">Aspect</span><span className="f-val">{fmtChromeNum(camera.aspect)}</span></div>
+      <div className="f-row"><span className="f-name">Near Clip</span><span className="f-val">{fmtChromeNum(camera.near)}</span></div>
+      <div className="f-row"><span className="f-name">Far Clip</span><span className="f-val">{fmtChromeNum(camera.far)}</span></div>
+      <div className="f-row"><span className="f-name">Location</span><span className="f-val">{fmtChromeVec(transform?.pos)}</span></div>
+      <div className="f-row"><span className="f-name">Rotation</span><span className="f-val">{fmtChromeVec(transform?.quat)}</span></div>
+    </div>
+  );
+}
+
 export function InspectorPanel() {
   const remote = useRemoteInspectorProjection();
   // The in-process Studio realm has a live Gateway world and must keep using
@@ -1304,6 +1355,15 @@ function LocalInspectorPanel() {
   const { t } = useTranslation();
   const sel = useSelection();
   const selList = useSelectionList();
+  const hierarchyView = useSyncExternalStore(
+    subscribeHierarchyPanelState,
+    getHierarchyPanelSnapshot,
+    getHierarchyPanelSnapshot,
+  );
+  const editorInspectionId = hierarchyView.showEditorWorld ? hierarchyView.editorInspectionId : null;
+  const editorRow = editorInspectionId !== null
+    ? getEditorWorldProjection().rows.find((row) => row.id === editorInspectionId)
+    : undefined;
   // Component values are the authored document snapshot. Asset binding resolves
   // asynchronously through bindAssetRef and may keep the same selection, so the
   // Inspector must re-read the selected entity after the Gateway's document
@@ -1385,6 +1445,16 @@ function LocalInspectorPanel() {
     arr[picker.slot] = 0;
     dispatchMutation({ kind: 'setComponent', entity: sel, component: picker.comp, patch: { [picker.field]: arr } });
   };
+  if (editorRow) {
+    return (
+      <EditorWorldChromeInspector
+        name={editorRow.name}
+        id={editorRow.id}
+        camera={editorRow.camera}
+        transform={editorRow.transform}
+      />
+    );
+  }
   if (selList.size > 1) {
     return <BatchPanel ids={[...selList]} />;
   }

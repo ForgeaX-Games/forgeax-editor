@@ -8,7 +8,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
-  Slider,
 } from '@forgeax/editor-ui';
 import {
   ArrowDownWideNarrow,
@@ -32,8 +31,6 @@ import { CONTENT_BROWSER_INTERACTION_SCOPE } from './interaction-surface';
 interface Props {
   filter: FilterAPI;
   sort: SortAPI;
-  thumbnailSize?: number;
-  onThumbnailSizeChange?: (size: number) => void;
 }
 
 const SORT_KEYS: readonly CBSortKey[] = ['name', 'kind', 'packModifiedAt', 'estimatedSize'];
@@ -48,7 +45,7 @@ const SORT_DIRS: readonly (readonly [CBSortDir, LucideIcon])[] = [
   ['desc', ArrowDownWideNarrow],
 ];
 
-export function CBFilterBar({ filter, sort, thumbnailSize, onThumbnailSizeChange }: Props) {
+export function CBFilterBar({ filter, sort }: Props) {
   const { t } = useTranslation();
   const activeFilters = filter.filters.filter(item => item.active);
   const filterLabel = activeFilters.length === 0
@@ -188,19 +185,6 @@ export function CBFilterBar({ filter, sort, thumbnailSize, onThumbnailSizeChange
             })}
           </DropdownMenuContent>
         </DropdownMenu>
-
-        {thumbnailSize != null && onThumbnailSizeChange && (
-          <Slider
-            className="cb-thumb-slider"
-            size="sm"
-            min={48}
-            max={200}
-            step={4}
-            value={thumbnailSize}
-            onChange={e => onThumbnailSizeChange(Number(e.target.value))}
-            title={t('editor.contentBrowser.actions.thumbnailSize', { size: thumbnailSize })}
-          />
-        )}
       </div>
     </div>
   );

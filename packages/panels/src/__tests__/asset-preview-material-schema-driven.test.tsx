@@ -42,6 +42,12 @@ describe('AssetPreviewMaterial is schema-driven', () => {
     expect(panel).toContain("kind: 'updateMaterialParams'");
   });
 
+  it('projects Two Sided / Blend from the authored pass renderState', () => {
+    const panel = source('asset-inspector/AssetPreviewMaterial.tsx');
+    expect(panel).toContain('materialRenderStateFacts');
+    expect(panel).toContain('mat-render-state');
+  });
+
   it('the preview viewport owns overlay teardown on the post-commit assetsChanged', () => {
     // The panel deliberately does NOT clear staging on dispatch: the viewport
     // drops the overlay when the re-resolved (post-write) values land, so the

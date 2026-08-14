@@ -6,14 +6,14 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import { useTranslation, type TFunction } from '@forgeax/editor-core/i18n';
 import { dispatchActiveEditorOperation } from '@forgeax/editor-core';
-import { ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
+import { ContentBrowserIcon } from './content-browser-icons';
+import { CBInlineRename } from './CBInlineRename';
 import {
-  dirOfPath,
-  fileKindLabel,
   isPathInSelectionChain,
+  viewItemKey,
   type SourceTreeNode,
 } from './content-browser-format';
-import type { CBFile, CBFolder, CBViewItem } from './types';
+import type { CBFolder, CBViewItem } from './types';
 
 interface Nav {
   currentPath: string;
@@ -67,7 +67,11 @@ export interface CBSourceTreeProps {
   onFocusItem: (item: CBViewItem | null) => void;
   nav: Nav;
   openFolderContextMenu: (pos: ContextMenuPos, folder: CBFolder) => void;
-  openFileContextMenu: (pos: ContextMenuPos, file: CBFile) => void;
+  /** viewItemKey (= path) of the tree row being inline-renamed, or null. */
+  renamingKey: string | null;
+  renameValidate: (value: string) => string | null;
+  onRenameCommit: (item: CBViewItem, value: string) => void;
+  onRenameCancel: () => void;
 }
 
 function renderRows(
@@ -84,16 +88,20 @@ function renderRows(
     onFocusItem: (item: CBViewItem | null) => void;
     nav: Nav;
     openFolderContextMenu: CBSourceTreeProps['openFolderContextMenu'];
-    openFileContextMenu: CBSourceTreeProps['openFileContextMenu'];
+    renamingKey: string | null;
+    renameValidate: CBSourceTreeProps['renameValidate'];
+    onRenameCommit: CBSourceTreeProps['onRenameCommit'];
+    onRenameCancel: CBSourceTreeProps['onRenameCancel'];
   },
 ): ReactNode {
-  const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, onFocusItem, nav, openFolderContextMenu, openFileContextMenu } = ctx;
-  return nodes.map((node) => {
-    // Folders are expanded by default; the store records only the folders a
-    // double-click has explicitly COLLAPSED (`=== true`). Leaf folders have no
-    // tree children, so they are selectable/navigation targets only and must not
-    // look or behave like expandable folders.
-    const expandable = node.type === 'folder' && node.children.length > 0;
+  const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, onFocusItem, nav, openFolderContextMenu, renamingKey, renameValidate, onRenameCommit, onRenameCancel } = ctx;
+  // The source tree lists DIRECTORIES only — files live in the right-hand grid.
+  // Folders are expanded by default; the store records only the ones a
+  // double-click has explicitly COLLAPSED (`=== true`). A folder is expandable
+  // only when it has SUB-folders, so a folder holding just files is a navigable
+  // leaf (clicking it drills the grid into that folder).
+  return nodes.filter(node => node.type === 'folder').map((node) => {
+    const expandable = node.children.some(child => child.type === 'folder');
     const open = expandable && collapsedSourceFolders[node.path] !== true;
     const inSelectionPath = isPathInSelectionChain(selectedPath, node.path);
     const selected = selectedPath === node.path;
@@ -104,25 +112,8 @@ function renderRows(
       childCount: node.childCount,
       isFavorite: node.isFavorite,
     };
-    const file: CBFile | null = node.type === 'file' ? {
-      type: 'file',
-      path: node.path,
-      diskPath: node.diskPath,
-      name: node.name,
-      family: node.family ?? 'other',
-      assets: node.assets ?? [],
-      kindLabel: fileKindLabel(t, node.family ?? 'other'),
-      isFavorite: node.isFavorite,
-    } : null;
     const handleClick = () => {
       setFavoritesOnly(false);
-      if (file) {
-        nav.navigate(dirOfPath(file.path));
-        setSelectedItem(file);
-        setPreviewItem(file);
-        selectTreePath(file.path, 'file');
-        return;
-      }
       nav.navigate(node.path);
       setSelectedItem(folder);
       setPreviewItem(folder);
@@ -135,41 +126,62 @@ function renderRows(
     const handleRowContextMenu = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (file) {
-        setSelectedItem(file);
-        setPreviewItem(file);
-        selectTreePath(file.path, 'file');
-        openFileContextMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} }, file);
-      } else {
-        setSelectedItem(folder);
-        setPreviewItem(folder);
-        selectTreePath(folder.path, 'dir');
-        openFolderContextMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} }, folder);
-      }
+      setSelectedItem(folder);
+      setPreviewItem(folder);
+      selectTreePath(folder.path, 'dir');
+      openFolderContextMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} }, folder);
     };
+
+    const renaming = renamingKey != null && renamingKey === viewItemKey(folder);
+    const chev = (
+      <span
+        className={`cb-source-chev${expandable ? '' : ' hidden'}`}
+        onClick={expandable ? (e) => { e.stopPropagation(); handleDoubleClick(); } : undefined}
+      ><ContentBrowserIcon name="chevron-down" /></span>
+    );
+    const icon = (
+      <span className="cb-source-icon">
+        <ContentBrowserIcon name={expandable && open ? 'folder-open' : 'folder'} />
+      </span>
+    );
 
     return (
       <div key={node.path} className="cb-source-node">
-        <button
-          type="button"
-          className={`no-motion-lift cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}`}
-          style={{ paddingLeft: `${16 + depth * 14}px` }}
-          title={node.path}
-          tabIndex={selected ? 0 : -1}
-          onFocus={() => onFocusItem(file ?? folder)}
-          onClick={handleClick}
-          onDoubleClick={handleDoubleClick}
-          onContextMenu={handleRowContextMenu}
-        >
-          <span
-            className={`cb-source-chev${expandable ? '' : ' hidden'}`}
-            onClick={expandable ? (e) => { e.stopPropagation(); handleDoubleClick(); } : undefined}
-          ><ContentBrowserIcon name="chevron-down" /></span>
-          <span className={`cb-source-icon${node.type === 'file' ? ` is-${node.family ?? 'other'}` : ''}`}>
-            {node.type === 'folder' ? <ContentBrowserIcon name={expandable && open ? 'folder-open' : 'folder'} /> : <FileFamilyIcon family={node.family ?? 'other'} />}
-          </span>
-          <span className="cb-source-name">{node.name}</span>
-        </button>
+        {renaming ? (
+          // Editing variant: a plain row (no <button>, so the <input> is not
+          // nested in an interactive control) carrying the shared inline editor.
+          <div
+            className={`cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}`}
+            style={{ paddingLeft: `${16 + depth * 14}px` }}
+            title={node.path}
+          >
+            {chev}
+            {icon}
+            <CBInlineRename
+              initial={node.name}
+              validate={renameValidate}
+              onCommit={(value) => onRenameCommit(folder, value)}
+              onCancel={onRenameCancel}
+              ariaLabel={t('editor.contentBrowser.contextMenu.rename')}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={`no-motion-lift cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}`}
+            style={{ paddingLeft: `${16 + depth * 14}px` }}
+            title={node.path}
+            tabIndex={selected ? 0 : -1}
+            onFocus={() => onFocusItem(folder)}
+            onClick={handleClick}
+            onDoubleClick={handleDoubleClick}
+            onContextMenu={handleRowContextMenu}
+          >
+            {chev}
+            {icon}
+            <span className="cb-source-name">{node.name}</span>
+          </button>
+        )}
         {expandable && open && renderRows(node.children, depth + 1, ctx)}
       </div>
     );
@@ -188,7 +200,10 @@ export function CBSourceTree({
   onFocusItem,
   nav,
   openFolderContextMenu,
-  openFileContextMenu,
+  renamingKey,
+  renameValidate,
+  onRenameCommit,
+  onRenameCancel,
 }: CBSourceTreeProps): ReactNode {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -255,7 +270,6 @@ export function CBSourceTree({
             onClick={() => setFavoritesGroupOpen(open => !open)}
           >
             <span className="cb-source-chev"><ContentBrowserIcon name="chevron-down" /></span>
-            <span className="cb-source-group-icon"><ContentBrowserIcon name="star" /></span>
             <span className="cb-source-group-name">{t('editor.contentBrowser.sourceTree.favorites')}</span>
           </button>
           {favoritesGroupOpen && (
@@ -303,7 +317,6 @@ export function CBSourceTree({
             onClick={() => setProjectOpen(open => !open)}
           >
             <span className="cb-source-chev"><ContentBrowserIcon name="chevron-down" /></span>
-            <span className="cb-source-group-icon"><ContentBrowserIcon name="package" /></span>
             <span className="cb-source-group-name">{projectName}</span>
           </button>
           {projectOpen && (
@@ -319,7 +332,10 @@ export function CBSourceTree({
                 onFocusItem,
                 nav,
                 openFolderContextMenu,
-                openFileContextMenu,
+                renamingKey,
+                renameValidate,
+                onRenameCommit,
+                onRenameCancel,
               })}
             </div>
           )}

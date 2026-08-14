@@ -3,16 +3,16 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // (resolves GUID → shared<T> handle) instead of setComponent with deprecated names.
 import {
   requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
-  dispatchActiveEditorOperation, gateway, getSelection, validateAssetBasename,
+  dispatchActiveEditorOperation, gateway, getSelection,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
-// Rename fallback still uses the editor-ui prompt modal (only when no host
-// onRename callback is supplied). Delete no longer uses the editor-ui confirm —
-// it always routes through the host's reliable cb-dialog delete guards
-// (onDelete / onDeleteFolder), which paint correctly in the standalone host.
+// Rename is not built here: it is a single inline-edit flow owned by
+// ContentBrowser (beginRename → commitRename), injected into the menu via the
+// host's commonItemMenu. Delete likewise always routes through the host's
+// reliable cb-dialog delete guards (onDelete / onDeleteFolder), which paint
+// correctly in the standalone host.
 import { isAssetPlacementAvailable } from './content-browser-format';
-import { contentBrowserPrompt } from './interaction-surface';
 import type { SubjectActionRequest } from './workspace/subject-actions';
 
 /** Assign a catalogued asset to the selected entity via bindAssetRef (GUID→handle).
@@ -58,7 +58,6 @@ export function dispatchReimportAsset(asset: CBAsset): void {
 
 export interface CRUDCallbacks {
   onSubjectAction?: (request: Omit<SubjectActionRequest, 'snapshot'>) => void;
-  onRename?: (asset: CBAsset) => void;
   onNewFolder?: (parentPath: string) => void;
   onReload?: () => void;
   /**
@@ -91,33 +90,7 @@ export function buildAssetContextMenu(
 
   return [
     // ── Common ──
-    { id: 'rename', label: tr('editor.contentBrowser.contextMenu.rename'), shortcut: 'F2', action: () => {
-      if (callbacks?.onRename) {
-        callbacks.onRename(asset);
-      } else {
-        void (async () => {
-          const newName = await contentBrowserPrompt({
-            title: tr('editor.contentBrowser.contextMenu.rename'),
-            label: tr('editor.contentBrowser.dialogs.renameAssetPrompt'),
-            defaultValue: asset.name,
-            confirmText: tr('editor.contentBrowser.dialogs.ok'),
-            cancelText: tr('editor.contentBrowser.dialogs.cancel'),
-            // Same SSOT the applier enforces; dialog Confirm disables while
-            // invalid so the user gets red text instead of a silent reject.
-            validate: (v) => {
-              const r = validateAssetBasename(v);
-              return r.ok ? null : r.hint;
-            },
-          });
-          if (newName && newName !== asset.name) {
-            // D6: rename routes through the ONE gateway door (document op, undoable).
-            // The applier reaches pack IO via ctx.assetIO and fires the in-process
-            // assetsChanged notification itself; Content Browser reloads from it.
-            void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
-          }
-        })();
-      }
-    }},
+    // Rename is injected by the host (commonItemMenu → beginRename inline edit).
     { id: 'replace', label: 'Replace asset', action: () => {
       callbacks?.onSubjectAction?.({ operation: 'replace', asset });
     }},
@@ -225,7 +198,7 @@ export function buildFolderContextMenu(
     }},
     { id: 'sep-1', label: '', separator: true, action: () => {} },
 
-    { id: 'rename', label: tr('editor.contentBrowser.contextMenu.rename'), shortcut: 'F2', action: () => { /* folder rename needs server move API */ } },
+    // Rename is injected by the host (commonItemMenu → beginRename inline edit).
     { id: 'delete', label: tr('editor.contentBrowser.contextMenu.delete'), shortcut: 'Del', danger: true, action: () => {
       // Route through the host's path-delete guard (reliable cb-dialog modal),
       // consistent with asset delete. No editor-ui confirm fallback.

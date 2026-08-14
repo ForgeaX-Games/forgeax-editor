@@ -34,6 +34,8 @@ function createGateway(events: string[]): RunGateway {
   return {
     enterPlay(world) { events.push(`enter:${String(world)}`); },
     exitPlay() { events.push('exit'); },
+    beginPlayAttempt() {},
+    failPlayAttempt() {},
   };
 }
 
@@ -81,7 +83,6 @@ describe('in-process VFX Play lifecycle', () => {
             events.push('play-detach');
             bridge.detachWorld(playWorld);
           },
-          disposeWorld() {},
           detach() { events.push('assembly-detach'); },
         };
         return { ok: true as const, value: assembly };

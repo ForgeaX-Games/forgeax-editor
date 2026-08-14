@@ -5,7 +5,7 @@ import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-she
 import { isPageDirty } from '@forgeax/interface/core/page-platform';
 import { publish } from '@forgeax/interface/lib/bus';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { Download, FolderPlus, Plus, Save } from 'lucide-react';
+import { Download, FolderPlus, Plus, Save, Settings2 } from 'lucide-react';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
 import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, getViewportRuntimeClientSnapshot, requestAddAssetsToChat, resolveGamePath, showContextMenu, subscribeViewportRuntimeClient, waitViewportRuntimeOperationRun,
@@ -24,8 +24,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  IconButton,
 } from '@forgeax/editor-ui';
 import { useMultiSelect } from './hooks/useMultiSelect';
 import { useSort } from './hooks/useSort';
@@ -71,7 +73,7 @@ import {
   type SourceMutationAction,
 } from './source-authoring/source-mutation-view-model';
 import { sceneActivationToOp, scenePromoteToOp } from './scene-activation-route';
-import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem } from './types';
+import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem, RenameSurface } from './types';
 import {
   viewItemKey,
   copyText,
@@ -127,14 +129,23 @@ function ContentBrowserActionBar({
   nav,
   gameSlug,
   allDirs,
+  thumbnailSize,
+  onThumbnailSizeChange,
+  detailPanelOpen,
+  onDetailPanelOpenChange,
 }: {
   executeCommand: (command: string) => void;
   nav: ReturnType<typeof useNavHistory>;
   gameSlug: string;
   allDirs: string[];
+  thumbnailSize: number;
+  onThumbnailSizeChange: (size: number) => void;
+  detailPanelOpen: boolean;
+  onDetailPanelOpenChange: (open: boolean) => void;
 }): ReactNode {
   const { t } = useTranslation();
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
 
   return (
     <div className="cb-toolbar" data-testid="cb-content-actions" role="toolbar">
@@ -171,6 +182,48 @@ function ContentBrowserActionBar({
         </Button>
       </div>
       <CBNavigationBar nav={nav} gameSlug={gameSlug} allDirs={allDirs} inline />
+      <DropdownMenu modal={false} open={settingsMenuOpen} onOpenChange={setSettingsMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <IconButton
+            size="sm"
+            variant="chrome"
+            className="cb-settings-btn no-motion-lift"
+            aria-label={t('editor.contentBrowser.actions.settings')}
+            title={t('editor.contentBrowser.actions.settings')}
+          >
+            <Settings2 />
+          </IconButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="cb-settings-menu" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
+          <DropdownMenuLabel>{t('editor.contentBrowser.actions.settings')}</DropdownMenuLabel>
+          <div className="cb-settings-row">
+            <span className="cb-settings-label">{t('editor.contentBrowser.actions.thumbnailSizeLabel')}</span>
+            <input
+              type="range"
+              className="cb-settings-range"
+              min={48}
+              max={200}
+              step={4}
+              value={thumbnailSize}
+              onChange={e => onThumbnailSizeChange(Number(e.target.value))}
+              title={t('editor.contentBrowser.actions.thumbnailSize', { size: thumbnailSize })}
+            />
+          </div>
+          <DropdownMenuSeparator />
+          <button
+            type="button"
+            className="cb-settings-toggle no-motion-lift"
+            role="switch"
+            aria-checked={detailPanelOpen}
+            aria-label={t('editor.contentBrowser.actions.detailPanel')}
+            data-checked={detailPanelOpen ? 'true' : 'false'}
+            onClick={() => onDetailPanelOpenChange(!detailPanelOpen)}
+          >
+            <span className="cb-settings-label">{t('editor.contentBrowser.actions.detailPanel')}</span>
+            <span className="cb-settings-switch" aria-hidden="true" />
+          </button>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -282,6 +335,9 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     return activation === null ? asset : { ...asset, activation };
   }), [catalogAssets, sceneModel.scenes, workspaceSnapshot.revision]);
   const [thumbnailSize, setThumbnailSize] = useState(80);
+  // Windows-Explorer-style preview pane toggle: on by default, controls whether
+  // the right-hand detail panel renders for the selected card.
+  const [detailPanelOpen, setDetailPanelOpen] = useState(true);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const currentImportRun = importProgress?.currentRun;
   const currentImportIsActive = currentImportRun?.status === 'accepted' || currentImportRun?.status === 'running';
@@ -295,6 +351,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
   const [selectedItem, setSelectedItem] = useState<CBViewItem | null>(null);
   const [previewItem, setPreviewItem] = useState<CBViewItem | null>(null);
+  // Which item is currently being inline-renamed AND on which surface it was
+  // triggered. Keyed by viewItemKey (guid for assets, path for folders/files)
+  // PLUS the originating surface ('grid' | 'tree'). The surface matters because
+  // a folder can be visible in BOTH the grid and the (folders-only) source tree
+  // at once; keying on path alone would mount two <input>s for the same edit,
+  // and their autofocus race would blur-cancel each other (F2 appeared to do
+  // nothing on folders). Scoping to the surface keeps exactly one editor live.
+  // `null` = no edit in flight. This is the ONE rename entry point — F2,
+  // context-menu "Rename", and any future trigger all set it; the inline
+  // <input> rendered by the matching card/tree row commits through `commitRename`.
+  const [rename, setRename] = useState<{ key: string; surface: RenameSurface } | null>(null);
+  const gridRenamingKey = rename?.surface === 'grid' ? rename.key : null;
+  const treeRenamingKey = rename?.surface === 'tree' ? rename.key : null;
   // Focus targets are event-time facts, not render state. Keep them in refs so
   // F2/Delete pressed immediately after focus cannot race a React effect and
   // execute against the previously focused card/tree row.
@@ -406,10 +475,11 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     expandedPacks,
   });
 
-  // Selection has two deliberate projections:
-  //   1. selectedItem is the exact directory/file/asset subject;
-  //   2. selectedSourcePath is the source-tree path chain used to paint every
-  //      ancestor from the project root to that subject.
+  // `selectedSourcePath` = the exact source path of the right-panel subject.
+  // It feeds the IMPORT destination only. It deliberately does NOT drive the
+  // left source tree: UE-parity dictates the tree tracks the folder you are
+  // BROWSING (see `treeCurrentPath`), not whatever card is selected — clicking
+  // an asset/file in the Asset View must never auto-locate/expand the tree.
   // Keep previewItem separate so closing the preview does not erase selection.
   const selectedSourcePath = useMemo(() => {
     if (!selectedItem) return null;
@@ -418,6 +488,11 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       selectedItem.type === 'asset' ? relByAssetGuid.get(selectedItem.guid) : null,
     );
   }, [relByAssetGuid, selectedItem]);
+  // The left source tree is a stable "you are here": it highlights the folder
+  // being browsed and only moves on NAVIGATION — a tree click, a folder
+  // double-click, the breadcrumb/back-forward, or an explicit reveal (all of
+  // which write nav.currentPath). Plain right-panel card selection never does.
+  const treeCurrentPath = nav.currentPath || null;
   const selectedImportPath = useMemo(
     () => selectedItem
       ? importDirectoryForViewItem(selectedItem, selectedSourcePath, nav.currentPath || 'assets')
@@ -732,30 +807,6 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     onDelete: requestDelete,
     onDeleteFolder: (folder: { path: string; name: string }) =>
       setPathDeleteTarget({ path: folder.path, name: folder.name, kind: 'dir' }),
-    onRename: (asset: CBAsset) => {
-      void (async () => {
-        const newName = await contentBrowserPrompt({
-          title: t('editor.contentBrowser.contextMenu.rename'),
-          label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
-          defaultValue: asset.name,
-          confirmText: t('editor.contentBrowser.dialogs.ok'),
-          cancelText: t('editor.contentBrowser.dialogs.cancel'),
-        });
-        if (newName && newName !== asset.name) {
-          const gate = preflightSubjectAction({
-            operation: 'rename',
-            asset,
-            snapshot: workspaceSnapshot,
-            payload: { newName },
-          });
-          if (!gate.preflight.ok || !authorizeSubjectAction(gate).ok) return;
-          // D6: rename routes through the ONE gateway door (document op, undoable).
-          // The applier reaches pack IO via ctx.assetIO and fires the in-process
-          // assetsChanged notification; the Content Browser listener reloads.
-          void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
-        }
-      })();
-    },
     onSubjectAction: (request: Omit<SubjectActionRequest, 'snapshot'>) => {
       if (request.operation === 'rename') return;
       const gate = preflightSubjectAction({ ...request, snapshot: workspaceSnapshot });
@@ -921,34 +972,53 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     favorites.toggleFavorite(favoriteRef(item));
   }, [favorites.toggleFavorite]);
 
-  const renameItem = useCallback((item: CBViewItem) => {
+  // ── Rename: one entry (beginRename) → one commit pipeline (commitRename) ──
+  // beginRename just opens the inline editor on the item; every trigger (F2,
+  // context menu, …) funnels through here so the keybinding and the input are
+  // authored once. commitRename holds the shared front matter (trim / empty /
+  // unchanged short-circuit) and forks to the subject-specific business ONLY at
+  // the end: assets carry a guid-based authorization gate and survive on their
+  // guid key; folders/files are path-keyed so they queue a reselect (and a
+  // folder carries the nav path onto its new path). All three route through the
+  // ONE gateway door (undoable document ops).
+  const beginRename = useCallback((item: CBViewItem, surface: RenameSurface) => {
+    setRename({ key: viewItemKey(item), surface });
+  }, []);
+  const cancelRename = useCallback(() => setRename(null), []);
+  // Same basename SSOT the applier enforces; the inline editor shows the hint as
+  // red feedback instead of silently rejecting on commit.
+  const renameValidate = useCallback((value: string): string | null => {
+    const result = validateAssetBasename(value);
+    return result.ok ? null : result.hint;
+  }, []);
+  const commitRename = useCallback((item: CBViewItem, rawName: string) => {
+    setRename(null);
+    const newName = rawName.trim();
+    if (!newName || newName === item.name) return;
     if (item.type === 'asset') {
-      crudCallbacks.onRename?.(item);
+      const gate = preflightSubjectAction({
+        operation: 'rename',
+        asset: item,
+        snapshot: workspaceSnapshot,
+        payload: { newName },
+      });
+      if (!gate.preflight.ok || !authorizeSubjectAction(gate).ok) return;
+      void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: item.packPath, guid: item.guid, newName, oldName: item.name }, 'human');
       return;
     }
-    void (async () => {
-      const newName = await contentBrowserPrompt({
-        title: t('editor.contentBrowser.contextMenu.rename'),
-        label: t('editor.contentBrowser.dialogs.renameAssetPrompt'),
-        defaultValue: item.name,
-        confirmText: t('editor.contentBrowser.dialogs.ok'),
-        cancelText: t('editor.contentBrowser.dialogs.cancel'),
-      });
-      if (!newName || newName === item.name) return;
-      const slash = item.path.lastIndexOf('/');
-      const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
-      pendingReselectRef.current = { oldPath: item.path, newPath, newName };
-      if (item.type === 'folder') {
-        const cur = navPathRef.current;
-        if (cur === item.path || cur.startsWith(`${item.path}/`)) {
-          nav.navigate(`${newPath}${cur.slice(item.path.length)}`);
-        }
-        void dispatchActiveEditorOperation({ kind: 'renameDirectory', path: item.path, newName }, 'human');
-      } else {
-        void dispatchActiveEditorOperation({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
+    const slash = item.path.lastIndexOf('/');
+    const newPath = slash >= 0 ? item.path.slice(0, slash + 1) + newName : newName;
+    pendingReselectRef.current = { oldPath: item.path, newPath, newName };
+    if (item.type === 'folder') {
+      const cur = navPathRef.current;
+      if (cur === item.path || cur.startsWith(`${item.path}/`)) {
+        nav.navigate(`${newPath}${cur.slice(item.path.length)}`);
       }
-    })();
-  }, [crudCallbacks, nav, t]);
+      void dispatchActiveEditorOperation({ kind: 'renameDirectory', path: item.path, newName }, 'human');
+    } else {
+      void dispatchActiveEditorOperation({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
+    }
+  }, [nav, workspaceSnapshot]);
 
   const deleteItem = useCallback((item: CBViewItem) => {
     if (item.type === 'folder') {
@@ -968,12 +1038,12 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     requestDelete(targets);
   }, [multiSelect.selection.items, requestDelete]);
 
-  const commonItemMenu = useCallback((item: CBViewItem) => {
+  const commonItemMenu = useCallback((item: CBViewItem, surface: RenameSurface) => {
     if (item.type === 'folder') {
       const fullPath = resolveGamePath(item.path);
       return [
         { label: item.isFavorite ? t('editor.contentBrowser.contextMenu.unfavorite') : t('editor.contentBrowser.contextMenu.favorite'), icon: 'star', onClick: () => favorites.toggleFavorite(favoriteRef(item)) },
-        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => beginRename(item, surface) },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
@@ -984,7 +1054,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     }
     if (item.type === 'file') {
       return [
-        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
+        { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => beginRename(item, surface) },
         { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(item.diskPath) },
         { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(item.path) },
         { label: t('editor.contentBrowser.contextMenu.showInFileManager'), icon: 'folder-search', onClick: () => {
@@ -1041,7 +1111,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       : [];
     return [
       ...importedActions,
-      { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => renameItem(item) },
+      { label: t('editor.contentBrowser.contextMenu.rename'), icon: 'pencil', shortcut: 'F2', onClick: () => beginRename(item, surface) },
       { label: t('editor.contentBrowser.contextMenu.copyPath'), icon: 'copy', onClick: () => copyText(fullPath) },
       { label: t('editor.contentBrowser.contextMenu.copyRelativePath'), icon: 'copy', onClick: () => copyText(relPath) },
       { label: t('editor.contentBrowser.contextMenu.addToChat'), icon: 'spark', forge: true, onClick: () => requestAddAssetsToChat([{
@@ -1054,7 +1124,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       }]) },
       { label: t('editor.contentBrowser.contextMenu.delete'), icon: 'trash-2', shortcut: 'Del', danger: true, onClick: () => deleteItem(item) },
     ];
-  }, [deleteItem, favorites, fetchDiskDirs, gameSlug, host.commands, relByAssetGuid, reload, renameItem, t]);
+  }, [deleteItem, favorites, fetchDiskDirs, gameSlug, host.commands, relByAssetGuid, reload, beginRename, t]);
 
   const importSelectedFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) {
@@ -1115,7 +1185,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     })();
   }, [acceptString, importSelectedFiles, projectPickerPath, selectedImportPath]);
 
-  const openFolderContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, folder: CBFolder) => {
+  const openFolderContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, folder: CBFolder, surface: RenameSurface = 'grid') => {
     const assetsInFolder = scopedAssets
       .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
       .map(s => s.asset);
@@ -1134,10 +1204,18 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         forge: item.forge,
       })),
       { sep: true },
-      ...commonItemMenu(folder),
+      ...commonItemMenu(folder, surface),
     ];
     setTimeout(() => showContextMenu(pos, orderContextMenuEntries(items)), 0);
   }, [commonItemMenu, crudCallbacks, favorites, nav, scopedAssets]);
+
+  // The source tree reuses the same folder menu but its "Rename" must open the
+  // inline editor on the TREE row, not the grid card (both can show the folder
+  // at once — see the `rename` state comment).
+  const openTreeFolderContextMenu = useCallback(
+    (pos: { clientX: number; clientY: number; preventDefault: () => void }, folder: CBFolder) => openFolderContextMenu(pos, folder, 'tree'),
+    [openFolderContextMenu],
+  );
 
   const openFileContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, file: CBFile) => {
     const firstAsset = file.assets[0];
@@ -1171,7 +1249,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         disabled: item.disabled || (item.id === 'copy-guid' && !firstAsset),
       })),
       { sep: true },
-      ...commonItemMenu(file),
+      ...commonItemMenu(file, 'grid'),
       { sep: true },
     ];
     // Gate on the actual scene asset (kind === 'scene'), matching openAsset's
@@ -1256,7 +1334,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     setThumbnailSize,
     getFocusedSourceTreeItem,
     getFocusedGridItem,
-    renameItem,
+    renameItem: beginRename,
     deleteItem,
     selectAllGridItems: multiSelect.selectAll,
   });
@@ -1292,7 +1370,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     }));
     setTimeout(() => showContextMenu(pos, orderContextMenuEntries([
       { title: asset.name, icon: iconNameForAssetKind(asset.kind) },
-      ...commonItemMenu(asset),
+      ...commonItemMenu(asset, 'grid'),
       { sep: true },
       ...resolved,
     ])), 0);
@@ -1419,13 +1497,16 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
             sourceTree={sourceTree}
             collapsedSourceFolders={collapsedSourceFolders}
             setCollapsedSourceFolders={setCollapsedSourceFolders}
-            selectedPath={selectedSourcePath}
+            selectedPath={treeCurrentPath}
             setSelectedItem={setSelectedItem}
             setPreviewItem={setPreviewItem}
             onFocusItem={focusSourceTreeItem}
             nav={nav}
-            openFolderContextMenu={openFolderContextMenu}
-            openFileContextMenu={openFileContextMenu}
+            openFolderContextMenu={openTreeFolderContextMenu}
+            renamingKey={treeRenamingKey}
+            renameValidate={renameValidate}
+            onRenameCommit={commitRename}
+            onRenameCancel={cancelRename}
           />
 
           {/* Draggable divider (UE-parity): widen the tree to read long paths. */}
@@ -1434,10 +1515,19 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
 
           {/* Right: Asset view */}
           <div className="cb-asset-view" onClick={handleContainerClick} onContextMenu={handleBlankContextMenu}>
-            <ContentBrowserActionBar executeCommand={executeContentBrowserCommand} nav={nav} gameSlug={gameSlug} allDirs={allDirs} />
+            <ContentBrowserActionBar
+              executeCommand={executeContentBrowserCommand}
+              nav={nav}
+              gameSlug={gameSlug}
+              allDirs={allDirs}
+              thumbnailSize={thumbnailSize}
+              onThumbnailSizeChange={setThumbnailSize}
+              detailPanelOpen={detailPanelOpen}
+              onDetailPanelOpenChange={setDetailPanelOpen}
+            />
             <div className="cb-content-body">
               <div className="cb-grid-column">
-                <CBFilterBar filter={filter} sort={sort} thumbnailSize={thumbnailSize} onThumbnailSizeChange={setThumbnailSize} />
+                <CBFilterBar filter={filter} sort={sort} />
                 {catalogStale && (
                   <div className="cb-catalog-stale" data-testid="cb-catalog-stale" role="status">
                     <span>Catalog is stale. Browser context is preserved until reconciliation.</span>
@@ -1468,10 +1558,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
                     onFocusItem={focusGridItem}
                     isItemFavorite={isItemFavorite}
                     onToggleFavorite={toggleItemFavorite}
+                    renamingKey={gridRenamingKey}
+                    renameValidate={renameValidate}
+                    onRenameCommit={commitRename}
+                    onRenameCancel={cancelRename}
                   />
                 )}
               </div>
-              {previewItem && (
+              {detailPanelOpen && (
                 <CBPreviewPanel
                   previewItem={previewItem}
                   foldersInPath={foldersInPath}

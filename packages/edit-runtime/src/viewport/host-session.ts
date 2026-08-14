@@ -60,7 +60,7 @@ type RendererLike = {
   store: unknown;
 };
 // The editor App: start (edit boot) + pause/resume (▶/■ drive the
-// editWorld freeze/thaw, D-2). dispose-shielded play uses stop() on the PLAY app,
+// editWorld freeze/thaw, D-2). Play uses stop() on the PLAY app,
 // never on this one.
 type EditorAppLike = {
   start(): void;
@@ -269,11 +269,9 @@ export interface HostGateway {
   installGameProjection(registry: ReturnType<HostGateway['createGameProjectionRegistry']>): void;
   /** Clear all game-owned closures before Play world teardown. */
   clearGameProjection(): void;
-  // Play-attempt observability (solo round-8 #3) — mirror of RunGateway's pair, so
-  // the same gateway singleton satisfies both surfaces. Optional for fake-gateway
-  // compatibility; the real EditGateway implements both.
-  beginPlayAttempt?(): void;
-  failPlayAttempt?(error: { code: string; hint?: string }): void;
+  // Play-attempt observability — the same gateway singleton owns both surfaces.
+  beginPlayAttempt(): void;
+  failPlayAttempt(error: { code: string; hint?: string }): void;
 }
 
 /**
@@ -602,13 +600,13 @@ export function createHostSession(deps: HostSessionDeps): {
       }
       if (dirty && policy === 'save-then-play') {
         invalidateNextPlaySceneAsset = true;
-        gateway.beginPlayAttempt?.();
+        gateway.beginPlayAttempt();
         const requestId = globalThis.crypto.randomUUID();
         const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId }, origin);
         if (!accepted.ok) {
           invalidateNextPlaySceneAsset = false;
           const error = { code: 'play-save-failed' as const, hint: 'Save Then Play could not start the canonical save operation.' };
-          gateway.failPlayAttempt?.(error);
+          gateway.failPlayAttempt(error);
           return { ok: false, error };
         }
         void (async () => {
@@ -617,7 +615,7 @@ export function createHostSession(deps: HostSessionDeps): {
             invalidateNextPlaySceneAsset = false;
             const saveError = terminal?.value?.error;
             const hint = saveError?.hint ?? 'Save Then Play stopped because the canonical save did not succeed.';
-            gateway.failPlayAttempt?.({ code: 'play-save-failed', hint });
+            gateway.failPlayAttempt({ code: 'play-save-failed', hint });
             return;
           }
           void runLifecycle.playSimulation();

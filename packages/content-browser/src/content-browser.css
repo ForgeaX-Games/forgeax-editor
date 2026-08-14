@@ -275,6 +275,11 @@
   width: 15px;
   height: 15px;
 }
+/* Only folder rows (no `is-<family>` class) wear the standard folder colour;
+ * file / asset rows stay neutral grey (the base colour above). */
+.cb-source-icon:not([class*=" is-"]) {
+  color: #c9a86a;
+}
 .cb-source-name {
   white-space: nowrap;
   overflow: hidden;
@@ -572,7 +577,6 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
 }
 .cb-view-separator {
   width: 1px;
@@ -589,10 +593,83 @@
   border-color: var(--cb-selected-border);
 }
 
-/* Layout only — track/thumb styling is owned by editor-ui Slider (size="sm"). */
-.cb-thumb-slider {
-  width: 96px;
+/* ── Settings dropdown (thumbnail size + preview-pane toggle) ── */
+.cb-settings-btn {
   flex: 0 0 auto;
+}
+.cb-settings-menu {
+  min-width: 240px;
+  padding: 6px;
+}
+.cb-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+}
+.cb-settings-label {
+  font-size: 12px;
+  color: var(--color-text-secondary, #bbb);
+  white-space: nowrap;
+}
+/* Slider + toggle are a faithful copy of the viewport controls (.fx-vp-switch /
+ * .fx-vp-pop-range): native range with the lime accent-color, and a pill toggle
+ * whose track/thumb read from the same brand tokens. Kept as CB-local classes
+ * on native elements so no editor-ui component internals need overriding. */
+.cb-settings-range {
+  width: 120px;
+  flex: 0 0 auto;
+  accent-color: var(--color-brand-primary, #d4ff48);
+  cursor: pointer;
+}
+.cb-settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary, #bbb);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.cb-settings-toggle:hover {
+  background: var(--color-interaction-hover, rgba(255, 255, 255, 0.06));
+  color: var(--color-text-primary, #fff);
+}
+.cb-settings-switch {
+  width: 28px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-default, #454a52);
+  background: var(--color-background-base, #151618);
+  position: relative;
+}
+.cb-settings-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-text-tertiary, #77818c);
+  transition: left 0.15s ease, background 0.15s ease;
+}
+.cb-settings-toggle[data-checked="true"] .cb-settings-switch {
+  border-color: var(--color-brand-line, rgba(212, 255, 72, 0.45));
+  background: var(--color-brand-soft, rgba(212, 255, 72, 0.12));
+}
+.cb-settings-toggle[data-checked="true"] .cb-settings-switch::after {
+  left: 15px;
+  background: var(--color-brand-primary, #d4ff48);
 }
 
 /* ── Grid view ── */
@@ -603,14 +680,15 @@
 }
 .cb-fe-grid {
   display: grid;
-  /* The slider (`--cb-thumb`) drives BOTH card dimensions of the grid's direct
-   * items: column width fixes the card WIDTH, and grid-auto-rows fixes the card
-   * HEIGHT (the grid never sizes rows on its own — that omission is why height
-   * used to stay stuck while width tracked). +34px is the fixed label strip
-   * (name + type) below the ~square thumbnail; counts/stats live in the right
-   * preview, not on the card. */
+  /* Card = square preview (top) + fixed-height 4-line label block (bottom). The
+   * slider (`--cb-thumb`) sets the column WIDTH, and the thumbnail is a 1:1
+   * square that tracks it. Card HEIGHT is intrinsic (square thumb + constant
+   * label block), so rows self-size uniformly — no manual row math needed. The
+   * label block height never changes: names clamp to 4 lines (folders) or 3
+   * lines + a type row (files/assets). */
+  --cb-card-line: 13px;
   grid-template-columns: repeat(auto-fill, var(--cb-thumb, 88px));
-  grid-auto-rows: calc(var(--cb-thumb, 88px) + 34px);
+  grid-auto-rows: max-content;
   justify-content: start;
   align-content: start;
   gap: 8px;
@@ -630,19 +708,22 @@
 .cb-fe-card {
   position: relative;
   min-width: 0;
-  /* Fill the grid cell so the CARD (not just the thumbnail) is what the slider
-   * resizes. Height comes from grid-auto-rows above; the thumbnail below is a
-   * flex-fill that soaks up whatever space the fixed label strip leaves. */
-  height: 100%;
+  /* Height is intrinsic: square thumbnail + fixed label block. */
+  height: auto;
   min-height: 0;
   gap: 4px;
-  padding: 10px 6px 7px;
+  padding: 3px 3px 5px;
   border-radius: 8px;
-  background: var(--color-background-elevated, rgba(255, 255, 255, 0.03));
-  border-color: var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  /* UE parity: the card is a soft rounded tile that's ALWAYS present (the
+   * backing block behind thumbnail + label), but with NO border — the border,
+   * not the fill, was the ugly part. Hover/selection brighten the same tile. */
+  background: var(--cb-card-tile-bg, rgba(255, 255, 255, 0.05));
+  border-color: transparent;
 }
 .cb-grid-item:hover { background: var(--cb-card-hover-bg); }
-.cb-grid-folder { border-color: transparent; }
+/* Folders skip the tile plate entirely — just the big folder graphic floating
+ * on the panel (UE). Hover/selection fills still apply via the rules above. */
+.cb-grid-folder { background: transparent; border-color: transparent; }
 .cb-grid-folder:hover { border-color: var(--color-border-subtle, rgba(255, 255, 255, 0.08)); }
 .cb-grid-item.sel {
   background: var(--color-brand-soft, rgba(212, 255, 72, 0.10));
@@ -670,18 +751,39 @@
   overflow: hidden;
 }
 .cb-fe-thumb {
-  /* Internal fill: the card size is owned by the grid cell (width = column,
-   * height = auto-row). The thumbnail just grows to take all card space above
-   * the fixed label strip, so it scales together with the card. */
+  /* UE-style preview plate: a near-black square that fills the card width and
+   * scales with the slider. Assets without a real preview show a centred,
+   * moderate, neutral-grey type icon on this plate; real previews (texture
+   * checkerboard, material gradient) paint over it. A very thin type-colour
+   * strip runs along the bottom edge. Folders opt out of the plate + strip. */
+  position: relative;
   width: 100%;
-  flex: 1 1 auto;
+  aspect-ratio: 1 / 1;
+  flex: 0 0 auto;
+  height: auto;
   min-height: 0;
   padding: 0;
-  background: transparent;
+  background: var(--cb-thumb-bg, #141414);
+  border-radius: 6px;
 }
+.cb-fe-thumb::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--cb-type-color, transparent);
+}
+/* Non-folder icons stay neutral grey — colour-coding every kind reads as
+ * garish. Only folders wear their (amber) type colour, kept below so its rule
+ * wins the shared `.cb-grid-icon` class on the folder span. */
 .cb-fe-thumb .cb-grid-icon,
 .cb-fe-thumb .cb-file-icon {
   color: var(--color-text-tertiary, #8a8a8a);
+}
+.cb-fe-thumb .cb-folder-icon {
+  color: var(--cb-type-color, var(--color-text-tertiary, #8a8a8a));
 }
 /* Glyph/image scale WITH the box (override the fixed px sizes used elsewhere). */
 .cb-fe-thumb .cb-grid-icon,
@@ -693,11 +795,18 @@
   width: 100%;
   height: 100%;
 }
+/* Type glyphs on the dark plate stay a moderate, centred size (UE-style) —
+ * they represent the kind, they don't fill the square. */
 .cb-fe-thumb .cb-grid-icon svg,
 .cb-fe-thumb .cb-folder-icon svg,
 .cb-fe-thumb .cb-file-icon svg {
-  width: 48%;
-  height: 48%;
+  width: 46%;
+  height: 46%;
+}
+/* Folders read as big UE-style folder graphics — fill nearly the whole tile. */
+.cb-fe-thumb .cb-folder-icon svg {
+  width: 86%;
+  height: 86%;
 }
 .cb-fe-thumb .cb-thumb-img {
   width: 100%;
@@ -705,7 +814,7 @@
   object-fit: cover;
 }
 .cb-file-thumb {
-  background: transparent;
+  background: var(--cb-thumb-bg, #141414);
 }
 .cb-file-icon {
   display: inline-flex;
@@ -719,6 +828,9 @@
 .cb-grid-icon svg { width: 34px; height: 34px; }
 .cb-folder-thumb {
   background: transparent;
+}
+.cb-folder-thumb::after {
+  display: none;
 }
 .cb-folder-icon {
   display: inline-flex;
@@ -761,9 +873,62 @@
   width: 100%;
   font-size: 10px;
 }
+/* Fixed-height label block: always 4 text lines tall regardless of content, so
+ * every card in the grid lines up. Name clamps to 4 lines on its own, or to 3
+ * lines when a type row is present (`.has-kind`), leaving the 4th line for it. */
+.cb-fe-label {
+  width: 100%;
+  flex: 0 0 auto;
+  height: calc(var(--cb-card-line, 13px) * 4);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+}
 .cb-fe-name {
   margin-top: 0;
   font-size: 11px;
+  line-height: var(--cb-card-line, 13px);
+  text-align: center;
+  /* Multi-line clamp (overrides the single-line ellipsis from .cb-grid-label). */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  white-space: normal;
+  overflow: hidden;
+  /* Prefer breaking at word boundaries; only fall back to mid-token breaks for
+   * over-long unbroken names (e.g. dotted filenames with no spaces). */
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.cb-fe-label.has-kind .cb-fe-name {
+  -webkit-line-clamp: 3;
+}
+/* ── Inline rename (shared by grid cards + source-tree rows) ── */
+.cb-inline-rename {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 1px 3px;
+  border: 1px solid var(--color-accent, #3b82f6);
+  border-radius: 3px;
+  background: var(--color-bg-elevated, var(--surface, #1e1e1e));
+  color: var(--color-text-primary, #e6e6e6);
+  font: inherit;
+  outline: none;
+}
+.cb-inline-rename.is-invalid {
+  border-color: var(--color-danger, #e5484d);
+}
+/* Grid-card variant: match the centered 11px label it replaces. */
+.cb-fe-card .cb-inline-rename {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 11px;
+}
+/* Source-tree variant: fill the row's name slot inline. */
+.cb-source-row .cb-inline-rename {
+  font-size: inherit;
 }
 .cb-card-meta {
   width: 100%;
@@ -771,13 +936,18 @@
   color: var(--text-dim, var(--color-text-disabled, #6f6f6f));
   font-family: var(--font-mono, var(--prim-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace));
   font-size: 9px;
-  line-height: 12px;
+  line-height: var(--cb-card-line, 13px);
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .cb-card-kind {
+  flex: 0 0 auto;
+  /* Pinned to the bottom line of the fixed label block (UE places the type at
+   * the tile's foot); the name occupies the top 3 lines above it. */
+  margin-top: auto;
   font-size: 9.5px;
+  line-height: var(--cb-card-line, 13px);
   letter-spacing: 0.4px;
   text-transform: uppercase;
 }
@@ -904,6 +1074,15 @@
   overflow: auto;
   padding: 10px;
 }
+/* Empty placeholder (detail pane on, nothing selected): centre the hint so the
+ * kept-mounted panel reads as intentional rather than broken. */
+.cb-preview-empty .cb-preview-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-tertiary, #8a8a8a);
+}
 .cb-preview-ui-viewport {
   position: relative;
   min-height: 220px;
@@ -1004,8 +1183,11 @@
 }
 
 /* ── File item (file-browser mode) ── */
+/* Files share the same near-black preview plate as no-preview assets, so the
+ * grid is uniform. (Overrides the earlier `.cb-file-thumb` with !important to
+ * beat any leftover neutral-fill rule.) */
 .cb-file-thumb {
-  background: transparent !important;
+  background: var(--cb-thumb-bg, #141414) !important;
 }
 .cb-file-icon { font-size: 28px; }
 .cb-file-ext-badge {
@@ -1022,7 +1204,6 @@
   letter-spacing: 0.3px;
 }
 /* Asset-root folder marker in file-browser mode */
-.cb-source-item.asset-root { color: var(--accent, #4c9eff); font-weight: 600; }
 .cb-grid-folder.asset-root-folder .cb-folder-thumb {
   background: color-mix(in srgb, var(--accent, #4c9eff) 30%, var(--input-bg, #252525));
 }

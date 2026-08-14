@@ -38,7 +38,7 @@ bun scripts/chrome-performance.mjs \
   --out /tmp/forgeax-chrome-performance/<sample>-nested
 ```
 
-`--headed` 样本必须可见且聚焦；固定窗口 `1280×720`、DPR `1`、Chrome 版本、游戏、commit、运行阶段和启动参数。原始 trace 只放 `/tmp/forgeax-chrome-performance/`。
+`--headed` 样本必须可见、聚焦并使用真实可调整 viewport；脚本以最大化窗口启动，不能用 Playwright 的固定 viewport 模拟，否则手工放大后页面不会重排。固定 Chrome 版本、游戏、commit、运行阶段和启动参数，并以 summary 记录的实际 viewport、canvas 与 DPR 比较样本。原始 trace 只放 `/tmp/forgeax-chrome-performance/`。
 
 ## Scripts
 

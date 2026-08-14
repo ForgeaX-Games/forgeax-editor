@@ -113,6 +113,32 @@ test('self-hosted wasm-pack provisioning accepts only an exact host version befo
   assert.match(block, /curl --fail --location --retry 3/);
 });
 
+test('CI concurrency cancels superseded pull-request runs only', () => {
+  const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
+  const cancelInProgress = workflow.concurrency['cancel-in-progress'];
+  assert.equal(cancelInProgress, "${{ github.event_name == 'pull_request' }}");
+});
+
+test('main push, schedule, and manual dispatch remain non-cancelling events', () => {
+  const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
+  const cancelInProgress = workflow.concurrency['cancel-in-progress'];
+  assert.equal(cancelInProgress, "${{ github.event_name == 'pull_request' }}");
+
+  const expectedCancellation = {
+    push: false,
+    schedule: false,
+    workflow_dispatch: false,
+    pull_request: true,
+  };
+  for (const [eventName, expected] of Object.entries(expectedCancellation)) {
+    assert.equal(
+      cancelInProgress === "${{ github.event_name == 'pull_request' }}" && eventName === 'pull_request',
+      expected,
+      `${eventName} concurrency cancellation policy`,
+    );
+  }
+});
+
 test('the admission gate uses the pinned actionlint executable, not a skipped parser path', () => {
   const actionlintBin = process.env.ACTIONLINT_BIN ?? 'actionlint';
   const result = spawnSync(actionlintBin, ['-version'], {

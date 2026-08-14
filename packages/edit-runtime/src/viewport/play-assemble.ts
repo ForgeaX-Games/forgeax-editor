@@ -6,9 +6,7 @@
 //
 // feat-20260707-editor-world-fork-ssot-level-load-play-activeworld M2.
 //
-// Two exports:
-//   - shieldRendererDispose(renderer): the D-2 / R-N2 dispose-shield Proxy.
-//   - assemblePlayWorld(deps): build { playApp, playWorld, detach } for the
+// assemblePlayWorld(deps) builds { playApp, playWorld, detach } for the
 //     run-lifecycle to drive.
 //
 // Why a fresh world (D-1 / requirements AC-04): play forks a brand-new engine
@@ -28,22 +26,6 @@
 // reference; its AssetRegistry (renderer.assets) is shared, so GPU assets / pack
 // caches are loaded once, not duplicated.
 //
-// Why the dispose-shield (D-2 / R-N2): the engine `app.stop()` cleanup funnel
-// calls `renderer.dispose()` UNCONDITIONALLY — even the assemble form, which
-// claims the host owns backend lifecycle, still chains stop -> cleanupFunnel ->
-// rendererDispose (create-app.ts:846-950; the audio backend is exempted there,
-// the renderer is not — an assemble-contract asymmetry). If playApp.stop()
-// disposed the shared renderer the edit viewport would go black. The shield wraps
-// the renderer in a Proxy that turns `dispose` into a no-op while passing every
-// other member through by reference, so playApp.stop() gets a clean teardown
-// (rAF cancel + renderer.onError unsubscribe) WITHOUT killing the shared renderer;
-// run-lifecycle owns the one-time World-scoped GPU cleanup after detach.
-//
-// REMOVAL ANCHOR (R-N2): when the engine assemble form exempts the host-owned
-// renderer from the stop-time dispose (symmetric with its existing audio-backend
-// exemption), delete shieldRendererDispose + its call site here and pass the raw
-// renderer straight through.
-//
 // AC-12 note: the `newWorld()` default below constructs `new World()` in editor
 // source. This is a LEGAL play-world construction — lint-no-second-world scans the
 // engine submodule diff only (research Finding 10 / plan-strategy D-6), so an
@@ -51,7 +33,7 @@
 //
 // Anchors:
 //   plan-strategy D-1 (single host-owned renderer, assemble form, draw(world) per-call)
-//   plan-strategy D-2 (dual-App mutually-exclusive single driver + dispose-shield)
+//   plan-strategy D-2 (dual-App mutually-exclusive single driver)
 //   plan-strategy D-7 (assemble runs only user plugins → replicate the canvas default
 //     5-plugin set + physicsPlugin)
 //   plan-strategy D-8 (playWorld does NOT inject EditMode — same shape as game runtime)
@@ -98,12 +80,10 @@ import { supportsVfxRenderFeature } from './vfx-render-capability';
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
 
-/** Minimal renderer surface the assemble + shield need. `dispose` is the member
- *  the shield intercepts; the rest pass through. `assets` is the engine
+/** Minimal renderer surface the assemble needs. `assets` is the engine
  *  AssetRegistry — its `instantiate` spine is what resolves a scene payload's
  *  GUID-string handles → fresh per-world numeric handles before spawn. */
-export interface ShieldableRenderer {
-  dispose(): void;
+export interface PlayRenderer {
   readonly assets: unknown;
   readonly device?: {
     readonly caps?: {
@@ -111,8 +91,6 @@ export interface ShieldableRenderer {
       readonly indirectDrawing?: boolean;
     };
   };
-  /** Older renderer builds expose no per-world GPU eviction seam. */
-  readonly store: { destroyWorld?: (world: World) => void };
   [k: string]: unknown;
 }
 
@@ -157,8 +135,6 @@ export interface PlayAssembly {
   readonly clearGameProjection?: () => void;
   /** Detach engine-owned runtime systems before stopping the Play App. */
   readonly detachBeforeStop?: () => void;
-  /** Release this world's GPU residency when the Play run is stopped. */
-  readonly disposeWorld: () => void;
   /** Tear down this play run's host-owned side effects. Called on ■ Stop AFTER
    *  playApp.stop() (run-lifecycle). Three things, in order:
    *   1. detach the play-side input backends (release the shared canvas), then
@@ -176,7 +152,7 @@ type PhysicsBackend = 'rapier-3d' | 'rapier-2d';
  *  so the headless test can substitute fakes for the disk/game/DOM seams). */
 export interface AssemblePlayWorldDeps {
   /** The single host-owned renderer (shared across edit + play worlds, D-1). */
-  readonly renderer: ShieldableRenderer;
+  readonly renderer: PlayRenderer;
   /**
    * Load the SceneAsset payload for the game's forge.json `defaultScene` GUID.
    * Production: forge.json read → AssetGuid.parse → renderer.assets.loadByGuid.
@@ -251,63 +227,10 @@ export interface AssemblePlayWorldDeps {
 }
 
 /**
- * Wrap a renderer in a Proxy that turns `dispose` into a silent no-op and passes
- * every other member through by reference (D-2 / R-N2). See the file header for
- * why this exists and when it retires.
- */
-export function shieldRendererDispose(renderer: ShieldableRenderer): ShieldableRenderer {
-  const postProcess = Reflect.get(renderer, 'postProcess') as {
-    register?: (id: string, entry: unknown) => void;
-  } | undefined;
-  const guardedPostProcess = postProcess === undefined
-    ? undefined
-    : new Proxy(postProcess, {
-      get(target, prop, receiver) {
-        if (prop !== 'register' || typeof target.register !== 'function') {
-          return Reflect.get(target, prop, receiver);
-        }
-        return (id: string, entry: unknown): void => {
-          try {
-            target.register!(id, entry);
-          } catch (error) {
-            // The editor intentionally reuses one renderer across fresh Play
-            // worlds. Game bootstrap runs once per world, while the renderer's
-            // user post-process registry lives for the renderer lifetime. A
-            // user effect therefore legitimately reaches this boundary twice
-            // on Play -> Stop -> Play. Keep the engine's public register API
-            // fail-fast; only this editor-owned shared-renderer seam absorbs
-            // the repeat, and never for an engine builtin id.
-            const code = typeof error === 'object' && error !== null && 'code' in error
-              ? (error as { code?: unknown }).code
-              : undefined;
-            if (id.startsWith('forgeax::') || code !== 'post-process-already-registered') {
-              throw error;
-            }
-          }
-        };
-      },
-    });
-  return new Proxy(renderer, {
-    get(target, prop, receiver) {
-      if (prop === 'dispose') {
-        // Silent no-op: playApp.stop() must not dispose the shared renderer.
-        return () => {
-          /* shielded — the host owns the renderer lifecycle (R-N2) */
-        };
-      }
-      if (prop === 'postProcess' && guardedPostProcess !== undefined) {
-        return guardedPostProcess;
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-  });
-}
-
-/**
  * Assemble a fresh play World + App (level-load, AC-04). See file header.
  *
- * Order: shield renderer → new World() → attachInput (pre-inject backend) →
- * createApp(assemble: shielded renderer + fresh world + explicit plugin set) →
+ * Order: new World() → attachInput (pre-inject backend) →
+ * createApp(assemble: host renderer + fresh world + explicit plugin set) →
  * loadDefaultScene → allocSharedRef → registry.instantiate (GUID→handle resolve
  * → spawn) → resolveBootstrap → bootstrap(world, ctx). Returns { playApp,
  * playWorld, detach }; the lifecycle
@@ -317,7 +240,6 @@ export function shieldRendererDispose(renderer: ShieldableRenderer): ShieldableR
 export async function assemblePlayWorld(
   deps: AssemblePlayWorldDeps,
 ): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> {
-  const shielded = shieldRendererDispose(deps.renderer);
   // AC-12: legal play-world construction (gate scans the engine submodule only).
   const playWorld = (deps.newWorld ?? (() => new World()))();
 
@@ -417,7 +339,6 @@ export async function assemblePlayWorld(
       console.warn('[editor] ▶ Play failed assembly stop threw:', err);
     }
     detachHostResources();
-    deps.renderer.store.destroyWorld?.(playWorld as World);
   };
 
   // Resolve the module BEFORE statePlugin() builds the fresh world. A game calls
@@ -475,7 +396,7 @@ export async function assemblePlayWorld(
   let appRes: Awaited<ReturnType<typeof createApp>>;
   try {
     appRes = await createApp({
-      renderer: shielded as never,
+      renderer: deps.renderer as never,
       world: playWorld as never,
       plugins: plugins as never,
       ...(vfxFeatureEnabled ? { features: [deps.vfxRuntimeHost!.feature] } : {}),
@@ -782,7 +703,7 @@ export async function assemblePlayWorld(
     const rendererAssets = (deps.renderer as { assets?: unknown }).assets;
     const ctx = {
       world: playWorld,
-      renderer: shielded,
+      renderer: deps.renderer,
       assets: rendererAssets,
       app: playApp,
       setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
@@ -817,10 +738,6 @@ export async function assemblePlayWorld(
       ...(gameProjection !== undefined
         ? { installGameProjection: gameProjection.install, clearGameProjection: gameProjection.clear }
         : {}),
-      // The current renderer owns a shared GPU store but does not yet expose a
-      // per-world eviction method. Call the seam when available; dropping the
-      // fresh Play world remains the safe fallback for older/current builds.
-      disposeWorld: () => deps.renderer.store.destroyWorld?.(playWorld as World),
       detach,
     },
   };

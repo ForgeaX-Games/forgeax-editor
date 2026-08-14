@@ -19,6 +19,7 @@ import {
 import { AssetPicker } from '../AssetPicker';
 import { PropertyRow } from './PropertyRow';
 import { useNumberDraft } from '../useNumberDraft';
+import { materialRenderStateFacts } from './material-render-state-facts';
 import type { PreviewProps } from './index';
 
 interface PassDesc {
@@ -386,6 +387,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const textureRows = rows.filter((row) => row.kind === 'texture');
 
   const canEdit = !!asset?.packPath && !!asset?.guid;
+  const surface = materialRenderStateFacts(payload);
 
   /** Dispatch an updateMaterialParams op AFTER guaranteeing the material's
    *  payload envelope is cataloged — _preFillMaterialOp reads
@@ -449,6 +451,13 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   return (
     <div data-testid="preview-material" className="mat-editor">
       <div className="compname">Material</div>
+
+      <div className="mat-tex-section" data-testid="mat-render-state">
+        <div className="mat-tex-section-title">Render State</div>
+        <PropertyRow label="Two Sided" value={surface.twoSided ? 'Yes' : 'No'} />
+        <PropertyRow label="Cull Mode" value={surface.cullMode} />
+        <PropertyRow label="Blend" value={surface.blendLabel} />
+      </div>
 
       {/* Schema-driven parameter rows (shader paramSchema + declared +
           values-only), displayed with parent-chain resolved values. */}

@@ -59,6 +59,10 @@
     "hierarchy": {
       "outliner": "Outliner",
       "sceneRoot": "Scene",
+      "editorWorldRoot": "Editor World",
+      "showEditorWorld": "Show Editor World",
+      "hideEditorWorld": "Hide Editor World",
+      "editorCameraChrome": "Editor camera (not saved with the scene)",
       "switchingGame": "Switching game...",
       "noMatch": "no match",
       "childCount": "{{count}} child node(s)",
@@ -206,6 +210,8 @@
       "copyJson": "Copy JSON",
       "trackChannels": "channels: {{count}} (edit keys/tracks in Timeline)",
       "noSelection": "No selection — pick something in the Hierarchy or Viewport.",
+      "editorCameraTitle": "Editor Camera",
+      "editorCameraHint": "Read-only viewport chrome. This camera lives in the editor world and is not written to the scene pack.",
       "searchPlaceholder": "Search properties...",
       "noMatch": "No property matches \"{{query}}\"",
       "components": "Components",
@@ -303,7 +309,10 @@
         "all": "All",
         "editPath": "Click to type a path",
         "editPathPlaceholder": "Enter a folder path and press Enter",
-        "openSubfolders": "Subfolders of {{name}}"
+        "openSubfolders": "Subfolders of {{name}}",
+        "settings": "View settings",
+        "thumbnailSizeLabel": "Thumbnail size",
+        "detailPanel": "Detail panel"
       },
       "sourceTree": {
         "favorites": "Favorites",
@@ -426,6 +435,7 @@
         "assetMeta": "{{kind}} · {{path}}",
         "emptyFolder": "Empty folder",
         "noTextPreview": "No text preview for this file type",
+        "nothingSelected": "Select an item to see its details",
         "items": "{{count}} items",
         "assetCount": "→ {{count}} assets",
         "uiPreview": "UI preview",

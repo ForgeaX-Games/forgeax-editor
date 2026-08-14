@@ -53,6 +53,11 @@ export function setEditorCameraEntity(entity: number): void {
   editorCameraEntity = entity;
 }
 
+/** The editor orbit-camera handle in editorWorld, or undefined before spawn. */
+export function getEditorCameraEntity(): number | undefined {
+  return editorCameraEntity;
+}
+
 /**
  * Register the game's camera entity (discovered from the authored scene or
  * explicitly set by game logic). `undefined` means "no game camera found" —

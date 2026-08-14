@@ -18,7 +18,10 @@ import { realPayload } from './hooks';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
 
 export interface CBPreviewPanelProps {
-  previewItem: CBViewItem;
+  /** The item to preview, or `null` for the empty placeholder. When the detail
+   *  pane is toggled on it stays mounted even with no selection, so the grid
+   *  column width never changes (no reflow/jitter as selection comes and goes). */
+  previewItem: CBViewItem | null;
   foldersInPath: CBFolder[];
   diskFiles: CBFile[];
   gameSlug: string;
@@ -40,7 +43,7 @@ export function CBPreviewPanel({
   const [previewInfo, setPreviewInfo] = useState<PreviewFileInfo | null>(null);
 
   useEffect(() => {
-    if (previewItem.type !== 'file') {
+    if (!previewItem || previewItem.type !== 'file') {
       setPreviewInfo(null);
       return;
     }
@@ -55,6 +58,21 @@ export function CBPreviewPanel({
       });
     return () => { cancelled = true; };
   }, [previewItem]);
+
+  // Empty placeholder — keeps the panel (and its resize handle) mounted so the
+  // layout is identical whether or not something is selected.
+  if (!previewItem) {
+    return (
+      <>
+        <ResizeHandle orientation="col" onDrag={onDrag} onDragEnd={onDragEnd} title={t('editor.contentBrowser.actions.resizePreview')} />
+        <aside className="cb-preview-panel cb-preview-empty" data-facts="product" data-projection-source="editor-product">
+          <div className="cb-preview-body">
+            <div className="cb-preview-note">{t('editor.contentBrowser.preview.nothingSelected')}</div>
+          </div>
+        </aside>
+      </>
+    );
+  }
 
   const name = previewItem.name;
   const meta = previewItem.type === 'folder'

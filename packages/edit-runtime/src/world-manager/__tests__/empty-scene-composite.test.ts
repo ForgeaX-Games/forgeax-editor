@@ -64,13 +64,19 @@ interface DrawCall {
   resourceOwner: number;
 }
 
-function makeFakeRenderer(record: DrawCall[]) {
+function makeFakeRenderer(record: DrawCall[], attachedWorlds: Set<World>) {
   return {
     ready: Promise.resolve({ ok: true }),
     assets: { instantiate: () => ({ ok: true as const, value: 1 }) },
-    draw(worlds: World[] | World, opts?: { cameraOwner?: number; resourceOwner?: number; owner?: number }) {
-      // Record only the multi-world (composite) form. The single-world legacy
-      // form (draw(world)) is not what the composite path emits.
+    attachWorld(world: World) {
+      attachedWorlds.add(world);
+      return { ok: true as const, value: undefined };
+    },
+    detachWorld(world: World) {
+      attachedWorlds.delete(world);
+    },
+    draw(worlds: World[] | World, opts?: { cameraOwner?: number; resourceOwner?: number }) {
+      // Record only the multi-world (composite) form emitted by drawSource.
       if (Array.isArray(worlds)) {
         record.push({
           worlds,
@@ -106,8 +112,9 @@ describe('w17 — E3 empty scene composite render does not crash', () => {
         .unwrap();
 
       const drawCalls: DrawCall[] = [];
+      const attachedWorlds = new Set<World>();
       const editorApp = await createApp({
-        renderer: makeFakeRenderer(drawCalls) as never,
+        renderer: makeFakeRenderer(drawCalls, attachedWorlds) as never,
         world: wm.editorWorld as never,
         plugins: [transformPlugin()],
         drawSource: wm.createDrawSource(),
@@ -128,8 +135,10 @@ describe('w17 — E3 empty scene composite render does not crash', () => {
       expect(last.worlds[1]).toBe(sceneWorld);
       expect(last.cameraOwner).toBe(0);
       expect(last.resourceOwner).toBe(1);
+      expect(attachedWorlds).toEqual(new Set([wm.editorWorld, sceneWorld]));
 
       app.stop();
+      expect(attachedWorlds.size).toBe(0);
     } finally {
       fakeRaf.restore();
     }

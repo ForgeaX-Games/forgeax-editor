@@ -259,6 +259,19 @@ export {
 } from './store/entity-state';
 export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, EditRejectedInPlayError, HandleCheckOpts } from './store/entity-state';
 
+// Editor-world chrome projection (Hierarchy "Show Editor World"). Filled by
+// edit-runtime after the orbit camera spawns; panels read Camera rows only —
+// never mint a scene HandlePair for these handles.
+export {
+  registerEditorWorldProjectionProvider,
+  getEditorWorldProjection,
+  EMPTY_EDITOR_WORLD_PROJECTION,
+} from './store/editor-world-projection';
+export type {
+  EditorWorldProjection,
+  EditorWorldProjectionRow,
+} from './store/editor-world-projection';
+
 // ── Handle-pair (world-bound handle + three-layer validation) ──
 // The world-manager layer holds HandlePairs (worldRef + epoch + entity) instead
 // of bare EntityHandles, and validates them through validateHandlePair before

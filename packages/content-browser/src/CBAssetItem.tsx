@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react';
+import { memo, useState, useCallback, useRef, useEffect, type CSSProperties, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
@@ -6,6 +6,7 @@ import { colorForAssetKind, ContentBrowserIcon, iconNameForAssetKind, labelForAs
 import { isAssetPlacementAvailable } from './content-browser-format';
 import type { CBAsset } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
+import { CBInlineRename } from './CBInlineRename';
 
 interface Props {
   asset: CBAsset;
@@ -20,6 +21,10 @@ interface Props {
   onToggleFavorite: (item: CBAsset) => void;
   onClickIndex: (index: number, e: React.MouseEvent) => void;
   onFocusItem: (item: CBAsset) => void;
+  renaming?: boolean;
+  renameValidate?: (value: string) => string | null;
+  onRenameCommit?: (item: CBAsset, value: string) => void;
+  onRenameCancel?: () => void;
 }
 
 const TIP_W = 260;
@@ -48,6 +53,10 @@ function CBAssetItemImpl({
   onToggleFavorite,
   onClickIndex,
   onFocusItem,
+  renaming = false,
+  renameValidate,
+  onRenameCommit,
+  onRenameCancel,
 }: Props) {
   const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
@@ -120,6 +129,7 @@ function CBAssetItemImpl({
     <div
       ref={rootRef}
       className={`cb-grid-item cb-fe-card${selected ? ' sel' : ''}`}
+      style={{ '--cb-type-color': colorForAssetKind(asset.kind) } as CSSProperties}
       data-testid="cb-asset-item"
       data-asset-name={asset.name}
       data-asset-kind={asset.kind}
@@ -176,8 +186,20 @@ function CBAssetItemImpl({
         )}
         {Boolean(asset.payload?.cookError) && <span className="cb-thumb-warn" title={String(asset.payload?.cookError)}>⚠</span>}
       </div>
-      <div className="cb-grid-label cb-fe-name" title={asset.name}>{asset.name}</div>
-      <div className="cb-card-meta cb-card-kind" style={{ color: colorForAssetKind(asset.kind) }}>{labelForAssetKind(asset.kind, t)}</div>
+      {renaming ? (
+        <CBInlineRename
+          initial={asset.name}
+          validate={renameValidate}
+          onCommit={(value) => onRenameCommit?.(asset, value)}
+          onCancel={() => onRenameCancel?.()}
+          ariaLabel={t('editor.contentBrowser.contextMenu.rename')}
+        />
+      ) : (
+        <div className="cb-fe-label has-kind">
+          <div className="cb-grid-label cb-fe-name" title={asset.name}>{asset.name}</div>
+          <div className="cb-card-meta cb-card-kind">{labelForAssetKind(asset.kind, t)}</div>
+        </div>
+      )}
 
       {hovered && tipXY && createPortal(
         <div className="cb-rich-tooltip" style={{ position: 'fixed', left: tipXY.left, top: tipXY.top }}>

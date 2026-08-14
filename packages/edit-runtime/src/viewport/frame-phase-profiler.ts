@@ -7,6 +7,7 @@ import {
 	createProfiler,
 	validateProfileCapture,
 	type ProfileCapture,
+	type ProfileDetail,
 	type ProfileResult,
 	type Profiler,
 	type RecorderSession,
@@ -18,6 +19,7 @@ const DEFAULT_PROFILE_POLL_MS = 4;
 
 interface FramePhaseDiagnosticsConfig {
 	readonly enabled?: boolean;
+	readonly detail?: ProfileDetail;
 }
 
 type DiagnosticGlobal = typeof globalThis & {
@@ -73,12 +75,13 @@ function timingSource(source: OpenPhase["source"]): "frame" | "render" {
 function observerSession(
 	performanceApi: Performance | undefined,
 	onPhaseEnd: FramePhaseProfilerOptions["onPhaseEnd"],
+	detail: ProfileDetail,
 ): RecorderSession {
 	let frameId: number | undefined;
 	const openPhases: OpenPhase[] = [];
 	return {
 		captureId: OBSERVER_CAPTURE_ID,
-		detail: "owner",
+		detail,
 		beginFrame(nextFrameId) {
 			frameId = nextFrameId;
 			openPhases.length = 0;
@@ -205,8 +208,14 @@ export function createFramePhaseProfiler(
 	options: FramePhaseProfilerOptions = {},
 ): Profiler | undefined {
 	const diagnosticGlobal = globalThis as DiagnosticGlobal;
-	const timingEnabled = diagnosticGlobal[DIAGNOSTICS_KEY]?.enabled === true;
-	if (!timingEnabled && options.onPhaseEnd === undefined && options.enableCpuCapture !== true) return undefined;
+	const diagnostics = diagnosticGlobal[DIAGNOSTICS_KEY];
+	const timingEnabled = diagnostics?.enabled === true;
+	if (
+		!timingEnabled &&
+		options.onPhaseEnd === undefined &&
+		options.enableCpuCapture !== true
+	)
+		return undefined;
 
 	const performanceApi = timingEnabled ? globalThis.performance : undefined;
 	if (
@@ -218,7 +227,10 @@ export function createFramePhaseProfiler(
 	}
 
 	const engineProfiler = createProfiler();
-	const observer = observerSession(performanceApi, options.onPhaseEnd);
+	const observesPhases = timingEnabled || options.onPhaseEnd !== undefined;
+	const observer = observesPhases
+		? observerSession(performanceApi, options.onPhaseEnd, diagnostics?.detail ?? "owner")
+		: undefined;
 	const decorated = new WeakMap<RecorderSession, RecorderSession>();
 	const sessionFor = (raw: RecorderSession): RecorderSession => {
 		const existing = decorated.get(raw);

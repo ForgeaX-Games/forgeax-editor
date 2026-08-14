@@ -19,12 +19,14 @@ import {
   hasHierarchyViewFilter,
   hierarchyTypeCategory,
   resetHierarchyViewState,
+  setHierarchyEditorInspection,
   setHierarchySearchQuery,
   subscribeHierarchyPanelState,
   toggleHierarchyCollapseAll,
   toggleHierarchyCollapsed,
   toggleHierarchyColumn,
   toggleHierarchyFilter,
+  toggleHierarchyShowEditorWorld,
 } from '../hierarchy-state';
 
 // hierarchy-state owns a module-global view snapshot + localStorage-backed
@@ -123,6 +125,26 @@ describe('view-state mutators', () => {
     expect(snapshot.searchQuery).toBe('');
     expect(snapshot.filters.size).toBe(0);
     expect(snapshot.columns.mobility).toBe(false);
+  });
+
+  it('toggles showEditorWorld off by default and clears chrome inspection on reset', () => {
+    expect(getHierarchyPanelSnapshot().showEditorWorld).toBe(false);
+    expect(getHierarchyPanelSnapshot().editorInspectionId).toBeNull();
+
+    toggleHierarchyShowEditorWorld();
+    expect(getHierarchyPanelSnapshot().showEditorWorld).toBe(true);
+    setHierarchyEditorInspection(7 as never);
+    expect(getHierarchyPanelSnapshot().editorInspectionId).toBe(7 as never);
+
+    toggleHierarchyShowEditorWorld();
+    expect(getHierarchyPanelSnapshot().showEditorWorld).toBe(false);
+    expect(getHierarchyPanelSnapshot().editorInspectionId).toBeNull();
+
+    toggleHierarchyShowEditorWorld();
+    setHierarchyEditorInspection(7 as never);
+    resetHierarchyViewState();
+    expect(getHierarchyPanelSnapshot().showEditorWorld).toBe(false);
+    expect(getHierarchyPanelSnapshot().editorInspectionId).toBeNull();
   });
 
   it('collapses/expands entities and the scene-folder root through the persisted set', () => {

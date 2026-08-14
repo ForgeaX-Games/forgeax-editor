@@ -1,6 +1,7 @@
-import { memo, useCallback, type MouseEvent } from 'react';
+import { memo, useCallback, type CSSProperties, type MouseEvent } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForFileFamily, ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
+import { CBInlineRename } from './CBInlineRename';
 import type { CBFile } from './types';
 
 interface Props {
@@ -21,6 +22,10 @@ interface Props {
   onToggleExpand: (path: string) => void;
   onClickIndex: (index: number, e: MouseEvent) => void;
   onFocusItem: (item: CBFile) => void;
+  renaming?: boolean;
+  renameValidate?: (value: string) => string | null;
+  onRenameCommit?: (item: CBFile, value: string) => void;
+  onRenameCancel?: () => void;
 }
 
 interface FileDragDataTransfer {
@@ -56,11 +61,19 @@ function CBFileItemImpl({
   onToggleExpand,
   onClickIndex,
   onFocusItem,
+  renaming = false,
+  renameValidate,
+  onRenameCommit,
+  onRenameCancel,
 }: Props) {
   const { t } = useTranslation();
   const fav = favorite ?? file.isFavorite;
 
   const handleClick = useCallback((e: MouseEvent) => {
+    // Focus the card so the grid's focused-item ref updates — this is what lets
+    // F2 (and other focused-item commands) act on THIS file. Mirrors the asset
+    // card; without it a file click leaves focus on the last-focused asset.
+    (e.currentTarget as HTMLDivElement).focus();
     onSelect(file);
     onClickIndex(index, e);
   }, [onSelect, onClickIndex, file, index]);
@@ -72,6 +85,7 @@ function CBFileItemImpl({
   return (
     <div
       className={`cb-grid-item cb-fe-card cb-file-card${selected ? ' sel' : ''}${expanded ? ' cb-pack-expanded' : ''}`}
+      style={{ '--cb-type-color': colorForFileFamily(file.family) } as CSSProperties}
       data-testid="cb-file-item"
       data-file-path={file.path}
       tabIndex={tabIndex}
@@ -101,8 +115,20 @@ function CBFileItemImpl({
       <div className={`cb-grid-thumb cb-fe-thumb cb-file-thumb is-${file.family}`}>
         <span className="cb-file-icon"><FileFamilyIcon family={file.family} /></span>
       </div>
-      <div className="cb-grid-label cb-fe-name" title={file.name}>{file.name}</div>
-      <div className="cb-card-meta cb-card-kind" style={{ color: colorForFileFamily(file.family) }}>{file.kindLabel}</div>
+      {renaming ? (
+        <CBInlineRename
+          initial={file.name}
+          validate={renameValidate}
+          onCommit={(value) => onRenameCommit?.(file, value)}
+          onCancel={() => onRenameCancel?.()}
+          ariaLabel={t('editor.contentBrowser.contextMenu.rename')}
+        />
+      ) : (
+        <div className="cb-fe-label has-kind">
+          <div className="cb-grid-label cb-fe-name" title={file.name}>{file.name}</div>
+          <div className="cb-card-meta cb-card-kind">{file.kindLabel}</div>
+        </div>
+      )}
     </div>
   );
 }
