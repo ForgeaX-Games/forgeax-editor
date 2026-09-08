@@ -59,6 +59,59 @@ describe('resolveGameEngineEntry', () => {
     }
   });
 
+  test('expands package ./* exports for public facade imports', () => {
+    const hostRoot = mkdtempSync(join(tmpdir(), 'forgeax-engine-facades-'));
+    try {
+      const packageDir = resolve(hostRoot, 'packages/engine');
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        resolve(packageDir, 'package.json'),
+        JSON.stringify({
+          name: '@forgeax/engine',
+          exports: {
+            './*': {
+              import: './dist/facades/*.mjs',
+            },
+          },
+        }),
+      );
+      expect(resolveGameEngineEntry('@forgeax/engine/ecs', { packageRoots: [hostRoot] })).toBe(
+        resolve(packageDir, 'dist/facades/ecs.mjs'),
+      );
+      expect(resolveGameEngineEntry('@forgeax/engine/input', { packageRoots: [hostRoot] })).toBe(
+        resolve(packageDir, 'dist/facades/input.mjs'),
+      );
+    } finally {
+      rmSync(hostRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('prefers the browser export over the Node import entry', () => {
+    const hostRoot = mkdtempSync(join(tmpdir(), 'forgeax-editor-browser-export-'));
+    try {
+      const packageDir = resolve(hostRoot, 'packages/engine-dual-export');
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        resolve(packageDir, 'package.json'),
+        JSON.stringify({
+          name: '@forgeax/engine-dual-export',
+          exports: {
+            '.': {
+              types: './dist/index.d.ts',
+              browser: './dist/browser.mjs',
+              import: './dist/index.mjs',
+            },
+          },
+        }),
+      );
+      expect(resolveGameEngineEntry('@forgeax/engine-dual-export', { packageRoots: [hostRoot] })).toBe(
+        resolve(packageDir, 'dist/browser.mjs'),
+      );
+    } finally {
+      rmSync(hostRoot, { recursive: true, force: true });
+    }
+  });
+
   test('leaves unavailable package exports unresolved', () => {
     expect(resolveGameEngineEntry('@forgeax/not-an-engine-package')).toBeNull();
     expect(resolveGameEngineEntry('@forgeax/engine-assets-runtime/not-exported')).toBeNull();

@@ -8,7 +8,9 @@
 import type { CommandError, EditorOp } from '../types';
 import type { DispatchResult } from '../io/gateway';
 import type { CommandOrigin } from '../io/gateway-history';
+import { getActiveRuntimeUiGraph } from '../io/runtime-ui-diagnostics';
 import { broadcastAssetsChanged } from './assets-changed';
+import { gateway } from './gateway';
 import { resolveGamePath } from '../util/path-resolver';
 import {
   dispatchViewportRuntimeOperation,
@@ -91,14 +93,25 @@ async function refreshHostAfterDirectoryOperation(
  * Dispatch a UI operation to the active authority.
  *
  * This seam is for projection clients. Runtime-local code already owns a Gateway
- * and calls it directly. A disconnected client fails closed instead of mutating
- * the shell singleton, which must never become a shadow authoring authority.
+ * and calls it directly. A disconnected iframe-shell client fails closed instead
+ * of mutating a shadow World. Same-window Studio still hosts the live
+ * EditGateway (Hierarchy already reads it), so Play/Stop must use that Gateway
+ * when the panel Runtime client has not bound — or a sibling boot unbind left
+ * the client cache disconnected.
  */
 export async function dispatchActiveEditorOperation(
   operation: EditorOp,
   origin: CommandOrigin = 'human',
 ): Promise<DispatchResult> {
   if (getViewportRuntimeClientSnapshot().status !== 'ready') {
+    if (getActiveRuntimeUiGraph() !== null) {
+      const { kind } = operation;
+      return refreshSelectionAfterSuccess(kind, gateway.dispatch(operation, origin));
+    }
+    console.warn(
+      '[editor] operation blocked: Viewport Runtime is disconnected',
+      operation.kind,
+    );
     return {
       ok: false,
       error: {

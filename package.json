@@ -22,6 +22,7 @@
     "./bridge": "./packages/edit-runtime/src/bridge.ts",
     "./default-dock-layout": "./packages/edit-runtime/src/default-dock-layout.ts",
     "./keyboard-router-deps": "./packages/edit-runtime/src/keyboard-router-deps.ts",
+    "./menu-contributions": "./packages/edit-runtime/src/menu-contributions.ts",
     "./panels": "./packages/panels/src/manifest.ts",
     "./play": "./packages/edit-runtime/src/public/play.ts",
     "./protocol": "./packages/edit-runtime/src/public/protocol.ts",

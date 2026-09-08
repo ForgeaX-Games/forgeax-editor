@@ -26,7 +26,11 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename, join } from 'node:path';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
-import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from './scripts/vite/engine-vite-preset';
+import {
+  ENGINE_EXECUTION_ISOLATION_HEADERS,
+  engineVitePreset,
+  resolveBrowserPackageExportPath,
+} from './scripts/vite/engine-vite-preset';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolveWorktreePorts } from './scripts/lib/worktree-ports.ts';
 import tailwindcss from 'tailwindcss';
@@ -138,11 +142,11 @@ for (const id of enginePreset.resolve.dedupe) {
   try {
     const packageDir = realpathSync(resolve(ENGINE_LINK_DIR, packageName));
     const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
-      exports?: Record<string, string | { import?: string } | null>;
+      exports?: Record<string, string | { browser?: string; import?: string } | null>;
     };
     for (const [subpath, entry] of Object.entries(manifest.exports ?? {})) {
       if (subpath.includes('*')) continue;
-      const importPath = typeof entry === 'string' ? entry : entry?.import;
+      const importPath = resolveBrowserPackageExportPath(entry);
       if (typeof importPath !== 'string') continue;
       const specifier = subpath === '.'
         ? id

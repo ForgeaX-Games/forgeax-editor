@@ -73,6 +73,30 @@ export interface LiveWorldFrameEndPublisher {
   unbind(world: unknown): void;
 }
 
+export interface RendererFrameOpportunity {
+  readonly subscribeFrameEnd?: (listener: () => void) => () => void;
+  readonly subscribe?: (listener: (event: { readonly kind?: string }) => void) => () => void;
+}
+
+/**
+ * Packaged Engine renderers publish `frame-submitted` on `subscribe()`.
+ * `subscribeFrameEnd` is a legacy hook some hosts still expose.
+ */
+export function subscribeRendererFrameOpportunity(
+  renderer: RendererFrameOpportunity,
+): (listener: () => void) => () => void {
+  if (typeof renderer.subscribeFrameEnd === 'function') {
+    return renderer.subscribeFrameEnd.bind(renderer);
+  }
+  if (typeof renderer.subscribe === 'function') {
+    const subscribe = renderer.subscribe.bind(renderer);
+    return (listener) => subscribe((event) => {
+      if (event.kind === 'frame-submitted') listener();
+    });
+  }
+  return () => () => undefined;
+}
+
 export function createLiveWorldFrameEndPublisher(
   graph: LiveWorldPublisherGraph,
   subscribeFrameEnd: (listener: () => void) => () => void,

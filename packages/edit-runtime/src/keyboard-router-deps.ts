@@ -163,3 +163,17 @@ export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
     handleViewportKeyDown: routeViewportKeydown,
   };
 }
+
+export function createEditorKeyboardExtension(_deps: KeyboardRouterDepsShape): {
+  readonly id: string;
+  readonly version: string;
+  setup(): () => void;
+} {
+  return {
+    id: 'editor.keyboard-router',
+    version: '1.0.0',
+    setup() {
+      return () => {};
+    },
+  };
+}

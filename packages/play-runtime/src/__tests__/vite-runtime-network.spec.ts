@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { assetCorsOrigins, hmrClientPort } from '../../vite.config';
+import { assetCorsOrigins, hmrClientPort, playViteHmrOptions } from '../../vite.config';
+import { PLAY_VITE_HMR_PATH } from '../watch-policy';
 
 describe('play-runtime Vite network projection', () => {
   test('keeps every loopback origin and uses the isolated interface port by default', () => {
@@ -12,6 +13,10 @@ describe('play-runtime Vite network projection', () => {
       'https://localhost:28920',
     ]);
     expect(hmrClientPort(env)).toBe(28920);
+    expect(playViteHmrOptions(env)).toEqual({
+      clientPort: 28920,
+      path: PLAY_VITE_HMR_PATH,
+    });
   });
 
   test('honours the derived CORS set and an explicit reverse-proxy HMR port', () => {
@@ -29,5 +34,9 @@ describe('play-runtime Vite network projection', () => {
 
     expect(assetCorsOrigins(env)).toEqual(env.FORGEAX_ASSET_CORS_ORIGINS.split(','));
     expect(hmrClientPort(env)).toBe(443);
+    expect(playViteHmrOptions(env)).toEqual({
+      clientPort: 443,
+      path: PLAY_VITE_HMR_PATH,
+    });
   });
 });

@@ -35,6 +35,7 @@ import {
   dispatchActiveEditorOperation,
   entComponents,
   gateway,
+  getActiveRuntimeUiGraph,
   getViewportRuntimeClientSnapshot,
   getGizmoMode,
   getGizmoPivot,
@@ -54,6 +55,7 @@ import {
 } from '@forgeax/editor-core';
 import { getLocale, useTranslation, type Locale } from '@forgeax/editor-core/i18n';
 import {
+  getViewportQuadrant,
   type DisplayMode,
   type RunMode,
 } from './viewport-quadrant';
@@ -81,6 +83,7 @@ interface ViewportStatusProjection {
   readonly gizmoMode?: GizmoMode;
   readonly gizmoSpace?: GizmoSpace;
   readonly gizmoPivot?: GizmoPivot;
+  readonly playPhase?: 'edit' | 'starting' | 'play' | 'failed';
 }
 
 const DISCONNECTED_VIEWPORT_STATUS: ViewportStatusProjection = {
@@ -91,6 +94,7 @@ const DISCONNECTED_VIEWPORT_STATUS: ViewportStatusProjection = {
   gizmoMode: getGizmoMode(),
   gizmoSpace: getGizmoSpace(),
   gizmoPivot: getGizmoPivot(),
+  playPhase: 'edit',
 };
 const viewportContextSignatures = new WeakMap<AppHost, string>();
 let projectedFps = 0;
@@ -157,28 +161,48 @@ function useProjectedGizmoState(): ProjectedGizmoState {
   return useSyncExternalStore(subscribeProjectedGizmo, readProjectedGizmo, readProjectedGizmo);
 }
 
+function localViewportStatus(): ViewportStatusProjection {
+  const quadrant = getViewportQuadrant();
+  return {
+    quadrant,
+    fps: getFps(),
+    canUndo: gateway.canUndo(),
+    canRedo: gateway.canRedo(),
+    gizmoMode: getGizmoMode(),
+    gizmoSpace: getGizmoSpace(),
+    gizmoPivot: getGizmoPivot(),
+    playPhase: gateway.playPhase,
+  };
+}
+
+function isViewportPlaying(status: ViewportStatusProjection): boolean {
+  return status.quadrant.run === 'play'
+    || status.playPhase === 'play'
+    || status.playPhase === 'starting';
+}
+
 function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mounted: boolean): void {
   if (syncProjectedGizmo(status)) syncEditorContext(host);
   const q = status.quadrant;
-  const signature = `${mounted}:${q.run}:${q.display}:${q.control}:${status.fps}:${status.canUndo}:${status.canRedo}`;
+  const playing = isViewportPlaying(status);
+  const signature = `${mounted}:${playing}:${q.run}:${status.playPhase}:${q.display}:${q.control}:${status.fps}:${status.canUndo}:${status.canRedo}`;
   if (projectedFps !== status.fps) {
     projectedFps = status.fps;
     for (const listener of projectedFpsListeners) listener();
   }
   if (viewportContextSignatures.get(host) === signature) return;
   viewportContextSignatures.set(host, signature);
-  const running = q.run !== 'edit';
-  document.documentElement.dataset.forgeaxViewportRunning = String(running);
+  document.documentElement.dataset.forgeaxViewportRunning = String(playing);
   window.dispatchEvent(new CustomEvent(APP_EVENTS.viewportRunChanged, {
-    detail: { running },
+    detail: { running: playing },
   }));
   setContextKeys(host, {
     'panel.viewport.mounted': mounted,
     'panel.viewport.run': q.run,
     'panel.viewport.display': q.display,
-    'panel.viewport.isEdit': q.run === 'edit',
-    'panel.viewport.isPlay': q.run === 'play',
-    'panel.viewport.isRunning': q.run !== 'edit',
+    'panel.viewport.isEdit': !playing,
+    'panel.viewport.isPlay': playing,
+    'panel.viewport.isRunning': playing,
     'panel.viewport.isGame': q.display === 'game',
     'panel.viewport.isScene': q.display === 'scene',
     'panel.viewport.control': q.control,
@@ -191,6 +215,10 @@ function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mo
 
 async function refreshViewportContext(host: AppHost): Promise<void> {
   if (getViewportRuntimeClientSnapshot().status !== 'ready') {
+    if (getActiveRuntimeUiGraph() !== null) {
+      syncViewportContext(host, localViewportStatus(), true);
+      return;
+    }
     syncViewportContext(host, DISCONNECTED_VIEWPORT_STATUS, false);
     return;
   }
@@ -202,6 +230,10 @@ async function refreshViewportContext(host: AppHost): Promise<void> {
     }
   } catch {
     // A carrier reload invalidates the cache; the next connected poll repopulates it.
+  }
+  if (getActiveRuntimeUiGraph() !== null) {
+    syncViewportContext(host, localViewportStatus(), true);
+    return;
   }
   syncViewportContext(host, DISCONNECTED_VIEWPORT_STATUS, false);
 }
@@ -348,10 +380,14 @@ async function captureRhiFrame(host: AppHost): Promise<void> {
 
 function setRunMode(mode: RunMode): void {
   if (mode === 'play') {
-    void dispatchActiveEditorOperation({ kind: 'play', dirtyPolicy: 'last-saved' });
+    void dispatchActiveEditorOperation({ kind: 'play', dirtyPolicy: 'last-saved' }).then((result) => {
+      if (!result.ok) console.warn('[viewport-panel] play blocked', result.error);
+    });
     return;
   }
-  void dispatchActiveEditorOperation({ kind: 'stop' });
+  void dispatchActiveEditorOperation({ kind: 'stop' }).then((result) => {
+    if (!result.ok) console.warn('[viewport-panel] stop blocked', result.error);
+  });
 }
 
 function setDisplay(display: DisplayMode): void {

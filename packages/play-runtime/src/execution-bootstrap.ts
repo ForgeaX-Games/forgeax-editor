@@ -195,6 +195,7 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
         assets.configureRuntimeBinding(
           data.runtimeBinding as unknown as RuntimeAssetBinding,
         );
+        await assets.refreshCatalog();
       }
       if (data.packIndexUrl !== undefined) assets.configurePackIndex(data.packIndexUrl);
 
@@ -270,7 +271,9 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
 
       const pulse = createPlayExecutionPulse();
       registerCleanup(installCompletedFrameHeartbeat({
-        subscribe: (listener) => renderer.subscribeFrameEnd(listener),
+        subscribe: (listener) => renderer.subscribe((event) => {
+          if (event.kind === 'frame-submitted') listener();
+        }),
         now: () => performance.now(),
         publish: (heartbeat) => {
           post(context.executionBootstrapHost.port, {

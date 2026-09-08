@@ -3,6 +3,7 @@ import {
   type ExecutionApp,
   type ExecutionBootstrapValue,
 } from '@forgeax/engine-app';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { PointerLockProvider } from '@forgeax/engine-input';
 import {
@@ -57,7 +58,7 @@ export async function startPlayExecution(
       },
       lockProvider: options.lockProvider,
     },
-    { shaderManifestUrl: '/preview/shaders/manifest.json' },
+    forgeaxBundlerAdapter(),
   );
   if (!created.ok) {
     channel.port1.close();

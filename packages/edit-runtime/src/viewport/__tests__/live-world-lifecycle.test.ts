@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { createRuntimeUiGraph } from '@forgeax/editor-core';
-import { createLiveWorldFrameEndPublisher } from '../run-lifecycle';
+import { createLiveWorldFrameEndPublisher, subscribeRendererFrameOpportunity } from '../run-lifecycle';
 
 describe('live world FrameEnd publisher lifecycle', () => {
   it('subscribes one renderer-owned publisher for the active World and publishes only at frame end', () => {
@@ -93,5 +93,29 @@ describe('live world FrameEnd publisher lifecycle', () => {
       publisher.unbind(worldA);
       assertBaseline();
     }
+  });
+
+  it('maps packaged renderer subscribe(frame-submitted) onto the FrameEnd publisher', () => {
+    const events: Array<(event: { readonly kind?: string }) => void> = [];
+    const subscribe = subscribeRendererFrameOpportunity({
+      subscribe: (listener) => {
+        events.push(listener);
+        return () => { events.length = 0; };
+      },
+    });
+    const calls: string[] = [];
+    const graph = {
+      bindWorld: () => 1,
+      unbindWorld: () => true,
+      publish: () => { calls.push('publish'); return 'published' as const; },
+    };
+    const publisher = createLiveWorldFrameEndPublisher(graph, subscribe);
+    const world = {};
+    publisher.bind(world);
+    events[0]?.({ kind: 'error' });
+    expect(calls).toEqual([]);
+    events[0]?.({ kind: 'frame-submitted' });
+    expect(calls).toEqual(['publish']);
+    publisher.unbind(world);
   });
 });

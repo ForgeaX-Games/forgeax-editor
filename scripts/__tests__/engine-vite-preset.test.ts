@@ -16,8 +16,10 @@ import {
   discoverGameMaterialPackages,
   discoverParticleCodeModules,
   engineVitePreset,
+  resolveBrowserPackageExportPath,
   resolveEngineDdcOptions,
   resolveEngineProjectDdcRoot,
+  resolveGameEngineEntry,
 } from '../vite/engine-vite-preset';
 import { engineVitePreset as publicEngineVitePreset } from '../../engine-vite-preset';
 
@@ -255,6 +257,37 @@ describe('shared engine Vite preset', () => {
     } finally {
       await pack!.closeBundle();
     }
+  });
+});
+
+describe('browser package export resolution', () => {
+  test('prefers browser over Node import for dual-export packages', () => {
+    expect(resolveBrowserPackageExportPath({
+      browser: './dist/browser.mjs',
+      import: './dist/index.mjs',
+    })).toBe('./dist/browser.mjs');
+    expect(resolveBrowserPackageExportPath({ import: './dist/index.mjs' })).toBe('./dist/index.mjs');
+    expect(resolveBrowserPackageExportPath('./dist/flat.mjs')).toBe('./dist/flat.mjs');
+    expect(resolveBrowserPackageExportPath(undefined)).toBeUndefined();
+  });
+
+  test('resolveGameEngineEntry maps dual-export engine packages to the browser file', () => {
+    const hostRoot = tempRoot();
+    const packageDir = resolve(hostRoot, 'packages/engine-dual-export');
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+      name: '@forgeax/engine-dual-export',
+      exports: {
+        '.': {
+          types: './dist/index.d.ts',
+          browser: './dist/browser.mjs',
+          import: './dist/index.mjs',
+        },
+      },
+    }));
+    expect(resolveGameEngineEntry('@forgeax/engine-dual-export', { packageRoots: [hostRoot] })).toBe(
+      resolve(packageDir, 'dist/browser.mjs'),
+    );
   });
 });
 

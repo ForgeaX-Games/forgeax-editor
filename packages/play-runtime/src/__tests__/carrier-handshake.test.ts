@@ -40,6 +40,7 @@ describe('Play carrier handshake', () => {
     expect(source).toContain('runtimeGeneration: expectedGeneration');
     expect(source).toContain("carrierId: qp.get('carrierId')?.trim() || undefined");
     expect(source).toContain("carrierKind: qp.get('carrierKind') === 'iframe'");
+    expect(source).toContain('execution: toVagExecutionEnvelope(carrierExecutionReport)');
     expect(source).toContain("sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(");
     expect(VagCarrierHeartbeatSchema.safeParse({ type: 'VAG_CARRIER_HEARTBEAT', payload: {
       ...payload,

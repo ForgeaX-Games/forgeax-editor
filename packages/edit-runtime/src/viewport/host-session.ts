@@ -41,7 +41,7 @@ import type {
   RemoteGameplayTransport,
   SelectedAsset,
 } from '@forgeax/editor-core';
-import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
+import { createLiveWorldFrameEndPublisher, createRunLifecycle, subscribeRendererFrameOpportunity, type RendererFrameOpportunity, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
 import {
@@ -784,13 +784,11 @@ export function createHostSession(deps: HostSessionDeps): {
     };
 
     const runtimeUiGraph = createRuntimeUiGraph();
-    const rendererSubscribeFrameEnd = (renderer as unknown as { subscribeFrameEnd?: (listener: () => void) => () => void }).subscribeFrameEnd;
     const liveWorldPublisher = createLiveWorldFrameEndPublisher(
       runtimeUiGraph,
-      rendererSubscribeFrameEnd === undefined ? (() => () => undefined) : rendererSubscribeFrameEnd.bind(renderer),
+      subscribeRendererFrameOpportunity(renderer as RendererFrameOpportunity),
     );
-    const canPublishFrameEnd = rendererSubscribeFrameEnd !== undefined;
-    if (canPublishFrameEnd) liveWorldPublisher.bind(ctx.world);
+    liveWorldPublisher.bind(ctx.world);
 
     const remoteCarrier = ctx.playChildUrl !== undefined
       && app.releaseSurfacePreserveWorld !== undefined
@@ -867,7 +865,7 @@ export function createHostSession(deps: HostSessionDeps): {
     runLifecycle = createRunLifecycle({
       editorApp: app,
       gateway,
-      publisher: canPublishFrameEnd ? liveWorldPublisher : undefined,
+      publisher: liveWorldPublisher,
       editWorld: ctx.world,
       ...(remoteCarrier === undefined ? {} : { remoteCarrier }),
       assemble: async (): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> => {
@@ -1046,9 +1044,7 @@ export function createHostSession(deps: HostSessionDeps): {
 
     const dispose = (options: { flushPendingSave?: boolean } = {}): void => {
       runLifecycle?.dispose();
-      if (canPublishFrameEnd) {
-        try { liveWorldPublisher.unbind(ctx.world as never); } catch { /* best effort */ }
-      }
+      try { liveWorldPublisher.unbind(ctx.world as never); } catch { /* best effort */ }
       // Flush any pending save one last time before tearing the session down so a
       // cross-game switch never drops the previous game's unsaved edits. Asset-
       // driven reloads pass flushPendingSave:false because the disk change is the

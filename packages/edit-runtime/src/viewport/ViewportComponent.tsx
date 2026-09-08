@@ -124,6 +124,7 @@ import {
 import {
   createViewportRuntimeTransportService,
   createInProcessViewportRuntimeClient,
+  shouldBindInProcessViewportRuntimeClient,
   installViewportRuntimeConnectionHost,
   VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
   VIEWPORT_RUNTIME_OPEN_ASSET,
@@ -1917,7 +1918,25 @@ async function bootViewport(
       runtime: runtimeIdentity,
       service,
     }));
-  } else if (runtimeOwner !== null && runtimeUiGraph !== null) {
+    // Detached popup/Tauri windows still host PanelShell in THIS window.
+    // Broadcast serves other windows; the local client is what enables Play.
+    if (shouldBindInProcessViewportRuntimeClient(runtimeIdentity.carrierKind)) {
+      const localClient: MessagePortTransportClient = createInProcessViewportRuntimeClient(service);
+      const unbindLocalClient = bindViewportRuntimeClient(
+        runtimeIdentity,
+        localClient,
+        gameSession.runtimeBinding?.catalogRoots,
+      );
+      const uninstallPreviewExecutorLease = installInProcessPreviewExecutorLeaseHost(
+        bindVfxPreviewExecutorLease,
+      );
+      registerTeardown(() => {
+        uninstallPreviewExecutorLease();
+        unbindLocalClient();
+        localClient.dispose();
+      });
+    }
+  } else if (runtimeOwner !== null && runtimeUiGraph !== null && runtimeIdentity.carrierKind === 'iframe') {
     const runtimeHostOrigin = readViewportRuntimeHostOrigin(window.location.search, window.location.origin);
     registerTeardown(configureEditorPageNavigation({
       openAsset: async (asset) => {
@@ -1994,12 +2013,14 @@ async function bootViewport(
         revision: snapshot.revision,
       }, runtimeHostOrigin);
     }));
-  } else if (runtimeOwner === null && runtimeUiGraph !== null) {
+  } else if (runtimeUiGraph !== null && shouldBindInProcessViewportRuntimeClient(runtimeIdentity.carrierKind)) {
     // Studio's current editor is a single realm: the shell and this Runtime
     // share one window, so there is no iframe MessagePort handshake to bind the
     // panel-side viewport client. Reuse the exact canonical service locally so
     // toolbar enablement and projection queries observe the same Runtime-owned
     // Gateway/World surface as the isolated carrier path.
+    // WebView2/Tauri may expose a wrapper `window.parent !== window` even for
+    // the main window; that is not an iframe carrier and must not skip bind.
     const service = createViewportRuntimeTransportService({
       runtime: runtimeIdentity,
       referenceCreationScope,

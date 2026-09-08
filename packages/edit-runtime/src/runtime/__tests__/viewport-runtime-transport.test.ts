@@ -15,6 +15,7 @@ import {
   VIEWPORT_PREVIEW_EXECUTOR_CONNECTED,
   VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT,
   createInProcessViewportRuntimeClient,
+  shouldBindInProcessViewportRuntimeClient,
   createViewportProjectionQuery,
   createViewportReferenceCreationJournalStore,
   createViewportRuntimeTransportService,
@@ -118,6 +119,13 @@ describe('viewport runtime transport', () => {
 
     client.dispose();
     await expect(client.request(request)).rejects.toThrow('viewport-runtime-client-disposed');
+  });
+
+  test('binds the in-process shell client for desktop hosts so Play is not stuck disabled', () => {
+    expect(shouldBindInProcessViewportRuntimeClient('local')).toBe(true);
+    expect(shouldBindInProcessViewportRuntimeClient('browser-page')).toBe(true);
+    expect(shouldBindInProcessViewportRuntimeClient('tauri-webview')).toBe(true);
+    expect(shouldBindInProcessViewportRuntimeClient('iframe')).toBe(false);
   });
 
   test('accepts one trusted generation and rejects source, stale, and replayed connections', () => {
@@ -574,6 +582,30 @@ describe('viewport runtime transport', () => {
       gateway,
       readViewportStatus: () => viewport,
     });
+    expect(query({ kind: 'viewport.status' })).toMatchObject({
+      status: 'ready',
+      value: viewport,
+    });
+  });
+
+  test('keeps viewport.status ready when the selector graph is still unbound', () => {
+    const graph = { stats: () => ({ status: 'unbound' }) } as any;
+    const gateway = { buildQueryFn: () => () => ({ ok: true, rows: [] }) } as any;
+    const viewport = {
+      quadrant: { run: 'edit', display: 'scene', control: 'editor' },
+      playPhase: 'edit',
+      lastPlayError: null,
+      fps: 60,
+      canUndo: false,
+      canRedo: false,
+    };
+    const query = createViewportProjectionQuery({
+      runtime,
+      graph,
+      gateway,
+      readViewportStatus: () => viewport,
+    });
+    expect(query({ kind: 'world.snapshot', with: ['Name'] }).status).toBe('unavailable');
     expect(query({ kind: 'viewport.status' })).toMatchObject({
       status: 'ready',
       value: viewport,

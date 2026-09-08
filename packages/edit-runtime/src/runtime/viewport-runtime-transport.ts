@@ -321,6 +321,17 @@ function fencedViewportRuntimeService(lifecycle: ViewportRuntimeServiceLifecycle
 }
 
 /**
+ * PanelShell Play/Stop enablement (`panel.viewport.mounted`) follows the
+ * in-process Runtime client. Iframe carriers handshake a MessagePort with the
+ * parent; every same-window host — including Tauri `tauri-webview` popouts and
+ * WebView2 wrappers where `window.parent !== window` — must still bind locally
+ * or the viewport toolbar stays disabled.
+ */
+export function shouldBindInProcessViewportRuntimeClient(carrierKind: string): boolean {
+  return carrierKind !== 'iframe';
+}
+
+/**
  * Adapt the canonical Runtime service to the panel client contract when the
  * Runtime and shell live in the same window. This keeps in-process Studio on
  * the same typed request path as the MessagePort carrier without inventing a
@@ -734,15 +745,18 @@ export function createViewportProjectionQuery(
     const base = { version: options.runtime.version, runtime: options.runtime, revision } as const;
     const query = parseProjectionQuery(input);
     if (query === null) return {
-      ...base,
-      status: 'faulted',
-      error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list.'),
-    };
-    if (options.graph.stats().status !== 'bound') return {
-      ...base,
-      status: 'unavailable',
-      error: projectionError('runtime-unavailable', 'Reconnect after the active Runtime binds its Edit World.'),
-    };
+        ...base,
+        status: 'faulted',
+        error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list.'),
+      };
+    // Play/Stop chrome reads viewport.status from Gateway/quadrant, not from the
+    // selector graph. Gating it on graph bind left the toolbar disabled whenever
+    // the packaged renderer only exposes `subscribe()` / frame-submitted.
+    if (query.kind !== 'viewport.status' && options.graph.stats().status !== 'bound') return {
+        ...base,
+        status: 'unavailable',
+        error: projectionError('runtime-unavailable', 'Reconnect after the active Runtime binds its Edit World.'),
+      };
     if (query.kind === 'runtime-ui.diagnostics') return {
       ...base,
       status: 'ready',

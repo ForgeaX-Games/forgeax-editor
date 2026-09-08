@@ -41,6 +41,7 @@
   "dependencies": {
     "@forgeax/editor-game-plugins": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/engine": "workspace:*",
     "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",

@@ -229,8 +229,29 @@ function normalizeGameFilePath(raw: string, viteRoot: string, dereference = true
   return process.platform === 'win32' ? p.toLowerCase() : p;
 }
 
+interface PackageExportTarget {
+  readonly browser?: string;
+  readonly import?: string;
+}
+
 interface PackageExports {
-  readonly [subpath: string]: string | { readonly import?: string } | undefined;
+  readonly [subpath: string]: string | PackageExportTarget | undefined;
+}
+
+/**
+ * Pick the browser graph entry from a package `exports` target.
+ *
+ * Vite client conditions prefer `browser` over `import`. Play/Edit hosts must
+ * honor the same order: `@forgeax/engine-plugin` ships a Node `import` that
+ * uses `createRequire`, and a separate `browser` build that does not.
+ */
+export function resolveBrowserPackageExportPath(
+  entry: string | PackageExportTarget | null | undefined,
+): string | undefined {
+  if (typeof entry === 'string') return entry;
+  if (typeof entry?.browser === 'string') return entry.browser;
+  if (typeof entry?.import === 'string') return entry.import;
+  return undefined;
 }
 
 /**
@@ -272,9 +293,19 @@ export function resolveGameEngineEntry(
         };
         if (manifest.name !== id.split('/').slice(0, 2).join('/')) continue;
         const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
-        const entry = manifest.exports?.[exportKey];
-        const importPath = typeof entry === 'string' ? entry : entry?.import;
-        if (typeof importPath === 'string') return resolve(packageDir, importPath);
+        const exactEntry = manifest.exports?.[exportKey];
+        const wildcardReplacement = subpath.join('/');
+        const wildcardEntry = wildcardReplacement
+          ? manifest.exports?.['./*']
+          : undefined;
+        const entry = exactEntry ?? wildcardEntry;
+        const importPath = resolveBrowserPackageExportPath(entry);
+        if (typeof importPath === 'string') {
+          const resolvedImportPath = exactEntry === undefined && wildcardEntry !== undefined
+            ? importPath.replaceAll('*', wildcardReplacement)
+            : importPath;
+          return resolve(packageDir, resolvedImportPath);
+        }
       } catch { /* try the next producer-owned package root */ }
     }
   }

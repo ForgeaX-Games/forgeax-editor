@@ -28,9 +28,20 @@ function gameTemplateEngineImports(dir: string): string[] {
 
 describe('new-game template Play imports', () => {
   test('resolves the engine plugin from the current Editor worktree', () => {
-    expect(resolvePlayEngineEntry('@forgeax/engine-plugin')).toBe(
-      resolve(PLAY_RUNTIME, '..', 'engine', 'packages/plugin/dist/index.mjs'),
+    const entry = resolvePlayEngineEntry('@forgeax/engine-plugin');
+    expect(entry).toBe(
+      resolve(PLAY_RUNTIME, '..', 'engine', 'packages/plugin/dist/browser.mjs'),
     );
+    const source = readFileSync(entry!, 'utf8');
+    expect(source).not.toMatch(/\bcreateRequire\b/);
+    expect(source).not.toMatch(/from ['"]module['"]/);
+  });
+
+  test('desktop Play closure declares the public engine umbrella', () => {
+    const play = JSON.parse(readFileSync(join(PLAY_RUNTIME, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(play.dependencies?.['@forgeax/engine']).toBe('workspace:*');
   });
 
   test('resolve from the standalone Play Runtime dependency graph', () => {

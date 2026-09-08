@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { candidateGameRoots } from '../host-session';
 
 describe('host-session game filesystem candidates', () => {
@@ -20,5 +22,13 @@ describe('host-session game filesystem candidates', () => {
     expect(candidateGameRoots('/workspace/games/sample', '')).toEqual([
       '/workspace/games/sample',
     ]);
+  });
+
+  it('binds the RuntimeUiGraph even when the renderer only exposes subscribe()', () => {
+    const source = readFileSync(resolve(import.meta.dir, '..', 'host-session.ts'), 'utf8');
+    expect(source).toContain('subscribeRendererFrameOpportunity');
+    expect(source).toContain('liveWorldPublisher.bind(ctx.world)');
+    expect(source).toContain('publisher: liveWorldPublisher');
+    expect(source).not.toContain('canPublishFrameEnd');
   });
 });

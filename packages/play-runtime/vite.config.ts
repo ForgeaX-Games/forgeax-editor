@@ -11,7 +11,7 @@ import {
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
 import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots.ts';
-import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy.ts';
+import { PLAY_RUNTIME_STATIC_WATCH_IGNORES, PLAY_VITE_HMR_PATH } from './src/watch-policy.ts';
 import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller.ts';
 import { setupSingleGameRootFarm } from './src/active-game-mount.ts';
 import {
@@ -59,7 +59,9 @@ const engineWorktreeResolve = {
   name: 'forgeax:play-engine-worktree-resolve',
   enforce: 'pre' as const,
   resolveId(id: string): string | null {
-    return id.startsWith('@forgeax/engine-') ? resolvePlayEngineEntry(id) : null;
+    return id === '@forgeax/engine' || id.startsWith('@forgeax/engine/') || id.startsWith('@forgeax/engine-')
+      ? resolvePlayEngineEntry(id)
+      : null;
   },
 };
 
@@ -271,6 +273,14 @@ export function assetCorsOrigins(env: Readonly<NodeJS.ProcessEnv> = process.env)
 
 export function hmrClientPort(env: Readonly<NodeJS.ProcessEnv> = process.env): number {
   return Number(env.FORGEAX_HMR_CLIENT_PORT ?? env.FORGEAX_INTERFACE_PORT ?? 18920);
+}
+
+/** Play HMR socket projection. Path is relative so Vite joins it onto `/preview/`. */
+export function playViteHmrOptions(env: Readonly<NodeJS.ProcessEnv> = process.env) {
+  return {
+    clientPort: hmrClientPort(env),
+    path: PLAY_VITE_HMR_PATH,
+  };
 }
 
 /** Project-bound identity used by local orchestration clients before opening preview. */
@@ -625,9 +635,8 @@ export default defineConfig({
     // open the HMR websocket to the *gateway* port (usually 443), not the
     // internal vite port. FORGEAX_HMR_CLIENT_PORT overrides
     // FORGEAX_INTERFACE_PORT for exactly this case.
-    hmr: {
-      clientPort: hmrClientPort(),
-    },
+    // path must not equal `base` (`/preview/`); see PLAY_VITE_HMR_PATH.
+    hmr: playViteHmrOptions(),
   },
   build: {
     ...enginePreset.build,

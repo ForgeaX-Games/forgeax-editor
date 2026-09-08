@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { buildKeyboardRouterDeps } from '../keyboard-router-deps';
+import { buildKeyboardRouterDeps, createEditorKeyboardExtension } from '../keyboard-router-deps';
 import { setViewportQuadrant } from '../viewport/viewport-quadrant';
 
 const EXPECTED_KEYS = [
@@ -91,5 +91,13 @@ describe('buildKeyboardRouterDeps — remaining legacy router bridge', () => {
       ctrlKey: false,
       metaKey: false,
     } as KeyboardEvent);
+  });
+});
+
+describe('createEditorKeyboardExtension — IDE assembly hook', () => {
+  it('exports a no-op AppExtension the Studio host can register', () => {
+    const extension = createEditorKeyboardExtension(buildKeyboardRouterDeps());
+    expect(extension.id).toBe('editor.keyboard-router');
+    expect(typeof extension.setup()).toBe('function');
   });
 });

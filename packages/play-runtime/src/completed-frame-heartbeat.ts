@@ -14,6 +14,10 @@ export interface CompletedFrameHeartbeatSource {
 /**
  * Build a bounded reporter driven only by renderer-completed frames.
  *
+ * The first completed frame publishes immediately (fps 0). Studio's Play
+ * chrome waits for that first `ready` heartbeat; skipping it left ▶ in place
+ * whenever the renderer submitted one frame and then stalled.
+ *
  * The caller supplies the completion timestamp so Host and Worker execution
  * lanes share one timing policy without creating another rAF or timer loop.
  */
@@ -30,12 +34,13 @@ export function createCompletedFrameHeartbeat(options: {
   let sentinel = 0;
 
   return (completedAtMs): CompletedFrameHeartbeat | undefined => {
+    frames += 1;
     if (sampleStartedAt === undefined || lastHeartbeatAt === undefined) {
       sampleStartedAt = completedAtMs;
       lastHeartbeatAt = completedAtMs;
-      return undefined;
+      sentinel += 1;
+      return { fps: lastFps, sentinel };
     }
-    frames += 1;
 
     const sampleElapsedMs = completedAtMs - sampleStartedAt;
     if (sampleElapsedMs >= sampleMs) {
