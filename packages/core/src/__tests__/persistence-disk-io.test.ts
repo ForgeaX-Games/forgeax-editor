@@ -36,6 +36,7 @@ import { Name, Transform } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { SceneInstance } from '@forgeax/engine-render';
 import {
+  attachPublicationFences,
   createDiskIo,
   type DiskIoDeps,
   type PersistenceGateway,
@@ -44,6 +45,7 @@ import {
 import { assetIO } from '../io/asset-io-facade';
 import { createScenePersistenceContext, type ScenePersistenceContext } from '../store/scene-persistence';
 import type { EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Fakes — nothing here touches the network or a real engine world. ──────────
 
@@ -123,10 +125,254 @@ describe('createDiskIo — factory shape + deps boundary (AC-02)', () => {
     expect(typeof io.inlineAssetCount).toBe('function');
   });
 });
+describe('attachPublicationFences — refreshes authored mount provenance', () => {
+  it('replaces a stale live mount fence with the current complete publication tuple', () => {
+    const guid = '019ffdb4-1000-7000-8000-000000000008';
+    const publication = {
+      schemaVersion: 'asset-publication/1',
+      sourcePath: 'assets/procedural-showcase.pack.ts',
+      sourceRevision: 'source-revision-current',
+      generation: 2,
+      digest: 'sha256:publication-current',
+      outputSetDigest: 'sha256:outputs-current',
+      outputs: [{ guid, sourceKey: 'scene/showcase', kind: 'scene', digest: 'sha256:scene-current', refs: [] }],
+      receipt: {
+        schemaVersion: 'asset-publication-receipt/1',
+        sourcePath: 'assets/procedural-showcase.pack.ts',
+        sourceRevision: 'source-revision-current',
+        inputFingerprint: 'sha256:receipt-current',
+        outputDigest: 'sha256:publication-current',
+        outputSetDigest: 'sha256:outputs-current',
+        externalEvidence: [],
+      },
+      externalEvidence: [],
+    };
+    const registry = {
+      catalogSnapshot: () => ({ version: 2, entries: [{ guid, kind: 'scene', packageUrl: 'scene.pack.json', sourcePath: publication.sourcePath, publication }], stale: false, diagnostics: [] }),
+    } as unknown as AssetRegistry;
+    const scene = {
+      kind: 'scene' as const,
+      entities: [],
+      mounts: [{
+        localId: 0 as never,
+        source: guid,
+        memberFirst: 1 as never,
+        memberCount: 1,
+        publicationFence: {
+          schemaVersion: 'scene-publication-fence/1' as const,
+          sourcePath: publication.sourcePath,
+          sourceRevision: 'source-revision-old',
+          publicationGeneration: 1,
+          outputDigest: 'sha256:publication-old',
+          outputSetDigest: 'sha256:outputs-old',
+          receiptIdentity: 'sha256:receipt-old',
+        },
+      }],
+    };
+
+    const saved = attachPublicationFences(scene, registry);
+
+    expect(saved.mounts?.[0]?.publicationFence).toEqual({
+      schemaVersion: 'scene-publication-fence/1',
+      sourcePath: publication.sourcePath,
+      sourceRevision: publication.sourceRevision,
+      publicationGeneration: publication.generation,
+      outputDigest: publication.digest,
+      outputSetDigest: publication.outputSetDigest,
+      receiptIdentity: 'sha256:receipt-current',
+    });
+  });
+	it("prefers a complete pack-index publication over a stale catalog replica row", () => {
+		const guid = "019ffdb4-1000-7000-8000-000000000009";
+		const stalePublication = {
+			schemaVersion: "asset-publication/1",
+			sourcePath: "assets/procedural-showcase.pack.ts",
+			sourceRevision: "source-revision-stale",
+			generation: 7,
+			digest: "sha256:publication-stale",
+			outputSetDigest: "sha256:outputs-stale",
+			outputs: [
+				{
+					guid,
+					sourceKey: "scene/showcase",
+					kind: "scene",
+					digest: "sha256:scene-stale",
+					refs: [],
+				},
+			],
+			receipt: {
+				schemaVersion: "asset-publication-receipt/1",
+				sourcePath: "assets/procedural-showcase.pack.ts",
+				sourceRevision: "source-revision-stale",
+				inputFingerprint: "sha256:receipt-stale",
+				outputDigest: "sha256:publication-stale",
+				outputSetDigest: "sha256:outputs-stale",
+				externalEvidence: [],
+			},
+			externalEvidence: [],
+		};
+		const currentPublication = {
+			...stalePublication,
+			sourceRevision: "source-revision-current",
+			generation: 8,
+			digest: "sha256:publication-current",
+			outputSetDigest: "sha256:outputs-current",
+			outputs: [
+				{
+					guid,
+					sourceKey: "scene/showcase",
+					kind: "scene",
+					digest: "sha256:scene-current",
+					refs: [],
+				},
+			],
+			receipt: {
+				...stalePublication.receipt,
+				sourceRevision: "source-revision-current",
+				inputFingerprint: "sha256:receipt-current",
+				outputDigest: "sha256:publication-current",
+				outputSetDigest: "sha256:outputs-current",
+			},
+		};
+		const registry = {
+			catalogSnapshot: () => ({
+				version: 2,
+				entries: [
+					{
+						guid,
+						kind: "scene",
+						packageUrl: "scene.pack.json",
+						sourcePath: stalePublication.sourcePath,
+						publication: stalePublication,
+					},
+				],
+				stale: false,
+				diagnostics: [],
+			}),
+			packIndexCache: new Map([
+				[
+					guid,
+					{
+						kind: "scene",
+						packageUrl: "scene.pack.json",
+						sourcePath: currentPublication.sourcePath,
+						publication: currentPublication,
+					},
+				],
+			]),
+		} as unknown as AssetRegistry;
+		const scene = {
+			kind: "scene" as const,
+			entities: [],
+			mounts: [
+				{
+					localId: 0 as never,
+					source: guid,
+					memberFirst: 1 as never,
+					memberCount: 1,
+					publicationFence: {
+						schemaVersion: "scene-publication-fence/1" as const,
+						sourcePath: currentPublication.sourcePath,
+						sourceRevision: "source-revision-stale",
+						publicationGeneration: 7,
+						outputDigest: "sha256:publication-stale",
+						outputSetDigest: "sha256:outputs-stale",
+						receiptIdentity: "sha256:receipt-stale",
+					},
+				},
+			],
+		};
+
+		const saved = attachPublicationFences(scene, registry);
+
+		expect(saved.mounts?.[0]?.publicationFence).toMatchObject({
+			sourceRevision: "source-revision-current",
+			publicationGeneration: 8,
+			outputDigest: "sha256:publication-current",
+			outputSetDigest: "sha256:outputs-current",
+			receiptIdentity: "sha256:receipt-current",
+		});
+	});
+
+	it("resolves a live numeric mount source before deriving its publication fence", () => {
+		const guid = "019ffdb4-1000-7000-8000-00000000000a";
+		const publication = {
+			schemaVersion: "asset-publication/1",
+			sourcePath: "assets/procedural-showcase.pack.ts",
+			sourceRevision: "source-revision-current",
+			generation: 9,
+			digest: "sha256:publication-current",
+			outputSetDigest: "sha256:outputs-current",
+			outputs: [
+				{
+					guid,
+					sourceKey: "scene/showcase",
+					kind: "scene",
+					digest: "sha256:scene-current",
+					refs: [],
+				},
+			],
+			receipt: {
+				schemaVersion: "asset-publication-receipt/1",
+				sourcePath: "assets/procedural-showcase.pack.ts",
+				sourceRevision: "source-revision-current",
+				inputFingerprint: "sha256:receipt-current",
+				outputDigest: "sha256:publication-current",
+				outputSetDigest: "sha256:outputs-current",
+				externalEvidence: [],
+			},
+			externalEvidence: [],
+		};
+		const sourceAsset = { kind: "scene" as const, entities: [] };
+		const world = createCoreTestWorld();
+		const sourceHandle = world.internSharedRef(sourceAsset.kind, sourceAsset);
+		const registry = {
+			_guidForAsset: (asset: unknown) =>
+				asset === sourceAsset ? guid : undefined,
+			catalogSnapshot: () => ({
+				version: 2,
+				entries: [
+					{
+						guid,
+						kind: "scene",
+						packageUrl: "scene.pack.json",
+						sourcePath: publication.sourcePath,
+						publication,
+					},
+				],
+				stale: false,
+				diagnostics: [],
+			}),
+		} as unknown as AssetRegistry;
+		const scene = {
+			kind: "scene" as const,
+			entities: [],
+			mounts: [
+				{
+					localId: 0 as never,
+					source: sourceHandle as never,
+					memberFirst: 1 as never,
+					memberCount: 1,
+				},
+			],
+		};
+
+		const saved = attachPublicationFences(scene, registry, world);
+
+		expect(saved.mounts?.[0]?.publicationFence).toMatchObject({
+			sourcePath: publication.sourcePath,
+			sourceRevision: publication.sourceRevision,
+			publicationGeneration: publication.generation,
+			outputDigest: publication.digest,
+			outputSetDigest: publication.outputSetDigest,
+			receiptIdentity: "sha256:receipt-current",
+		});
+	});
+});
 
 describe('instantiateSceneRefUnderWorld — normalized mounts remain saveable', () => {
   it('preserves the loaded scene GUID after animation compatibility normalization', async () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const registry = new AssetRegistry({} as never);
     const childGuid = '11111111-1111-4111-8111-111111111111';
     const topGuid = '22222222-2222-4222-8222-222222222222';
@@ -199,6 +445,24 @@ describe('scenePath — reads ctx via deps, no network (AC-02)', () => {
     expect(io.scenePath()).toBe('/games/g1/scene.pack.json');
   });
 
+  it('keeps a modern game empty when its discovered scene manifest has no current binding', () => {
+    const { deps, ctx } = makeDeps();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = null;
+    ctx.sceneList = [{ id: 'prefab', name: 'Prefab', pack: 'assets/prefab.pack.json', guid: 'prefab-guid' }];
+    const io = createDiskIo(deps);
+    expect(io.scenePath()).toBeNull();
+  });
+
+  it('keeps a declared but unresolved default scene empty instead of using the legacy pack', () => {
+    const { deps, ctx } = makeDeps();
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = null;
+    ctx.defaultSceneGuid = 'missing-default-guid';
+    const io = createDiskIo(deps);
+    expect(io.scenePath()).toBeNull();
+  });
+
   it('resolves the bound scene file entry pack when currentSceneFile is set', () => {
     const { deps, ctx } = makeDeps();
     ctx.currentSceneId = 'shoot';
@@ -210,6 +474,33 @@ describe('scenePath — reads ctx via deps, no network (AC-02)', () => {
 });
 
 describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)', () => {
+  it('reconciles the Engine publication catalog before serializing authored mounts', async () => {
+    let reconciled = false;
+    const registry = {
+      reconcileCatalog: async () => {
+        reconciled = true;
+        return { ok: true, value: { version: 2, entries: [], stale: false, diagnostics: [] } };
+      },
+    } as unknown as AssetRegistry;
+    const ctx = createScenePersistenceContext();
+    ctx.currentSceneId = 'shoot';
+    const { gateway } = makeFakeGateway({ registry });
+    const deps: DiskIoDeps = {
+      ctx,
+      gateway,
+      fetch: async () => new Response('{}', { status: 200 }),
+      fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+      resolveGamePath: (rel) => `/games/g1/${rel}`,
+      notifyDocChanged: () => {},
+      serializeForSave: () => {
+        expect(reconciled).toBe(true);
+        return validPack();
+      },
+    };
+
+    await expect(createDiskIo(deps).doSaveDocToDisk({ acceptedRevision: 1 })).resolves.toMatchObject({ ok: true });
+  });
+
   it('refuses imported preview save before serialization or write', async () => {
     const net = makeNetSpies();
     const { deps, ctx } = makeDeps({
@@ -265,7 +556,7 @@ describe('doSaveDocToDisk — serialize-fail aborts, never POSTs (OOS-1 / R-6)',
 
 describe('worldToPack — preserves tracked scene roots when live root discovery is incomplete', () => {
   it('serializes a loaded root even when it has no Name component', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const spawned = world.spawn({
       component: Transform,
       data: { pos: [1, 2, 3] },
@@ -536,6 +827,45 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes gu
     expect(net.fetchTimeoutCalls.length).toBe(0);
   });
 
+  it('opens a declared catalog-only default scene without inventing a writable pack path', async () => {
+    const guid = '11111111-2222-5333-8444-555555555555';
+    const registry = {
+      assetCatalog: new Map(),
+      async loadByGuid() {
+        return { ok: true, value: { kind: 'scene', entities: [] } };
+      },
+      catalog(_guid: string, payload: unknown) {
+        return { ok: true, value: payload };
+      },
+      instantiateFlat() {
+        return { ok: true, value: [] };
+      },
+    } as never;
+    const ctx = createScenePersistenceContext();
+    ctx.currentSceneId = 'scriptable-game';
+    ctx.defaultSceneGuid = guid;
+    const net = makeNetSpies();
+    const world = createCoreTestWorld();
+    const gateway = makeFakeGateway({ world, registry }).gateway;
+    let notifications = 0;
+    const { deps } = makeDeps({
+      ctx,
+      gateway,
+      fetch: net.fetch,
+      fetchWithTimeout: net.fetchWithTimeout,
+      notifyDocChanged: () => { notifications += 1; },
+    });
+    const io = createDiskIo(deps);
+
+    expect(io.scenePath()).toBeNull();
+    expect(await io.doLoadDocFromDisk()).toBe(true);
+    expect(net.fetchTimeoutCalls).toHaveLength(0);
+    expect(ctx.currentSceneGuid).toBe(guid);
+    expect(ctx.isDirty).toBe(false);
+    expect(notifications).toBe(1);
+    expect(io.scenePath()).toBeNull();
+  });
+
   it('reads THIS scene path through the injected fetchWithTimeout without publishing a failed load guid', async () => {
     // A valid pack with a scene asset GUID; the load then reaches loadSceneByGuid
     // which returns false headlessly (null world) — so the doc and current GUID
@@ -621,7 +951,7 @@ describe('doLoadDocFromDisk — legacy material refs migration', () => {
     const net = makeNetSpies({
       fetchTimeoutImpl: () => Promise.resolve(new Response(JSON.stringify({ content: JSON.stringify(pack) }), { status: 200 })),
     });
-    const world = new World();
+    const world = createCoreTestWorld();
     const gateway = makeFakeGateway({ world, registry }).gateway;
     const { deps } = makeDeps({
       ctx,
@@ -682,8 +1012,92 @@ describe('loadSceneByGuid — headless world short-circuits (AC-02)', () => {
 });
 
 describe('loadSceneByGuid — staged replacement preserves nested descendants', () => {
+  it('retries a transient public-readiness failure after refreshing the catalog', async () => {
+    const world = createCoreTestWorld();
+    const registry = new AssetRegistry({} as never);
+    const sceneGuid = '55555555-5555-4555-8555-555555555555';
+    const scene = {
+      kind: 'scene' as const,
+      entities: [{ localId: 0 as never, components: { Name: { value: 'Ready After Retry' } } }],
+    };
+    expect(registry.catalog(sceneGuid, scene).ok).toBe(true);
+    let attempts = 0;
+    let refreshes = 0;
+    Object.assign(registry, {
+      loadByGuid: async () => {
+        attempts++;
+        if (attempts === 1) {
+          return {
+            ok: false,
+            error: {
+              code: 'asset-parse-failed',
+              expected: `GUID ${sceneGuid} and all referenced assets to be public-ready`,
+              hint: 'retry after every referenced GUID has loaded successfully',
+            },
+          };
+        }
+        return { ok: true, value: scene };
+      },
+      refreshCatalog: async () => {
+        refreshes++;
+        return true;
+      },
+    });
+    const gateway = makeFakeGateway({ world, registry }).gateway;
+    const io = createDiskIo({
+      ctx: createScenePersistenceContext(),
+      gateway,
+      fetch: async () => new Response('{}', { status: 200 }),
+      fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+      resolveGamePath: (rel) => `/games/g1/${rel}`,
+      notifyDocChanged: () => {},
+    });
+
+    expect(await io.loadSceneByGuid(sceneGuid)).toBe(true);
+    expect(attempts).toBe(2);
+    expect(refreshes).toBe(1);
+  });
+
+  it('does not retry a permanent asset parse failure', async () => {
+    const world = createCoreTestWorld();
+    const registry = new AssetRegistry({} as never);
+    const sceneGuid = '66666666-6666-4666-8666-666666666666';
+    let attempts = 0;
+    let refreshes = 0;
+    Object.assign(registry, {
+      loadByGuid: async () => {
+        attempts++;
+        return {
+          ok: false,
+          error: {
+            code: 'asset-parse-failed',
+            expected: 'a valid SceneAsset payload',
+            hint: 'repair the malformed scene payload before loading it',
+          },
+        };
+      },
+      refreshCatalog: async () => {
+        refreshes++;
+        return true;
+      },
+    });
+    const gateway = makeFakeGateway({ world, registry }).gateway;
+    const io = createDiskIo({
+      ctx: createScenePersistenceContext(),
+      gateway,
+      fetch: async () => new Response('{}', { status: 200 }),
+      fetchWithTimeout: async () => new Response('{}', { status: 200 }),
+      resolveGamePath: (rel) => `/games/g1/${rel}`,
+      notifyDocChanged: () => {},
+    });
+
+    expect(await io.loadSceneByGuid(sceneGuid)).toBe(false);
+    expect(attempts).toBe(1);
+    expect(refreshes).toBe(0);
+  });
+
   it('does not sweep named members below an unnamed nested-scene carrier', async () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const registry = new AssetRegistry({} as never);
     const childGuid = '33333333-3333-4333-8333-333333333333';
     const sceneGuid = '44444444-4444-4444-8444-444444444444';

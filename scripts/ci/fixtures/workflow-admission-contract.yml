@@ -11,3 +11,12 @@ jobs:
     steps:
       - name: Parse trusted workflow text
         run: echo "workflow text only"
+  editor-portability:
+    name: editor-portability (${{ matrix.platform }})
+    strategy:
+      matrix:
+        platform: [linux, windows, macos]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Run native portability producer
+        run: bun scripts/ci/editor-portability.mjs --platform ${{ matrix.platform }} --report "$RUNNER_TEMP/editor-portability-report.json"

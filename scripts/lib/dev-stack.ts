@@ -6,6 +6,7 @@
 // identically on Linux, macOS, and a Windows dev box (no Git-Bash needed).
 
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { closeSync, openSync, writeSync } from 'node:fs';
 import { resolveBunExecutable } from '../ci/bun-runtime.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -28,8 +29,14 @@ export function die(msg: string): never {
 
 /** True if `cmd` resolves on PATH (cross-platform `command -v`). */
 export function has(cmd: string): boolean {
-  const probe = IS_WIN ? 'where' : 'command';
-  const args = IS_WIN ? [cmd] : ['-v', cmd];
+  // `command` is a shell builtin on Linux, not an executable. macOS happens
+  // to ship `/usr/bin/command`, which made the old probe pass there while
+  // always reporting a missing tool on Linux. Keep the argument out of the
+  // shell program itself so command names cannot alter the probe script.
+  const probe = IS_WIN ? 'where' : 'sh';
+  const args = IS_WIN
+    ? [cmd]
+    : ['-c', 'command -v "$1" >/dev/null 2>&1', 'forgeax-has', cmd];
   const r = spawnSync(probe, args, { stdio: 'ignore', shell: IS_WIN });
   return r.status === 0;
 }
@@ -101,6 +108,8 @@ export type SpawnServiceOptions = {
   env?: NodeJS.ProcessEnv;
   detach?: boolean;
   logFd?: number;
+  /** Tee foreground child stdout/stderr to a per-run diagnostic file. */
+  teeLogPath?: string;
 };
 
 /**
@@ -115,13 +124,28 @@ export type SpawnServiceOptions = {
  */
 export function spawnService(cmd: string, args: string[], opts: SpawnServiceOptions = {}): ChildProcess {
   const env = opts.env ?? process.env;
+  const teeFd = opts.teeLogPath === undefined ? undefined : openSync(opts.teeLogPath, 'a');
   const child = spawn(resolveBunExecutable(cmd, env), args, {
-    stdio: opts.detach ? ['ignore', opts.logFd ?? 'ignore', opts.logFd ?? 'ignore'] : 'inherit',
+    stdio: opts.detach
+      ? ['ignore', opts.logFd ?? 'ignore', opts.logFd ?? 'ignore']
+      : teeFd === undefined
+        ? 'inherit'
+        : ['inherit', 'pipe', 'pipe'],
     shell: IS_WIN, // resolve `bun`/`bun.exe` via PATHEXT on Windows
     detached: opts.detach || !IS_WIN, // bg: detach everywhere; fg POSIX: own group
     cwd: opts.cwd,
     env,
   });
+  if (teeFd !== undefined) {
+    const tee = (chunk: Buffer | string, target: NodeJS.WriteStream): void => {
+      target.write(chunk);
+      if (typeof chunk === 'string') writeSync(teeFd, chunk);
+      else writeSync(teeFd, chunk);
+    };
+    child.stdout?.on('data', (chunk: Buffer | string) => tee(chunk, process.stdout));
+    child.stderr?.on('data', (chunk: Buffer | string) => tee(chunk, process.stderr));
+    child.once('close', () => closeSync(teeFd));
+  }
   if (opts.detach) child.unref(); // let this process exit without waiting
   return child;
 }

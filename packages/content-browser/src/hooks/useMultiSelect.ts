@@ -16,7 +16,14 @@ function itemKey(item: Selectable): string {
 
 /** Map a CBAsset to the store's SelectedAsset shape (single source of truth). */
 function toSelectedAsset(a: CBAsset) {
-  return { guid: a.guid, kind: a.kind, name: a.name, payload: a.payload, packPath: a.packPath };
+  return {
+    guid: a.guid,
+    kind: a.kind,
+    name: a.name,
+    payload: a.payload,
+    packPath: a.packPath,
+    ...(a.revision?.startsWith('project:') ? { revision: a.revision } : {}),
+  };
 }
 
 /** Map a folder/file item to the typed PathSelectionItem for the store. */

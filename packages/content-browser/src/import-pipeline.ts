@@ -18,12 +18,16 @@
  */
 
 import {
+  broadcastAssetsChanged,
   createImportFailure,
   dispatchActiveEditorOperation,
+  getViewportRuntimeOperationRun,
+  resolveFbxImportDependencies,
   resolveGamePath,
   retryViewportRuntimeOperationRun,
   waitViewportRuntimeOperationRun,
   type ImportFailureCode,
+  type FbxDependencyCandidate,
   type ImportFileResult,
   type OperationRun,
   isImportable,
@@ -60,6 +64,41 @@ export function isRetryableImportRun(run: OperationRun): boolean {
 
 export type ImportProgressCallback = (progress: ImportProgress) => void;
 
+async function waitForImportRunWithProgress(
+  requestId: string,
+  onRunUpdate: (run: OperationRun) => void,
+): Promise<OperationRun> {
+  let latestRun: OperationRun | undefined;
+  const publishLatest = (): void => {
+    if (latestRun !== undefined) onRunUpdate(latestRun);
+  };
+
+  const poll = setInterval(() => {
+    void getViewportRuntimeOperationRun(requestId).then((response) => {
+      if (response.error !== undefined || response.result === undefined) return;
+      latestRun = response.result as OperationRun;
+      publishLatest();
+    });
+  }, 100);
+
+  try {
+    const terminalResponse = await waitViewportRuntimeOperationRun(requestId);
+    if (terminalResponse.error !== undefined) {
+      throw new Error(terminalResponse.error.hint ?? terminalResponse.error.code);
+    }
+    latestRun = terminalResponse.result as OperationRun;
+    publishLatest();
+    return latestRun;
+  } finally {
+    clearInterval(poll);
+  }
+}
+
+function refreshImportedAssets(onReload?: () => void): void {
+  onReload?.();
+  broadcastAssetsChanged('directory-only', 'local-op');
+}
+
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let binary = '';
@@ -68,6 +107,146 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
+}
+
+interface ImportDependencyFile {
+  readonly file: File;
+  readonly relativePath: string;
+  readonly sourceRelativePath: string;
+}
+
+interface ImportUnit {
+  readonly file: File;
+  readonly destinationPath: string;
+  readonly dependencies?: readonly ImportDependencyFile[];
+}
+
+export function mapFbxDependencyResolutionCode(
+  code: 'fbx-external-texture-missing'
+    | 'fbx-external-texture-ambiguous'
+    | 'fbx-external-texture-unsupported'
+    | 'fbx-source-invalid',
+): 'IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED'
+  | 'IMPORT_FBX_DEPENDENCY_AMBIGUOUS'
+  | 'IMPORT_FBX_SOURCE_INVALID'
+  | 'IMPORT_FBX_UNSUPPORTED' {
+  return code === 'fbx-external-texture-ambiguous'
+    ? 'IMPORT_FBX_DEPENDENCY_AMBIGUOUS'
+    : code === 'fbx-source-invalid'
+      ? 'IMPORT_FBX_SOURCE_INVALID'
+      : code === 'fbx-external-texture-unsupported'
+        ? 'IMPORT_FBX_UNSUPPORTED'
+        : 'IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED';
+}
+
+function normalizeSelectionPath(raw: string): string {
+  return raw.replaceAll('\\', '/').replace(/^\.?\//, '').replace(/^\/+|\/+$/g, '');
+}
+
+function selectionRelativePath(file: File): string {
+  const relative = (file as File & { readonly webkitRelativePath?: string }).webkitRelativePath;
+  return normalizeSelectionPath(relative || file.name);
+}
+
+function folderPrefix(files: readonly File[]): string {
+  const paths = files.map(selectionRelativePath);
+  if (paths.length === 0 || paths.some((path) => !path.includes('/'))) return '';
+  const first = paths[0]!.split('/')[0]!;
+  return paths.every((path) => path.split('/')[0] === first) ? `${first}/` : '';
+}
+
+function stripFolderPrefix(path: string, prefix: string): string {
+  return prefix !== '' && path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+function dirname(path: string): string {
+  const slash = path.lastIndexOf('/');
+  return slash < 0 ? '' : path.slice(0, slash);
+}
+
+function sourceRelativePath(sourcePath: string, candidatePath: string): string {
+  const from = dirname(sourcePath).split('/').filter(Boolean);
+  const to = candidatePath.split('/').filter(Boolean);
+  let common = 0;
+  while (common < from.length && common < to.length && from[common] === to[common]) common++;
+  return [
+    ...from.slice(common).map(() => '..'),
+    ...to.slice(common),
+  ].join('/') || './';
+}
+
+function joinGamePath(base: string, relativePath: string): string {
+  return `${base.replace(/\/+$/g, '')}/${relativePath.replace(/^\/+/, '')}`;
+}
+
+function isFbx(file: File): boolean {
+  return file.name.toLowerCase().endsWith('.fbx');
+}
+
+async function prepareFolderImportUnit(
+  files: readonly File[],
+  root: File,
+): Promise<
+  | { readonly ok: true; readonly unit: ImportUnit }
+  | {
+      readonly ok: false;
+      readonly code:
+        | 'IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED'
+        | 'IMPORT_FBX_DEPENDENCY_AMBIGUOUS'
+        | 'IMPORT_FBX_PARSE_FAILED'
+        | 'IMPORT_FBX_SOURCE_INVALID'
+        | 'IMPORT_FBX_UNSUPPORTED';
+      readonly hint: string;
+    }
+> {
+  const prefix = folderPrefix(files);
+  const rootPath = stripFolderPrefix(selectionRelativePath(root), prefix);
+  const candidates: Array<FbxDependencyCandidate & { readonly file: File }> = files
+    .filter((file) => file !== root)
+    .map((file) => {
+      const relativePath = stripFolderPrefix(selectionRelativePath(file), prefix);
+      return {
+        file,
+        relativePath,
+        sourceRelativePath: sourceRelativePath(rootPath, relativePath),
+      };
+    });
+  const resolution = await resolveFbxImportDependencies(
+    await root.arrayBuffer(),
+    rootPath,
+    candidates,
+  );
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      code: mapFbxDependencyResolutionCode(resolution.code),
+      hint: resolution.hint,
+    };
+  }
+  const dependencies: ImportDependencyFile[] = [];
+  for (const dependency of resolution.files) {
+    const candidate = candidates.find((entry) => entry.relativePath.toLowerCase() === dependency.relativePath.toLowerCase());
+    if (candidate === undefined) {
+      return {
+        ok: false,
+        code: 'IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED',
+        hint: `The selected FBX dependency ${dependency.relativePath} is not available in the selected file scope; choose the containing folder.`,
+      };
+    }
+    dependencies.push({
+      file: candidate.file,
+      relativePath: dependency.relativePath,
+      sourceRelativePath: dependency.sourceRelativePath,
+    });
+  }
+  return {
+    ok: true,
+    unit: {
+      file: root,
+      destinationPath: rootPath,
+      dependencies,
+    },
+  };
 }
 
 function failureResult(
@@ -116,24 +295,32 @@ export async function retryImportRun(
     return { ok: false, error: { code: 'IMPORT_EXECUTION_FAILED', hint: 'Retry was accepted without an OperationRun.' } };
   }
   onRun?.(requestId, accepted);
-  const response = await waitViewportRuntimeOperationRun(requestId);
-  if (response.error !== undefined) return { ok: false, error: { code: response.error.code, hint: response.error.hint } };
-  const terminal = response.result as OperationRun;
-  onRun?.(requestId, terminal);
-  return {
-    ok: true,
-    requestId,
-    terminal,
-    result: importRunToResult(record.filename, record.path, terminal),
-  };
+  try {
+    const terminal = await waitForImportRunWithProgress(requestId, (run) => onRun?.(requestId, run));
+    onRun?.(requestId, terminal);
+    return {
+      ok: true,
+      requestId,
+      terminal,
+      result: importRunToResult(record.filename, record.path, terminal),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: 'IMPORT_EXECUTION_FAILED',
+        hint: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
 }
 
 /**
  * Import multiple files with progress reporting.
  *
  * Sends each file's bytes to Runtime through the `importAsset` op (one door).
- * Calls `onProgress` after each dispatch and
- * `onReload` once at the end to refresh the Content Browser.
+ * Calls `onProgress` after each dispatch and refreshes the Content Browser
+ * after every terminal file result.
  */
 export async function importFiles(
   files: File[],
@@ -148,6 +335,50 @@ export async function importFiles(
   });
 
   const importable = files.filter(f => isImportable(f.name));
+  const folderSelection = files.some((file) => {
+    const relative = (file as File & { readonly webkitRelativePath?: string }).webkitRelativePath;
+    return typeof relative === 'string' && relative.length > 0;
+  });
+  if (folderSelection) {
+    const fbxRoots = files.filter(isFbx);
+    if (fbxRoots.length !== 1) {
+      const name = fbxRoots.length === 0 ? 'selected-folder' : 'selected-folder (choose one FBX)';
+      return [failureResult(
+        name,
+        name,
+        'IMPORT_FBX_ROOT_SELECTION_REQUIRED',
+        fbxRoots.length === 0
+          ? 'Folder import requires exactly one FBX root file; choose an FBX file or a folder containing one FBX.'
+          : `Folder import found ${fbxRoots.length} FBX roots; choose one FBX file instead of importing the whole folder.`,
+        false,
+      )];
+    }
+    const prepared = await prepareFolderImportUnit(files, fbxRoots[0]!);
+    if (!prepared.ok) {
+      return [failureResult(
+        fbxRoots[0]!.name,
+        selectionRelativePath(fbxRoots[0]!),
+        prepared.code,
+        prepared.hint,
+        false,
+      )];
+    }
+    return importPreparedUnits([prepared.unit], currentPath, onProgress, onReload, files);
+  }
+  if (importable.length === 1 && isFbx(importable[0]!)) {
+    const root = importable[0]!;
+    const prepared = await prepareFolderImportUnit([root], root);
+    if (!prepared.ok) {
+      return [failureResult(
+        root.name,
+        root.name,
+        prepared.code,
+        prepared.hint,
+        false,
+      )];
+    }
+    return importPreparedUnits([prepared.unit], currentPath, onProgress, onReload, files);
+  }
   if (importable.length === 0) {
     logImport('pipeline.importFiles.skip', {
       reason: 'no importable files',
@@ -161,9 +392,25 @@ export async function importFiles(
     names: importable.map(f => f.name),
   });
 
+  return importPreparedUnits(
+    importable.map((file) => ({ file, destinationPath: file.name })),
+    currentPath,
+    onProgress,
+    onReload,
+    files,
+  );
+}
+
+async function importPreparedUnits(
+  units: readonly ImportUnit[],
+  currentPath: string,
+  onProgress?: ImportProgressCallback,
+  onReload?: () => void,
+  selectedFiles: readonly File[] = [],
+): Promise<ImportFileResult[]> {
   const results: ImportFileResult[] = [];
   const progress: ImportProgress = {
-    total: importable.length,
+    total: units.length,
     completed: 0,
     current: '',
     results,
@@ -183,21 +430,22 @@ export async function importFiles(
   const basePath = resolveGamePath(gameRelBase);
   logImport('pipeline.importFiles.resolvedBase', { basePath, gameRelBase });
 
-  for (const file of importable) {
+  for (const unit of units) {
+    const file = unit.file;
     progress.current = file.name;
     progress.currentRequestId = undefined;
     progress.currentRun = undefined;
     progress.actionError = undefined;
     publishProgress();
 
-    const uploadPath = `${basePath}/${file.name}`;
-    const gameRelPath = `${gameRelBase}/${file.name}`;
+    const uploadPath = `${basePath}/${unit.destinationPath}`;
+    const gameRelPath = joinGamePath(gameRelBase, unit.destinationPath);
     let result: ImportFileResult;
     try {
       logImport('pipeline.file.readBytes', { filename: file.name, size: file.size, uploadPath, gameRelPath });
       const base64 = arrayBufferToBase64(await file.arrayBuffer());
-      const uiCompanion = file.name.toLowerCase().endsWith('.ui.html')
-        ? files.find(candidate => candidate.name.toLowerCase() === file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'))
+      const uiCompanion = unit.dependencies === undefined && file.name.toLowerCase().endsWith('.ui.html')
+        ? selectedFiles.find(candidate => candidate.name.toLowerCase() === file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'))
         : undefined;
       const companionSources = uiCompanion === undefined
         ? undefined
@@ -205,6 +453,13 @@ export async function importFiles(
           destPath: `${gameRelBase}/${uiCompanion.name}`,
           base64: arrayBufferToBase64(await uiCompanion.arrayBuffer()),
         }];
+      const sourceFiles = unit.dependencies === undefined
+        ? undefined
+        : await Promise.all(unit.dependencies.map(async (dependency) => ({
+          destPath: joinGamePath(gameRelBase, dependency.relativePath),
+          relativePath: dependency.sourceRelativePath,
+          base64: arrayBufferToBase64(await dependency.file.arrayBuffer()),
+        })));
       {
         // Pass game-relative paths. Runtime owns resolveGamePath and every write.
         logImport('pipeline.file.dispatching', { filename: file.name, gameRelPath });
@@ -216,6 +471,7 @@ export async function importFiles(
             sourceName: file.name,
             base64,
             ...(companionSources === undefined ? {} : { companionSources }),
+            ...(sourceFiles === undefined ? {} : { sourceFiles }),
             skipUpload: false,
             requestId,
           },
@@ -233,15 +489,17 @@ export async function importFiles(
             progress.currentRun = acceptedRun;
             progress.runs.push({ filename: file.name, path: uploadPath, requestId, run: acceptedRun });
             publishProgress();
-            const terminalResponse = await waitViewportRuntimeOperationRun(requestId);
-            if (terminalResponse.error === undefined) {
-              const terminal = terminalResponse.result as OperationRun;
-              const record = progress.runs.find(entry => entry.requestId === requestId);
-              if (record) record.run = terminal;
-              progress.currentRun = terminal;
+            try {
+              const terminal = await waitForImportRunWithProgress(requestId, (run) => {
+                const record = progress.runs.find(entry => entry.requestId === requestId);
+                if (record) record.run = run;
+                progress.currentRun = run;
+                publishProgress();
+              });
               result = importRunToResult(file.name, uploadPath, terminal);
-            } else {
-              result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', terminalResponse.error.code, false);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', msg, false);
             }
           }
         }
@@ -256,10 +514,10 @@ export async function importFiles(
     progress.completed++;
     logImport('pipeline.file.done', { filename: file.name, status: result.status, error: result.error });
     publishProgress();
+    refreshImportedAssets(onReload);
   }
 
   logImport('pipeline.importFiles.complete', { total: results.length, results: results.map(r => ({ f: r.filename, s: r.status, e: r.error })) });
-  onReload?.();
 
   return results;
 }

@@ -687,7 +687,7 @@ registerApplier('session', 'promoteImportedScene', (rawOp) => {
         return promoteFailure('promote-serialization-failed', 'Engine collection could not serialize the imported preview.', collected.error);
       }
       promotedScene = collected.value;
-      const serialized = serializeSceneAssetToPack(promotedScene, newGuid);
+      const serialized = serializeSceneAssetToPack(promotedScene, sourceState.world.components.entries(), newGuid);
       if (!serialized.ok) {
         return promoteFailure('promote-serialization-failed', 'Engine serialization rejected the effective imported snapshot.', serialized.error);
       }
@@ -704,6 +704,20 @@ registerApplier('session', 'promoteImportedScene', (rawOp) => {
       // Instantiate into a detached fresh world before writing or replacing the
       // active document. Any failure leaves the imported world/session untouched.
       const fresh = createEditSession();
+      // Component definitions are World-local Engine ownership facts. A fresh
+      // authored candidate must receive the imported world's catalog explicitly
+      // before instantiation; relying on process-global definitions would make
+      // promotion order-dependent and would violate the World catalog boundary.
+      for (const component of sourceState.world.components.entries().values()) {
+        const registered = fresh.world.components.register(component);
+        if (!registered.ok) {
+          return promoteFailure(
+            'promote-activation-failed',
+            'Promoted SceneAsset component catalog could not be registered in a fresh authored world.',
+            registered.error,
+          );
+        }
+      }
       fresh.registry = sourceState.registry;
       const freshEngine = new EngineFacade(fresh.world, sourceState.registry);
       const instantiated = freshEngine.instantiateSceneAssetFlat(
@@ -871,7 +885,7 @@ async function doCreateSceneFile(
       return { ok: false, error: { code: 'scene-create-serialize-failed', hint: `Could not isolate the duplicated scene envelope: ${error instanceof Error ? error.message : String(error)}`, current: { requestId, sceneId: slug, duplicateCurrent: true }, retryable: true, recoveryActions: ['operation.retry'] } };
     }
   } else {
-    const emptyPack = serializeSceneAssetToPack({ kind: 'scene', entities: [] }, newSceneGuid);
+    const emptyPack = serializeSceneAssetToPack({ kind: 'scene', entities: [] }, gateway.activeWorld.components.entries(), newSceneGuid);
     if (!emptyPack.ok) {
       return { ok: false, error: { code: 'scene-create-serialize-failed', hint: 'Could not serialize the canonical empty scene pack; the new file was not written.', current: { requestId, sceneId: slug, duplicateCurrent: false }, retryable: false, recoveryActions: ['editor.discover'] } };
     }

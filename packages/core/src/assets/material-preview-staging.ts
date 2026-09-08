@@ -1,4 +1,6 @@
-// assets/material-preview-staging — transient (chrome-only) preview channel
+// assets/material-preview-staging — transient UI overlay + preview value SSOT.
+// Engine preview descriptors remain the canonical preview binding; this
+// channel carries unsaved drag values and never registers an operation.
 // for the base-Material editor page.
 //
 // WHY THIS EXISTS
@@ -17,8 +19,36 @@
 //   deliberately much smaller: no dirty tracking, no save semantics — a staged
 //   value is meaningless the moment the commit (or any assetsChanged) lands.
 
+import { getMaterialStaging } from './material-staging';
+import { resolveOverrides, type MaterialCatalogLookup } from './material-instance-resolve';
+
 const stagedByGuid = new Map<string, Record<string, unknown>>();
 const listeners = new Set<(guid: string) => void>();
+
+/**
+ * Flat value map for the Material page 3D preview. Mirrors the properties
+ * panel: catalog inheritance → live staging buffer → transient drag overlay.
+ * Staging is authoritative over catalog so a stale registry rebuild cannot
+ * revert the sphere after save.
+ */
+export function resolveMaterialPreviewDisplayValues(
+  guid: string,
+  lookup: MaterialCatalogLookup,
+): Record<string, unknown> {
+  const fromCatalog = resolveOverrides(guid, lookup);
+  const staging = getMaterialStaging(guid);
+  const fromStaging = staging
+    ? {
+      ...staging.staging.values,
+      ...(staging.staging.textureGuids ?? {}),
+    }
+    : {};
+  return {
+    ...fromCatalog,
+    ...fromStaging,
+    ...getMaterialPreviewParams(guid),
+  };
+}
 
 function notify(guid: string): void {
   for (const listener of listeners) listener(guid);

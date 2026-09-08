@@ -1,0 +1,8 @@
+{
+  "id": "forgeax.engine.runtime",
+  "version": "1.0.0",
+  "kind": "engine",
+  "contributions": ["engine.preview", "engine.runtime"],
+  "capabilities": ["engine.preview.create", "engine.runtime.attach"],
+  "variants": ["web", "desktop"]
+}

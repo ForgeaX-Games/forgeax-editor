@@ -1,5 +1,10 @@
 #define_import_path sample_vfx::arc_nova_violet_sigil
 
+// particle-billboard group 0 is the Engine VFX scene-depth binding. This
+// effect does not need depth in its color math, but it must keep the ABI so
+// the host can bind the current depth target without a layout mismatch.
+@group(0) @binding(0) var scene_depth: texture_depth_2d;
+
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) color: vec4<f32>,

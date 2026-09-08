@@ -229,7 +229,33 @@
       "animPause": "Pause preview",
       "animNoClip": "bind a clip to slot 0 to preview",
       "animPhase": "Preview position",
-      "animSpeed": "Preview speed"
+      "animSpeed": "Preview speed",
+      "assetRef": {
+        "none": "None",
+        "missing": "Missing asset — browse to repair",
+        "slot": "Slot {{index}}",
+        "useSelection": "Use selected asset from Content Browser",
+        "browse": "Browse assets",
+        "revealInBrowser": "Find in Content Browser",
+        "more": "More actions",
+        "clear": "Clear",
+        "copyGuid": "Copy GUID",
+        "pick": "Pick",
+        "addSlot": "Add slot",
+        "removeSlot": "Remove slot",
+        "lockedSlotHint": "{{count}} slot — matches mesh submeshes",
+        "lockedSlotHint_plural": "{{count}} slots — match mesh submeshes",
+        "mismatchHint": "{{current}} materials bound, mesh has {{expected}} submeshes",
+        "mismatchAction": "{{current}} / {{expected}} submeshes — click to fix"
+      },
+      "assetPicker": {
+        "browseSection": "Browse",
+        "searchPlaceholder": "Search assets",
+        "nameColumn": "Name",
+        "none": "None",
+        "emptyType": "No {{assetType}} in project",
+        "emptyQuery": "No matches for \"{{query}}\""
+      }
     },
     "launcher": {
       "title": "Launcher",
@@ -287,15 +313,19 @@
       }
     },
     "contentBrowser": {
+      "catalogAuthoringOutsideAssets": "Materials and particle effects must be created under assets/.",
       "actions": {
         "create": "Create",
         "createFolder": "New Folder",
         "createAsset": "New {{label}}",
         "import": "Import",
+        "importFolder": "Import Folder",
         "saveAll": "Save All",
         "favorite": "Favorites",
         "filterByType": "Filter by Type",
         "filterAll": "All",
+        "fileTypeSection": "File Type",
+        "assetTypeSection": "Asset Type",
         "clearFilters": "Clear all filters",
         "searchPlaceholder": "Search files / assets...",
         "searchAria": "Search assets",
@@ -312,7 +342,19 @@
         "openSubfolders": "Subfolders of {{name}}",
         "settings": "View settings",
         "thumbnailSizeLabel": "Thumbnail size",
-        "detailPanel": "Detail panel"
+        "detailPanel": "Detail panel",
+        "layoutLabel": "View mode",
+        "layoutTiles": "Tiles",
+        "layoutList": "List",
+        "layoutDetails": "Details"
+      },
+      "details": {
+        "colName": "Name",
+        "colType": "Type",
+        "colSize": "Size",
+        "colModified": "Modified",
+        "typeFolder": "Folder",
+        "itemCount": "{{count}} items"
       },
       "sourceTree": {
         "favorites": "Favorites",
@@ -339,6 +381,7 @@
         "image": "Image",
         "audio": "Audio",
         "model": "3D Model",
+        "assetPackage": "Asset Package",
         "font": "Font",
         "ui": "UI Asset",
         "data": "Data",
@@ -369,6 +412,7 @@
         "play": "Play",
         "setDefaultScene": "Set as Default Scene",
         "setCurrentScene": "Set as Current Scene",
+        "editMesh": "Edit Mesh",
         "expandSubAssets": "Expand Sub-assets",
         "reimport": "Reimport",
         "locateSourceFile": "Locate Source File",
@@ -391,6 +435,9 @@
         "cancel": "Cancel",
         "deleteFolderConfirm": "Delete folder \"{{name}}\" and all its contents?",
         "deleteFileConfirm": "Delete file \"{{name}}\"?",
+        "moveConflictTitle": "Name already in use",
+        "moveConflictNote": "These names already exist in \"{{dir}}\". Moving may overwrite them:",
+        "moveConflictConfirm": "Move anyway",
         "sceneSwitch": {
           "title": "Unsaved scene changes",
           "body": "Switching to \"{{name}}\" would replace the current authored scene. Choose how to handle unsaved edits.",
@@ -436,6 +483,8 @@
         "emptyFolder": "Empty folder",
         "noTextPreview": "No text preview for this file type",
         "nothingSelected": "Select an item to see its details",
+        "modeAssets": "Assets",
+        "modeSource": "Source",
         "items": "{{count}} items",
         "assetCount": "→ {{count}} assets",
         "uiPreview": "UI preview",

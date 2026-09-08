@@ -26,7 +26,10 @@ export type PackReadResult =
 export async function readPackDetailed(packPath: string): Promise<PackReadResult> {
   let r: Response;
   try {
-    r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}`);
+    // A missing target pack is the normal first step for createAsset. Use the
+    // optional-read contract so the browser does not report an expected probe
+    // miss as a red 404 network error.
+    r = await fetchWithTimeout(`/api/files?path=${encodeURIComponent(packPath)}&optional=1`);
   } catch (e) {
     return { status: 'error', hint: `pack read network error: ${(e as Error)?.message ?? String(e)}` };
   }

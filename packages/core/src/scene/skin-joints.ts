@@ -18,7 +18,7 @@
 //   socket-calibration M1 / doc §3.2 (parent-bone selection)
 //   AGENTS.md anti-pattern #3 (socket = ChildOf + Transform; no Socket component)
 //   AGENTS.md anti-pattern #5 (verify engine symbols — Skin is read by name via
-//     the registered-component registry, not by importing a phantom token here)
+//     the World-local component catalog, not by importing a phantom token here)
 
 import type { World } from '@forgeax/engine-ecs';
 import { Children } from '@forgeax/engine-scene';

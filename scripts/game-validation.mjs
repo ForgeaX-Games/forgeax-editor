@@ -8,6 +8,10 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadGameProjectSync } from '../packages/engine/packages/engine-project/dist/index.mjs';
+import { loadAssetConfig } from '@forgeax/engine-pack/config';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
+import { loadScriptablePack } from '@forgeax/engine-pack/source-node';
 import { resolveGameAssetRoots, readDeclaredRoots } from '../packages/core/src/asset-roots.ts';
 import { CUBE_GUID, SPHERE_GUID, validatePackShell } from '../packages/core/src/scene/scene-pack.ts';
 
@@ -41,7 +45,7 @@ function safeJson(file) {
 function rel(root, file) { return relative(root, file).split(sep).join('/'); }
 
 /** @param {string} gameDir @param {{maxBytes?: number, maxEntities?: number}} [options] */
-export function validateGameProject(gameDir, options = {}) {
+export async function validateGameProject(gameDir, options = {}) {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxEntities = options.maxEntities ?? DEFAULT_MAX_ENTITIES;
   const blocking = [];
@@ -70,12 +74,15 @@ export function validateGameProject(gameDir, options = {}) {
     sharedBase: SHARED_BASE,
     implicitSharedSubs: ['template-game-default'],
   });
+  const { paths: assetPaths } = loadAssetConfig(resolve(gameDir));
   const files = roots.flatMap((root) => walk(root.abs));
   const uniqueFiles = [...new Set(files)];
   const packFiles = uniqueFiles.filter((file) => file.endsWith('.pack.json'));
+  const scriptablePackFiles = uniqueFiles.filter((file) => file.endsWith('.pack.ts'));
   const sidecarFiles = uniqueFiles.filter((file) => file.endsWith('.meta.json') && !file.endsWith('.pack.json'));
   const knownGuids = new Set([CUBE_GUID, SPHERE_GUID, CYLINDER_GUID]);
   const refs = [];
+  const scriptableRefs = [];
   let bytes = 0;
   let entities = 0;
 
@@ -123,17 +130,60 @@ export function validateGameProject(gameDir, options = {}) {
       continue;
     }
     const source = parsed.value.source;
-    const sourcePath = typeof source === 'string' ? resolve(dirname(file), source) : '';
+    const sourceResolution =
+      source === undefined || typeof source === 'string'
+        ? resolveAssetSource(file, source, assetPaths)
+        : { ok: false, error: { detail: { reason: 'invalid-source', rawSource: source } } };
+    const sourcePath = sourceResolution.ok ? sourceResolution.value : '';
     const subAssets = parsed.value.subAssets;
     if (!sourcePath || !statSafe(sourcePath)?.isFile() || !Array.isArray(subAssets) || subAssets.length === 0) {
-      blocking.push(issue('orphan-sidecar', rel(gameDir, file), 'sidecar has no existing source or sub-assets', { source, sourcePath: sourcePath ? rel(gameDir, sourcePath) : null }));
+      blocking.push(issue(
+        'orphan-sidecar',
+        rel(gameDir, file),
+        'sidecar has no existing source or sub-assets',
+        {
+          source,
+          sourcePath: sourcePath ? rel(gameDir, sourcePath) : null,
+          ...(sourceResolution.ok ? {} : { resolution: sourceResolution.error.detail }),
+        },
+      ));
     } else {
       for (const sub of subAssets) if (typeof sub?.guid === 'string') knownGuids.add(sub.guid);
     }
   }
 
+  // ScriptablePack source declarations are producer-owned facts. Load only
+  // metadata here: validation must know declared output/external GUIDs without
+  // executing the build body or manufacturing a second source schema.
+  for (const file of scriptablePackFiles) {
+    let loaded;
+    try {
+      loaded = await loadScriptablePack(file, { metadataOnly: true });
+    } catch (error) {
+      blocking.push(issue(
+        'scriptable-pack-invalid',
+        rel(gameDir, file),
+        `ScriptablePack metadata could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+      ));
+      continue;
+    }
+    if (!loaded.ok) {
+      blocking.push(issue('scriptable-pack-invalid', rel(gameDir, file), loaded.error.hint, loaded.error.detail));
+      continue;
+    }
+    for (const asset of Object.values(loaded.value.assets)) {
+      knownGuids.add(AssetGuid.format(asset.guid));
+    }
+    for (const asset of Object.values(loaded.value.externalAssets ?? {})) {
+      scriptableRefs.push({ file, asset: rel(gameDir, file), ref: AssetGuid.format(asset) });
+    }
+  }
+
   for (const ref of refs) {
     if (!knownGuids.has(ref.ref)) blocking.push(issue('missing-reference', rel(gameDir, ref.file), `asset ${ref.asset} references missing GUID ${ref.ref}`, ref));
+  }
+  for (const ref of scriptableRefs) {
+    if (!knownGuids.has(ref.ref)) blocking.push(issue('missing-reference', rel(gameDir, ref.file), `ScriptablePack ${ref.asset} references missing GUID ${ref.ref}`, ref));
   }
 
   if (manifest.defaultScene && !knownGuids.has(manifest.defaultScene)) {
@@ -161,7 +211,7 @@ if (import.meta.main) {
     if (!match) throw new Error(`unknown validation flag: ${arg}`);
     options[match[1] === 'max-bytes' ? 'maxBytes' : 'maxEntities'] = Number(match[2]);
   }
-  const result = validateGameProject(gameDir, options);
+  const result = await validateGameProject(gameDir, options);
   console.log(JSON.stringify(result, null, 2));
   process.exit(result.ok ? 0 : 1);
 }

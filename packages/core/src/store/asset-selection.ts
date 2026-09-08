@@ -19,13 +19,10 @@ import { useSyncExternalStore } from 'react';
 import type { EditorOp } from '../types';
 import { registerApplier } from '../io/appliers';
 import { panelBridge } from '../io/panel-bridge';
-// Single-active-selection-domain: selecting an asset clears any entity selection
-// so Delete / blank-click resolve to one target. Direct clear (guarded on
-// non-empty) goes through the shared selection-domain seam.
-import {
-  clearSelectionDomains,
-  registerSelectionDomainClear,
-} from './selection-domain-clears';
+// Orthogonal selection domains: asset selection does not clear entity/folder
+// selection (Delete routes by focused keybinding scope, not mutual exclusion).
+// Lifecycle clears (blank-click, play/stop) still go through selection-domain-clears.
+import { registerSelectionDomainClear } from './selection-domain-clears';
 
 export interface SelectedAsset {
   guid: string;
@@ -80,10 +77,8 @@ function applySetAssetSelection(op: EditorOp): { ok: true } {
   if (sameSet(selectedAssets, assets) && primaryAsset?.guid === primary?.guid) {
     return { ok: true };
   }
-  // Only a forward (non-empty) asset selection is the active domain — clear the
-  // entity selection FIRST, then emit assets LAST so lastSelectionDomain = 'asset'.
-  // An empty set (deselect) must NOT clear the entity selection.
-  if (assets.length > 0) clearSelectionDomains('entity');
+  // Forward (non-empty) asset selection advances lastSelectionDomain to 'asset'.
+  // Empty set (deselect) is a dedup-guarded no-op and never advances the domain.
   selectedAssets = assets;
   primaryAsset = primary;
   notifyIdentityConsumers();

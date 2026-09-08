@@ -28,18 +28,24 @@ import type {
   ComponentSchema,
   EcsError,
   EntityHandle,
-  Handle,
   InputShapeOf,
-  Result,
   ShapeOf,
   World,
 } from '@forgeax/engine-ecs';
+import { componentDefinition } from '@forgeax/engine-ecs';
+import {
+  worldDespawnScene,
+  worldGetSceneInstanceState,
+  worldRemoveSceneOverride,
+  worldSetSceneOverride,
+} from '@forgeax/engine-scene';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { PackError } from '@forgeax/engine-pack/errors';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { AssetError, SceneAsset } from '@forgeax/engine-types';
+import type { AssetError, Handle, Result, SceneAsset } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { activeSpan, type EngineInterfaceName } from './trace';
+import { getComponentSchema as reflectEditorComponentSchema, type ComponentSchema as EditorComponentSchema } from '../scene/schema';
 
 // feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
 // "engine interface name -> side-effect hint" table (SSOT, AC-07 / D-4). It
@@ -161,10 +167,26 @@ export class EngineFacade {
     return this._world.get(entity, component);
   }
 
+  /** Resolve a component token from this World-local catalog. */
+  resolveComponent(name: string): Component | undefined {
+    return this._world.components.resolve(name);
+  }
+
+  /** Read the Engine-owned schema/policy projection for a catalogued token. */
+  componentDefinition(name: string): ReturnType<typeof componentDefinition> | undefined {
+    const component = this.resolveComponent(name);
+    return component === undefined ? undefined : componentDefinition(component);
+  }
+
+  /** World-bound editor projection used by document validation/read helpers. */
+  editorComponentSchema(name: string): EditorComponentSchema | undefined {
+    return reflectEditorComponentSchema(name, this._world);
+  }
+
   /** Read the engine-owned SceneInstance state payload. This is a read seam;
    * the editor never stores a parallel instance map. */
-  getSceneInstanceState(root: EntityHandle): ReturnType<World['getSceneInstanceState']> {
-    return this._world.getSceneInstanceState(root);
+  getSceneInstanceState(root: EntityHandle): ReturnType<typeof worldGetSceneInstanceState> {
+    return worldGetSceneInstanceState(this._world, root);
   }
 
   /** Set a component field on an entity. Records 'world.set' leaf when an
@@ -185,9 +207,9 @@ export class EngineFacade {
     component: Component<string, S>,
     field: keyof ShapeOf<S> & string,
     value: unknown,
-  ): ReturnType<World['setSceneOverride']> {
+  ): ReturnType<typeof worldSetSceneOverride> {
     _recordLeaf('world.set');
-    return this._world.setSceneOverride(root, member, component, field, value);
+    return worldSetSceneOverride(this._world, root, member, component, field, value);
   }
 
   /** Remove an instance override and let the engine restore its source value. */
@@ -196,9 +218,9 @@ export class EngineFacade {
     member: EntityHandle,
     component: Component<string, S>,
     field: keyof ShapeOf<S> & string,
-  ): ReturnType<World['removeSceneOverride']> {
+  ): ReturnType<typeof worldRemoveSceneOverride> {
     _recordLeaf('world.set');
-    return this._world.removeSceneOverride(root, member, component, field);
+    return worldRemoveSceneOverride(this._world, root, member, component, field);
   }
 
   /** Spawn a new entity with initial components. Records 'world.spawn' leaf.
@@ -225,7 +247,7 @@ export class EngineFacade {
   /** Despawn a SceneInstance root and all of its mapped members. */
   despawnScene(root: EntityHandle): Result<number, EcsError> {
     _recordLeaf('world.despawn');
-    return this._world.despawnScene(root);
+    return worldDespawnScene(this._world, root);
   }
 
   /** Allocate a shared reference to an asset (chrome casting, not an op).
@@ -234,10 +256,9 @@ export class EngineFacade {
   allocSharedRef<Target extends string, T>(
     target: Target,
     payload: T,
-    onLastRelease?: (payload: T) => void,
   ): Handle<Target, 'shared'> {
     _recordLeaf('world.allocSharedRef');
-    return this._world.allocSharedRef(target, payload, onLastRelease);
+    return this._world.allocSharedRef(target, payload);
   }
 
   /** Resolve a catalogued asset GUID string to a live shared<T> handle

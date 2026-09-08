@@ -19,19 +19,22 @@ import { AnimationPlayer } from '@forgeax/engine-animation';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
 import { _resetSchemaCache } from '../scene/schema';
+import { applyEditorComponentMeta } from '../scene/editor-component-meta';
 import type { EditSession, EditorOp } from '../types';
 import {
   clearAnimationPreviews,
   hasAnimationPreview,
   restoreAllAnimationPreviews,
 } from '../session/animation-preview';
+import { createCoreTestWorld } from './fixtures/world';
 // Side-effect: registers the setAnimationPreview applier (same as the barrel).
 import '../session/animation-preview-ops';
 
 void AnimationPlayer;
 
 function createSession(): { session: EditSession; world: World } {
-  const world = new World();
+  const world = createCoreTestWorld();
+  applyEditorComponentMeta(world);
   const session = createEditSession();
   session.world = world as unknown as EditSession['world'];
   return { session, world };

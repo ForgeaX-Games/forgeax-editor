@@ -10,7 +10,8 @@
 //   1. typecheck fan-out (ci.yml) skips the editor SUBpackages
 //      (editor-core/edit-runtime/play-runtime/editor-panels), so
 //      the consumer's TS2305 was never compiled.
-//   2. ci.yml runs no unit tests; nightly only tests types/host-sdk/server.
+//   2. ci.yml ran no unit tests; the nightly suite covered only shared contracts,
+//      extension transport, and server packages.
 // Adding those subpackages to a tsc gate isn't viable (pre-existing engine-
 // boundary type debt makes them deeply red). This focused, hermetic test fills
 // the gap: every name editor-family code imports from the BARE

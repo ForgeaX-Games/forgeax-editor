@@ -1,17 +1,18 @@
 #define_import_path sample_vfx::arc_nova_flow
 
-struct View { reserved: vec4<f32> };
-
-@group(0) @binding(0) var<uniform> view: View;
-
 struct VertexInput {
   @location(0) position: vec3<f32>,
-  @location(1) right: vec2<f32>,
-  @location(2) up: vec2<f32>,
-  @location(3) particleColor: vec4<f32>,
-  @location(4) baseColor: vec4<f32>,
-  @location(5) emissiveIntensity: vec4<f32>,
-  @location(6) surface: vec4<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) tangent: vec4<f32>,
+  @location(4) center: vec3<f32>,
+  @location(5) right: vec3<f32>,
+  @location(6) up: vec3<f32>,
+  @location(7) forward: vec3<f32>,
+  @location(8) particleColor: vec4<f32>,
+  @location(9) baseColor: vec4<f32>,
+  @location(10) emissiveIntensity: vec4<f32>,
+  @location(11) surface: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -22,21 +23,13 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs_main(input: VertexInput, @builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-  let corners = array<vec2<f32>, 6>(
-    vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
-    vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0)
-  );
-  let corner = corners[vertexIndex];
+fn vs_main(input: VertexInput) -> VertexOutput {
   var output: VertexOutput;
-  output.position = vec4<f32>(
-    input.position.xy + input.right * corner.x + input.up * corner.y,
-    input.position.z,
-    1.0,
-  );
+  let offset = input.right * input.position.x + input.up * input.position.y + input.forward * input.position.z;
+  output.position = vec4<f32>(input.center + offset, 1.0);
   output.color = input.particleColor * input.baseColor * material.tint;
-  output.uv = corner * 0.5 + 0.5;
-  output.local = corner;
+  output.uv = input.uv;
+  output.local = input.uv * 2.0 - vec2<f32>(1.0);
   return output;
 }
 

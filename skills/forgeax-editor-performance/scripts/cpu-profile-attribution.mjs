@@ -6,16 +6,49 @@ function framePath(frame) {
   }
 }
 
-export async function selectedSurfaceFrame(page, surface) {
+function pickSurfaceOwner(items, surface, mainItem, pathOf) {
   const prefix = surface === 'edit' ? '/editor/' : '/preview/';
+  const matches = items.filter((item) => pathOf(item).startsWith(prefix));
+  if (matches.length > 1) {
+    throw new Error(`surface ${surface} has ${matches.length} matching ${prefix} frames`);
+  }
+  if (matches.length === 1) return matches[0];
+  if (surface === 'edit' && mainItem !== undefined && !pathOf(mainItem).startsWith('/preview/')) {
+    return mainItem;
+  }
+  return undefined;
+}
+
+/** Resolve the authoritative surface across iframe and single-realm Editor hosts. */
+export function pickSurfaceFrame(frames, surface, mainFrame) {
+  return pickSurfaceOwner(frames, surface, mainFrame, framePath);
+}
+
+/** Resolve the same surface owner from Page.getFrameTree output. */
+export function pickSurfaceFrameId(frameTree, surface) {
+  const rows = [];
+  const visit = (node) => {
+    rows.push(node.frame);
+    for (const child of node.childFrames ?? []) visit(child);
+  };
+  visit(frameTree);
+  return pickSurfaceOwner(rows, surface, rows[0], (frame) => {
+    try {
+      return new URL(frame.url).pathname;
+    } catch {
+      return '';
+    }
+  })?.id;
+}
+
+export async function selectedSurfaceFrame(page, surface) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    const matches = page.frames().filter((frame) => framePath(frame).startsWith(prefix));
-    if (matches.length === 1) return matches[0];
-    if (matches.length > 1) throw new Error(`surface ${surface} has ${matches.length} matching ${prefix} frames`);
+    const match = pickSurfaceFrame(page.frames(), surface, page.mainFrame());
+    if (match !== undefined) return match;
     await page.waitForTimeout(100);
   }
-  throw new Error(`surface ${surface} did not expose exactly one ${prefix} frame`);
+  throw new Error(`surface ${surface} did not expose an authoritative frame`);
 }
 
 function flattenFrameTree(tree, output = []) {

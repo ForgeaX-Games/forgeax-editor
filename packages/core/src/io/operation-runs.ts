@@ -1,4 +1,6 @@
-// Gateway-owned OperationRun read/coordination surface.
+// Gateway-owned OperationRun read/coordination surface for legacy UI/save
+// projections. M6 authoring execution is host ToolClient-owned; this module
+// must not become a second authoring executor or Project authority.
 //
 // This module deliberately reuses the product OperationRun/RunJournal contract.
 // It owns no save-specific status type: save is only the first adopter of this

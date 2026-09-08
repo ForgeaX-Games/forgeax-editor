@@ -8,12 +8,18 @@ afterEach(() => { for (const dispose of registered.splice(0)) dispose(); });
 
 function deps() {
   const calls: string[] = [];
+  const provenance = {
+    backend: 'webgpu', rendererIdentity: 'renderer-test', rendererGeneration: 1,
+    carrierGeneration: 1, carrierId: 'carrier-test', carrierKind: 'local',
+    runtimeId: 'runtime-test', runtimeGeneration: 1,
+  };
   const world = {
     addSystem: () => ({ unwrap: () => { calls.push('addSystem'); } }),
     removeSystem: () => ({ unwrap: () => { calls.push('removeSystem'); } }),
   } as never;
   return {
     calls,
+    provenance,
     value: {
       play: (policy: PlayDirtyPolicy) => { calls.push(`play:${policy}`); return { ok: true as const }; },
       stop: () => { calls.push('stop'); },
@@ -33,9 +39,14 @@ function deps() {
         calls.push(`replay:${entity}`);
         return { ok: true as const };
       },
-      captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' }; },
+      captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json', provenance }; },
       world,
       activeWorld: () => world,
+      removeSystem: (targetWorld: unknown, name: string) => {
+        const result = (targetWorld as { removeSystem: (systemName: string) => { unwrap(): void } }).removeSystem(name);
+        result.unwrap();
+        return { ok: true as const };
+      },
       gateway,
     },
   };
@@ -77,6 +88,19 @@ describe('viewport session applier registrar (M3)', () => {
       },
     });
     expect(d.calls).toContain('capture:1');
+  });
+
+  it('fails a successful-looking capture closed when producer provenance is absent', async () => {
+    const d = deps();
+    registered.push(registerViewportSessionAppliers({
+      ...d.value,
+      captureFrame: async () => ({ runId: 'untrusted', tapePath: 'untrusted.tape.bin', reportPath: 'untrusted.report.json' }),
+    }));
+    gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-no-provenance' }, 'ai');
+    await expect(gateway.waitOperationRun('capture-no-provenance')).resolves.toMatchObject({
+      ok: true,
+      value: { status: 'failed', error: { code: 'capture-provenance-unavailable' } },
+    });
   });
 
   it('captures a validated non-empty Engine ProfileCapture through the Gateway', async () => {
@@ -152,7 +176,7 @@ describe('viewport session applier registrar (M3)', () => {
       captureFrame: async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('debug upload failed');
-        return { runId: 'capture-retry', tapePath: 'retry.tape.bin', reportPath: 'retry.report.json' };
+        return { runId: 'capture-retry', tapePath: 'retry.tape.bin', reportPath: 'retry.report.json', provenance: d.provenance };
       },
     }));
     expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-retry-source' }, 'ai')).toMatchObject({ ok: true });

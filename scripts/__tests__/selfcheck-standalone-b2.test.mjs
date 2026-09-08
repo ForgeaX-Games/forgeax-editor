@@ -13,3 +13,9 @@ test('B2 starts all child processes with the verified Bun executable', () => {
   assert.match(source, /spawn\(BUN_EXECUTABLE, \['run', 'dev'\]/);
   assert.doesNotMatch(source, /spawn\(['"]bun['"]/);
 });
+
+test('B2 gates the browser-localStorage page-layout mirror, not the removed workbench-layout route', () => {
+  assert.match(source, /\/api\/prefs\/browser-localStorage/);
+  assert.match(source, /page-layout:editor:center/);
+  assert.doesNotMatch(source, /\/api\/prefs\/workbench-layout/);
+});

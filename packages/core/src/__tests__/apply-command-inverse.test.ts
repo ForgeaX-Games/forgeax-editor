@@ -16,17 +16,17 @@
 //   research F-ChildOf-Cascade: despawn(parent) recursively deletes subtree
 
 import { describe, expect, it } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import { applyCommand, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // M7 / AC-15: sessions built via createEditSession + injected world; legacy ID
 // → engine handle read via entHandle (doc.entities deleted).
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

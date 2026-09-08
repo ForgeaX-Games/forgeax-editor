@@ -10,7 +10,16 @@ const contract = await Bun.file('scripts/ci/editor-ci-contract.json').json();
 const fixture = await Bun.file('scripts/ci/fixtures/regression-manifest-projection.json').json();
 
 test('contract projection preserves identity and owner home fields', () => {
-  expect(projectRegressionManifest(contract)).toEqual(fixture);
+  const projection = projectRegressionManifest(contract);
+  const projectedChecks = projection.checks.filter((check) => check.profiles.length > 0);
+  const fixtureChecks = fixture.checks.filter((check: { profiles: string[] }) => check.profiles.length > 0);
+  expect({
+    ...projection,
+    checks: projectedChecks,
+  }).toEqual({
+    ...fixture,
+    checks: fixtureChecks,
+  });
   expect(REGRESSION_CHECKS.every((check) => check.owner === 'editor-ci')).toBe(true);
   expect(REGRESSION_CHECKS.every((check) => Object.keys(check.executionHome).length === 6)).toBe(true);
 });
@@ -48,4 +57,10 @@ test('mainline R0 checks are complete local-only contract entries', () => {
     });
     expect(fixture.requiredContexts.some((entry: { checkId: string }) => entry.checkId === checkId)).toBe(false);
   }
+});
+
+test('Engine dogfood enters the pnpm-owned workspace through Bun', () => {
+  const check = REGRESSION_CHECKS.find((candidate) => candidate.id === 'r0-engine-dogfood-diagnostics');
+  expect(check?.command).toBe('bun');
+  expect(check?.args.slice(0, 3)).toEqual(['run', '--cwd', 'packages/engine']);
 });

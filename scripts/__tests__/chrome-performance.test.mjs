@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import { classifyResourceRequest, normalizeTraceUrl, parseCli, parseEditCameraJson, parseEditPatchJson, parseTraceText, percentile, readTraceStream, summarizeCpuProfile, summarizeTrace, validateEvidence, withTimeout } from '../chrome-performance.mjs';
+import { pickSurfaceFrame } from '../../skills/forgeax-editor-performance/scripts/cpu-profile-attribution.mjs';
 
 describe('chrome performance trace summary', () => {
+  test('attributes Edit to either the iframe carrier or the single-realm main frame', () => {
+    const main = { url: () => 'http://localhost:15290/' };
+    const edit = { url: () => 'http://localhost:15290/editor/?runtimeId=edit' };
+    const preview = { url: () => 'http://localhost:15290/preview/' };
+
+    expect(pickSurfaceFrame([main], 'edit', main)).toBe(main);
+    expect(pickSurfaceFrame([main, edit], 'edit', main)).toBe(edit);
+    expect(pickSurfaceFrame([main, preview], 'play-game', main)).toBe(preview);
+  });
+
   test('uses a fixed 20s warmup and measurement contract in benchmark mode', () => {
     expect(parseCli(['--benchmark'])).toMatchObject({
       benchmark: true,
@@ -630,7 +641,7 @@ describe('chrome performance trace summary', () => {
       resourceType: () => 'fetch',
     }).category).toBe('background-control-plane');
     expect(classifyResourceRequest({
-      url: 'http://localhost:15290/api/workbench/games',
+      url: 'http://localhost:15290/api/projects',
       method: 'GET',
       resourceType: 'fetch',
     }).category).toBe('background-control-plane');
@@ -643,6 +654,16 @@ describe('chrome performance trace summary', () => {
       url: 'http://localhost:15290/api/health',
       method: 'GET',
       resourceType: 'fetch',
+    }).category).toBe('background-control-plane');
+    expect(classifyResourceRequest({
+      url: 'http://localhost:15290/api/tools',
+      method: 'GET',
+      resourceType: 'fetch',
+    }).category).toBe('background-control-plane');
+    expect(classifyResourceRequest({
+      url: 'http://localhost:15290/api/events/stream?topic=plugin.reloaded',
+      method: 'GET',
+      resourceType: 'eventsource',
     }).category).toBe('background-control-plane');
   });
 

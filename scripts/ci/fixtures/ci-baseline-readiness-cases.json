@@ -1,0 +1,74 @@
+{
+  "basePacket": {
+    "attemptProvenance": {
+      "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runId": 42,
+      "runAttempt": 2,
+      "topologyId": "topology-1",
+      "graphDigest": "sha256:graph-1",
+      "rosterKey": "[build,smoke]",
+      "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+    }
+  },
+  "cases": [
+    {
+      "name": "same attempt with multiple consumers",
+      "packet": {"attemptProvenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runId": 42,
+        "runAttempt": 2,
+        "topologyId": "topology-1",
+        "graphDigest": "sha256:graph-1",
+        "rosterKey": "[build,smoke]",
+        "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+      }},
+      "observations": {
+        "producer": {"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "artifactName": "editor-build", "readyAt": "2026-08-15T00:00:10Z", "observationKind": "upload-completed"},
+        "consumers": [
+          {"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "artifactName": "editor-build", "consumerIdentity": "consumer-a", "observedStart": "2026-08-15T00:00:15Z", "observationKind": "download-started"},
+          {"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "artifactName": "editor-build", "consumerIdentity": "consumer-b", "observedStart": "2026-08-15T00:00:22Z", "observationKind": "download-started"}
+        ]
+      }
+    },
+    {
+      "name": "missing producer",
+      "expectedCode": "readiness-producer-missing",
+      "packet": {"attemptProvenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "topologyId": "topology-1", "graphDigest": "sha256:graph-1", "rosterKey": "[build,smoke]", "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+      }},
+      "observations": {"producer": null, "consumers": [{"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "consumerIdentity": "consumer-a", "observedStart": "2026-08-15T00:00:15Z"}]}
+    },
+    {
+      "name": "missing consumer",
+      "expectedCode": "readiness-consumer-missing",
+      "packet": {"attemptProvenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "topologyId": "topology-1", "graphDigest": "sha256:graph-1", "rosterKey": "[build,smoke]", "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+      }},
+      "observations": {"producer": {"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "readyAt": "2026-08-15T00:00:10Z"}, "consumers": []}
+    },
+    {
+      "name": "reversed readiness time",
+      "expectedCode": "readiness-time-reversed",
+      "packet": {"attemptProvenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "topologyId": "topology-1", "graphDigest": "sha256:graph-1", "rosterKey": "[build,smoke]", "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+      }},
+      "observations": {"producer": {"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "readyAt": "2026-08-15T00:00:20Z"}, "consumers": [{"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "consumerIdentity": "consumer-a", "observedStart": "2026-08-15T00:00:15Z"}]}
+    },
+    {
+      "name": "readiness provenance mismatch",
+      "expectedCode": "readiness-provenance-mismatch",
+      "packet": {"attemptProvenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "topologyId": "topology-1", "graphDigest": "sha256:graph-1", "rosterKey": "[build,smoke]", "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+      }},
+      "observations": {"producer": {"sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "readyAt": "2026-08-15T00:00:10Z"}, "consumers": [{"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact", "consumerIdentity": "consumer-a", "observedStart": "2026-08-15T00:00:15Z"}]}
+    },
+    {
+      "name": "same artifact name with different identity",
+      "expectedCode": "readiness-artifact-identity-mismatch",
+      "packet": {"attemptProvenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "topologyId": "topology-1", "graphDigest": "sha256:graph-1", "rosterKey": "[build,smoke]", "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+      }},
+      "observations": {"producer": {"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 88, "artifactDigest": "sha-artifact-a", "artifactName": "editor-build", "readyAt": "2026-08-15T00:00:10Z"}, "consumers": [{"sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runId": 42, "runAttempt": 2, "artifactId": 89, "artifactDigest": "sha-artifact-b", "artifactName": "editor-build", "consumerIdentity": "consumer-a", "observedStart": "2026-08-15T00:00:15Z"}]}
+    }
+  ]
+}

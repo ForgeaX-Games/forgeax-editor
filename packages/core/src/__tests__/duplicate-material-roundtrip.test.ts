@@ -32,6 +32,7 @@ import { gateway } from '../store/store';
 import { duplicateEntity, copySelected, pasteClipboard } from '../session/ops';
 import { entName } from '../store/entity-state';
 import type { EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Registry / material setup ───────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ function makeMaterial(): MaterialAsset {
  *  its GUID (the collect path the fix depends on). */
 function setupSessionWithMeshEntity(): { session: EditSession; ball: EntityHandle } {
   const registry = new AssetRegistry(makeMockShaderRegistry());
-  const world = new World();
+  const world = createCoreTestWorld([MeshFilter, MeshRenderer]);
 
   // Catalog + alloc a material shared-ref so _guidForAsset(resolve(handle)) hits.
   const mat = makeMaterial();

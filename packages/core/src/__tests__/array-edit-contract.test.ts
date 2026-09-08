@@ -3,6 +3,11 @@ import { AnimationPlayer } from '@forgeax/engine-animation';
 import { applyCommand, createEditSession } from '../session/document';
 import { _resetSchemaCache } from '../scene/schema';
 import { planArrayEdit, planGroupedArrayPatch } from '../scene/array-edit';
+import { MeshRenderer } from '@forgeax/engine-render';
+import { createCoreTestWorld } from './fixtures/world';
+
+const testWorld = createCoreTestWorld();
+testWorld.components.register(MeshRenderer);
 
 beforeAll(() => {
   void AnimationPlayer;
@@ -14,6 +19,7 @@ describe('R0-03D array edit planning', () => {
     const plan = planArrayEdit(
       { component: 'AnimationPlayer', field: 'times', action: 'add', value: 0.25 },
       { clips: [], times: [], weights: [], speeds: [], nodeWeights: [], nodeTimes: [], nodeSpeeds: [] },
+      testWorld,
     );
     expect(plan).toEqual({
       ok: true,
@@ -25,6 +31,7 @@ describe('R0-03D array edit planning', () => {
     const plan = planArrayEdit(
       { component: 'AnimationPlayer', field: 'weights', action: 'reorder', index: 0, toIndex: 1 },
       { clips: [10, 20], times: [1, 2], weights: [0.1, 0.2], speeds: [3, 4], nodeWeights: [], nodeTimes: [], nodeSpeeds: [] },
+      testWorld,
     );
     expect(plan).toEqual({
       ok: true,
@@ -36,6 +43,7 @@ describe('R0-03D array edit planning', () => {
     const plan = planArrayEdit(
       { component: 'AnimationPlayer', field: 'times', action: 'update', index: 0, value: 0.5 },
       { clips: [], times: [0.1], weights: [], speeds: [], nodeWeights: [], nodeTimes: [], nodeSpeeds: [] },
+      testWorld,
     );
     expect(plan.ok).toBe(false);
     if (!plan.ok) expect(plan.fieldPath).toBe('AnimationPlayer.times');
@@ -45,6 +53,7 @@ describe('R0-03D array edit planning', () => {
     const plan = planGroupedArrayPatch(
       { component: 'AnimationPlayer', field: 'clips', value: 20, slot: 1 },
       { clips: [10], times: [1], weights: [0.5], speeds: [2] },
+      testWorld,
     );
     expect(plan).toEqual({
       ok: true,
@@ -56,6 +65,7 @@ describe('R0-03D array edit planning', () => {
     const plan = planGroupedArrayPatch(
       { component: 'MeshRenderer', field: 'materials', value: [42] },
       {},
+      testWorld,
     );
     expect(plan).toEqual({ ok: true, patch: { materials: [42] } });
   });
@@ -64,6 +74,7 @@ describe('R0-03D array edit planning', () => {
     const plan = planGroupedArrayPatch(
       { component: 'AnimationPlayer', field: 'clips', value: [20, 30] },
       { clips: [10], times: [1], weights: [0.5], speeds: [2] },
+      testWorld,
     );
     expect(plan).toEqual({
       ok: true,
@@ -75,6 +86,7 @@ describe('R0-03D array edit planning', () => {
 describe('R0-03D document field-path validation', () => {
   it('rejects unknown fields and parallel-array mismatch before engine update', () => {
     const session = createEditSession();
+    session.world = createCoreTestWorld();
     const spawned = applyCommand(session, { kind: 'spawnEntity', name: 'R0-03D' });
     expect(spawned.ok).toBe(true);
     const entity = spawned.ok ? spawned.created[0]! : 0;
@@ -117,6 +129,7 @@ describe('R0-03D document field-path validation', () => {
 
   it('preserves fixed-array capacity as a field-path error', () => {
     const session = createEditSession();
+    session.world = createCoreTestWorld();
     const spawned = applyCommand(session, { kind: 'spawnEntity', name: 'R0-03D-fixed' });
     expect(spawned.ok).toBe(true);
     const entity = spawned.ok ? spawned.created[0]! : 0;

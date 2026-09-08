@@ -10,6 +10,7 @@ const EFFECT_GUID = '019f56f2-0ac0-776a-9d28-50eb5a9edeb9';
 const PLAYER_NAME = 'Arc Nova Skill · Select and Replay';
 const FLOW_EMITTER_ID = 'charge-textured-arcane-dial';
 const FLOW_MATERIAL_GUID = '427e8932-3ea3-49ad-a8ce-8c9561e53062';
+const FLOW_MESH_GUID = '9a7e15c1-5d02-4d64-9001-1a2b3c4d5e01';
 const repoRoot = fileURLToPath(new URL('../', import.meta.url));
 
 function parseRef(args) {
@@ -83,12 +84,16 @@ const flowEmitter = emitters.find((emitter) => emitter.id === FLOW_EMITTER_ID);
 if (flowEmitter === undefined) fail(`textured flow emitter ${FLOW_EMITTER_ID} is missing`);
 assertValue(flowEmitter.capacity, 2, 'textured flow emitter capacity');
 assertValue(flowEmitter.renderers?.length, 1, 'textured flow renderer count');
-assertValue(flowEmitter.renderers?.[0]?.kind, 'billboard', 'textured flow renderer kind');
+assertValue(flowEmitter.renderers?.[0]?.kind, 'mesh', 'textured flow renderer kind');
 assertValue(
   flowEmitter.renderers?.[0]?.material,
   FLOW_MATERIAL_GUID,
   'textured flow material GUID',
 );
+assertValue(flowEmitter.renderers?.[0]?.mesh, FLOW_MESH_GUID, 'textured flow mesh GUID');
+if ('blend' in (flowEmitter.renderers?.[0] ?? {})) {
+  fail('textured flow mesh renderer must not carry the billboard-only blend field');
+}
 
 console.log(
   `[sample-vfx-skill] PASS (${ref ?? 'worktree'}; one named replay target; 8 GPU emitters; 20 bursts; textured CFX dial)`,

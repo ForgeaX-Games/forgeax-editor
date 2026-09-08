@@ -12,6 +12,17 @@ export type CapabilityKind = 'operation' | 'query' | 'run' | 'workflow';
 /** A host that can publish or execute a capability. */
 export type CapabilityHost = 'bun' | 'edit' | 'play';
 
+/** Lifecycle stage at which a capability contract is evaluated. */
+export type CapabilityStage =
+  | 'discover'
+  | 'preflight'
+  | 'dispatch'
+  | 'wait'
+  | 'query'
+  | 'save'
+  | 'capture'
+  | 'resume';
+
 /** JSON-like input or output facts used for discovery and preflight. */
 export interface CapabilitySchema {
   readonly type?: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'null';
@@ -46,9 +57,16 @@ export interface CapabilityAvailabilityUnavailable {
     | 'permission-denied'
     | 'confirmation-required'
     | 'not-supported'
-    | 'wave1-input-blocked';
+    | 'wave1-input-blocked'
+    | 'capability-blocked';
   readonly reason: string;
   readonly resolution?: string;
+  readonly capabilityGeneration?: string;
+  readonly stage?: CapabilityStage;
+  readonly owner?: string;
+  readonly expected?: string;
+  readonly recoveryAction?: string;
+  readonly diagnosticId?: string;
 }
 
 /** The machine-readable availability result returned during preflight. */
@@ -109,6 +127,9 @@ export interface CapabilityDescriptor {
   readonly subject: string;
   /** Stable camelCase action or query name, such as `listCatalog`. */
   readonly verb: string;
+  readonly capabilityGeneration?: string;
+  readonly stage?: CapabilityStage;
+  readonly owner?: string;
   readonly inputSchema: CapabilitySchema | null;
   readonly outputSchema: CapabilitySchema | null;
   readonly availability: CapabilityAvailability;
@@ -120,6 +141,29 @@ export interface CapabilityDescriptor {
   readonly cancellation?: CapabilityCancellation;
   readonly retry?: CapabilityRetry;
   readonly recoveryActions: readonly string[];
+  readonly recoveryAction?: string;
+  readonly diagnosticId?: string;
+}
+
+export interface CapabilityGapError extends CommandError {
+  readonly code: 'capability-gap';
+  readonly capabilityId: string;
+  readonly capabilityGeneration: string;
+  readonly stage: CapabilityStage;
+  readonly owner: string;
+  readonly expected: string;
+  readonly recoveryAction: string;
+  readonly diagnosticId: string;
+}
+
+export interface CapabilityGapErrorInput {
+  readonly capabilityId: string;
+  readonly capabilityGeneration: string;
+  readonly stage: CapabilityStage;
+  readonly owner: string;
+  readonly expected: string;
+  readonly recoveryAction: string;
+  readonly diagnosticId: string;
 }
 
 /** Internal registration fact that may attach the host-owned executor. */
@@ -136,7 +180,7 @@ export function capabilityId(subject: string, verb: string): string {
 export function isCapabilityDescriptor(value: unknown): value is CapabilityDescriptor {
   if (value === null || typeof value !== 'object') return false;
   const candidate = value as Partial<CapabilityDescriptor>;
-  return (
+  const baseValid = (
     typeof candidate.id === 'string' &&
     candidate.id === capabilityId(candidate.subject ?? '', candidate.verb ?? '') &&
     typeof candidate.kind === 'string' &&
@@ -147,6 +191,25 @@ export function isCapabilityDescriptor(value: unknown): value is CapabilityDescr
     Array.isArray(candidate.preconditions) &&
     Array.isArray(candidate.recoveryActions)
   );
+  if (!baseValid) return false;
+  if (candidate.availability.available) return true;
+  if (candidate.availability.code !== 'capability-blocked') return true;
+  return (
+    typeof candidate.capabilityGeneration === 'string' &&
+    (candidate.availability.capabilityGeneration === undefined ||
+      candidate.availability.capabilityGeneration === candidate.capabilityGeneration) &&
+    typeof candidate.availability.stage === 'string' &&
+    typeof candidate.availability.owner === 'string' &&
+    typeof candidate.availability.recoveryAction === 'string' &&
+    typeof candidate.availability.diagnosticId === 'string'
+  );
+}
+
+/** Identify a discoverable capability whose owner has not published its seam. */
+export function isCapabilityBlocked(value: unknown): value is CapabilityDescriptor {
+  return isCapabilityDescriptor(value) &&
+    !value.availability.available &&
+    value.availability.code === 'capability-blocked';
 }
 
 /** Build an immutable unavailable fact without throwing during discovery. */
@@ -168,4 +231,37 @@ export function capabilityError(
   error: CommandError,
 ): CapabilityAvailabilityUnavailable {
   return unavailableCapability('not-supported', error.hint);
+}
+
+/** Build the structured owner handoff for a capability contract gap. */
+export function capabilityGapError(input: CapabilityGapErrorInput): CapabilityGapError {
+  return Object.freeze({
+    code: 'capability-gap' as const,
+    capabilityId: input.capabilityId,
+    capabilityGeneration: input.capabilityGeneration,
+    stage: input.stage,
+    owner: input.owner,
+    expected: input.expected,
+    retryable: false,
+    recoveryAction: input.recoveryAction,
+    diagnosticId: input.diagnosticId,
+    hint: `Capability "${input.capabilityId}" is blocked until its owner publishes the expected contract.`,
+    recoveryActions: Object.freeze([input.recoveryAction]),
+  }) as CapabilityGapError;
+}
+
+/** Narrow a transport value to the stable capability-gap error shape. */
+export function isCapabilityGapError(value: unknown): value is CapabilityGapError {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<CapabilityGapError>;
+  return candidate.code === 'capability-gap' &&
+    typeof candidate.capabilityId === 'string' &&
+    typeof candidate.capabilityGeneration === 'string' &&
+    typeof candidate.stage === 'string' &&
+    typeof candidate.owner === 'string' &&
+    typeof candidate.expected === 'string' &&
+    candidate.retryable === false &&
+    typeof candidate.recoveryAction === 'string' &&
+    typeof candidate.diagnosticId === 'string' &&
+    Array.isArray(candidate.recoveryActions);
 }

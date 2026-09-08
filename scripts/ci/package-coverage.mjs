@@ -52,6 +52,11 @@ export function parsePackageCoverageText(text, packageRoot, excludedRoots = []) 
   return parseCoverageText(text, {
     includeSource(source) {
       const sourcePath = resolve(root, source);
+      const ownerRelativePath = relative(root, sourcePath);
+      const ownerLocal = ownerRelativePath !== '..'
+        && !ownerRelativePath.startsWith(`..${sep}`)
+        && !ownerRelativePath.startsWith(sep);
+      if (!ownerLocal) return false;
       return excluded.every((boundary) => {
         const boundaryPath = relative(boundary, sourcePath);
         return boundaryPath === '..' || boundaryPath.startsWith(`..${sep}`) || boundaryPath.startsWith('/');
@@ -159,6 +164,10 @@ export function packageCoverageProducerArgs(testCommand, packageEvidence) {
   };
 }
 
+export function packageTestEnvironment(environment = process.env) {
+  return { ...environment, NODE_ENV: 'test' };
+}
+
 function parseLcovResult(packageName, lcovPath, text, packageRoot, excludedRoots) {
   const parsed = parsePackageCoverageText(text, packageRoot, excludedRoots);
   if (!parsed.ok) return parsed;
@@ -171,7 +180,11 @@ function runPackageProducer(rootDir, surface, evidenceRoot, excludedRoots) {
   const packageEvidence = join(evidenceRoot, surface.path.replaceAll('/', '__'));
   const command = packageCoverageProducerArgs(quality.test, packageEvidence);
   if (!command.ok) return command;
-  const processResult = spawnSync(BUN_EXECUTABLE, ['test', ...command.args], { cwd: packagePath, encoding: 'utf8' });
+  const processResult = spawnSync(BUN_EXECUTABLE, ['test', ...command.args], {
+    cwd: packagePath,
+    encoding: 'utf8',
+    env: packageTestEnvironment(),
+  });
   if (processResult.status !== 0) {
     return fail('package-test-failed', 'package test entry exits successfully', { packageName: surface.packageJson.name, status: processResult.status, stderr: processResult.stderr.slice(-4000) }, 'Fix the package test failure before publishing coverage evidence.');
   }

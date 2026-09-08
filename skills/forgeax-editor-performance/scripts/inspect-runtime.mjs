@@ -179,7 +179,7 @@ async function main() {
     });
     const page = await context.newPage();
     await page.goto(flags.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.locator('.fx-dockwrap').waitFor({ state: 'visible', timeout: 60_000 });
+    await page.locator('.fx-dockregion-DockShell').waitFor({ state: 'visible', timeout: 60_000 });
     const runtime = await findEditorRuntime(page);
     await runtime.waitForFunction(
       () => globalThis.__forgeax_editor?.gateway?.doc?.registry !== undefined,

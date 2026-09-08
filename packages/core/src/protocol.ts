@@ -145,7 +145,69 @@ export type VagCarrierHeartbeatMessage = z.infer<typeof VagCarrierHeartbeatSchem
 export const VagCarrierFailureSchema = carrierFailureMessageSchema('VAG_CARRIER_FAILURE');
 export type VagCarrierFailureMessage = z.infer<typeof VagCarrierFailureSchema>;
 
-// ── 6. VAG_PREVIEW_DISPOSE ───────────────────────────────────────────────────
+// ── 6. Remote gameplay projection requests ─────────────────────────────────
+// The embedded Play carrier owns the live game World in a disposable iframe.
+// These messages expose only the producer-owned projection surface; they never
+// transfer a World, ECS handle, or editor command across the boundary.
+export const VAG_GAMEPLAY_PROTOCOL_VERSION = 1 as const;
+
+const VagGameplayRequestPayloadSchema = z.discriminatedUnion('operation', [
+  z.object({
+    version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
+    requestId: z.string().min(1),
+    operation: z.literal('describe'),
+  }).strict(),
+  z.object({
+    version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
+    requestId: z.string().min(1),
+    operation: z.literal('run'),
+    id: z.string().min(1),
+    args: z.unknown(),
+  }).strict(),
+  z.object({
+    version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
+    requestId: z.string().min(1),
+    operation: z.literal('read'),
+    id: z.string().min(1),
+  }).strict(),
+]);
+
+export const VagGameplayRequestSchema = z.object({
+  type: z.literal('VAG_GAMEPLAY_REQUEST'),
+  payload: VagGameplayRequestPayloadSchema,
+}).strict();
+export type VagGameplayRequestMessage = z.infer<typeof VagGameplayRequestSchema>;
+
+export const VagGameplayProjectionDescriptorSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  argsSchema: z.unknown().optional(),
+}).strict();
+export const VagGameplayDescribeDataSchema = z.object({
+  actions: z.array(VagGameplayProjectionDescriptorSchema),
+  reads: z.array(VagGameplayProjectionDescriptorSchema),
+}).strict();
+
+const VagGameplayResponseErrorSchema = z.object({
+  code: z.string().min(1),
+  hint: z.string().min(1),
+  retryable: z.boolean().optional(),
+}).strict();
+
+export const VagGameplayResponseSchema = z.object({
+  type: z.literal('VAG_GAMEPLAY_RESPONSE'),
+  payload: z.object({
+    version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
+    requestId: z.string().min(1),
+    ok: z.boolean(),
+    data: z.unknown().optional(),
+    error: VagGameplayResponseErrorSchema.optional(),
+  }).strict(),
+}).strict();
+export type VagGameplayResponseMessage = z.infer<typeof VagGameplayResponseSchema>;
+
+// ── 7. VAG_PREVIEW_DISPOSE ───────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:287 / 324 / 414 (interface). Type-only command
 // asking the preview iframe to dispose its engine before src reset / unmount.
 export const VagPreviewDisposeSchema = z.object({
@@ -153,21 +215,21 @@ export const VagPreviewDisposeSchema = z.object({
 });
 export type VagPreviewDisposeMessage = z.infer<typeof VagPreviewDisposeSchema>;
 
-// ── 6. VAG_PREVIEW_PAUSE ─────────────────────────────────────────────────────
+// ── 8. VAG_PREVIEW_PAUSE ─────────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:407 (sendToGame helper). Type-only.
 export const VagPreviewPauseSchema = z.object({
   type: z.literal('VAG_PREVIEW_PAUSE'),
 });
 export type VagPreviewPauseMessage = z.infer<typeof VagPreviewPauseSchema>;
 
-// ── 7. VAG_PREVIEW_PLAY ──────────────────────────────────────────────────────
+// ── 9. VAG_PREVIEW_PLAY ──────────────────────────────────────────────────────
 // Producer: PreviewMode.tsx:407 (sendToGame helper). Type-only.
 export const VagPreviewPlaySchema = z.object({
   type: z.literal('VAG_PREVIEW_PLAY'),
 });
 export type VagPreviewPlayMessage = z.infer<typeof VagPreviewPlaySchema>;
 
-// ── 8. VAG_PREVIEW_RELOAD ────────────────────────────────────────────────────
+// ── 10. VAG_PREVIEW_RELOAD ───────────────────────────────────────────────────
 // Producer: interface preview / engine HMR path. Type-only — receiver does
 // location.reload() (editor-runtime/main.tsx:326).
 export const VagPreviewReloadSchema = z.object({
@@ -207,6 +269,7 @@ function vagSchemaUnion() {
   return z.union([
     VagConsoleSchema, VagDeviceLostSchema, VagFpsStatsSchema,
     VagCarrierHandshakeSchema, VagCarrierHeartbeatSchema, VagCarrierFailureSchema,
+    VagGameplayRequestSchema, VagGameplayResponseSchema,
     VagPreviewDisposeSchema, VagPreviewPauseSchema, VagPreviewPlaySchema,
     VagPreviewReloadSchema,
   ]);
@@ -307,6 +370,8 @@ const VAG_SCHEMA_BY_TYPE = {
   VAG_CARRIER_HANDSHAKE: VagCarrierHandshakeSchema,
   VAG_CARRIER_HEARTBEAT: VagCarrierHeartbeatSchema,
   VAG_CARRIER_FAILURE: VagCarrierFailureSchema,
+  VAG_GAMEPLAY_REQUEST: VagGameplayRequestSchema,
+  VAG_GAMEPLAY_RESPONSE: VagGameplayResponseSchema,
   VAG_PREVIEW_DISPOSE: VagPreviewDisposeSchema,
   VAG_PREVIEW_PAUSE: VagPreviewPauseSchema,
   VAG_PREVIEW_PLAY: VagPreviewPlaySchema,

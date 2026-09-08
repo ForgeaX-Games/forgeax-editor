@@ -29,7 +29,7 @@ import { entExists, entName, entParent, entComponents, entComponentsPresent, wor
 // play->playWorld) + EntityHandle; node key IS the engine handle.
 import { dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getEditorWorldProjection, getSelection, getSelectionList, onSelectionChange, onRenameRequest, readEntityVisibility, readVisibilityIntent, requestRefEntity, resolveVisibility, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, subscribeViewportRuntimeClient } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
-import type { EntityHandle, VisibilitySnapshot } from '@forgeax/editor-core';
+import type { EditorWorldProjectionRow, EntityHandle, VisibilitySnapshot } from '@forgeax/editor-core';
 import {
   clearHierarchyFilters,
   clearHierarchySearchQuery,
@@ -561,6 +561,8 @@ function useRemoteHierarchyProjection(enabled: boolean): HierarchyRuntimeProject
     let pending = false;
     let lastProjectionRevision: number | undefined;
     let lastSelectionIds: readonly EntityHandle[] | undefined;
+    let lastEditorWorldRowsCount: number | undefined;
+    let lastEditorWorldCamId: EntityHandle | null | undefined;
     const refresh = async () => {
       if (pending) return;
       pending = true;
@@ -573,13 +575,21 @@ function useRemoteHierarchyProjection(enabled: boolean): HierarchyRuntimeProject
           const sameSelection = lastSelectionIds !== undefined
             && lastSelectionIds.length === next.selectionIds.length
             && lastSelectionIds.every((id, index) => id === next.selectionIds[index]);
-          if (revision !== undefined && revision === lastProjectionRevision && sameSelection) return;
+          const currentRowsCount = next.editorWorld?.rows?.length ?? 0;
+          const currentCamId = next.editorWorld?.cameraId;
+          const sameEditorWorld = lastEditorWorldRowsCount === currentRowsCount
+            && lastEditorWorldCamId === currentCamId;
+          if (revision !== undefined && revision === lastProjectionRevision && sameSelection && sameEditorWorld) return;
           lastProjectionRevision = revision;
           lastSelectionIds = next.selectionIds;
+          lastEditorWorldRowsCount = currentRowsCount;
+          lastEditorWorldCamId = currentCamId;
           setProjection(next);
         } else if (envelope.status === 'empty') {
           lastProjectionRevision = envelope.revision;
           lastSelectionIds = [];
+          lastEditorWorldRowsCount = 0;
+          lastEditorWorldCamId = undefined;
           setProjection({
             structure: { structureEpoch: envelope.revision, rows: [] },
             selectionIds: [],
@@ -587,6 +597,8 @@ function useRemoteHierarchyProjection(enabled: boolean): HierarchyRuntimeProject
         } else {
           lastProjectionRevision = undefined;
           lastSelectionIds = undefined;
+          lastEditorWorldRowsCount = undefined;
+          lastEditorWorldCamId = undefined;
           setProjection(undefined);
         }
       } catch {
@@ -1441,10 +1453,20 @@ export function HierarchyPanel() {
   );
   const editorRows = (() => {
     if (!view.showEditorWorld) return [];
-    const rows = getEditorWorldProjection().rows;
+    let rows: readonly EditorWorldProjectionRow[] = remoteProjectionState?.editorWorld?.rows ?? getEditorWorldProjection().rows;
+    if (rows.length === 0 && (remoteProjectionState?.editorWorld?.cameraId != null || (!remoteProjection && getEditorWorldProjection().cameraId != null))) {
+      const fallbackId = (remoteProjectionState?.editorWorld?.cameraId ?? getEditorWorldProjection().cameraId ?? 0) as EntityHandle;
+      rows = [{
+        id: fallbackId,
+        name: 'Editor Camera',
+        typeId: 'Camera',
+        camera: {},
+        transform: null,
+      }];
+    }
     if (!filtering) return rows;
     const q = view.searchQuery.trim().toLowerCase();
-    return rows.filter((row) => {
+    return rows.filter((row: EditorWorldProjectionRow) => {
       if (view.filters.size > 0 && !view.filters.has(row.typeId)) return false;
       if (!q) return true;
       return row.name.toLowerCase().includes(q) || row.typeId.toLowerCase().includes(q);

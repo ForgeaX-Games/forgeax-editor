@@ -15,7 +15,8 @@
 // drag-spawn resolver → mesh-stats → preview-skin → disk-watch + beacon
 // listeners.
 
-import { toShared } from '@forgeax/engine-ecs';
+import { toShared } from '@forgeax/engine-types';
+import type { World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
 import { parseScenePayload } from '@forgeax/engine-assets-runtime';
@@ -23,13 +24,23 @@ import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import type { SceneAsset } from '@forgeax/engine-types';
 import {
   bindSceneInstanceAnimationTargets,
+  createRemoteGameplayGateway,
   createRuntimeUiGraph,
   entComponent,
   normalizeAnimationPlayerSceneAsset,
   panelBridge,
   publishMeshStats,
 } from '@forgeax/editor-core';
-import type { CommandOrigin, DispatchResult, EngineFacade, EntityHandle, PlayDirtyPolicy, SelectedAsset } from '@forgeax/editor-core';
+import type {
+  CommandOrigin,
+  DispatchResult,
+  EngineFacade,
+  EntityHandle,
+  GameplayGateway,
+  PlayDirtyPolicy,
+  RemoteGameplayTransport,
+  SelectedAsset,
+} from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher, createRunLifecycle, type RunLifecycle } from './run-lifecycle';
 import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
@@ -43,6 +54,7 @@ import {
   type GamePluginLoad,
 } from '@forgeax/editor-game-plugins';
 import { createDisposablePlayCarrier } from './disposable-play-carrier';
+import { forwardFeedbackHealth, normalizeCarrierFailureCode } from '../feedback-health';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -51,7 +63,6 @@ type WorldLike = {
   _getGraph: () => { archetypes: { columns: Map<number, Map<string, { view: Uint32Array }>>; size: number }[] };
 };
 type RendererLike = {
-  ready: Promise<unknown>;
   assets: {
     loadByGuid: (guid: unknown) => Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }>;
     invalidate?: (guid: string) => void;
@@ -74,6 +85,22 @@ type ViewportLike = { resetCamera(): void };
 export type PhysicsBackend = 'rapier-3d' | 'rapier-2d';
 
 /**
+ * Standalone `/api/health` reports the active game directory as
+ * `instanceRootAbs`, while some hosts report the instance parent and rely on
+ * `gameRoot` to select the game below it. Keep both layouts in the probe list:
+ * the first candidate is the direct health result, and the second is the
+ * host-relative fallback. This is deliberately a candidate list rather than a
+ * string heuristic because the two values may use different path roots.
+ */
+export function candidateGameRoots(instanceRootAbs: string, gameRoot: string): string[] {
+  const direct = instanceRootAbs.replace(/[\\/]+$/, '');
+  const relative = gameRoot.replace(/^[/\\]+|[/\\]+$/g, '');
+  if (relative === '') return [direct];
+  const joined = `${direct}/${relative}`;
+  return joined === direct ? [direct] : [direct, joined];
+}
+
+/**
  * Everything host-session needs from the booted viewport, declared explicitly
  * (Pipeline Isolation — no implicit context). ViewportComponent assembles this
  * after createApp + createViewport succeed.
@@ -83,7 +110,7 @@ export interface HostSessionContext {
   readonly app: EditorAppLike;
   /** The single edit world (createApp's world). */
   readonly world: WorldLike;
-  /** The renderer (assets + ready + store). */
+  /** The renderer (assets + store). */
   readonly renderer: RendererLike;
   /** The editor orbit camera entity id (viewport-owned). */
   readonly cameraEntity: number;
@@ -152,7 +179,7 @@ export interface HostSessionContext {
   readonly onRemotePlayStarted?: () => void;
   readonly onRemotePlayFps?: (fps: number, generation: number) => void;
   /** Play assembly failed and the gateway has returned to its edit-side state. */
-  readonly onPlayFailed: () => void;
+  readonly onPlayFailed: (error?: unknown) => void;
 }
 
 type GameBootstrap = (world: unknown, ctx?: unknown) => void | Promise<void>;
@@ -171,7 +198,7 @@ export interface BootstrapResolverDeps {
  * Module scope is a game registration boundary (`defineState`, plugin side effects),
  * while the exported bootstrap executes once for each fresh Play world. Re-importing
  * a timestamped URL on every ▶ re-runs module scope and makes a second Play collide
- * with the engine's global state-token registry.
+ * with the host's module-scoped registration boundary.
  */
 export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Promise<GameBootstrap | null> {
   let resolved = false;
@@ -220,6 +247,8 @@ export interface HostSession {
   playSimulation(policy?: PlayDirtyPolicy, origin?: CommandOrigin): DispatchResult;
   /** ■ Stop — freeze + restore the pre-▶ snapshot. */
   stopSimulation(): void;
+  /** Capture from the active RHI carrier; remote Play never falls back to paused Edit. */
+  captureFrame(frames: number): Promise<unknown>;
   /**
    * Tear down the session's global side effects (disk-watch socket, flush
    * beacons, VAG flush handler). The active-game host calls this before a realm
@@ -232,6 +261,8 @@ export interface HostSession {
   currentPlayRunId(): string | null;
   /** The live play App's pause/resume handle while playing, else null. */
   getPlayPauseHandle(): { pause(): void; resume(): void } | null;
+  /** The gameplay producer gateway for the visible local or remote Play realm. */
+  getGameplayGateway(): GameplayGateway;
 }
 
 /**
@@ -445,15 +476,15 @@ export function createHostSession(deps: HostSessionDeps): {
     // engine answers with a real file. forge.json exists in every game dir.
     const BUNDLE_BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
     const FS_BASE_CANDIDATES = [...new Set([BUNDLE_BASE, '/preview', ''])];
-    let cachedFsBase: string | undefined;
+    let cachedGameFsBase: string | undefined;
     const resolveGameFsBase = async (): Promise<string> => {
       const toFsUrl = (abs: string, base: string) => {
         const norm = abs.replace(/\\/g, '/');
         return `${base}/@fs${norm.startsWith('/') ? '' : '/'}${norm}`;
       };
-      let gameAbs: string;
+      let gameRoots: string[];
       if (typeof __FORGEAX_GAME_DIR_ABS__ === 'string' && __FORGEAX_GAME_DIR_ABS__) {
-        gameAbs = __FORGEAX_GAME_DIR_ABS__;
+        gameRoots = [__FORGEAX_GAME_DIR_ABS__];
       } else {
         const rootAbs = await getInstanceRootAbs();
         // gameRoot comes from the host-installed path resolver (configureHostSession
@@ -461,44 +492,60 @@ export function createHostSession(deps: HostSessionDeps): {
         // NOT from `?gameRoot=` — the single realm passes the game as props, so the
         // resolver is the one source of the host's game->disk layout root.
         const gameRoot = resolveGamePath('');
-        gameAbs = gameRoot ? `${rootAbs}/${gameRoot}` : rootAbs;
+        gameRoots = candidateGameRoots(rootAbs, gameRoot);
       }
-      if (cachedFsBase !== undefined) return toFsUrl(gameAbs, cachedFsBase);
-      for (const base of FS_BASE_CANDIDATES) {
-        try {
-          const probe = await deps.fetch(`${toFsUrl(gameAbs, base)}/forge.json`, { cache: 'no-store' });
-          const contentType = probe.headers.get('content-type') ?? '';
-          if (probe.ok && !contentType.includes('text/html')) {
-            cachedFsBase = base;
-            return toFsUrl(gameAbs, base);
-          }
-        } catch { /* candidate unreachable — try the next */ }
+      if (cachedGameFsBase !== undefined) return cachedGameFsBase;
+      for (const gameAbs of gameRoots) {
+        for (const base of FS_BASE_CANDIDATES) {
+          try {
+            const probe = await deps.fetch(`${toFsUrl(gameAbs, base)}/forge.json`, { cache: 'no-store' });
+            const contentType = probe.headers.get('content-type') ?? '';
+            if (probe.ok && !contentType.includes('text/html')) {
+              cachedGameFsBase = toFsUrl(gameAbs, base);
+              return cachedGameFsBase;
+            }
+          } catch { /* candidate unreachable — try the next */ }
+        }
       }
-      // No candidate answered: fall back to the bundle base so the import
-      // failure surfaces with the same diagnostics as before this probe.
-      return toFsUrl(gameAbs, BUNDLE_BASE);
+      // No candidate answered: use the direct health result with the bundle
+      // base so the import failure retains the original diagnostics.
+      const fallbackRoot = gameRoots[0] ?? '';
+      return toFsUrl(fallbackRoot, BUNDLE_BASE);
     };
 
     // ── Asset-resident game plugins (game-plugins.ts) ───────────────────────────
-    // Import every `assets/**/*.plugin.ts` ONCE (memoized in game-plugins.ts by
-    // gameFsBase) so their defineComponent/defineSystem side effects register into
-    // the editor's single engine registry. EDIT uses this only to register the
-    // COMPONENTS (so they are attachable + round-trip through the scene pack);
-    // PLAY additionally `addSystem`s the plugin systems into the fresh playWorld
-    // (in the assemble closure below). One promise → edit + every ▶ Play share the
-    // SAME component/system tokens.
+    // Discover each asset plugin once for this host session. The native Plugin
+    // values are reusable Cordis declarations; each World gets its own context
+    // when the host installs them, while the discovery result remains one SSOT
+    // for edit and Play. A rejected promise is cleared so a transient fetch or
+    // import failure can be retried without creating a second loader path.
     const EMPTY_PLUGIN_LOAD: GamePluginLoad = { plugins: [], systems: [], components: [], errors: [] };
-    const loadGamePlugins = (): Promise<GamePluginLoad> => {
+    let cachedGamePluginLoad: GamePluginLoad | undefined;
+    let gamePluginLoadPromise: Promise<GamePluginLoad> | undefined;
+    const loadGamePlugins = (targetWorld?: World): Promise<GamePluginLoad> => {
+      if (cachedGamePluginLoad !== undefined) return Promise.resolve(cachedGamePluginLoad);
+      if (gamePluginLoadPromise !== undefined) return gamePluginLoadPromise;
       // No real game (scene-less / demo default) → skip entirely, touching no fetch.
       // Mirrors resolveEditPhysics's `'default'` early-out so the boot tail stays
       // network-free on an empty world (host-boot-di AC-05 asserts zero fetches).
       const slug = getSceneId();
-      if (!slug || slug === 'default') return Promise.resolve(EMPTY_PLUGIN_LOAD);
-      return ensureGamePluginsLoaded({
+      if (!slug || slug === 'default') {
+        cachedGamePluginLoad = EMPTY_PLUGIN_LOAD;
+        return Promise.resolve(EMPTY_PLUGIN_LOAD);
+      }
+      gamePluginLoadPromise = ensureGamePluginsLoaded({
         fetch: deps.fetch,
         gameRoot: resolveGamePath(''),
         resolveGameFsBase,
+        ...(targetWorld === undefined ? {} : { world: targetWorld }),
+      }).then((loaded) => {
+        cachedGamePluginLoad = loaded;
+        return loaded;
+      }, (error) => {
+        gamePluginLoadPromise = undefined;
+        throw error;
       });
+      return gamePluginLoadPromise;
     };
 
     // ── Load the authored scene (was bootEditor :433) ───────────────────────────
@@ -510,16 +557,16 @@ export function createHostSession(deps: HostSessionDeps): {
     // the saved scene into a separate fresh playWorld (run-lifecycle), so the edit
     // world's loaded entities are never used for a ▶ snapshot / ■ restore.
     // ── Asset-resident game plugins: register COMPONENTS before scene load ───────
-    // Import `assets/**/*.plugin.ts` (memoized) so their defineComponent side
-    // effects register into the engine registry BEFORE loadDocFromDisk runs — a
+    // Discover `assets/**/*.plugin.ts` before loadDocFromDisk runs — a
     // saved scene entity carrying a plugin component (e.g. BlueBall + Rotator) can
-    // only round-trip in if the component token already exists. EDIT registers the
-    // component only; the systems are NOT added to the edit world (nothing ticks
-    // while authoring — the ball stays still until ▶ Play). Graceful: a failed
-    // load leaves the editor fully functional minus plugin components.
+    // only round-trip in if the component token already exists. The native Plugin
+    // is activated through createWorldContext for this World, so component and
+    // system ownership stays World-local; Play activates the same declaration in
+    // its fresh World. Graceful: a failed load leaves the editor fully functional
+    // minus plugin components.
     setBootStage('gamePlugins');
     try {
-      const pluginLoad = await loadGamePlugins();
+      const pluginLoad = await loadGamePlugins(ctx.world as unknown as World);
       if (pluginLoad.components.length > 0) {
         emitBoot(`plugins ▸ components registered: ${pluginLoad.components.join(', ')}`);
       }
@@ -531,14 +578,11 @@ export function createHostSession(deps: HostSessionDeps): {
     }
 
     setBootStage('loadDoc');
-    await renderer.ready.catch(() => null);
-
     await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
     emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
 
     // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
-    // asynchronously by the scene load above (configurePackIndex + loadByGuid, both
-    // gated on renderer.ready). The Assets panel (ContentBrowser) mounts and reads
+    // asynchronously by the scene load above (configurePackIndex + loadByGuid). The Assets panel (ContentBrowser) mounts and reads
     // registry.listCatalog() BEFORE that completes, so its first read is empty and
     // nothing re-triggers it — the panel stayed blank until a manual page refresh.
     // Fire the existing "assets changed" signal now that the catalog is live so any
@@ -607,6 +651,7 @@ export function createHostSession(deps: HostSessionDeps): {
           invalidateNextPlaySceneAsset = false;
           const error = { code: 'play-save-failed' as const, hint: 'Save Then Play could not start the canonical save operation.' };
           gateway.failPlayAttempt(error);
+          ctx.onPlayFailed(error);
           return { ok: false, error };
         }
         void (async () => {
@@ -615,7 +660,9 @@ export function createHostSession(deps: HostSessionDeps): {
             invalidateNextPlaySceneAsset = false;
             const saveError = terminal?.value?.error;
             const hint = saveError?.hint ?? 'Save Then Play stopped because the canonical save did not succeed.';
-            gateway.failPlayAttempt({ code: 'play-save-failed', hint });
+            const error = { code: 'play-save-failed' as const, hint };
+            gateway.failPlayAttempt(error);
+            ctx.onPlayFailed(error);
             return;
           }
           void runLifecycle.playSimulation();
@@ -688,7 +735,6 @@ export function createHostSession(deps: HostSessionDeps): {
           hint: `forge.json defaultScene is not a valid asset GUID: ${forge.defaultSceneGuid}`,
         };
       }
-      await renderer.ready.catch(() => null);
       // The shared AssetRegistry caches loadByGuid results. Save Then Play must
       // invalidate the authored SceneAsset first, or Play would silently replay
       // stale bytes despite the canonical save having succeeded.
@@ -738,10 +784,13 @@ export function createHostSession(deps: HostSessionDeps): {
     };
 
     const runtimeUiGraph = createRuntimeUiGraph();
-    const liveWorldPublisher = createLiveWorldFrameEndPublisher(runtimeUiGraph);
-    const canPublishFrameEnd = typeof (ctx.world as unknown as { addSystem?: unknown }).addSystem === 'function'
-      && typeof (ctx.world as unknown as { removeSystem?: unknown }).removeSystem === 'function';
-    if (canPublishFrameEnd) liveWorldPublisher.bind(ctx.world as never);
+    const rendererSubscribeFrameEnd = (renderer as unknown as { subscribeFrameEnd?: (listener: () => void) => () => void }).subscribeFrameEnd;
+    const liveWorldPublisher = createLiveWorldFrameEndPublisher(
+      runtimeUiGraph,
+      rendererSubscribeFrameEnd === undefined ? (() => () => undefined) : rendererSubscribeFrameEnd.bind(renderer),
+    );
+    const canPublishFrameEnd = rendererSubscribeFrameEnd !== undefined;
+    if (canPublishFrameEnd) liveWorldPublisher.bind(ctx.world);
 
     const remoteCarrier = ctx.playChildUrl !== undefined
       && app.releaseSurfacePreserveWorld !== undefined
@@ -767,9 +816,53 @@ export function createHostSession(deps: HostSessionDeps): {
           const execution = (payload as { execution?: { requestedTier?: unknown; actualTier?: unknown; engine?: { realm?: unknown } } } | null)?.execution;
           emitBoot(`play ▸ child ready; execution requested=${String(execution?.requestedTier ?? 'unreported')} actual=${String(execution?.actualTier ?? 'unreported')} realm=${String(execution?.engine?.realm ?? 'unreported')}`);
         },
+        onFailure: (failure) => {
+          forwardFeedbackHealth({
+            source: 'play',
+            code: normalizeCarrierFailureCode(failure),
+            message: failure.hint,
+          });
+        },
+        livenessTimeoutMs: 3_000,
+        // Runtime reachability is probed every tick (independent of frame
+        // cadence), so require three consecutive failures before declaring an
+        // outage — a dev server restart or one dropped request is not one.
+        unreachableConfirmations: 3,
         ...(ctx.onRemotePlayFps ? { onFps: ctx.onRemotePlayFps } : {}),
       })
       : undefined;
+
+    const remoteGameplayGateway = remoteCarrier === undefined
+      ? undefined
+      : createRemoteGameplayGateway({
+        descriptors: () => {
+          const current = remoteCarrier.gameplayDescriptors();
+          return {
+            actions: current.actions,
+            reads: current.reads,
+          };
+        },
+        request: (request) => remoteCarrier.gameplay(request),
+      } satisfies RemoteGameplayTransport, () => (
+        (gateway as unknown as { readonly playPhase?: GameplayGateway['playPhase'] }).playPhase ?? 'edit'
+      ));
+
+    const captureFrame = (frames: number): Promise<unknown> => {
+      // A disposable carrier owns the live renderer while entering, playing, or
+      // stopping. Its child capture hook is the only valid source in those
+      // phases; calling the parent here would arm the paused Edit recorder and
+      // wait forever for a frame-end callback that cannot arrive.
+      if (remoteCarrier !== undefined && remoteCarrier.state() !== 'edit') {
+        return remoteCarrier.captureFrame(frames);
+      }
+      const capture = (globalThis as typeof globalThis & {
+        __forgeax?: { captureFrame?: (count: number) => Promise<unknown> };
+      }).__forgeax?.captureFrame;
+      if (typeof capture !== 'function') {
+        return Promise.reject(new Error('RHI debug capture is unavailable; start the editor with --rhi-debug'));
+      }
+      return capture(frames);
+    };
 
     runLifecycle = createRunLifecycle({
       editorApp: app,
@@ -861,6 +954,7 @@ export function createHostSession(deps: HostSessionDeps): {
               return result;
             });
           },
+          gamePlugins: pluginLoad.plugins.flatMap((plugin) => plugin.plugin === undefined ? [] : [plugin.plugin]),
           ...(ctx.physics ? { physics: ctx.physics } : {}),
           vfxRuntimeHost: ctx.vfxRuntimeHost,
           vfxRenderFeatureEnabled: ctx.vfxRenderFeatureEnabled,
@@ -971,10 +1065,12 @@ export function createHostSession(deps: HostSessionDeps): {
     return {
       playSimulation,
       stopSimulation,
+      captureFrame,
       dispose,
       currentPlayWorld: () => runLifecycle?.currentPlayWorld() ?? null,
       currentPlayRunId: () => runLifecycle?.currentPlayRunId() ?? null,
       getPlayPauseHandle: () => runLifecycle?.getPlayPauseHandle() ?? null,
+      getGameplayGateway: () => remoteGameplayGateway ?? (gateway as unknown as GameplayGateway),
     };
   }
 
@@ -1144,7 +1240,6 @@ export function createHostSession(deps: HostSessionDeps): {
     const { world, engine, renderer, viewport } = ctx;
     const slug = getSceneId();
     if (!slug || slug === 'default') return;
-    await renderer.ready.catch(() => null);
     try {
       const gameForgePath = resolveGamePath(FORGE_JSON);
       const fetchRead = async (): Promise<string> => {

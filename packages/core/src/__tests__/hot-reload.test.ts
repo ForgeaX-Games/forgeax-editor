@@ -9,14 +9,13 @@
 //         disposable; OOS-7 edit-mode hot reload rebuilds, no fine-grained
 //         unload — OOS-8)
 //
-// The fingerprint judge is the engine `component.toSchemaJSON()` snapshot over
-// `getRegisteredComponents()` (research Finding 1: toSchemaJSON @
-// component.ts:660). This test pins the PURE tier-decision logic that the
+// The fingerprint judge is the World-local component `fields` snapshot. This
+// test pins the PURE tier-decision logic that the
 // edit-runtime hot-reload orchestrator (w37) consumes.
 //
 // Anchors:
 //   plan-tasks.json w30: hot-reload two-tier branch unit test
-//   requirements AC-15: toSchemaJSON snapshot fingerprint drives the two tiers
+//   requirements AC-15: component field snapshot fingerprint drives the two tiers
 //   plan-strategy D-8: same snapshot → in-place update; different → rebuild
 //   OOS-7 / OOS-8: no Play-mode runtime hot reload; no fine-grained unload
 
@@ -24,11 +23,10 @@ import { describe, expect, it } from 'bun:test';
 
 import { schemaFingerprint, decideReloadTier } from '../util/hot-reload';
 
-// A minimal stand-in for the engine `Component` token surface the fingerprint
-// reads: just `toSchemaJSON()`. We model schema changes by changing the JSON it
-// returns.
-function comp(schema: Record<string, unknown>): { toSchemaJSON(): string } {
-  return { toSchemaJSON: () => JSON.stringify(schema) };
+// A minimal stand-in for the Engine Component token surface the fingerprint
+// reads: World-local reflected fields.
+function comp(schema: Record<string, string>): { fields: Record<string, { type: string }> } {
+  return { fields: Object.fromEntries(Object.entries(schema).map(([name, type]) => [name, { type }])) };
 }
 
 describe('schemaFingerprint — snapshot over registered components', () => {
@@ -46,7 +44,7 @@ describe('schemaFingerprint — snapshot over registered components', () => {
   });
 
   it('empty component list yields a stable empty fingerprint', () => {
-    const empty = new Map<string, { toSchemaJSON(): string }>();
+    const empty = new Map<string, { fields: Record<string, { type: string }> }>();
     expect(schemaFingerprint(empty)).toBe(schemaFingerprint(new Map()));
   });
 });
@@ -62,7 +60,7 @@ describe('decideReloadTier — same fingerprint keeps the world', () => {
   });
 
   it('only a default value changed (schema shape unchanged) → world-update', () => {
-    // toSchemaJSON serializes the schema SHAPE (field → type), not runtime
+    // The fingerprint serializes the schema SHAPE (field → type), not runtime
     // default scalar values; changing a default leaves the fingerprint equal.
     const before = schemaFingerprint(new Map([['Speed', comp({ value: 'f32' })]]));
     const after = schemaFingerprint(new Map([['Speed', comp({ value: 'f32' })]]));

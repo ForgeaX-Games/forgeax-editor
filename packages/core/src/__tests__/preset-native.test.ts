@@ -33,6 +33,7 @@ import {
 import { applyCommand, createEditSession } from '../session/document';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '../scene/presets';
 import type { EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ import type { EditorOp, EditSession } from '../types';
 // → engine handle read via entHandle (doc.entities deleted).
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld([MeshFilter, MeshRenderer, PointLight, DirectionalLight, SpotLight]);
   return session;
 }
 

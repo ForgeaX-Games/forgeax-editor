@@ -1,5 +1,5 @@
 declare module 'virtual:forgeax-static-game-entry' {
-  const bootstrap: import('@forgeax/engine-app').BootstrapEntry | null;
+  const bootstrap: import('@forgeax/editor-game-plugins').BootstrapEntry | null;
   export { bootstrap };
 }
 

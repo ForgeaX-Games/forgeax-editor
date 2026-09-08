@@ -228,6 +228,10 @@
     "signature": "SessionDirtyAsset"
   },
   {
+    "name": "subscribeActiveEditorAsset",
+    "signature": "(listener: () => void) => () => void"
+  },
+  {
     "name": "subscribeDocVersion",
     "signature": "(fn: () => void) => () => void"
   },

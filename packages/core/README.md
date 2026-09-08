@@ -2,6 +2,103 @@
 
 > forgeax editor 核心逻辑层 — EditSession 单一真相源（scene-as-asset）、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
 
+## Project authoring transaction boundary
+
+The material, mesh, and VFX operations are installed by the Engine Tool Runtime
+contribution. Core owns the producer transaction seam:
+read a fresh Project revision, merge a serialized draft, CAS-write with
+`expectedRevision`, and expose terminal/error evidence. The Gateway remains a
+thin UI projection and does not become a second authoring executor.
+
+| Terminal | Project fact | Recovery |
+| --- | --- | --- |
+| `succeeded` | New revision and project-file artifact are published | Refresh projections |
+| `authoring-revision-conflict` | No partial write | Keep `draft`, refresh, retry |
+| producer write failure | No in-memory promotion | Use structured `recoveryActions` |
+
+> [!WARNING]
+> Do not treat an EditSession or panel snapshot as the Project authority after
+> a failed terminal. Re-read the Project files before retrying.
+
+## Material publication inspection and parameter contract
+
+`MaterialPublicationInspection` is the single read-only shape for a cooked
+MaterialAsset publication. Query it by authored `materialGuid`; compare
+`publicationGeneration`, `specializationKey`, `sourceClosure`,
+`artifactDigest`, and `parameterContract` across hosts. `transport` records
+where the projection was read and is provenance only: it never participates in
+publication tuple equality.
+
+`resolveMaterialParamSchema` reads `parameterContract.parameters` first. The
+retained built-in schema is only an offline fallback; the deleted game
+manifest and its `materialShaders[].paramSchema` entries are not an Editor
+authority. Inspector values and diagnostics remain read projections and use
+the existing Gateway/provider seams.
+
+Failure projections use the stable kebab-case codes
+`shader-module-not-found`, `material-reflection-binding-mismatch`,
+`material-specialization-not-cooked`, `asset-artifact-missing`,
+`asset-artifact-integrity-mismatch`, and `material-cook-record-invalid`.
+Callers branch on `code`, identity fields, `expected`/`actual`, `hint`,
+`retryable`, and `recoveryActions`; they do not parse `message`.
+
+## Version-control evidence index
+
+The version-control surface is a read projection plus four Gateway session operations.
+It does not create a second catalog, undo ledger, Runtime, or Git owner.
+
+```mermaid
+sequenceDiagram
+  participant H as Human or AI
+  participant G as Gateway
+  participant R as Runtime projection
+  participant O as Host owner
+  H->>G: discover live operation
+  G->>R: query generation-fenced snapshot
+  H->>G: dispatch one session operation
+  G->>O: run scoped command
+  O-->>G: terminal OperationRun and structured error
+  G-->>H: refresh snapshot or recovery action
+```
+
+| Evidence | Source | Consumer rule |
+|:--|:--|:--|
+| AC-17 | `packages/core/src/io/version-control-schema.ts` and Gateway operation tests | Human and AI use the same descriptor, args, confirmation, ledger, and run |
+| AC-18 | `src/io/__tests__/version-control-error-contract.test.ts` | Branch on `code`, `stage`, `expected`, `actual`, `requestId`, and `recoveryActions`; never parse message/stderr |
+| AC-15/20 | `src/io/__tests__/version-control-snapshot.test.ts` and `edit-runtime` generation tests | Snapshot generation is authoritative; old projections are stale after switch |
+
+The indexed path is `discover -> query -> dispatch -> wait -> refresh`. Accepted or
+running is not terminal success. A stale snapshot, stale target, dirty worktree,
+recovery freeze, or generation change must remain an explicit structured state.
+
+## 版本控制最短成功路径
+
+版本控制能力与 Human UI 共用一个 Gateway live catalog。AI 或 UI 应按以下顺序操作：
+
+```ts
+const operations = gateway.listOps();
+const snapshot = await queryViewportRuntimeProjection({ kind: 'version-control.snapshot' });
+const accepted = gateway.dispatch({
+  kind: 'publishGameVersion',
+  tag: 'release/one',
+  expectedSnapshotId: snapshot.value.snapshotId,
+  requestId: 'publish-release-one',
+}, 'ai');
+const terminal = await gateway.waitOperationRun('publish-release-one');
+```
+
+四个 session operation 是 `configureGitExecutable`、`initializeGameRepository`、
+`publishGameVersion` 与 `switchGameVersion`。`version-control.snapshot` 是只读、按
+Runtime generation 隔离的状态投影；它不会进入 undo ledger。`dispatch` 的 accepted/running
+不是成功，必须读取 `OperationRun` 的 terminal 状态。retry 必须生成新的 `requestId`。
+
+| 状态 | 恢复动作 |
+|:--|:--|
+| `unavailable` / `uninitialized` | 重新 discover，等待 Host 绑定后 query snapshot |
+| `version-control-snapshot-stale` | 刷新 snapshot，重新确认 `expectedSnapshotId` |
+| `version-control-worktree-dirty` | 处理文件变化后重新预览，不静默提交 |
+| `version-control-recovery-required` | 按 `recoveryActions` 请求外部检查，再 reconcile |
+
 ## Viewport grid preference
 
 The Edit main viewport grid is editor chrome. It is not scene-pack data, a document undo

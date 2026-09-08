@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "forgeax-ci-baseline-topology-cases/v2",
+  "cases": [
+    {
+      "name": "accepted topology",
+      "graph": {
+        "schemaVersion": "forgeax-ci-baseline/v2",
+        "workflows": [
+          {
+            "file": "ci.yml",
+            "jobs": [
+              { "id": "prepare", "name": "prepare", "needs": [], "condition": null },
+              { "id": "build", "name": "build", "needs": ["prepare"], "condition": null },
+              { "id": "smoke", "name": "smoke", "needs": ["build"], "condition": null },
+              { "id": "disabled", "name": "disabled", "needs": [], "condition": "false" }
+            ]
+          }
+        ],
+        "needsEdges": [],
+        "requiredContexts": []
+      },
+      "requiredContexts": [{ "context": "smoke", "jobId": "smoke", "jobName": "smoke", "matches": [{ "workflow": "ci.yml", "jobId": "smoke", "jobName": "smoke" }] }],
+      "observedJobNames": ["prepare", "build", "smoke"],
+      "expectedPath": ["prepare", "build", "smoke"],
+      "jobTimings": {
+        "prepare": { "activeSeconds": 10 },
+        "build": { "activeSeconds": 20 },
+        "smoke": { "activeSeconds": 30 }
+      }
+    },
+    {
+      "name": "missing needs target",
+      "graph": {
+        "workflows": [{ "file": "ci.yml", "jobs": [{ "id": "build", "name": "build", "needs": ["missing"], "condition": null }] }]
+      },
+      "requiredContexts": [],
+      "observedJobNames": ["build"],
+      "expectedCode": "workflow-needs-missing"
+    },
+    {
+      "name": "cycle",
+      "graph": {
+        "workflows": [{ "file": "ci.yml", "jobs": [
+          { "id": "a", "name": "a", "needs": ["b"], "condition": null },
+          { "id": "b", "name": "b", "needs": ["a"], "condition": null }
+        ] }]
+      },
+      "requiredContexts": [],
+      "observedJobNames": ["a", "b"],
+      "expectedCode": "workflow-cycle"
+    },
+    {
+      "name": "conditional topology is not admitted",
+      "graph": {
+        "workflows": [{ "file": "ci.yml", "jobs": [
+          { "id": "prepare", "name": "prepare", "needs": [], "condition": null },
+          { "id": "conditional", "name": "conditional", "needs": ["prepare"], "condition": "github.event_name == 'push'" }
+        ] }]
+      },
+      "requiredContexts": [],
+      "observedJobNames": ["prepare", "conditional"],
+      "expectedCode": "topology-not-admitted"
+    }
+  ]
+}

@@ -119,25 +119,6 @@
 /* ════════════════ Field rows ════════════════ */
 .fx-inspector .f-row { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 26px; min-height: 26px; }
 .fx-inspector .f-row:hover { background: var(--color-interaction-hover); }
-.fx-inspector .mi-save-related {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-top: 8px;
-  padding-bottom: 6px;
-}
-.fx-inspector .mi-save-related button {
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--color-text-primary);
-  background: var(--color-background-elevated);
-  border: 1px solid var(--color-border-default);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.fx-inspector .mi-save-related button:hover {
-  background: var(--color-background-floating);
-}
 .fx-inspector .f-name { flex: 0 1 148px; min-width: 0; color: var(--color-text-secondary); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-inspector .f-val { flex: 1 1 96px; display: flex; align-items: center; gap: 5px; min-width: 0; }
 .fx-inspector .f-val > *, .fx-inspector .asset-f .an { min-width: 0; }
@@ -188,10 +169,35 @@
 .fx-inspector .seg span.on, .fx-inspector .seg button.on { background: var(--color-background-floating); color: var(--color-text-primary); }
 .fx-inspector .swatch { width: 26px; height: 15px; border-radius: var(--prim-radius-4); border: 1px solid var(--color-border-default); flex: 0 0 auto; padding: 0; cursor: pointer; }
 .fx-inspector .hexval { font-family: var(--prim-font-mono); font-size: 10px; color: var(--color-text-secondary); flex: 0 0 auto; }
+.fx-inspector .f-fact { font-size: 11.5px; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* asset field */
+/* asset field — UE-style reference widget (thumbnail + combobox + action row) */
+.fx-inspector .asset-ref { flex: 1; display: flex; align-items: stretch; gap: 6px; min-width: 0; padding: 2px 4px; border: 1px solid var(--color-border-subtle); border-radius: 5px; background: var(--color-background-elevated); }
+.fx-inspector .asset-ref.drop-hot { border-color: var(--color-brand-line); background: var(--color-brand-soft); }
+.fx-inspector .asset-ref.drop-reject { border-color: var(--color-danger-line, rgba(240, 110, 110, 0.8)); background: var(--color-danger-soft, rgba(240, 110, 110, 0.14)); cursor: not-allowed; }
+.fx-inspector .asset-ref-thumb { flex: 0 0 28px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--color-border-default); border-radius: 3px; background: var(--color-background-floating); overflow: hidden; }
+.fx-inspector .asset-ref-thumb-empty { width: 22px; height: 22px; border: 1px dashed var(--color-border-default); border-radius: 2px; box-sizing: border-box; }
+.fx-inspector .asset-ref-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; justify-content: center; }
+.fx-inspector .asset-ref-combo { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--color-border-subtle); border-radius: 4px; background: var(--color-background-base); color: var(--color-text-primary); cursor: pointer; }
+.fx-inspector .asset-ref-combo:hover:not(:disabled) { border-color: var(--color-border-default); }
+.fx-inspector .asset-ref-combo:disabled { opacity: 0.55; cursor: default; }
+.fx-inspector .asset-ref-combo-label { flex: 1; min-width: 0; font-size: 11.5px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-inspector .asset-ref-combo-label.empty { color: var(--color-text-tertiary); }
+.fx-inspector .asset-ref-actions { display: flex; align-items: center; gap: 2px; }
+.fx-inspector .asset-ref-act { width: 22px; height: 22px; display: grid; place-items: center; border: none; border-radius: 4px; background: transparent; color: var(--color-text-tertiary); cursor: pointer; padding: 0; }
+.fx-inspector .asset-ref-act:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-interaction-hover); }
+.fx-inspector .asset-ref-act:disabled { opacity: 0.35; cursor: default; }
+.fx-inspector .asset-ref-slots { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fx-inspector .asset-ref-slot-row { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.fx-inspector .asset-ref-slot-entry { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fx-inspector .asset-ref-slot-caption { font-size: 10px; color: var(--color-text-tertiary); padding-left: 34px; }
+.fx-inspector .asset-ref-slot-remove { flex: 0 0 auto; align-self: flex-start; display: grid; place-items: center; width: 22px; height: 22px; margin-top: 4px; border: none; border-radius: 4px; background: transparent; color: var(--color-text-tertiary); cursor: pointer; padding: 0; }
+.fx-inspector .asset-ref-slot-remove:hover { color: var(--color-text-primary); background: var(--color-interaction-hover); }
+
+/* legacy asset-f pill — retained for mesh-slot editor + material instance until migrated */
 .fx-inspector .asset-f { flex: 1; display: flex; align-items: center; gap: 6px; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: 5px; padding: 2px 6px; min-width: 0; }
 .fx-inspector .asset-f.drop-hot { border-color: var(--color-brand-line); background: var(--color-brand-soft); }
+.fx-inspector .asset-f.drop-reject { border-color: var(--color-danger-line, rgba(240, 110, 110, 0.8)); background: var(--color-danger-soft, rgba(240, 110, 110, 0.14)); cursor: not-allowed; }
 .fx-inspector .asset-f .ab { width: 14px; height: 14px; border-radius: 3px; background: var(--color-background-floating); border: 1px solid var(--color-border-default); flex: 0 0 auto; }
 .fx-inspector .asset-f .ab.empty { border-style: dashed; }
 .fx-inspector .asset-f .an { flex: 1; font-size: 11px; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -200,6 +206,13 @@
 .fx-inspector .asset-f .abtn { color: var(--color-text-tertiary); display: inline-flex; gap: 3px; flex: 0 0 auto; }
 .fx-inspector .asset-f .abtn button { color: inherit; background: none; border: none; cursor: pointer; display: grid; place-items: center; padding: 0; }
 .fx-inspector .asset-f .abtn button:hover { color: var(--color-text-primary); }
+/* Mesh material-slot rows: asset field + inline default/source actions + a
+   right-aligned section count. The asset field goes read-only (not a bespoke
+   pill) when the imported source has no writable slot-default metadata. */
+.fx-inspector .mesh-slot-row .f-val { flex-wrap: wrap; gap: 6px; }
+.fx-inspector .mesh-slot-row .asset-f[aria-disabled="true"] { opacity: 0.6; cursor: not-allowed; }
+.fx-inspector .mesh-slot-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.fx-inspector .mesh-slot-sections { flex: 0 0 auto; margin-left: auto; font-size: 10.5px; font-family: var(--prim-font-mono); color: var(--color-text-tertiary); white-space: nowrap; }
 .fx-inspector .asset-slots { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .fx-inspector .asset-slotnote { font-size: 10px; color: var(--color-text-tertiary); }
 .fx-inspector .asset-fix { text-align: left; border: 1px solid var(--d-cap); border-radius: 4px; background: var(--color-background-elevated); color: var(--d-cap); font-size: 11px; padding: 3px 6px; cursor: pointer; }
@@ -235,9 +248,82 @@
 .fx-inspector .batch-component-row .fbtn { padding: 2px 6px; font-size: 10px; }
 .fx-inspector .batch-mixed { color: var(--color-text-tertiary); font: 10px var(--prim-font-mono, ui-monospace, monospace); letter-spacing: .04em; text-transform: uppercase; }
 
-/* AssetPicker modal (reskin to tokens) */
-.fx-asset-picker-backdrop { position: fixed; inset: 0; z-index: var(--prim-z-level-3, 300); background: var(--color-overlay-modal, rgba(0,0,0,0.5)); display: flex; align-items: center; justify-content: center; }
-.fx-asset-picker { width: 340px; max-height: 70vh; display: flex; flex-direction: column; background: var(--color-background-base); border: 1px solid var(--color-border-default); border-radius: var(--prim-radius-8); box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55); overflow: hidden; font: 13px/1.5 var(--prim-font-sans); color: var(--color-text-primary); }
+/* AssetPicker — UE-style anchored popover (portaled to body) */
+.fx-asset-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--prim-z-level-3, 300);
+  background: rgba(0, 0, 0, 0.12);
+}
+.fx-asset-picker {
+  position: fixed;
+  z-index: calc(var(--prim-z-level-3, 300) + 1);
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0) 18%),
+    var(--color-background-floating, var(--color-background-base));
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 16px 40px rgba(0, 0, 0, 0.55),
+    0 4px 12px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  font: 12px/1.4 var(--prim-font-sans);
+  color: var(--color-text-primary);
+}
+.fx-asset-picker-section {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--color-divider-default);
+  background: rgba(255, 255, 255, 0.015);
+}
+.fx-asset-picker-section-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 7px;
+}
+.fx-asset-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--prim-radius-full);
+  background: var(--color-background-canvas, var(--color-background-elevated));
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.fx-asset-picker-search:focus-within {
+  border-color: var(--color-border-strong, rgba(255, 255, 255, 0.16));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+.fx-asset-picker-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--color-text-primary); font-size: 12px; font-family: var(--prim-font-sans); }
+.fx-asset-picker-search input::placeholder { color: var(--color-text-tertiary); }
+.fx-asset-picker-list-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--color-background-floating);
+  border-bottom: 1px solid var(--color-divider-default);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.fx-asset-picker-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
+.fx-asset-picker-row { display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); padding: 5px 10px; margin: 0 4px; border: none; border-radius: 4px; background: transparent; cursor: pointer; text-align: left; color: inherit; transition: background 100ms ease; }
+.fx-asset-picker-row:hover, .fx-asset-picker-row.focused { background: var(--color-interaction-hover); }
+.fx-asset-picker-row.active { background: rgba(77, 144, 255, 0.22); }
+.fx-asset-picker-row-thumb { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--color-border-subtle); border-radius: 4px; overflow: hidden; background: var(--color-background-floating); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
+.fx-asset-picker-row-thumb.empty { border-style: dashed; }
+.fx-asset-picker-row-name { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-asset-picker-empty { padding: 24px 12px; text-align: center; color: var(--color-text-tertiary); font-size: 11.5px; }
 
 /* ════════════════ Portaled menu / listbox skin ════════════════
    editor-ui <DropdownMenu>/<Select> content is portaled to <body> (outside
@@ -278,6 +364,31 @@
 .fx-inspector button:hover > svg,
 .fx-inspector [role="button"]:hover > svg { transform: none !important; }
 
+/* ════════════════ Material Editor Enhancements (STD-02) ════════════════ */
+/* AssetPreviewMaterial (asset-properties panel) now renders on the canonical
+   .fx-inspector primitives — .dp-search, .cat/.cat-head/.cat-fields, .f-row,
+   .numfield, .vec, .asset-f, .swatch/.hexval, .reset — so it needs no bespoke
+   .mat-editor / toolbar / search skin. Only the overridden-count badge is
+   material-specific. (MaterialEditor.tsx still uses the .mat-tex-* slot skin
+   below.) */
+.fx-inspector .cat-head .cat-override-badge {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--prim-radius-full);
+  background: var(--color-brand-soft, rgba(88, 166, 255, 0.15));
+  color: var(--color-brand-primary, #58a6ff);
+  font-family: var(--prim-font-mono, monospace);
+}
+
+/* ════════════════ Asset preview media / source (read-only forms) ════════════════ */
+/* Texture image thumbnail and shader source snippet shown inside a `.cat-fields`
+   section of the asset-properties forms. */
+.fx-inspector .asset-media { padding: 8px 12px 8px 26px; }
+.fx-inspector .asset-media img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; border-radius: var(--prim-radius-6); border: 1px solid var(--color-border-subtle); background: var(--color-background-elevated); }
+.fx-inspector .asset-source { margin: 0 12px 8px 26px; padding: 8px 10px; max-height: 140px; overflow: auto; background: var(--color-background-elevated); border: 1px solid var(--color-border-subtle); border-radius: var(--prim-radius-6); font-family: var(--prim-font-mono); font-size: 11px; line-height: 1.5; color: var(--color-text-secondary); white-space: pre-wrap; }
+.fx-inspector .asset-empty-note { padding: 8px 12px 8px 26px; color: var(--color-text-tertiary); font-size: 11.5px; }
+
 /* ════════════════ Material Texture Slots ════════════════ */
 .mat-tex-section { margin-top: 8px; padding: 4px 0; }
 .mat-tex-section-title { font-size: 11px; font-weight: 600; color: var(--color-text-secondary); padding: 4px 0 2px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -290,8 +401,13 @@
   transition: border-color 0.15s, background 0.15s;
 }
 .mat-tex-slot.drop-hot {
-  border-color: var(--color-brand-primary, #d4ff48);
-  background: var(--color-interaction-hover, rgba(255,255,255,0.04));
+  border-color: var(--color-brand-line, var(--color-brand-primary, #d4ff48));
+  background: var(--color-brand-soft, var(--color-interaction-hover, rgba(255,255,255,0.04)));
+}
+.mat-tex-slot.drop-reject {
+  border-color: var(--color-danger-line, rgba(240, 110, 110, 0.8));
+  background: var(--color-danger-soft, rgba(240, 110, 110, 0.14));
+  cursor: not-allowed;
 }
 .mat-tex-slot-header { margin-bottom: 2px; }
 .mat-tex-slot-label { font-size: 11px; color: var(--color-text-secondary, #aaa); }

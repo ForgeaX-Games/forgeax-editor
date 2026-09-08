@@ -1,0 +1,127 @@
+{
+  "schemaVersion": "forgeax-ci-baseline-provenance-cases/v2",
+  "cases": [
+    {
+      "name": "complete envelope",
+      "provenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runId": 42,
+        "runAttempt": 2,
+        "topologyId": "topology-ci-v2",
+        "graphDigest": "sha256:graph-ci-v2",
+        "rosterKey": "[[\"build\"],[\"smoke\"]]",
+        "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+      }
+    },
+    {
+      "name": "missing envelope field",
+      "provenance": {
+        "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runId": 42,
+        "runAttempt": 2,
+        "topologyId": "topology-ci-v2",
+        "graphDigest": "sha256:graph-ci-v2",
+        "rosterKey": "[[\"build\"],[\"smoke\"]]",
+        "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+      },
+      "remove": "graphDigest",
+      "expectedCode": "attempt-provenance-missing"
+    },
+    {
+      "name": "mixed retry attempt",
+      "provenances": [
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 1,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        },
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        }
+      ],
+      "expectedCode": "mixed-attempt"
+    },
+    {
+      "name": "mixed source",
+      "provenances": [
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        },
+        {
+          "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        }
+      ],
+      "expectedCode": "mixed-source-sha"
+    },
+    {
+      "name": "mixed roster",
+      "provenances": [
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        },
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"typecheck\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        }
+      ],
+      "expectedCode": "mixed-roster"
+    },
+    {
+      "name": "mixed topology",
+      "provenances": [
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        },
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v3",
+          "graphDigest": "sha256:graph-ci-v3",
+          "rosterKey": "[[\"build\"],[\"smoke\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        }
+      ],
+      "expectedCode": "mixed-topology"
+    }
+  ]
+}

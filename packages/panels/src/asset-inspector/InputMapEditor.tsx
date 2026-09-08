@@ -28,7 +28,6 @@ import {
   reorderInputMapActions,
   reloadInputMapStaging,
   subscribeInputMapStaging,
-  trySaveActivePage,
   updateInputMapStaging,
   useActiveEditorAsset,
   type InputMapAction,
@@ -262,6 +261,24 @@ function BindingValueSlot(props: {
   );
 }
 
+// The persistent toolbar verbs (+ Action / Import JSON / Export JSON) are
+// contributed as panel-header actions. Their bodies close over the live staging
+// payload, the hidden file input ref, and toast plumbing, so we expose them
+// through a module-level handler ref the commands call — the same "latest
+// closure" bridge Hierarchy uses. Save maps directly to the module-level
+// trySaveActivePage, so it needs no ref. The selection / fix-errors /
+// external-conflict actions stay in their contextual banners beside their
+// explanatory copy rather than moving to the global header.
+export interface InputMapCommandActions {
+  readonly addAction: () => void;
+  readonly triggerImport: () => void;
+  readonly exportJson: () => void;
+}
+let inputMapCommandActions: InputMapCommandActions | null = null;
+export function getInputMapCommandActions(): InputMapCommandActions | null {
+  return inputMapCommandActions;
+}
+
 export function InputMapEditor(): ReactElement {
   const asset = useActiveEditorAsset();
   const editorRef = useRef<HTMLDivElement>(null);
@@ -294,6 +311,10 @@ export function InputMapEditor(): ReactElement {
     setSelectedMappings(new Set());
     setListening(null);
   }, [asset?.guid]);
+  // Clear the command handler ref when this editor unmounts (the panel only
+  // mounts it for an active input-map asset). The ref itself is refreshed with
+  // the latest closures during render, below the guard.
+  useEffect(() => () => { inputMapCommandActions = null; }, []);
 
   const entry = useMemo(() => {
     void version;
@@ -711,6 +732,14 @@ export function InputMapEditor(): ReactElement {
     keepInputMapStaging(guid);
   };
 
+  // Refresh the panel-header command handlers with the current closures. Read
+  // only when a header command executes, so a render-phase assignment is safe.
+  inputMapCommandActions = {
+    addAction,
+    triggerImport: () => importRef.current?.click(),
+    exportJson,
+  };
+
   return (
     <div
       ref={editorRef}
@@ -760,23 +789,6 @@ export function InputMapEditor(): ReactElement {
             : ` · ${errorCount} errors · ${warningCount} warnings`}
         </div>
         <div className="im-editor__spacer" />
-        <button
-          type="button"
-          className="im-btn"
-          disabled={!dirty || entry?.saveStatus === 'saving'}
-          onClick={() => { void trySaveActivePage(); }}
-          data-testid="input-map-save"
-        >
-          {entry?.saveStatus === 'saving' ? 'Saving…' : 'Save'}
-        </button>
-        <button
-          type="button"
-          className="im-btn im-btn--primary"
-          onClick={addAction}
-          data-testid="input-map-add-action"
-        >
-          + Action
-        </button>
       </div>
 
       <div className="im-editor__toolbar">
@@ -808,25 +820,19 @@ export function InputMapEditor(): ReactElement {
             </button>
           ))}
         </div>
-        <div className="im-editor__transfer">
-          <input
-            ref={importRef}
-            type="file"
-            accept=".json,.input-map.json,application/json"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void importJson(file);
-            }}
-            data-testid="input-map-import-file"
-          />
-          <button type="button" className="im-btn" onClick={() => importRef.current?.click()}>
-            Import JSON
-          </button>
-          <button type="button" className="im-btn" onClick={exportJson}>
-            Export JSON
-          </button>
-        </div>
+        {/* Import/Export are panel-header actions; the hidden picker stays here
+            because triggerImport clicks it. */}
+        <input
+          ref={importRef}
+          type="file"
+          accept=".json,.input-map.json,application/json"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void importJson(file);
+          }}
+          data-testid="input-map-import-file"
+        />
         {selectedMappings.size > 0 ? (
           <div className="im-selection-actions" data-testid="input-map-selection-actions">
             <span>{selectedMappings.size} selected</span>

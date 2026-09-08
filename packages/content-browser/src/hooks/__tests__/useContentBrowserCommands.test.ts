@@ -20,6 +20,7 @@ const file: CBFile = {
   name: 'grid-target.txt',
   family: 'doc',
   assets: [],
+  isAssetPackage: false,
   kindLabel: 'Document',
   isFavorite: false,
 };

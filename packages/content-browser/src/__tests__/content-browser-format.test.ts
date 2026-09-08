@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 
 import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
 import { setPathResolver } from '@forgeax/editor-core';
+import { isCanonicalScriptablePackRevision } from '../scriptable-pack-mutation';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from '../types';
 import {
   dirOfPath,
@@ -12,6 +13,7 @@ import {
   importDirectoryForViewItem,
   isAbsoluteHostPath,
   isAssetPlacementAvailable,
+  isResourceGroup,
   isPathInSelectionChain,
   menuIconForId,
   normalizeGameRelativePath,
@@ -51,9 +53,24 @@ const file: CBFile = {
   name: 'readme.md',
   family: 'doc',
   assets: [],
+  isAssetPackage: false,
   kindLabel: 'Document',
   isFavorite: false,
 };
+
+describe('isResourceGroup — data-driven parent→child grouping', () => {
+  test('folds any source file that owns more than one catalog member', () => {
+    // glb/fbx imports and authored .pack.json alike: grouping is by member COUNT
+    // (the parent→child data relation), not the file family or producer subject.
+    expect(isResourceGroup(2)).toBe(true);
+    expect(isResourceGroup(7)).toBe(true);
+  });
+
+  test('a lone member (or none) never folds', () => {
+    expect(isResourceGroup(1)).toBe(false);
+    expect(isResourceGroup(0)).toBe(false);
+  });
+});
 
 test('scene default menu projects the Gateway scene read model', () => {
   const target = fileSpecificMenuItems(t, { family: 'scene' }, undefined, {
@@ -67,6 +84,14 @@ test('scene default menu projects the Gateway scene read model', () => {
     defaultSceneGuid: 'guid-lvl1',
   }).find((item) => item.id === 'set-default-scene');
   expect(current?.disabled).toBe(true);
+});
+
+test('ScriptablePack browser accepts only canonical source revisions for mutations', () => {
+  expect(isCanonicalScriptablePackRevision('a'.repeat(64))).toBe(true);
+  expect(isCanonicalScriptablePackRevision('A'.repeat(64))).toBe(false);
+  expect(isCanonicalScriptablePackRevision(`sha256:${'a'.repeat(64)}`)).toBe(false);
+  expect(isCanonicalScriptablePackRevision('')).toBe(false);
+  expect(isCanonicalScriptablePackRevision(undefined)).toBe(false);
 });
 
 describe('path helpers', () => {
@@ -169,9 +194,10 @@ describe('fileFamilyOf classification', () => {
     expect(fileFamilyOf('unknown.xyz')).toBe('other');
   });
 
-  test('fileFamilyOfWithAssets promotes any scene-bearing pack to scene', () => {
+  test('promotes authored scene packs without erasing ScriptablePack source identity', () => {
     expect(fileFamilyOfWithAssets('bundle.pack.json', [{ kind: 'scene' }])).toBe('scene');
     expect(fileFamilyOfWithAssets('bundle.pack.json', [{ kind: 'texture' }])).toBe('pack');
+    expect(fileFamilyOfWithAssets('procedural.pack.ts', [{ kind: 'scene' }])).toBe('pack');
   });
 });
 
@@ -246,6 +272,20 @@ describe('context-menu shaping', () => {
     const reimport = fileSpecificMenuItems(t, { family: 'pack' }, undefined).find((i) => i.id === 'reimport');
     expect(reimport?.disabled).toBe(true);
   });
+
+  test('keeps ScriptablePack source files in the pack family with authoring actions', () => {
+    expect(fileFamilyOf('procedural-showcase.pack.ts')).toBe('pack');
+    expect(fileSpecificMenuItems(
+      t,
+      { family: 'pack', name: 'procedural-showcase.pack.ts' },
+    ).map((item) => item.id)).toEqual([
+      'expand-sub-assets',
+      'asset-source-inspect',
+      'asset-source-rebuild',
+      'asset-source-cold-cook',
+      'copy-guid',
+    ]);
+  });
 });
 
 describe('registryEntryToCBAsset', () => {
@@ -277,6 +317,18 @@ describe('registryEntryToCBAsset', () => {
     expect(projected.refs).toEqual(['ref-a', 'ref-b']);
     // refs are copied, not aliased to the entry's array.
     expect(projected.refs).not.toBe(entry.refs);
+  });
+
+  test('keeps ScriptablePack sources out of the imported-asset meta sidecar convention', () => {
+    const projected = registryEntryToCBAsset({
+      guid: 'effect-orb-domain-guid',
+      kind: 'scene',
+      name: '沧溟法域',
+      packageUrl: '/__forgeax-ddc/effect-orb-domain.pack.json',
+      sourcePath: 'assets/authoring/abilities/catalog/effect-orb-domain.pack.ts',
+    }, 0);
+    expect(projected.packPath).toBe('assets/authoring/abilities/catalog/effect-orb-domain.pack.ts');
+    expect(projected.packPath.endsWith('.meta.json')).toBe(false);
   });
 
   test('falls back to the packageUrl and derives a short name when the entry is minimal', () => {

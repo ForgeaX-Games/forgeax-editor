@@ -1,21 +1,16 @@
 // editor-component-meta.ts — editor-owned component metadata SSOT
 //
-// The engine (ECS #924 "extensible component metadata") exposes an open,
-// MUTABLE `Component.meta` map that the ECS core assigns NO meaning to and
-// deliberately leaves extensible for higher-level consumers *after*
-// registration. Per the engine boundary decision (engine-harness feedback
-// 2026-07-23-component-meta-injection-editorhidden), editor-specific hints must
-// NOT be baked into engine component definitions. Instead the editor owns this
-// schema-validated config and injects it into each token's `meta.editor`
-// namespace once, after the engine has registered its components.
+// The Engine owns definition-time policy (`componentDefinition(token).policy`)
+// while the editor owns this validated `editor` namespace. Projection is
+// explicitly World-bound: there is no process-global component registry or
+// metadata cache.
 //
 // Canonical use: `{ hidden: true }` drops internal / derived / non-editable
 // components (Entity / Children / ChildOf) from the Inspector, replacing the
 // drift-prone hard-coded exclude lists with a single editor SSOT that stays
 // aligned with — but does not pollute — the engine registry.
 
-import { getRegisteredComponents } from '@forgeax/engine-ecs';
-import type { Component } from '@forgeax/engine-ecs';
+import { componentDefinition, type Component, type World } from '@forgeax/engine-ecs';
 import rawConfig from './editor-component-meta.json';
 
 /** Playback-transport field names an animation component declares so a generic
@@ -49,7 +44,7 @@ export interface AnimationComponentMeta {
   readonly runtimeFields: readonly string[];
 }
 
-/** Editor-owned per-component metadata, injected into `Component.meta.editor`. */
+/** Editor-owned per-component metadata, projected into Engine definition policy. */
 export interface EditorComponentMeta {
   /** Drop the component from the Inspector (internal / derived / non-editable). */
   readonly hidden?: boolean;
@@ -62,7 +57,7 @@ export interface EditorComponentMeta {
   readonly animation?: AnimationComponentMeta;
 }
 
-/** The `Component.meta` namespace key the editor overlay lives under. */
+/** The Engine definition-policy namespace key the editor overlay lives under. */
 const EDITOR_META_KEY = 'editor';
 
 function validateBespoke(name: string, raw: unknown): void {
@@ -143,55 +138,27 @@ function validateConfig(raw: unknown): Readonly<Record<string, EditorComponentMe
 /** The validated editor-metadata SSOT (component name → editor meta). */
 export const EDITOR_COMPONENT_META = validateConfig(rawConfig);
 
-/** Names whose overlay has already been injected — per-name guard so a
- *  component registered AFTER the first apply (lazy subsystem import, test
- *  boot order) still gets its overlay on a later call. */
-const _appliedTo = new Set<string>();
-
 /**
- * Inject the editor-metadata config into each registered component's
- * `meta.editor` namespace. Idempotent and safe to call before the engine is
- * loaded (unknown names are skipped and RETRIED on the next call — the guard
- * is per-name, not one-shot). The engine leaves `Component.meta` mutable
- * after registration precisely for this higher-level overlay; we never touch
- * the frozen token.
+ * Project editor metadata into a World-local component catalog. Unknown names
+ * are skipped so a later Plugin registration can be projected on the next
+ * call. The token stays immutable; only the Engine definition policy is
+ * extended.
  *
  * `config` is injectable for tests; production callers use the JSON SSOT.
  */
 export function applyEditorComponentMeta(
+  world: World,
   config: Readonly<Record<string, EditorComponentMeta>> = EDITOR_COMPONENT_META,
 ): void {
-  let registry: ReadonlyMap<string, Component>;
-  try {
-    registry = getRegisteredComponents();
-  } catch {
-    return; // engine not loaded yet (SSR / headless) — retry on next call
-  }
   for (const [name, editorMeta] of Object.entries(config)) {
-    if (_appliedTo.has(name)) continue;
-    const comp = registry.get(name);
+    const comp = world.components.resolve(name);
     if (comp === undefined) continue; // not registered yet — retried on a later call
-    const meta = comp.meta as Record<string, unknown>;
-    // The engine (ECS #924) leaves `meta` mutable for exactly this overlay.
-    // Guard the write so an older engine pin that still froze `meta` degrades
-    // gracefully (feature dormant) instead of throwing at editor boot; mark
-    // applied either way so a permanently-frozen token is not retried on
-    // every schema build.
-    try {
-      meta[EDITOR_META_KEY] = { ...(meta[EDITOR_META_KEY] as EditorComponentMeta | undefined), ...editorMeta };
-    } catch {
-      // frozen meta (pre-#924 engine) — overlay stays absent; readers see undefined.
-    }
-    _appliedTo.add(name);
+    const meta = componentDefinition(comp).policy.meta;
+    meta[EDITOR_META_KEY] = { ...(meta[EDITOR_META_KEY] as EditorComponentMeta | undefined), ...editorMeta };
   }
 }
 
-/** Read a component's editor-injected `meta.editor` overlay (or `undefined`). */
+/** Read a component's editor-injected definition-policy overlay (or `undefined`). */
 export function editorMetaOf(comp: Component): EditorComponentMeta | undefined {
-  return (comp.meta as { editor?: EditorComponentMeta } | undefined)?.editor;
-}
-
-/** Test-only: reset the per-name apply guard so a fresh injection can run. */
-export function _resetEditorComponentMeta(): void {
-  _appliedTo.clear();
+  return componentDefinition(comp).policy.meta[EDITOR_META_KEY] as EditorComponentMeta | undefined;
 }

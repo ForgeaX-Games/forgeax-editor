@@ -27,7 +27,7 @@ function readNumberArray(value: unknown): number[] {
 
 export default function AnimationTransportBar({ entity, component }: BespokeEditorProps) {
   const { t } = useTranslation();
-  const descriptor = getTransportDescriptor(component);
+  const descriptor = getTransportDescriptor(component, gateway.activeWorld);
   // Live phase follows playback — poll while mounted (Inspector-scale cheap).
   const [, force] = useReducer((c: number) => c + 1, 0);
   useEffect(() => {

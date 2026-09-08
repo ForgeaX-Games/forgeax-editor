@@ -1,0 +1,48 @@
+/* texture-preview-toolbar — header control for the Texture preview. Dropdowns
+   reuse editor-ui DropdownMenu (same as material-preview-toolbar / CB filter bar);
+   icon buttons reuse `.fx-panel-action`. */
+
+.fx-texpv-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.fx-texpv-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 2px;
+  min-width: 0;
+}
+
+.fx-texpv-label {
+  color: var(--text-mute, var(--color-text-muted, #8b949e));
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.fx-texpv-menu-trigger .fx-panel-action-label {
+  max-width: 72px;
+}
+
+.fx-texpv-menu-content {
+  min-width: 120px;
+}
+
+.fx-texpv-menu-item[data-active='true'] {
+  color: var(--primary, #d4ff48);
+  background: rgba(212, 255, 72, 0.08);
+}
+
+.fx-texpv-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line, #2a2d30);
+}

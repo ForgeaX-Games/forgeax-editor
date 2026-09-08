@@ -17,6 +17,7 @@ import react from '@vitejs/plugin-react';
 import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from '../../scripts/vite/engine-vite-preset';
 import { readWorktreePorts, resolveWorktreePorts } from '../../scripts/lib/worktree-ports';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
+import { resolveDdcRootPolicy } from '../../scripts/vite/ddc-root-policy';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const worktreeRoot = resolve(here, '../..');
@@ -27,6 +28,11 @@ const PORT = Number(process.env.FORGEAX_EDITOR_PORT ?? worktreePorts.editRuntime
 const HOST = process.env.FORGEAX_EDITOR_HOST ?? '0.0.0.0';
 const BASE = '/editor/';
 const BASE_PATH = BASE.replace(/\/$/, '');
+const API_PORT = Number(
+  process.env.FORGEAX_GAME_API_PORT
+    ?? process.env.FORGEAX_SERVER_PORT
+    ?? 18900,
+);
 
 // ── standalone `--game DIR` game root (abs) ───────────────────────────────────
 // The Play resolver (main.tsx resolveGameModuleForPlay) imports the game entry
@@ -35,9 +41,10 @@ const BASE_PATH = BASE.replace(/\/$/, '');
 // feeds engineVitePreset's self-hosted pluginPack (Part C standalone catalog).
 // null when embedded in studio -> resolver keeps its legacy branch; preset skips
 // the self-hosted pluginPack (studio's /preview proxy owns the catalog).
-const GAME_DIR_ABS = process.env.FORGEAX_GAME_DIR
-  ? resolve(process.env.FORGEAX_GAME_DIR)
-  : null;
+const DDC_ROOT_POLICY = process.env.FORGEAX_GAME_DIR === undefined
+  ? undefined
+  : resolveDdcRootPolicy(process.env.FORGEAX_GAME_DIR);
+const GAME_DIR_ABS = DDC_ROOT_POLICY?.gameDir ?? null;
 // Game slug = basename of the --game dir (the game-backend addresses files by
 // <slug>/<rel>). The dev entry passes it to ViewportComponent as props; null
 // (no --game / embedded studio) -> empty scene.
@@ -69,6 +76,7 @@ const STANDALONE_RUNTIME_BINDING: RuntimeAssetBinding | undefined = (
 const enginePreset = engineVitePreset({
   base: BASE,
   gameDirAbs: GAME_DIR_ABS,
+  ...(DDC_ROOT_POLICY === undefined ? {} : { ddc: DDC_ROOT_POLICY }),
   // The iframe is now a real carrier boundary, so this host no longer needs
   // symlink identity to distinguish it from the outer shell. Resolve workspace
   // packages to their producer realpaths: Bun/pnpm keep transitive dependencies
@@ -77,7 +85,6 @@ const enginePreset = engineVitePreset({
   preserveSymlinks: false,
   ...(STANDALONE_RUNTIME_BINDING === undefined ? {} : { runtimeBinding: STANDALONE_RUNTIME_BINDING }),
 });
-
 export default defineConfig({
   root: here,
   base: BASE,
@@ -95,7 +102,7 @@ export default defineConfig({
     __FORGEAX_CATALOG_ASSET_ROOTS__: JSON.stringify(enginePreset.catalogRoots),
   },
   plugins: [
-    react(),
+    react({ exclude: /\/packages\/core\/src\/ui\// }),
     ...enginePreset.plugins,
   ],
   optimizeDeps: enginePreset.optimizeDeps,
@@ -131,7 +138,10 @@ export default defineConfig({
     // host-injected game root via /api/files. Iframed via the interface (:18920/editor)
     // it's same-origin already; this proxy makes a DIRECT :15280 visit work too.
     proxy: {
-      '/api': { target: `http://127.0.0.1:${process.env.FORGEAX_SERVER_PORT ?? 18900}`, changeOrigin: true },
+      // fx start --game provides the standalone game-backend port (normally
+      // :15281). Studio does not provide it, so the server port remains the
+      // fallback for the embedded Studio runtime.
+      '/api': { target: `http://127.0.0.1:${API_PORT}`, changeOrigin: true },
       // Studio-embedded ONLY: the active game's scoped pluginPack lives behind
       // the play engine's /preview namespace. Standalone (SELF_HOST_PACK)
       // registers its own exact-game pluginPack via the preset and serves the

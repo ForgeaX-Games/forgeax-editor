@@ -8,6 +8,7 @@ const contract = JSON.parse(readFileSync(resolve('scripts/ci/editor-ci-contract.
 const fixture = JSON.parse(
   readFileSync(resolve('scripts/ci/fixtures/editor-ci-workflow-binding.json'), 'utf8'),
 );
+const ciWorkflowText = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
 
 function graphFor(name) {
   const graph = structuredClone(fixture.graph);
@@ -77,6 +78,43 @@ test('portfolio fixture keeps measurement outside the four required contexts', (
   assert.deepEqual(contract.requiredContexts.map((entry) => entry.context), expected.requiredContexts);
   assert.equal(contract.browserReleasePortfolio?.parentCheckId, expected.parentCheckId);
   assert.equal(contract.browserReleasePortfolio?.measurement?.required, expected.measurementRequired);
+});
+
+test('portability contract binds the native matrix without becoming required', () => {
+  const expected = fixture.portabilityAssertions;
+  assert.equal(contract.portability.required, expected.required);
+  assert.deepEqual(contract.portability.platforms, expected.platforms);
+  assert.deepEqual(contract.portability.entries, expected.entries);
+  assert.deepEqual(
+    contract.requiredContexts.map(({ context }) => context),
+    expected.requiredContexts,
+  );
+  assert.match(ciWorkflowText, /editor-portability:/);
+  assert.match(ciWorkflowText, /platform:\s*\[linux, windows, macos\]/);
+  assert.match(ciWorkflowText, /editor-portability\.mjs\s+--platform\s+\$\{\{\s*matrix\.platform\s*\}\}/);
+  assert.match(ciWorkflowText, /editor-portability-platform-\$\{\{\s*matrix\.platform\s*\}\}/);
+  assert.equal(contract.portability.artifact.name, 'editor-portability-aggregate');
+  assert.equal(contract.portability.artifact.path, 'editor-portability-aggregate.json');
+  assert.match(ciWorkflowText, /editor-portability-aggregate:/);
+  assert.match(ciWorkflowText, /name: editor-portability-aggregate/);
+});
+
+test('M5 parity and lifecycle steps stay under the smoke-play required owner', () => {
+  const smokeCheck = contract.checks.find((check) => check.checkId === 'smoke-play');
+
+  assert.equal(smokeCheck?.owner, 'editor-ci');
+  assert.match(smokeCheck?.command ?? '', /scripts\/ddc-packaging-parity\.mjs --game games\/sample --json/);
+  assert.match(smokeCheck?.command ?? '', /apps\/standalone\/e2e\/__tests__\/ddc-lifecycle\.spec\.ts/);
+  assert.match(ciWorkflowText, /smoke-play-shard:/);
+  assert.match(ciWorkflowText, /name: DDC packaging parity \(games\/sample\)/);
+  assert.match(ciWorkflowText, /name: DDC lifecycle recovery E2E \(games\/sample\)/);
+  assert.match(ciWorkflowText, /matrix\.shard == 'scriptable'/);
+  assert.match(ciWorkflowText, /scripts\/ddc-packaging-parity\.mjs --game games\/sample --json/);
+  assert.match(ciWorkflowText, /apps\/standalone\/e2e\/__tests__\/ddc-lifecycle\.spec\.ts/);
+  assert.equal(
+    contract.requiredContexts.find((entry) => entry.context === 'smoke-play')?.checkId,
+    'smoke-play',
+  );
 });
 
 test('supporting producer binds every requesting consumer without entering required contexts', () => {

@@ -1,0 +1,7 @@
+{
+  "id": "forgeax.editor.edit",
+  "version": "1.1.0",
+  "input": "forgeax-extension.json",
+  "entry": "src/extension/editor-runtime.ts",
+  "output": "dist/forgeax-editor-edit.fxe"
+}

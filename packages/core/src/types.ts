@@ -196,6 +196,13 @@ export type BuiltinEditorOp =
   // (not a full path). Session-domain, no undo.
   | { kind: 'renameDirectory'; path: string; newName: string }
   | { kind: 'renameSourceFile'; path: string; newName: string }
+  // moveDirectory / moveSourceFile: cross-directory MOVE through the same asset
+  // IO write gate as rename. `path` is the game-relative subject; `targetDir` is
+  // the game-relative destination PARENT directory (empty defaults to "assets").
+  // The basename is preserved. Session-domain, no undo. The applier is the SSOT
+  // for move legality (jailbreak, same-parent no-op, self/descendant cycle).
+  | { kind: 'moveDirectory'; path: string; targetDir: string }
+  | { kind: 'moveSourceFile'; path: string; targetDir: string }
   | { kind: 'revealInFileManager'; path: string }
   // deleteSourceFile (editor data-operation-view convergence M1): delete one
   // game-relative source file through the asset IO write gate. Dispatch is
@@ -211,6 +218,7 @@ export type BuiltinEditorOp =
     sourceName?: string;
     base64?: string;
     companionSources?: readonly { destPath: string; base64: string }[];
+    sourceFiles?: readonly { destPath: string; relativePath: string; base64: string }[];
     skipUpload?: boolean;
     requestId: string;
   }
@@ -369,6 +377,9 @@ export interface CommandError extends CommandErrorContext {
     | 'save-rejected-in-imported-preview'
     | 'preview-rejected-dirty'
     | 'mount-member-operation-unsupported'
+    | 'generated-scene-read-only'
+    | 'generated-scene-stale-override'
+    | 'generated-scene-refresh-failed'
     | 'engine-source-authoring-unavailable'
     | 'asset-source-key-missing'
     | 'asset-source-key-unknown'
@@ -383,6 +394,19 @@ export interface CommandError extends CommandErrorContext {
     | 'asset-catalog-subscription-gap'
     | 'asset-operation-failed'
     | 'asset-operation-cas-committed'
+    | 'pack-source-load-failed'
+    | 'pack-source-definition-invalid'
+    | 'pack-source-output-invalid'
+    | 'pack-source-external-closure-mismatch'
+    | 'pack-source-path-invalid'
+    | 'pack-source-revision-conflict'
+    | 'pack-source-mutation-unsupported'
+    | 'pack-source-reference-conflict'
+    | 'pack-source-write-failed'
+    | 'pack-source-build-cycle'
+    | 'pack-source-publication-timeout'
+    | 'pack-source-operation-committed'
+    | 'pack-source-operation-invalid'
     | 'run-cancelled-before-cas'
     | 'promote-capability-unavailable'
     | 'promote-session-mismatch'
@@ -475,6 +499,24 @@ export interface CommandError extends CommandErrorContext {
     | 'run-not-found'
     | 'run-expired'
     | 'operation-failed'
+    | 'operation-completion-missing'
+    // Version-control Gateway barrier and structured command facts.
+    | 'version-control-unavailable'
+    | 'version-control-root-mismatch'
+    | 'version-control-tag-conflict'
+    | 'version-control-request-conflict'
+    | 'version-control-snapshot-stale'
+    | 'version-control-target-stale'
+    | 'version-control-partial-publish'
+    | 'version-control-worktree-dirty'
+    | 'version-control-operation-busy'
+    | 'version-control-transition-active'
+    | 'version-control-staging-active'
+    | 'version-control-external-inspection-required'
+    | 'version-control-checkout-failed'
+    | 'version-control-recovery-required'
+    | 'version-control-command-failed'
+    | 'version-control-unexpected'
     // RHI debug capture is an optional edit-runtime capability. These errors
     // keep a missing recorder / failed upload visible through the gateway
     // instead of leaking a raw promise rejection to the caller.
@@ -524,5 +566,5 @@ export type ApplyResult =
   // flattened). Empty [] for non-creating ops (setComponent/rename/…) so
   // consumers read result.created without an undefined check. This is the ONE
   // out-channel for post-dispatch reads (selection, AI "what did I just make?").
-  | { ok: true; inverse: EditorOp; created: EntityHandle[] }
+  | { ok: true; inverse: EditorOp; created: EntityHandle[]; completion?: Promise<unknown> }
   | { ok: false; error: CommandError };

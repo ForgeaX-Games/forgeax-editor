@@ -246,7 +246,11 @@ function clearPlayerBinding(world: World, mutation: AnimationTargetBindingMutati
         mutation.removeComponent(target, AnimatedBy);
       }
     }
-    mutation.removeComponent(player, AnimationTargets);
+    // The engine marks relationship mirror tokens as read-only in the generic
+    // `removeComponent` type even though the relationship owner performs this
+    // detach during binding cleanup. Keep the call on the injected mutation
+    // gate and narrow only this owner-approved token.
+    (mutation.removeComponent as unknown as (entity: EntityHandle, component: typeof AnimationTargets) => unknown)(player, AnimationTargets);
   }
 }
 

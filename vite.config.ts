@@ -13,7 +13,7 @@
 // 404s and createApp fails).
 //
 // Aliases mirror packages/interface/vite.config.ts so that DockShell's deep
-// import chain (@forgeax/design/*, @forgeax/host-sdk, @/components/ui/*) all
+// import chain (@forgeax/design/*, @forgeax/types, @/components/ui/*) all
 // resolve identically here. Bun monorepo workspaces handle the workspace:*
 // package imports (@forgeax/editor, @forgeax/editor-shared, dockview, react,
 // react-dom, etc.) automatically.
@@ -121,6 +121,15 @@ const ENGINE_LINK_DIR = resolve(PACKAGE_DIR, 'packages/edit-runtime/node_modules
 // Anchor its third-party parser to the exact dependency owned by engine-ui so
 // Vite does not pick a second copy from Bun's root store.
 const CSS_TREE_DIR = realpathSync(resolve(ENGINE_LINK_DIR, 'engine-ui/node_modules/css-tree'));
+const SOURCE_MAP_JS_DIR = realpathSync(resolve(CSS_TREE_DIR, '../source-map-js'));
+// The standalone host is rooted at apps/standalone, so Node/Vite cannot walk
+// into the Engine package that owns @noble/hashes. The shared Engine preset
+// still pre-bundles Noble subpaths for the animation/pack importers; anchor the
+// host-side resolver to that producer-owned copy so the optimizer never serves
+// a 504 for an unresolved deep import on a cold Bun checkout.
+const NOBLE_HASHES_DIR = realpathSync(
+  resolve(ENGINE_LINK_DIR, 'engine-animation/node_modules/@noble/hashes'),
+);
 const engineWorktreeSubpathAliases: Record<string, string> = {};
 const engineWorktreeRootAliases: Record<string, string> = {};
 for (const id of enginePreset.resolve.dedupe) {
@@ -150,6 +159,7 @@ for (const id of enginePreset.resolve.dedupe) {
 const engineWorktreeTargets = {
   ...engineWorktreeSubpathAliases,
   ...engineWorktreeRootAliases,
+  '@forgeax/engine-plugin': resolve(PACKAGE_DIR, 'scripts/vite/engine-plugin-browser.ts'),
 };
 const engineWorktreeResolve = {
   name: 'forgeax:standalone-engine-worktree-resolve',
@@ -173,23 +183,17 @@ const INTERFACE_DIR = existsSync(resolve(STUDIO_INTERFACE, 'src/app-kit.ts'))
 // @forgeax/design now lives inside the interface repo (packages/design), so it
 // travels with whichever interface checkout we resolved above.
 const DESIGN_DIR = resolve(INTERFACE_DIR, 'packages/design');
-// host-sdk / types are studio-layer packages only exercised by the wb:* plugin
-// path (studio-only; never rendered in the standalone editor shell). interface
-// now imports host-sdk as TYPES ONLY (the runtime port factories are injected
-// via PanelRenderers), so a standalone clone needs NO host-sdk runtime binding
-// and NO stub — type-only imports are erased at build. We still alias to the
-// real sources WHEN the studio tree is present (embedded mode) so types resolve.
+// Types are supplied by Studio when embedded and vendored for standalone use.
 const STUDIO_ROOT = resolve(PACKAGE_DIR, '../..');
-const HOST_SDK = resolve(STUDIO_ROOT, 'packages/host-sdk/src/index.ts');
+const STUDIO_MANIFEST = resolve(STUDIO_ROOT, 'package.json');
 const TYPES_SRC = resolve(STUDIO_ROOT, 'packages/contracts/types/src/index.ts');
 const VENDORED_TYPES_SRC = resolve(PACKAGE_DIR, 'packages/contracts/types/src/index.ts');
 // An editor worktree lives at `<editor>/.worktrees/<name>`, so `../..` points
 // at the primary editor checkout. The contracts submodule exists there too
 // and therefore cannot distinguish Studio embedding from standalone worktree
-// use. host-sdk is Studio-owned and is the stable boundary discriminator.
-const HAS_STUDIO_LAYER = existsSync(HOST_SDK);
+// use. The root manifest is the stable Studio boundary discriminator.
+const HAS_STUDIO_LAYER = existsSync(STUDIO_MANIFEST);
 const studioLayerAlias: Record<string, string> = {};
-if (HAS_STUDIO_LAYER) studioLayerAlias['@forgeax/host-sdk'] = HOST_SDK;
 if (HAS_STUDIO_LAYER && existsSync(TYPES_SRC)) {
   studioLayerAlias['@forgeax/types'] = TYPES_SRC;
 } else if (existsSync(VENDORED_TYPES_SRC)) {
@@ -211,6 +215,7 @@ const STANDALONE_OPTIMIZE_DEPS = [
   // imports source-map-js through a CommonJS file. Pre-bundle the parser at
   // the host boundary so the browser never receives raw CommonJS code.
   'css-tree',
+  'source-map-js/lib/source-map-generator.js',
 ] as const;
 
 export default defineConfig({
@@ -241,6 +246,10 @@ export default defineConfig({
     // pluginPack. Content Browser uses the projection to classify catalog
     // sourcePath values without knowing where @shared roots live on disk.
     __FORGEAX_CATALOG_ASSET_ROOTS__: JSON.stringify(enginePreset.catalogRoots),
+    // TEMPORARY: smoke tests set FORGEAX_STANDALONE_FORCE_IFRAME=1 to keep the
+    // iframe carrier path while GPU device-lost during page reloads is unresolved.
+    // Remove once single-realm mode handles graceful GPU disposal on navigation.
+    __FORGEAX_STANDALONE_FORCE_IFRAME__: JSON.stringify(process.env.FORGEAX_STANDALONE_FORCE_IFRAME === '1'),
   },
   resolve: {
     // dockview declares react as a peer dep; under bun's isolated node_modules
@@ -259,6 +268,8 @@ export default defineConfig({
       // `engine-render/internal/construct-renderer` into
       // `dist/internal.mjs/construct-renderer`.
       'css-tree': CSS_TREE_DIR,
+      'source-map-js': SOURCE_MAP_JS_DIR,
+      '@noble/hashes': NOBLE_HASHES_DIR,
       '@/': `${resolve(INTERFACE_DIR, 'src')}/`,
       // @forgeax/interface package.json's exports map covers `./*: ./src/*.ts`
       // and `./styles/*.css`, but does NOT cover the `.tsx` files we deep-
@@ -285,7 +296,7 @@ export default defineConfig({
       '@forgeax/design/theme': resolve(DESIGN_DIR, 'theme.ts'),
       '@forgeax/design/tokens.css': resolve(DESIGN_DIR, 'tokens.css'),
       '@forgeax/design': resolve(DESIGN_DIR, 'index.ts'),
-      // host-sdk / types only when the studio tree is present (embedded mode).
+      // Shared contracts only when the Studio tree is present (embedded mode).
       ...studioLayerAlias,
     },
   },
@@ -387,8 +398,7 @@ export default defineConfig({
             },
             content: [
               resolve(PACKAGE_DIR, 'apps/standalone/**/*.{ts,tsx}'),
-              resolve(PACKAGE_DIR, 'packages/ui/src/components/breadcrumb.tsx'),
-              resolve(PACKAGE_DIR, 'packages/ui/src/components/button.tsx'),
+              resolve(PACKAGE_DIR, 'packages/ui/src/**/*.{ts,tsx}'),
               resolve(PACKAGE_DIR, 'packages/content-browser/src/**/*.{ts,tsx}'),
             ],
             corePlugins: { preflight: false },

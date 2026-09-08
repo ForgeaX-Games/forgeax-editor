@@ -45,6 +45,9 @@ export interface ProjectedOp {
   readonly domain: 'document' | 'session' | 'transient';
   readonly argsSchema: ArgsSchema | null;
   readonly title?: string;
+  readonly confirmation?: OpDescriptor['confirmation'];
+  readonly operationRun?: OpDescriptor['operationRun'];
+  readonly recoveryActions?: readonly string[];
 }
 
 /**
@@ -60,7 +63,7 @@ export interface ProjectedOp {
  *          the input ids.
  */
 export function projectOps(
-  ops: readonly Pick<OpDescriptor, 'id' | 'domain' | 'argsSchema' | 'title'>[],
+  ops: readonly Pick<OpDescriptor, 'id' | 'domain' | 'argsSchema' | 'title' | 'confirmation' | 'operationRun' | 'recoveryActions'>[],
 ): readonly ProjectedOp[] {
   return ops.map((descriptor) => {
     // Field-by-field derive. descriptor.domain / .argsSchema flow with no `as`
@@ -70,6 +73,9 @@ export function projectOps(
       domain: descriptor.domain,
       argsSchema: descriptor.argsSchema,
       ...(descriptor.title !== undefined ? { title: descriptor.title } : {}),
+      ...(descriptor.confirmation === undefined ? {} : { confirmation: descriptor.confirmation }),
+      ...(descriptor.operationRun === undefined ? {} : { operationRun: descriptor.operationRun }),
+      ...(descriptor.recoveryActions === undefined ? {} : { recoveryActions: descriptor.recoveryActions }),
     };
     return projected;
   });

@@ -44,7 +44,11 @@
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
 
 import { createApp, ensureFallbackCamera, inputPlugin } from '@forgeax/engine-app';
-import type { GamePluginInstallResult, GameProjectionRegistrar } from '@forgeax/engine-app';
+import type { Plugin } from '@forgeax/engine-app';
+import type {
+  GamePluginInstallResult,
+  GameProjectionRegistrar,
+} from '@forgeax/editor-game-plugins';
 import {
   World,
   Time,
@@ -54,12 +58,13 @@ import {
 } from '@forgeax/engine-ecs';
 import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
 import { animationPlugin } from '@forgeax/engine-animation';
-import { Camera, CAMERA_PROJECTION_PERSPECTIVE } from '@forgeax/engine-render';
+import { skinningPlugin } from '@forgeax/engine-skinning';
+import { Camera, CAMERA_PROJECTION_PERSPECTIVE, renderComponentsPlugin } from '@forgeax/engine-render';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
 import {
-  AUDIO_ENGINE_RESOURCE_KEY,
   AudioListener,
+  audioBackendPlugin,
   audioPlugin,
 } from '@forgeax/engine-audio';
 import {
@@ -75,7 +80,7 @@ import {
   type SceneAsset,
 } from '@forgeax/editor-core';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
-import { supportsVfxRenderFeature } from './vfx-render-capability';
+import { editorComponentVocabularyPlugin } from '@forgeax/editor-game-plugins';
 
 // ── loose engine types (same `as never`/structural discipline as run-lifecycle /
 // host-boot — the ECS/renderer types evolve independently) ────────────────────
@@ -185,6 +190,8 @@ export interface AssemblePlayWorldDeps {
   /** Construct the fresh play World. Default `() => new World()`. Injectable so
    *  the headless test can supply its own World ctor without a second import. */
   readonly newWorld?: () => unknown;
+  /** The persistent Edit World; assembly must never reuse this identity. */
+  readonly editWorld?: unknown;
   /**
    * The viewport panel's DOM container (HostSessionContext.viewportContainer —
    * `.ep-viewport-root`, position:relative + overflow:hidden). ▶ Play creates a
@@ -219,6 +226,8 @@ export interface AssemblePlayWorldDeps {
     readonly world: World;
     readonly gameProjection?: GameProjectionRegistrar;
   }) => Promise<GamePluginInstallResult>;
+  /** Native asset-resident Cordis plugins loaded by the host. */
+  readonly gamePlugins?: readonly Plugin[];
   /** The one host created by Edit; attach it to this fresh Play world. */
   readonly vfxRuntimeHost?: VfxRuntimeHost;
   /** Whether the shared renderer accepted the optional GPU particle feature. */
@@ -242,6 +251,15 @@ export async function assemblePlayWorld(
 ): Promise<{ ok: true; value: PlayAssembly } | { ok: false; error: unknown }> {
   // AC-12: legal play-world construction (gate scans the engine submodule only).
   const playWorld = (deps.newWorld ?? (() => new World()))();
+  if (deps.editWorld !== undefined && playWorld === deps.editWorld) {
+    return {
+      ok: false,
+      error: {
+        code: 'play-world-not-fresh',
+        hint: 'Play requires a transient World distinct from the frozen Edit World.',
+      },
+    };
+  }
 
   // D-3 pattern: pre-inject the input backend BEFORE plugins run (inputPlugin's
   // build() guards on hasResource(INPUT_BACKEND_KEY) and is a no-op otherwise).
@@ -275,13 +293,10 @@ export async function assemblePlayWorld(
   let playAppForCleanup: PlayApp | undefined;
   let detachVfx: () => void = () => {};
   let detached = false;
-  // The host still attaches the VFX simulation/runtime on every RHI, but the
-  // GPU render feature is optional. Older injected test renderers have no caps,
-  // so preserve their existing feature path; real renderers always expose caps.
+  // GPU render feature is optional. The Edit renderer makes this capability
+  // decision once and passes the result into the fresh Play App.
   const vfxFeatureEnabled = deps.vfxRuntimeHost !== undefined
-    && deps.vfxRenderFeatureEnabled !== false
-    && (deps.renderer.device?.caps === undefined
-      || supportsVfxRenderFeature(deps.renderer.device.caps));
+    && deps.vfxRenderFeatureEnabled === true;
 
   const startupError = (code: string, error: unknown): { code: string; hint: string } => {
     const structured = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
@@ -357,14 +372,10 @@ export async function assemblePlayWorld(
   }
 
   // Audio backend (round-17, P8): the assemble form does NOT auto-create the
-  // WebAudioBackend (createAppFromAssemble: "host owns backend lifecycle") — so
-  // editor ▶ Play must pre-inject it itself, exactly as it pre-injects the input
-  // backend above and as a standalone game's own createApp does (create-app.ts
-  // canvas form :481). Without this the play world had no AUDIO_ENGINE_RESOURCE_KEY
-  // and no audioTickSystem, so EVERY audio game's AudioSource silently never fired
-  // in editor Play (Edit≠Play) — the same canvas-vs-assemble divergence class that
-  // create-app.ts:455 already fixed for AnimationAssetResolver. audioPlugin.build()
-  // is a no-op unless it finds this resource, so the inject MUST precede createApp.
+  // WebAudioBackend (createAppFromAssemble: "host owns backend lifecycle").
+  // Engine 7dd's audioPlugin consumes the Cordis `audio` service, so provide
+  // that service before createApp assembles the plugin graph. The plugin itself
+  // owns the transient AUDIO_ENGINE_RESOURCE_KEY projection and audio systems.
   //
   // Cost for an audio-less scene is ~zero: createWebAudioBackend is fully lazy
   // (no AudioContext until the first play() / .listener touch — web-audio-engine.ts
@@ -374,10 +385,6 @@ export async function assemblePlayWorld(
   // forge.json-gated) — matching D-8 "the play world is the same shape as a
   // standalone game runtime."
   audioBackend = createWebAudioBackend();
-  (playWorld as { insertResource(key: unknown, value: unknown): void }).insertResource(
-    AUDIO_ENGINE_RESOURCE_KEY,
-    audioBackend,
-  );
 
   // D-7: the assemble form runs ONLY the plugins we list (defaultSet=[]), so
   // explicitly replicate the canvas-form default 5 plugins + physics + audio
@@ -386,11 +393,20 @@ export async function assemblePlayWorld(
   // runtime, so game systems tick without a notEditing gate.
   const plugins: unknown[] = [
     transformPlugin(),
+    // The assemble form does not inherit createApp(canvas)'s render profile;
+    // admit the authored render component vocabulary before defaultScene load.
+    renderComponentsPlugin(),
+    editorComponentVocabularyPlugin(),
+    // Skin is an optional Engine capability. Play must use the same authored
+    // scene vocabulary as Edit so imported rig mounts do not fail at spawn.
+    skinningPlugin(),
     animationPlugin(),
     statePlugin(),
     inputPlugin(),
+    audioBackendPlugin(audioBackend),
     audioPlugin(),
     ...(deps.physics ? [physicsPlugin(deps.physics)] : []),
+    ...(deps.gamePlugins ?? []),
   ];
 
   let appRes: Awaited<ReturnType<typeof createApp>>;
@@ -426,8 +442,16 @@ export async function assemblePlayWorld(
     detachVfx = () => {
       if (detachedVfx) return;
       detachedVfx = true;
-      const result = deps.vfxRuntimeHost!.detachWorld({ world: playWorld as never });
-      if (!result.ok) console.warn('[editor] Play VFX host detach failed:', result.error);
+      // Engine VFX hosts before and after the async teardown boundary expose
+      // the same Result contract with either a synchronous or Promise return.
+      // Normalize both forms here so Play cleanup remains one idempotent,
+      // non-blocking lifecycle seam while the editor can consume either
+      // compatible Engine pin.
+      void Promise.resolve(deps.vfxRuntimeHost!.detachWorld({ world: playWorld as never }))
+        .then((result) => {
+          if (!result.ok) console.warn('[editor] Play VFX host detach failed:', result.error);
+        })
+        .catch((error) => console.warn('[editor] Play VFX host detach failed:', error));
     };
     try {
       const attached = await deps.vfxRuntimeHost.attachWorld({
@@ -725,6 +749,42 @@ export async function assemblePlayWorld(
     // game's missing authored Camera: this branch is reached only when no game
     // bootstrap exists.
     ensureFallbackCamera(playWorld as World);
+  }
+
+  // Generic structural world read for the Host `query_world` tool. Register it
+  // after the game bootstrap so a project-owned `world` projection remains the
+  // authoritative surface; the reserved fallback is only installed when the
+  // game did not provide one. Keep the JSON boundary explicit because
+  // `WorldInspection` also contains the non-serializable schedule helper.
+  if (gameProjection) {
+    try {
+      gameProjection.registrar.registerRead({
+        id: 'world',
+        title: 'World snapshot',
+        description: 'Read the active Play world ECS structure and registered runtime systems.',
+        read: () => {
+          const inspection = (playWorld as World).inspect();
+          return {
+            entityCount: inspection.entityCount,
+            archetypeCount: inspection.archetypeCount,
+            archetypes: inspection.archetypes.map((archetype) => ({
+              key: archetype.key,
+              componentNames: [...archetype.componentNames],
+              entityCount: archetype.entityCount,
+            })),
+            activeComponents: [...inspection.activeComponents],
+            systemCount: inspection.systemCount,
+            systems: inspection.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+            resourceKeys: [...inspection.resourceKeys],
+          };
+        },
+      });
+    } catch (error) {
+      // A game-defined `world` read is valid and intentionally wins. Any other
+      // registration failure is surfaced so Play cannot silently lose Host truth.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('game projection id conflict: world')) throw error;
+    }
   }
 
   const detach = (): void => { detachHostResources(); };

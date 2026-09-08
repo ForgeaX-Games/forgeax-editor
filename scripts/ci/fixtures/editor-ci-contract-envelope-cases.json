@@ -36,6 +36,32 @@
       "expectedMaxAttempts": 1
     }
   ],
+  "portabilityCases": [
+    {
+      "name": "checkout is required",
+      "stage": "checkout",
+      "terminalStatus": "pass",
+      "expectedValid": true
+    },
+    {
+      "name": "install is required",
+      "stage": "install",
+      "terminalStatus": "failure",
+      "expectedValid": true
+    },
+    {
+      "name": "capability probe may be bounded skipped",
+      "stage": "capability-probe",
+      "terminalStatus": "skipped",
+      "expectedValid": true
+    },
+    {
+      "name": "smoke may be bounded skipped",
+      "stage": "smoke",
+      "terminalStatus": "skipped",
+      "expectedValid": true
+    }
+  ],
   "approvedInput": {
     "generation": 7,
     "remoteMainSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

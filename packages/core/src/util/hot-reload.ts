@@ -6,33 +6,37 @@
 // component SCHEMA changed — a field added / removed / retyped, so existing
 // archetype columns no longer match).
 //
-// The judge is a fingerprint over every registered component's `toSchemaJSON()`
-// (engine `component.toSchemaJSON` @ component.ts:660; research Finding 1):
+// The judge is a fingerprint over every World-local component's reflected
+// `fields` shape. Component definitions are the Engine ECS schema SSOT; no
+// process-global catalog or legacy token serializer is consulted.
 //   • same fingerprint  → 'world-update'  (keep the world, update systems)
 //   • different fingerprint → 'world-rebuild' (drop the world, re-instantiate;
 //                                A0' world is disposable, OOS-7/OOS-8)
 //
 // This module holds ONLY the pure decision logic (unit-tested in w30); the
 // edit-runtime hot-reload orchestrator (edit-runtime/src/hot-reload.ts) supplies
-// the live `getRegisteredComponents()` map and performs the world mutation.
+// the live World catalog projection and performs the world mutation.
 
 /** The minimal component-token surface the fingerprint reads. */
 export interface SchemaSource {
-  toSchemaJSON(): string;
+  readonly fields: Readonly<Record<string, { readonly type: string }>>;
 }
 
 /** Which reload tier to take after a script re-import. */
 export type ReloadTier = 'world-update' | 'world-rebuild';
 
 /**
- * Stable fingerprint of the registered component schemas. Order-independent
- * (component names are sorted) so a re-registration that reorders the map but
- * keeps every schema identical produces the SAME fingerprint → world-update.
+ * Stable fingerprint of World-local component schemas. Order-independent
+ * (component and field names are sorted) so catalog insertion order does not
+ * change the reload decision.
  */
 export function schemaFingerprint(components: ReadonlyMap<string, SchemaSource>): string {
   const entries: Array<[string, string]> = [];
   for (const [name, token] of components) {
-    entries.push([name, token.toSchemaJSON()]);
+    const fields = Object.entries(token.fields)
+      .map(([field, reflection]) => [field, reflection.type] as const)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    entries.push([name, JSON.stringify(fields)]);
   }
   entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   return JSON.stringify(entries);

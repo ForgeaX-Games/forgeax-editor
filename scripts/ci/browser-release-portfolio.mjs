@@ -9,6 +9,17 @@ export const EVIDENCE_SCHEMA_VERSION = 'forgeax-browser-release-evidence/v1';
 export const PORTFOLIO_PARENT_CHECK_ID = 'smoke-play';
 export const REQUIRED_UNIT_COUNT = 6;
 export const DISCOVERY_CHANNELS = Object.freeze(['typeScript', 'typeErased', 'json']);
+export const BASELINE_FACT_REFERENCE_SCHEMA_VERSION = 'forgeax-ci-baseline-fact-reference/v1';
+export const BASELINE_FACT_REFERENCE_FIELDS = Object.freeze(['criticalPath', 'costFacts', 'readiness']);
+export const BASELINE_FACT_PROVENANCE_FIELDS = Object.freeze([
+  'sourceSha',
+  'runId',
+  'runAttempt',
+  'topologyId',
+  'graphDigest',
+  'rosterKey',
+  'workflow',
+]);
 
 function issue(code, expected, observed, hint) {
   return { code, expected, observed, hint };
@@ -28,8 +39,18 @@ function nonEmpty(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function sharedReferenceIssue(code, expected, observed, hint) {
+  return issue(code, expected, observed, hint);
+}
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (isObject(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  return JSON.stringify(value);
 }
 
 export function canonicalCandidateId(path) {
@@ -335,6 +356,126 @@ export function validateBrowserReleaseDiscovery(discovery, portfolio) {
   return result([], {...structuredClone(discovery), units});
 }
 
+export function projectSharedFactReference(baselineEvidence) {
+  if (!isObject(baselineEvidence) || !isObject(baselineEvidence.attemptProvenance)) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-missing',
+      'baseline attempt facts with complete attemptProvenance',
+      baselineEvidence ?? 'missing',
+      'Collect the current baseline attempt packet before projecting a browser shared reference.',
+    )]);
+  }
+  const provenance = baselineEvidence.attemptProvenance;
+  const missing = BASELINE_FACT_PROVENANCE_FIELDS.find((field) => provenance[field] === undefined || provenance[field] === null);
+  if (missing) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-provenance-drift',
+      BASELINE_FACT_PROVENANCE_FIELDS,
+      provenance,
+      `Restore ${missing} from the exact baseline attempt; do not join browser evidence by artifact name or workflow label.`,
+    )]);
+  }
+  const factBlocks = BASELINE_FACT_REFERENCE_FIELDS.map((field) => [field, baselineEvidence.facts?.[field] ?? baselineEvidence[field] ?? null]);
+  const missingFact = factBlocks.find(([, block]) => !isObject(block));
+  if (missingFact) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-facts-missing',
+      BASELINE_FACT_REFERENCE_FIELDS,
+      missingFact[0],
+      'Project the current baseline fact blocks before sharing a browser reference.',
+    )]);
+  }
+  const costFacts = baselineEvidence.facts?.costFacts ?? baselineEvidence.costFacts;
+  const artifactIdentity = costFacts?.artifact?.identity ?? costFacts?.artifactIdentity ?? null;
+  if (!isObject(artifactIdentity) || !Number.isInteger(artifactIdentity.id) || typeof artifactIdentity.digest !== 'string' || artifactIdentity.digest.length === 0) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-artifact-missing',
+      'costFacts.artifact.identity with id and digest',
+      artifactIdentity ?? 'missing',
+      'Retain the browser shared reference as no-claim until the exact artifact identity is observed.',
+    )]);
+  }
+  return result([], {
+    schemaVersion: BASELINE_FACT_REFERENCE_SCHEMA_VERSION,
+    source: 'ci-baseline',
+    admissionGeneration: baselineEvidence.admissionGeneration ?? null,
+    attemptProvenance: structuredClone(provenance),
+    factFields: [...BASELINE_FACT_REFERENCE_FIELDS],
+    factReferences: factBlocks.map(([field, block]) => ({
+      field,
+      source: 'ci-baseline',
+      provenance: structuredClone(provenance),
+      digest: `sha256:${sha256(stableJson(block))}`,
+    })),
+    artifactIdentity: structuredClone(artifactIdentity),
+  });
+}
+
+export function validateSharedFactReference(reference, baselineEvidence = null) {
+  if (!isObject(reference)) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-missing',
+      'a current baseline fact reference',
+      reference ?? 'missing',
+      'Retain the browser projection no-claim until the current baseline attempt reference is available.',
+    )]);
+  }
+  if (reference.schemaVersion !== BASELINE_FACT_REFERENCE_SCHEMA_VERSION || reference.source !== 'ci-baseline') {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-schema-invalid',
+      {schemaVersion: BASELINE_FACT_REFERENCE_SCHEMA_VERSION, source: 'ci-baseline'},
+      {schemaVersion: reference.schemaVersion, source: reference.source},
+      'Use the baseline reference schema and keep the baseline owner as the only shared fact source.',
+    )]);
+  }
+  if (JSON.stringify(reference.factFields) !== JSON.stringify(BASELINE_FACT_REFERENCE_FIELDS)) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-fields-invalid',
+      BASELINE_FACT_REFERENCE_FIELDS,
+      reference.factFields,
+      'Reference only criticalPath, costFacts, and readiness; browser admission and budget claims remain independent.',
+    )]);
+  }
+  if (!Array.isArray(reference.factReferences) || reference.factReferences.length !== BASELINE_FACT_REFERENCE_FIELDS.length || reference.factReferences.some((fact, index) => fact?.field !== BASELINE_FACT_REFERENCE_FIELDS[index] || fact?.source !== 'ci-baseline' || typeof fact?.digest !== 'string' || !fact.digest.startsWith('sha256:'))) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-facts-invalid',
+      'one digest-backed baseline fact reference per fact field',
+      reference.factReferences ?? null,
+      'Reference the digest-backed baseline fact blocks instead of copying only their field names.',
+    )]);
+  }
+  if (!isObject(reference.artifactIdentity) || !Number.isInteger(reference.artifactIdentity.id) || typeof reference.artifactIdentity.digest !== 'string' || reference.artifactIdentity.digest.length === 0) {
+    return result([sharedReferenceIssue(
+      'baseline-fact-reference-artifact-missing',
+      'artifact identity with id and digest',
+      reference.artifactIdentity ?? null,
+      'Keep the browser shared reference no-claim until the baseline artifact identity is available.',
+    )]);
+  }
+  const provenance = reference.attemptProvenance;
+  const missing = BASELINE_FACT_PROVENANCE_FIELDS.find((field) => provenance?.[field] === undefined || provenance?.[field] === null);
+  if (missing) return result([sharedReferenceIssue('baseline-fact-reference-provenance-drift', BASELINE_FACT_PROVENANCE_FIELDS, provenance ?? 'missing', `Restore ${missing} from the same baseline attempt before sharing the reference.`)]);
+  if (baselineEvidence) {
+    if (reference.admissionGeneration !== (baselineEvidence.admissionGeneration ?? null)) {
+      return result([sharedReferenceIssue('baseline-fact-reference-generation-drift', baselineEvidence.admissionGeneration ?? null, reference.admissionGeneration ?? null, 'Discard the stale browser reference and project it from the current baseline admission generation.')]);
+    }
+    if (JSON.stringify(provenance) !== JSON.stringify(baselineEvidence.attemptProvenance)) {
+      return result([sharedReferenceIssue('baseline-fact-reference-provenance-drift', baselineEvidence.attemptProvenance, provenance, 'Discard the stale browser reference and project it from the exact current baseline attempt.')]);
+    }
+    const factBlocks = BASELINE_FACT_REFERENCE_FIELDS.map((field) => [field, baselineEvidence.facts?.[field] ?? baselineEvidence[field] ?? null]);
+    const digestMismatch = factBlocks.find(([field, block], index) => reference.factReferences[index]?.digest !== `sha256:${sha256(stableJson(block))}` || stableJson(reference.factReferences[index]?.provenance) !== stableJson(provenance) || reference.factReferences[index]?.field !== field);
+    if (digestMismatch) {
+      return result([sharedReferenceIssue('baseline-fact-reference-facts-drift', 'digest-backed references to the current baseline fact blocks', reference.factReferences, 'Discard the stale browser reference and project it from the current baseline fact blocks.')]);
+    }
+    const costFacts = baselineEvidence.facts?.costFacts ?? baselineEvidence.costFacts;
+    const artifactIdentity = costFacts?.artifact?.identity ?? costFacts?.artifactIdentity ?? null;
+    if (stableJson(reference.artifactIdentity) !== stableJson(artifactIdentity)) {
+      return result([sharedReferenceIssue('baseline-fact-reference-artifact-drift', artifactIdentity, reference.artifactIdentity, 'Discard the stale browser reference and project it from the current baseline artifact identity.')]);
+    }
+  }
+  return result();
+}
+
 export function validateEvidenceEnvelope(observed, expected) {
   if (!isObject(observed)) return result([issue('evidence-envelope-invalid', expected, observed, 'Regenerate the structured evidence envelope instead of parsing log text.')]);
   for (const field of ['sourceSha', 'contractDigest', 'admissionGeneration', 'terminalStatus']) {
@@ -496,6 +637,18 @@ export function projectPortfolioTopology(index, portfolio, options = {}) {
   if (options.phase && options.phase !== 'projected') return result([issue('topology-phase-invalid', 'projected', options.phase, 'Final home is only writable during the projected phase.')]);
   if (options.finalHome !== undefined && options.finalHome !== null) return result([issue('topology-phase-invalid', 'no final home before projection', options.finalHome, 'Keep provisional home until the same-generation index is projected.')]);
   if (options.snapshot && options.snapshot.sourceSha !== index.sourceSha) return result([issue('topology-snapshot-stale', index.sourceSha, options.snapshot.sourceSha, 'Discard the old snapshot and derive topology from the current measurement index.')]);
+  let sharedFactReference = null;
+  if (Object.hasOwn(options, 'baselineEvidence') || Object.hasOwn(options, 'sharedFactReference')) {
+    if (Object.hasOwn(options, 'sharedFactReference')) {
+      const validation = validateSharedFactReference(options.sharedFactReference, options.baselineEvidence ?? null);
+      if (!validation.ok) return validation;
+      sharedFactReference = structuredClone(options.sharedFactReference);
+    } else {
+      const projection = projectSharedFactReference(options.baselineEvidence);
+      if (!projection.ok) return projection;
+      sharedFactReference = projection.value;
+    }
+  }
   const aggregate = aggregateResult.value;
   const units = aggregate.units.map((unit, indexValue) => ({
     unitId: unit.unitId,
@@ -506,6 +659,7 @@ export function projectPortfolioTopology(index, portfolio, options = {}) {
   }));
   return result([], {
     ...aggregate,
+    ...(sharedFactReference ? {sharedFactReference} : {}),
     schemaVersion: AGGREGATE_SCHEMA_VERSION,
     phase: 'projected',
     topology: {
@@ -526,9 +680,13 @@ export function projectPortfolioTopology(index, portfolio, options = {}) {
   });
 }
 
-export function validateFinalProjection(projected, index, portfolio) {
+export function validateFinalProjection(projected, index, portfolio, options = {}) {
   if (!isObject(projected?.topology) || projected.phase !== 'projected' || projected.topology.phase !== 'projected' || projected.topology.status !== 'final') return result([issue('final-topology-phase-invalid', 'projected final topology', projected?.topology, 'Only a projected topology can carry a final claim.')]);
   if (index?.status !== 'pass') return result([issue('final-claim-index-not-pass', 'pass', index?.status, 'Keep the final claim blocked until the current index passes.')]);
+  if (Object.hasOwn(options, 'baselineEvidence') || Object.hasOwn(projected, 'sharedFactReference')) {
+    const referenceResult = validateSharedFactReference(projected.sharedFactReference, options.baselineEvidence ?? null);
+    if (!referenceResult.ok) return referenceResult;
+  }
   const expectedMeasurementDigest = index.measurementDigest ?? jsonDigest({...index, measurementDigest: undefined});
   for (const field of ['sourceSha', 'contractDigest', 'workflowDigest', 'admissionDigest', 'admissionGeneration']) {
     if (projected.topology[field] !== index[field]) return result([issue('final-topology-provenance-drift', index[field], projected.topology[field], 'Final topology must reference the exact current index provenance.')]);
@@ -547,6 +705,10 @@ export function validateFinalProjection(projected, index, portfolio) {
 export function validateBrowserReleasePortfolio(portfolio, options = {}) {
   const portfolioIssue = validatePortfolioShape(portfolio);
   if (portfolioIssue) return result([portfolioIssue]);
+  if (Object.hasOwn(options, 'sharedFactReference') || Object.hasOwn(options, 'baselineEvidence')) {
+    const referenceResult = validateSharedFactReference(options.sharedFactReference, options.baselineEvidence ?? null);
+    if (!referenceResult.ok) return referenceResult;
+  }
   if (options.discovery) return validateBrowserReleaseDiscovery(options.discovery, portfolio);
   return result();
 }

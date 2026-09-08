@@ -1,0 +1,69 @@
+/* material-preview-toolbar — header control for the material / MI preview.
+   Buttons reuse the global `.fx-panel-action` header-button class (lime active
+   state); only the row wrapper, separators and the camera dropdown internals
+   are bespoke. */
+
+.fx-matpv-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.fx-matpv-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line, #2a2d30);
+}
+
+/* Camera-view dropdown rows (plain buttons so we control active state). */
+.fx-matpv-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-secondary, #a8b0bb);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fx-matpv-menu-item:hover {
+  background: var(--sel-neutral, rgba(255, 255, 255, 0.06));
+  color: var(--color-text-primary, #e8edf2);
+}
+
+.fx-matpv-menu-item[data-active='true'] {
+  color: var(--primary, #d4ff48);
+  background: rgba(212, 255, 72, 0.08);
+}
+
+.fx-matpv-menu-shortcut {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.fx-matpv-fov {
+  padding: 6px 8px 2px;
+}
+
+.fx-matpv-fov-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary, #a8b0bb);
+}
+
+.fx-matpv-fov-val {
+  font-variant-numeric: tabular-nums;
+}
+
+.fx-matpv-fov input[type='range'] {
+  width: 100%;
+}

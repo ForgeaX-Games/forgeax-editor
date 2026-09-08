@@ -3,7 +3,7 @@
 // feat-20260709-editor-world-partition-editorworld-super-composite / M4 (w18).
 //
 // WorldManager is the ONE component that knows both worlds' roles: it owns the
-// editorWorld (camera + gizmo), holds the WorldBinding registry (world + epoch),
+// editorWorld (camera + residual editor-world chrome), holds the WorldBinding registry (world + epoch),
 // provides the composite drawSource callback, and mints the DEDICATED EngineFacade
 // through which editorWorld writes flow. sceneWorld writes are NOT world-manager's
 // job — they still go through gateway dispatch (begin/update/commit) so undo /
@@ -55,7 +55,7 @@ export { createEditorWorld } from './createEditorWorld';
 /** The five value-move channels super coordinates between the two worlds (D-6 /
  *  research F4). Each has a fixed world ROLE in edit mode:
  *   - 'camera'    → editorWorld (the orbit camera pose lives with the editor);
- *   - 'gizmo'     → editorWorld (the gizmo/param-gizmo overlay entities);
+ *   - 'gizmo'     → editorWorld (legacy value-routing role; visuals use DebugDraw);
  *   - 'pick'      → sceneWorld (ray vs authored geometry AABB);
  *   - 'drag'      → sceneWorld (moves the authored entity's Transform);
  *   - 'inspector' → sceneWorld (reads/writes the authored entity's components).
@@ -78,11 +78,12 @@ export type SuperChannel = 'camera' | 'gizmo' | 'pick' | 'drag' | 'inspector';
  * `attach()` returns a detach fn (unregisters both seams).
  */
 export class WorldManager {
-  /** The editor-owned world (camera + gizmo). Assembled at construction. */
+  /** The editor-owned world (camera + residual editor-world chrome). Assembled at construction. */
   readonly editorWorld: World;
 
-  /** The dedicated write proxy for editorWorld (D-5). All camera/gizmo spawn/set/
-   *  despawn go through this — never raw world writes (lint-unique-mutator). */
+  /** The dedicated write proxy for editorWorld (D-5). Camera and residual
+   *  editor-world chrome writes go through this — never raw world writes
+   *  (lint-unique-mutator). */
   readonly editorFacade: EngineFacade;
 
   /** Lazy accessor for the live scene world (doc.world). */
@@ -135,8 +136,10 @@ export class WorldManager {
   }
 
   /** The worldRef a value-move channel targets in edit mode (D-6 role map, SSOT).
-   *  Camera + gizmo write the editorWorld; pick / drag / inspector read+write the
-   *  sceneWorld. This is a PURE mapping — it does not read or copy the input-routing
+   *  Camera + legacy gizmo value routing target the editorWorld; pick / drag /
+   *  inspector read+write the sceneWorld. Gizmo visuals are frame-local DebugDraw
+   *  output and do not mutate either world. This is a PURE mapping — it does not
+   *  read or copy the input-routing
    *  state (getInputTarget stays the single derivation, viewport-quadrant.ts); it
    *  only names which world each channel's value-move lands in. */
   channelWorldRef(channel: SuperChannel): number {

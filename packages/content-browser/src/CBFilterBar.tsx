@@ -47,11 +47,13 @@ const SORT_DIRS: readonly (readonly [CBSortDir, LucideIcon])[] = [
 
 export function CBFilterBar({ filter, sort }: Props) {
   const { t } = useTranslation();
-  const activeFilters = filter.filters.filter(item => item.active);
-  const filterLabel = activeFilters.length === 0
+  const activeFamilyFilters = filter.filters.filter(item => item.active);
+  const activeKindFilters = filter.kindFilters.filter(item => item.active);
+  const totalActive = activeFamilyFilters.length + activeKindFilters.length;
+  const filterLabel = totalActive === 0
     ? t('editor.contentBrowser.actions.filterAll')
-    : activeFilters.length === 1
-      ? activeFilters[0]!.label
+    : totalActive === 1
+      ? (activeFamilyFilters[0] ?? activeKindFilters[0])!.label
       : t('editor.contentBrowser.actions.filterByType');
   const sortLabels: Record<CBSortKey, string> = {
     name: t('editor.contentBrowser.sort.name'),
@@ -66,7 +68,7 @@ export function CBFilterBar({ filter, sort }: Props) {
           <Button
             size="sm"
             variant="subtle"
-            className={`cb-filter-trigger${activeFilters.length > 0 ? ' is-active' : ''}`}
+            className={`cb-filter-trigger${totalActive > 0 ? ' is-active' : ''}`}
             aria-label={t('editor.contentBrowser.actions.filterByType')}
           >
             <Filter />
@@ -74,7 +76,7 @@ export function CBFilterBar({ filter, sort }: Props) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
-          <DropdownMenuLabel>{t('editor.contentBrowser.actions.filterByType')}</DropdownMenuLabel>
+          <DropdownMenuLabel>{t('editor.contentBrowser.actions.fileTypeSection')}</DropdownMenuLabel>
           {filter.filters.map(item => (
             <DropdownMenuItem
               key={item.id}
@@ -89,6 +91,24 @@ export function CBFilterBar({ filter, sort }: Props) {
             >
               <Checkbox size="menu" checked={item.active} tabIndex={-1} className="pointer-events-none" />
               <ContentBrowserIcon name={FILE_FAMILY_ICON_NAMES[item.family]} className="cb-filter-option-icon" />
+              {item.label}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>{t('editor.contentBrowser.actions.assetTypeSection')}</DropdownMenuLabel>
+          {filter.kindFilters.map(item => (
+            <DropdownMenuItem
+              key={item.id}
+              size="sm"
+              className="cb-filter-option"
+              data-active={item.active ? 'true' : 'false'}
+              onSelect={(event) => {
+                event.preventDefault();
+                filter.toggleFilter(item.id);
+              }}
+            >
+              <Checkbox size="menu" checked={item.active} tabIndex={-1} className="pointer-events-none" />
+              <ContentBrowserIcon name={item.icon} className="cb-filter-option-icon" />
               {item.label}
             </DropdownMenuItem>
           ))}

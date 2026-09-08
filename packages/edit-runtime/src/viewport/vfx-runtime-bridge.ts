@@ -1,7 +1,7 @@
 // Edit VFX runtime bridge — the composition seam for the engine-owned host.
 //
 // The bridge owns no simulation, observation, registry, identity, or protocol
-// state. It creates one VfxRuntimeHost, forwards the existing viewport
+// state. It creates one Engine VfxRuntimeHost, forwards the existing viewport
 // camera source, and projects the Renderer-owned feature diagnostics.
 // The same host instance is attached to the persistent Edit World and each
 // fresh Play World; the host itself owns attach/detach idempotency.
@@ -78,8 +78,8 @@ export function createEditVfxRuntimeBridge(
       notifyDiagnosticsChanged();
       return result;
     },
-    detachWorld: (world) => {
-      const result = host.detachWorld({ world });
+    detachWorld: async (world) => {
+      const result = await host.detachWorld({ world });
       notifyDiagnosticsChanged();
       return result;
     },

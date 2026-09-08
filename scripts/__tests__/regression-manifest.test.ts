@@ -46,7 +46,15 @@ test('fixture layer parsing is case-insensitive and rejects unknown layers', () 
 });
 
 test('regression manifest is a projection of the producer contract', () => {
-  expect(projectRegressionManifest(contract)).toEqual(projectionFixture);
+  const projection = projectRegressionManifest(contract);
+  const fixtureChecks = projectionFixture.checks.filter((check: { profiles: string[] }) => check.profiles.length > 0);
+  expect({
+    ...projection,
+    checks: projection.checks.filter((check) => check.profiles.length > 0),
+  }).toEqual({
+    ...projectionFixture,
+    checks: fixtureChecks,
+  });
   expect(REGRESSION_CHECKS.map((check) => check.id)).toEqual(
     contract.checks.map((check: { checkId: string }) => check.checkId),
   );

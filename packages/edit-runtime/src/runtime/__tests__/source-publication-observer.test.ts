@@ -23,6 +23,9 @@ describe('source publication observer', () => {
   it('reports a revision only after the runtime registry consumes the GUID', async () => {
     const events: string[] = [];
     const registry = {
+      assetCatalog: new Map(),
+      lookup: () => undefined,
+      adoptReloadedMeshMaterialSlots: () => ({ ok: true as const, value: undefined }),
       invalidate: (guid: string) => { events.push(`invalidate:${guid}`); },
       parseGuid: (guid: string) => ({ ok: true as const, value: guid }),
       loadByGuid: async (guid: string) => {
@@ -39,6 +42,89 @@ describe('source publication observer', () => {
 
     await expect(readRuntimeConsumedCurrent(registry as never, 'asset-guid')).resolves.toEqual(current('current:2'));
     expect(events).toEqual(['invalidate:asset-guid', 'load:asset-guid']);
+  });
+
+  it('derives a current from imported producer facts when the Catalog has no digest', async () => {
+    const registry = {
+      assetCatalog: new Map(),
+      lookup: () => undefined,
+      adoptReloadedMeshMaterialSlots: () => ({ ok: true as const, value: undefined }),
+      invalidate: () => {},
+      parseGuid: (guid: string) => ({ ok: true as const, value: guid }),
+      loadByGuid: async () => ({ ok: true as const, value: { kind: 'mesh' } }),
+      catalogSnapshot: () => ({
+        version: 2,
+        stale: false,
+        diagnostics: [],
+        entries: [{
+          guid: 'asset-guid',
+          sourceOverrides: { 'mesh:0': { materialSlotDefaultOverrides: { body: 'material-guid' } } },
+          refs: ['material-guid'],
+          packageUrl: '/mesh.pack.json',
+        }],
+      }),
+    };
+
+    await expect(readRuntimeConsumedCurrent(registry as never, 'asset-guid')).resolves.toEqual({
+      identity: 'asset-guid',
+      revision: expect.stringContaining('materialSlotDefaultOverrides'),
+    });
+  });
+
+  it('hot-patches an already-shared Mesh payload identity after publication', async () => {
+    const oldMesh = { kind: 'mesh', materialSlots: [{ slotName: 'Body', defaultMaterial: 'old' }] };
+    const freshMesh = { kind: 'mesh', materialSlots: [{ slotName: 'Body', defaultMaterial: 'new' }] };
+    const assetCatalog = new Map<string, { payload: unknown }>([['asset-guid', { payload: oldMesh }]]);
+    const registry = {
+      assetCatalog,
+      lookup: () => oldMesh,
+      invalidate: () => { assetCatalog.delete('asset-guid'); },
+      parseGuid: (guid: string) => ({ ok: true as const, value: guid }),
+      loadByGuid: async () => {
+        assetCatalog.set('asset-guid', { payload: freshMesh });
+        return { ok: true as const, value: freshMesh };
+      },
+      adoptReloadedMeshMaterialSlots: () => {
+        oldMesh.materialSlots = freshMesh.materialSlots;
+        assetCatalog.set('asset-guid', { payload: oldMesh });
+        return { ok: true as const, value: oldMesh };
+      },
+      catalogSnapshot: () => ({
+        version: 2,
+        stale: false,
+        diagnostics: [],
+        entries: [{ guid: 'asset-guid', revision: { digest: 'current:2' } }],
+      }),
+    };
+
+    await expect(readRuntimeConsumedCurrent(registry as never, 'asset-guid', true)).resolves.toEqual(current('current:2'));
+    expect(oldMesh.materialSlots).toEqual([{ slotName: 'Body', defaultMaterial: 'new' }]);
+    expect(assetCatalog.get('asset-guid')?.payload).toBe(oldMesh);
+  });
+
+  it('does not adopt live Mesh fields for a general reimport probe', async () => {
+    const oldMesh = { kind: 'mesh', materialSlots: [{ slotName: 'Old' }] };
+    let adoptions = 0;
+    const registry = {
+      lookup: () => oldMesh,
+      invalidate: () => {},
+      parseGuid: (guid: string) => ({ ok: true as const, value: guid }),
+      loadByGuid: async () => ({ ok: true as const, value: { kind: 'mesh', materialSlots: [{ slotName: 'Fresh' }] } }),
+      adoptReloadedMeshMaterialSlots: () => {
+        adoptions += 1;
+        return { ok: true as const, value: oldMesh };
+      },
+      catalogSnapshot: () => ({
+        version: 2,
+        stale: false,
+        diagnostics: [],
+        entries: [{ guid: 'asset-guid', revision: { digest: 'current:2' } }],
+      }),
+    };
+
+    await expect(readRuntimeConsumedCurrent(registry as never, 'asset-guid')).resolves.toEqual(current('current:2'));
+    expect(adoptions).toBe(0);
+    expect(oldMesh.materialSlots).toEqual([{ slotName: 'Old' }]);
   });
 
   it('requires Catalog, preview, and runtime to observe the same current', async () => {
@@ -62,6 +148,27 @@ describe('source publication observer', () => {
       },
     });
     expect(seen).toEqual(['catalog:current:2', 'preview:current:2', 'runtime:current:2']);
+  });
+
+  it('retries a transient cross-probe revision race until all consumers converge', async () => {
+    let catalogCalls = 0;
+    const observer = createSourcePublicationObserver({
+      timeoutMs: 100,
+      probes: {
+        catalog: async () => {
+          catalogCalls += 1;
+          return current(catalogCalls === 1 ? 'current:2' : 'current:3') as never;
+        },
+        preview: async () => current('current:3') as never,
+        runtime: async () => current('current:3') as never,
+      },
+    });
+
+    await expect(observer.observe(target())).resolves.toMatchObject({
+      status: 'succeeded',
+      current: current('current:3'),
+    });
+    expect(catalogCalls).toBe(2);
   });
 
   it('reports failed/LKG and observation timeout as recoverable terminal projections', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { OperationRun } from '@forgeax/editor-core';
-import { importFiles, importRunToResult, isRetryableImportRun } from '../import-pipeline';
+import { importFiles, importRunToResult, isRetryableImportRun, mapFbxDependencyResolutionCode } from '../import-pipeline';
 
 function run(overrides: Partial<OperationRun>): OperationRun {
   return {
@@ -118,5 +118,12 @@ describe('import pipeline terminal projection', () => {
         recoveryActions: ['operation.retry'],
       },
     }))).toBe(true);
+  });
+
+  it('does not project parser or unsupported-texture errors as a folder-scope retry', () => {
+    expect(mapFbxDependencyResolutionCode('fbx-external-texture-missing')).toBe('IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED');
+    expect(mapFbxDependencyResolutionCode('fbx-external-texture-ambiguous')).toBe('IMPORT_FBX_DEPENDENCY_AMBIGUOUS');
+    expect(mapFbxDependencyResolutionCode('fbx-source-invalid')).toBe('IMPORT_FBX_SOURCE_INVALID');
+    expect(mapFbxDependencyResolutionCode('fbx-external-texture-unsupported')).toBe('IMPORT_FBX_UNSUPPORTED');
   });
 });

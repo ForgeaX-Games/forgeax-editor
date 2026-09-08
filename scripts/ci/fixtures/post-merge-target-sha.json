@@ -89,5 +89,69 @@
       "envelopeTargetSha": "monitor-sha-001",
       "expectedCode": "target-sha-mismatch"
     }
+  ],
+  "workflowCases": [
+    {
+      "name": "completed CI push on main is eligible",
+      "workflowRun": {
+        "id": 801,
+        "run_attempt": 2,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "html_url": "https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801"
+      },
+      "targetSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "monitorSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "valid": true
+    },
+    {
+      "name": "workflow run must be completed",
+      "mutate": {"status": "in_progress"},
+      "expectedStatus": "pending",
+      "expectedCode": "workflow-run-not-completed"
+    },
+    {
+      "name": "target SHA is missing",
+      "targetSha": "",
+      "expectedStatus": "nonpass",
+      "expectedCode": "workflow-run-target-sha-mismatch"
+    },
+    {
+      "name": "target SHA format is invalid",
+      "targetSha": "not-a-commit-sha",
+      "mutate": {"head_sha": "not-a-commit-sha"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "workflow-run-target-sha-mismatch"
+    },
+    {
+      "name": "manual workflow is not landed evidence",
+      "mutate": {"event": "workflow_dispatch"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "workflow-run-event-invalid"
+    },
+    {
+      "name": "non-main workflow is not landed evidence",
+      "mutate": {"head_branch": "feature/other"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "workflow-run-branch-invalid"
+    },
+    {
+      "name": "workflow head SHA must equal explicit target SHA",
+      "targetSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expectedStatus": "nonpass",
+      "expectedCode": "workflow-run-target-sha-mismatch"
+    },
+    {
+      "name": "workflow head SHA cannot be replaced by monitor checkout SHA",
+      "targetSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "monitorSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "mutate": {"head_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "workflow-run-target-sha-mismatch"
+    }
   ]
 }

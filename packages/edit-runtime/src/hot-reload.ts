@@ -18,17 +18,27 @@
 // watcher uses) drives `onScriptChanged`, which re-runs the discoverer (its
 // dynamic import is cache-busted) and applies the tier.
 
-import { getRegisteredComponents } from '@forgeax/engine-ecs';
-import { schemaFingerprint, decideReloadTier, type ReloadTier } from '@forgeax/editor-core';
+import type { World } from '@forgeax/engine-ecs';
+import { schemaFingerprint, decideReloadTier, type ReloadTier, type SchemaSource } from '@forgeax/editor-core';
 
 /** What the orchestrator needs from its host to apply a reload. */
 export interface HotReloadHost {
+  /** World-local component catalog whose schema is being reloaded. */
+  world: World;
   /** Re-import + re-register the changed game-logic scripts (the discoverer).
    *  Cache-busted import so the new module source is picked up. */
   rediscover(): Promise<void>;
   /** Force the engine sync to drop + rebuild the rendered world from the
    *  SceneAsset (engineSync.forceResync). */
   rebuildWorld(): void;
+}
+
+function worldSchema(world: World): ReadonlyMap<string, SchemaSource> {
+  const schemas = new Map<string, SchemaSource>();
+  for (const [name, component] of world.components.entries()) {
+    schemas.set(name, { fields: component.fields });
+  }
+  return schemas;
 }
 
 /** Outcome of one script-change reload (returned for logging / tests). */
@@ -45,9 +55,9 @@ export interface HotReloadOutcome {
  * tear down + re-instantiate the rendered world.
  */
 export async function applyScriptChange(host: HotReloadHost): Promise<HotReloadOutcome> {
-  const before = schemaFingerprint(getRegisteredComponents());
+  const before = schemaFingerprint(worldSchema(host.world));
   await host.rediscover();
-  const after = schemaFingerprint(getRegisteredComponents());
+  const after = schemaFingerprint(worldSchema(host.world));
   const tier = decideReloadTier(before, after);
   if (tier === 'world-rebuild') host.rebuildWorld();
   return { tier };

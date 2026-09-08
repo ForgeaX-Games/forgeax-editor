@@ -24,6 +24,78 @@ import type { ArgsSchema, GatewayOpDescriptor, GatewayOpSnapshot } from '../io/c
 import type { CommandOrigin } from '../io/gateway-history';
 import type { EditorOp } from '../types';
 import { awaitAssetWriteCompletion } from '../session/authored-asset-write';
+import {
+  GAMEPLAY_CARRIER_CONTRACT_VERSION,
+  GAMEPLAY_OPERATION_MANIFEST,
+  type GameplayIdentity,
+  type GameplayOperationResult,
+} from '../io/gameplay-contract';
+import type { GameplayCarrierBridge } from '../io/gameplay-operations';
+
+export const EDITOR_CARRIER_CONTRACT_VERSION = 'editor-carrier/v1' as const;
+
+export const EDITOR_CARRIER_RECOVERY_ACTIONS = Object.freeze([
+  'editor.discover',
+  'carrier.status',
+  'carrier.focus',
+  'request.retry',
+  'carrier.stop',
+]);
+
+/** Stable page contribution used by hosts to identify the visible carrier. */
+export interface EditorPageCarrierDescriptor {
+  readonly pageTypeId: string;
+  readonly viewportPanelId: string;
+  readonly visible: true;
+  readonly gameplay: true;
+}
+
+/** Machine-readable schema references carried by the public editor facade. */
+export interface EditorCarrierSchemaDescriptor {
+  readonly version: typeof EDITOR_CARRIER_CONTRACT_VERSION;
+  readonly identity: 'GameplayIdentity/v1';
+  readonly gameplayRequest: 'GameplayOperationRequest/v1';
+  readonly gameplayResult: 'GameplayOperationResult/v1';
+  readonly gameplayOperations: typeof GAMEPLAY_OPERATION_MANIFEST;
+}
+
+export interface EditorCarrierDiscovery {
+  readonly version: typeof EDITOR_CARRIER_CONTRACT_VERSION;
+  readonly identity: GameplayIdentity | null;
+  readonly capabilities: readonly CapabilityDescriptor[];
+  readonly schemas: EditorCarrierSchemaDescriptor;
+  readonly recoveryActions: readonly string[];
+  readonly page: EditorPageCarrierDescriptor;
+}
+
+export interface EditorCarrierFacade {
+  readonly version: typeof EDITOR_CARRIER_CONTRACT_VERSION;
+  readonly adapter: GatewayCapabilityAdapter;
+  readonly identity: () => GameplayIdentity | null;
+  readonly discover: () => EditorCarrierDiscovery;
+  readonly executeGameplay: (input: unknown) => Promise<GameplayOperationResult>;
+  readonly dispose: () => void;
+}
+
+export interface CreateEditorCarrierFacadeOptions {
+  readonly source: GatewayCapabilitySource;
+  readonly page: EditorPageCarrierDescriptor;
+  readonly getIdentity: () => GameplayIdentity | null;
+  readonly gameplay?: GameplayCarrierBridge;
+}
+
+const missingGameplayResult = (): GameplayOperationResult => ({
+  version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
+  operation: null,
+  ok: false,
+  error: {
+    owner: 'editor-gameplay-carrier',
+    code: 'surface-unavailable',
+    phase: 'producer',
+    retryable: true,
+    hint: 'wait for the visible Editor viewport to publish its gameplay bridge',
+  },
+});
 
 export interface GatewayDispatchResult {
   readonly ok: boolean;
@@ -202,6 +274,9 @@ function registrationFor(
 ): CapabilityRegistration {
   const id = `editor.${descriptor.id}`;
   const hasExecutor = source.dispatch !== undefined && descriptor.availability.available;
+  const operationRun = descriptor.operationRun !== null && typeof descriptor.operationRun === 'object'
+    ? descriptor.operationRun
+    : undefined;
   const registration: CapabilityRegistration = {
     id,
     kind: 'operation',
@@ -212,7 +287,15 @@ function registrationFor(
     outputSchema: { type: 'object', description: 'Gateway dispatch result.' },
     availability: gatewayAvailability(descriptor, hasExecutor),
     preconditions: [],
-    recoveryActions: ['editor.discover'],
+    ...(descriptor.confirmation === undefined ? {} : { confirmation: descriptor.confirmation }),
+    ...(operationRun === undefined ? {} : {
+      cancellation: { supported: operationRun.cancellable === true },
+      retry: {
+        supported: true,
+        createsNewAttempt: operationRun.retry?.requiresNewRequestId === true,
+      },
+    }),
+    recoveryActions: descriptor.recoveryActions ?? ['editor.discover'],
     ...(hasExecutor
       ? { executor: { execute: (input: unknown) => executeGatewayCommand(source, descriptor, input) } }
       : {}),
@@ -463,5 +546,39 @@ export function createGatewayCapabilityAdapter(
     retryOperationRun(requestId, retryRequestId, actor = { id: 'ai', kind: 'ai' }) {
       return saveOperationRuns.retry(requestId, retryRequestId, actor);
     },
+  };
+}
+
+/**
+ * Compose the released editor product, page contribution, and live gameplay
+ * bridge into one host-facing carrier facade. The Gateway remains the source
+ * of capability facts; this wrapper only derives the public discovery shape.
+ */
+export function createEditorCarrierFacade(
+  options: CreateEditorCarrierFacadeOptions,
+): EditorCarrierFacade {
+  const adapter = createGatewayCapabilityAdapter(options.source);
+  const schemas: EditorCarrierSchemaDescriptor = Object.freeze({
+    version: EDITOR_CARRIER_CONTRACT_VERSION,
+    identity: 'GameplayIdentity/v1',
+    gameplayRequest: 'GameplayOperationRequest/v1',
+    gameplayResult: 'GameplayOperationResult/v1',
+    gameplayOperations: GAMEPLAY_OPERATION_MANIFEST,
+  });
+  const recoveryActions = Object.freeze([...EDITOR_CARRIER_RECOVERY_ACTIONS]);
+  return {
+    version: EDITOR_CARRIER_CONTRACT_VERSION,
+    adapter,
+    identity: options.getIdentity,
+    discover: () => Object.freeze({
+      version: EDITOR_CARRIER_CONTRACT_VERSION,
+      identity: options.getIdentity(),
+      capabilities: adapter.capabilities(),
+      schemas,
+      recoveryActions,
+      page: options.page,
+    }),
+    executeGameplay: (input) => options.gameplay?.execute(input) ?? Promise.resolve(missingGameplayResult()),
+    dispose: () => adapter.dispose(),
   };
 }

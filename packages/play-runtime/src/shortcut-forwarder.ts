@@ -1,9 +1,8 @@
-/** shortcut-forwarder —— VENDORED copy of `@forgeax/editor-core/src/shortcut-forwarder.ts`
- *  (itself a MIRROR of studio 权威 `@forgeax/host-sdk/src/shortcut-forwarder.ts`).
+/** Shortcut forwarder vendored from `@forgeax/editor-core/src/shortcut-forwarder.ts`.
  *
  *  ⚠ play-runtime 经 VAG_* iframe 协议与 core 通信,**禁止**运行时 import `@forgeax/editor-core`
  *  (invariant #5 / `lint-play-vag-boundary`)。转发器是浏览器基础设施、零依赖,故这里 vendor
- *  一份本地副本而非跨包 import。改动请先改权威(host-sdk),再同步 editor-core 与本文件。
+ *  一份本地副本而非跨包 import。改动请先改 Editor Core 权威,再同步本文件。
  *
  *  让全局快捷键(⌘K 命令面板 / Ctrl+Shift+* 布局键 / Esc)在 iframe 内也生效:studio 顶层的
  *  命令面板 + useGlobalShortcuts 拿不到跨 iframe 的按键,故各 iframe 内装本转发器,白名单命中
@@ -12,7 +11,7 @@
  *  浏览器专用,零依赖。只传可序列化数据。
  */
 
-/** postMessage 信封 type;与 studio host 侧接收器共用。 */
+/** postMessage 信封 type;与 Interface host 侧接收器共用。 */
 export const FORGEAX_FORWARD_KEY = 'FORGEAX_FORWARD_KEY';
 
 /** iframe → parent 转发的按键载荷(可序列化)。 */

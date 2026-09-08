@@ -2,16 +2,23 @@
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { CONTRACT_SCHEMA_VERSION, validateRuntimeProjection } from './editor-ci-contract.mjs';
+import {
+  CONTRACT_SCHEMA_VERSION,
+  PORTABILITY_PLATFORMS,
+  PORTABILITY_STAGES,
+  validateRuntimeProjection,
+} from './editor-ci-contract.mjs';
 import {
   createDeliveryEnvelope,
   LANDED_REQUIRED_CONTEXTS,
 } from './editor-ci-contract-envelope.mjs';
+import { validateEditorCiReport } from './editor-ci-report.mjs';
 import { discoverLiveRuleset, requiredContextNamesFromRuleset } from './live-ruleset-admission.mjs';
 
 const MAX_EVIDENCE = 4;
 const MAX_DETAIL_LENGTH = 220;
 const MAX_LOG_LENGTH = 16000;
+const HEX40 = /^[0-9a-f]{40}$/;
 
 export const CLASSIFICATIONS = Object.freeze([
   'success',
@@ -27,6 +34,8 @@ export const POST_MERGE_CONTRACT_VERSION = CONTRACT_SCHEMA_VERSION;
 const POST_MERGE_EXECUTION_HOME = 'post-merge';
 const POST_MERGE_TIMING_DOMAIN = 'post-merge-workflow';
 const FAILURE_CLASSES = new Set(['admission', 'environment', 'source', 'external-transport']);
+const PORTABILITY_TERMINAL_STATUSES = new Set(['pass', 'failure', 'skipped']);
+const REQUIRED_PORTABILITY_STAGES = new Set(['checkout', 'install', 'setup', 'wasm', 'zero-binary', 'type-static']);
 
 function structuredError(code, expected, observed, hint) {
   return { ok: false, error: { code, expected: typeof expected === 'string' ? expected : JSON.stringify(expected), observed, hint } };
@@ -416,6 +425,205 @@ function deliveryFailure(status, code, expected, observed, hint, blocker, requir
   };
 }
 
+export function validatePostMergeWorkflowRun({workflowRun, targetSha, monitorSha = null} = {}) {
+  if (!workflowRun || workflowRun.id === undefined || workflowRun.run_attempt === undefined || !workflowRun.head_sha) {
+    return deliveryFailure(
+      'pending',
+      'workflow-run-identity-missing',
+      'workflow_run id, run_attempt, head_sha, and html_url',
+      workflowRun ?? 'missing',
+      'Preserve the triggering workflow_run identity before classifying post-merge delivery.',
+      'workflow run identity is incomplete',
+      ['workflow_run.id', 'workflow_run.run_attempt', 'workflow_run.head_sha', 'workflow_run.html_url'],
+      'Re-run the monitor from the completed CI workflow_run event.',
+    );
+  }
+  if (workflowRun.status !== 'completed') {
+    return deliveryFailure(
+      'pending',
+      'workflow-run-not-completed',
+      'completed',
+      workflowRun.status ?? 'missing',
+      'Wait for the triggering CI workflow_run to reach its terminal completed state.',
+      'workflow run is not terminal',
+      ['workflow_run.status=completed'],
+      'Allow the completed workflow_run monitor to run after CI reaches a terminal state.',
+    );
+  }
+  if (workflowRun.name !== 'CI' && workflowRun.workflow_name !== 'CI') {
+    return deliveryFailure(
+      'nonpass',
+      'workflow-run-workflow-invalid',
+      'CI',
+      workflowRun.name ?? workflowRun.workflow_name ?? 'missing',
+      'The monitor only consumes the existing CI workflow.',
+      'workflow run is not the landed CI producer',
+      ['workflow_run.name=CI'],
+      'Trigger the monitor from the CI workflow_run event instead of a manual or scheduled result.',
+    );
+  }
+  if (workflowRun.event !== 'push') {
+    return deliveryFailure(
+      'nonpass',
+      'workflow-run-event-invalid',
+      'push',
+      workflowRun.event ?? 'missing',
+      'Manual, scheduled, and pull-request runs are not landed evidence.',
+      'workflow run event is not a main push',
+      ['workflow_run.event=push'],
+      'Use the completed CI push/main workflow_run for landed delivery.',
+    );
+  }
+  if (workflowRun.head_branch !== 'main') {
+    return deliveryFailure(
+      'nonpass',
+      'workflow-run-branch-invalid',
+      'main',
+      workflowRun.head_branch ?? 'missing',
+      'Only the CI push on main can establish landed evidence.',
+      'workflow run branch is not main',
+      ['workflow_run.head_branch=main'],
+      'Collect delivery evidence from the CI main-push workflow_run.',
+    );
+  }
+  if (!targetSha || !HEX40.test(targetSha)) {
+    return deliveryFailure(
+      'nonpass',
+      'workflow-run-target-sha-mismatch',
+      'a 40-character lowercase target SHA',
+      targetSha ?? 'missing',
+      'Provide the target SHA as the 40-character workflow_run.head_sha value; do not infer it from the monitor checkout.',
+      'workflow target SHA format is invalid',
+      ['TARGET_SHA=workflow_run.head_sha'],
+      'Derive TARGET_SHA from the triggering workflow_run event and retry the exact run.',
+    );
+  }
+  if (workflowRun.head_sha !== targetSha) {
+    return deliveryFailure(
+      'nonpass',
+      'workflow-run-target-sha-mismatch',
+      targetSha ?? 'workflow_run.head_sha',
+      workflowRun.head_sha,
+      'The explicit target must be workflow_run.head_sha; do not infer it from the monitor checkout.',
+      'workflow target SHA differs from workflow_run.head_sha',
+      ['TARGET_SHA=workflow_run.head_sha'],
+      'Derive TARGET_SHA from the triggering workflow_run event and retry the exact run.',
+    );
+  }
+  if (workflowRun.conclusion !== 'success') {
+    return deliveryFailure(
+      'nonpass',
+      'workflow-run-nonpass',
+      'success',
+      workflowRun.conclusion ?? 'missing',
+      'A failed or cancelled CI run cannot establish landed delivery.',
+      'completed CI workflow_run is not successful',
+      ['workflow_run.conclusion=success'],
+      'Resolve the CI failure and collect a new exact-SHA workflow_run.',
+    );
+  }
+  return {ok: true, status: 'pass', targetSha, monitorSha};
+}
+
+function portabilityPlatformName(value) {
+  return typeof value === 'string' ? value : value?.os;
+}
+
+export function validatePortabilityAggregate({artifact, workflowRun, targetSha = workflowRun?.head_sha} = {}) {
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+    return deliveryFailure(
+      'pending',
+      'portability-artifact-missing',
+      'one portability aggregate from the triggering workflow_run',
+      artifact ?? 'missing',
+      'The post-merge monitor cannot use historical or per-platform substitutes for the same-run aggregate.',
+      'same-run portability aggregate is missing',
+      ['portability aggregate artifact', 'triggering workflow_run id and attempt'],
+      'Upload or download the aggregate artifact from the exact triggering workflow_run.',
+    );
+  }
+  const matrix = artifact.matrix;
+  const workflowRunId = matrix?.workflowRunId;
+  const workflowRunAttempt = matrix?.workflowRunAttempt;
+  if (!Number.isInteger(workflowRunId) || !Number.isInteger(workflowRunAttempt)) {
+    return deliveryFailure(
+      'pending',
+      'portability-artifact-run-identity-missing',
+      {workflowRunId: workflowRun?.id, workflowRunAttempt: workflowRun?.run_attempt},
+      {workflowRunId, workflowRunAttempt},
+      'Portability provenance must identify the workflow_run that produced the aggregate.',
+      'portability aggregate run identity is missing',
+      ['portability workflowRunId', 'portability workflowRunAttempt'],
+      'Regenerate the aggregate with the triggering workflow_run identity.',
+    );
+  }
+  const reportValidation = validateEditorCiReport(artifact);
+  if (!reportValidation.ok) {
+    return deliveryFailure('nonpass', 'portability-aggregate-invalid', 'schema-valid editor-ci-report aggregate', reportValidation.error, 'The same-run aggregate is not a valid shared editor-ci-report projection.', 'portability aggregate schema is invalid', ['shared editor-ci-report validation'], 'Regenerate the aggregate with the shared report producer.');
+  }
+  if (workflowRunId !== workflowRun?.id) {
+    return deliveryFailure('nonpass', 'portability-run-mismatch', workflowRun?.id, workflowRunId, 'Do not combine artifacts from another workflow run.', 'portability artifact belongs to another workflow run', ['same workflow_run id'], 'Download only the aggregate from the triggering workflow_run.');
+  }
+  if (workflowRunAttempt !== workflowRun?.run_attempt) {
+    return deliveryFailure('nonpass', 'portability-attempt-mismatch', workflowRun?.run_attempt, workflowRunAttempt, 'Do not combine artifacts from another attempt of the same workflow run.', 'portability artifact belongs to another workflow attempt', ['same workflow_run attempt'], 'Download only the aggregate from the triggering workflow_run attempt.');
+  }
+  if (artifact.checkId !== 'editor-portability' || artifact.sourceSha !== targetSha) {
+    return deliveryFailure('nonpass', 'portability-source-sha-mismatch', targetSha, artifact.sourceSha ?? 'missing', 'Every platform report must identify workflow_run.head_sha as its sourceSha.', 'portability aggregate source SHA differs from landed target', ['portability sourceSha', 'workflow_run.head_sha'], 'Discard the mixed-SHA aggregate and rerun the exact target.');
+  }
+  const expectedPlatforms = [...PORTABILITY_PLATFORMS];
+  const platforms = Array.isArray(matrix.platforms) ? matrix.platforms : [];
+  if (JSON.stringify([...new Set(platforms)].sort()) !== JSON.stringify([...expectedPlatforms].sort()) || platforms.length !== expectedPlatforms.length) {
+    return deliveryFailure('pending', 'portability-platform-set-incomplete', expectedPlatforms, platforms, 'Wait for one aggregate contribution from Linux, Windows, and macOS.', 'portability platform set is incomplete', expectedPlatforms.map((platform) => `${platform} aggregate report`), 'Wait for all three platform reports from the same workflow_run.');
+  }
+  const expectedKeys = new Set(expectedPlatforms.flatMap((platform) => PORTABILITY_STAGES.map((stage) => `${platform}:${stage}`)));
+  const terminalResults = Array.isArray(matrix.terminalResults) ? matrix.terminalResults : [];
+  const terminalByKey = new Map();
+  for (const result of terminalResults) {
+    const key = `${result?.platform}:${result?.stage}`;
+    if (terminalByKey.has(key) || !expectedKeys.has(key) || (result.sourceSha !== undefined && result.sourceSha !== artifact.sourceSha) || !PORTABILITY_TERMINAL_STATUSES.has(result.terminalStatus)) {
+      return deliveryFailure('nonpass', 'portability-terminal-report-invalid', 'one valid terminal report per platform-stage for the aggregate sourceSha', result, 'Reject malformed, duplicate, or cross-SHA terminal provenance.', 'portability terminal report is invalid', [...expectedKeys], 'Rebuild the aggregate from the three platform stage reports.');
+    }
+    terminalByKey.set(key, result.terminalStatus);
+  }
+  if (terminalByKey.size !== expectedKeys.size) {
+    return deliveryFailure('pending', 'portability-terminal-reports-incomplete', expectedKeys.size, terminalByKey.size, 'Do not treat a partial matrix aggregate as green.', 'portability stage reports are incomplete', [...expectedKeys], 'Wait for every terminal stage report on every platform.');
+  }
+  const platformReports = Array.isArray(matrix.platformReports) ? matrix.platformReports : [];
+  const reportPlatforms = new Set();
+  for (const platformReport of platformReports) {
+    const platform = portabilityPlatformName(platformReport?.platform);
+    if (!expectedPlatforms.includes(platform) || reportPlatforms.has(platform) || platformReport.sourceSha !== artifact.sourceSha || !Array.isArray(platformReport.reports)) {
+      return deliveryFailure('nonpass', 'portability-platform-report-invalid', 'one sourceSha-bound platform report per platform', platformReport, 'Reject duplicate or malformed platform provenance.', 'portability platform report is invalid', expectedPlatforms, 'Rebuild the aggregate from the native platform artifacts.');
+    }
+    reportPlatforms.add(platform);
+    const stageKeys = new Set();
+    for (const report of platformReport.reports) {
+      const reportValidation = validateEditorCiReport(report);
+      if (!reportValidation.ok) {
+        return deliveryFailure('nonpass', 'portability-platform-stage-invalid', 'complete shared editor-ci-report envelope and portability fields', reportValidation.error, 'Reject nested platform reports that bypass the shared report contract.', 'nested portability stage report is not schema-valid', [`${platform}:shared editor-ci-report`], 'Regenerate the platform aggregate from complete terminal reports.');
+      }
+      const key = `${platform}:${report?.stage}`;
+      if (stageKeys.has(key) || !PORTABILITY_STAGES.includes(report?.stage) || report.sourceSha !== artifact.sourceSha || !PORTABILITY_TERMINAL_STATUSES.has(report.terminalStatus)) {
+        return deliveryFailure('nonpass', 'portability-platform-stage-invalid', 'one sourceSha-bound terminal report per declared stage', report, 'Reject malformed or cross-SHA platform stage provenance.', 'portability platform stage report is invalid', [...expectedKeys], 'Regenerate the affected platform report.');
+      }
+      stageKeys.add(key);
+      if (terminalByKey.get(key) !== report.terminalStatus) {
+        return deliveryFailure('nonpass', 'portability-stage-provenance-mismatch', terminalByKey.get(key), report.terminalStatus, 'The aggregate terminal result must match the original platform stage result.', 'aggregate and platform stage statuses differ', [key], 'Rebuild the aggregate without mutating platform terminal results.');
+      }
+      if (report.terminalStatus === 'failure' || (report.terminalStatus === 'skipped' && !['capability-probe', 'smoke'].includes(report.stage))) {
+        return deliveryFailure('nonpass', 'portability-stage-nonpass', 'pass', report.terminalStatus, 'Required portability stages cannot be hidden by a green aggregate.', 'a required platform stage is not successful', [key], 'Repair the first failed native stage and rerun the platform producer.');
+      }
+    }
+    if (stageKeys.size !== PORTABILITY_STAGES.length) {
+      return deliveryFailure('pending', 'portability-platform-stage-incomplete', PORTABILITY_STAGES, [...stageKeys], 'Each platform must publish one terminal report for every declared stage.', 'a platform stage set is incomplete', PORTABILITY_STAGES.map((stage) => `${platform}:${stage}`), 'Wait for the complete platform artifact.');
+    }
+  }
+  if (reportPlatforms.size !== expectedPlatforms.length) {
+    return deliveryFailure('pending', 'portability-platform-reports-incomplete', expectedPlatforms, [...reportPlatforms], 'The aggregate must contain all three platform stage report sets.', 'platform report provenance is incomplete', expectedPlatforms, 'Wait for all native platform artifacts from the same workflow_run.');
+  }
+  return {ok: true, status: 'pass', sourceSha: artifact.sourceSha, workflowRunId, workflowRunAttempt, artifact};
+}
+
 function validateDeliveryWorkflowRun(workflowRun, landed) {
   if (!workflowRun || workflowRun.id === undefined || workflowRun.run_attempt === undefined || !workflowRun.html_url) {
     return deliveryFailure(
@@ -445,10 +653,10 @@ function validateDeliveryWorkflowRun(workflowRun, landed) {
 }
 
 /**
- * Build the post-merge join envelope. Producer identity and landed delivery
+ * Build the post-merge source envelope. Producer identity and landed evidence
  * remain separate objects so a monitor checkout cannot impersonate either one.
  */
-export function buildPostMergeDeliveryEnvelope({
+export function buildPostMergeSourceEnvelope({
   workflowRun,
   producer,
   landed,
@@ -467,7 +675,7 @@ export function buildPostMergeDeliveryEnvelope({
   if (!joined.ok) return joined;
   const envelope = {
     contractVersion: POST_MERGE_CONTRACT_VERSION,
-    checkId: 'post-merge-delivery',
+    checkId: 'post-merge-source',
     owner: 'editor-ci',
     profile: 'post-merge',
     executionHome: POST_MERGE_EXECUTION_HOME,
@@ -479,7 +687,7 @@ export function buildPostMergeDeliveryEnvelope({
     terminalStatus: 'pass',
     failureClass: null,
     code: null,
-    expected: 'exact landed delivery joins the producer release identity',
+    expected: 'exact source evidence validates the producer release identity',
     observed: 'producer and landed evidence validated',
     hint: 'No recovery action is required.',
     firstFailure: null,
@@ -498,10 +706,10 @@ export function buildPostMergeDeliveryEnvelope({
 }
 
 /**
- * Classify a completed post-merge delivery using exact target-SHA and join evidence.
+ * Classify a completed post-merge source result using exact target-SHA evidence.
  * Missing evidence remains pending; deterministic mismatches remain nonpass.
  */
-export function classifyPostMergeDelivery({
+export function classifyPostMergeSource({
   workflowRun,
   relatedRuns = [],
   producer,
@@ -509,7 +717,38 @@ export function classifyPostMergeDelivery({
   consumerReports = [],
   monitorSha = null,
   expectedAdmissionGeneration,
+  targetSha,
+  portabilityArtifact,
 } = {}) {
+  const workflowResult = validatePostMergeWorkflowRun({
+    workflowRun,
+    targetSha: targetSha ?? workflowRun?.head_sha,
+    monitorSha,
+  });
+  if (!workflowResult.ok) return {...workflowResult, classification: workflowResult.status === 'pending' ? 'source-evidence-pending' : 'source-evidence-nonpass'};
+  const workflowIssue = validateDeliveryWorkflowRun(workflowRun, landed);
+  if (workflowIssue) return workflowIssue;
+  if (portabilityArtifact !== undefined) {
+    const portabilityResult = validatePortabilityAggregate({
+      artifact: portabilityArtifact,
+      workflowRun,
+      targetSha: workflowResult.targetSha,
+    });
+    if (!portabilityResult.ok) return {...portabilityResult, classification: portabilityResult.status === 'pending' ? 'source-evidence-pending' : 'source-evidence-nonpass'};
+  }
+  if (producer?.sourceSha !== undefined && producer.sourceSha !== workflowResult.targetSha) {
+    const producerIssue = deliveryFailure(
+      'nonpass',
+      'producer-source-sha-mismatch',
+      workflowResult.targetSha,
+      producer.sourceSha,
+      'The producer release must be bound to the same source SHA as workflow_run.head_sha.',
+      'producer release belongs to another source revision',
+      ['producer sourceSha', 'workflow_run.head_sha'],
+      'Download the producer release from the exact workflow_run target SHA.',
+    );
+    return {...producerIssue, classification: 'source-evidence-nonpass'};
+  }
   if (producer === undefined || producer === null) {
     return deliveryFailure(
       'pending',
@@ -520,11 +759,9 @@ export function classifyPostMergeDelivery({
       'producer release evidence is missing',
       ['artifactId', 'releaseDigest', 'producerRunId', 'producerAttempt', 'sourceSha', 'recursivePins'],
       'Download or query the producer release report for this workflow run.',
-      {classification: 'landed-delivery-pending'},
+      {classification: 'source-evidence-pending'},
     );
   }
-  const workflowIssue = validateDeliveryWorkflowRun(workflowRun, landed);
-  if (workflowIssue) return workflowIssue;
   const duplicate = duplicateRun(workflowRun, Array.isArray(relatedRuns) ? relatedRuns : []);
   if (duplicate) {
     return deliveryFailure(
@@ -552,7 +789,7 @@ export function classifyPostMergeDelivery({
       {classification: 'post-merge-run-nonpass'},
     );
   }
-  const result = buildPostMergeDeliveryEnvelope({
+  const result = buildPostMergeSourceEnvelope({
     workflowRun,
     producer,
     landed,
@@ -565,13 +802,13 @@ export function classifyPostMergeDelivery({
       ...result,
       classification: result.error?.code === 'duplicate-same-sha-delivery'
         ? 'duplicate-same-sha-delivery'
-        : result.status === 'pending' ? 'landed-delivery-pending' : 'landed-delivery-nonpass',
+        : result.status === 'pending' ? 'source-evidence-pending' : 'source-evidence-nonpass',
     };
   }
   return {
     ok: true,
     status: 'pass',
-    classification: 'landed-delivery-success',
+    classification: 'source-evidence-success',
     envelope: result.envelope,
   };
 }
@@ -913,7 +1150,7 @@ function readDeliveryManifest(path) {
   }
 }
 
-function deliveryInputFromWorkflow({workflowRun, jobs, producer, remoteMainSha, ancestor}) {
+function landedEvidenceFromWorkflow({workflowRun, jobs, remoteMainSha, ancestor}) {
   const contexts = LANDED_REQUIRED_CONTEXTS
     .map((context) => {
       const matches = jobs.filter((candidate) => String(candidate?.id ?? '') === context || candidate?.name === context);
@@ -929,7 +1166,6 @@ function deliveryInputFromWorkflow({workflowRun, jobs, producer, remoteMainSha, 
     })
     .filter(Boolean);
   return {
-    producer,
     landed: {
       landedSha: workflowRun.head_sha,
       remoteMain: remoteMainSha
@@ -947,19 +1183,97 @@ function deliveryInputFromWorkflow({workflowRun, jobs, producer, remoteMainSha, 
   };
 }
 
-function deliveryFinding(result, workflowRun) {
-  const evidence = result.ok
-    ? [{code: 'landed-delivery-validated', detail: 'producer identity and exact landed delivery joined'}]
-    : [{code: result.error?.code ?? 'landed-delivery-unclassified', detail: result.error?.hint ?? 'landed delivery did not pass'}];
+function sourceEvidenceBase({workflowRun, jobs, landed, admission, liveRuleset, workflowAdmission, monitorSha}) {
   return {
-    classification: result.classification ?? (result.ok ? 'landed-delivery-success' : 'landed-delivery-nonpass'),
+    targetSha: workflowRun?.head_sha ?? null,
+    workflowRun: {
+      id: workflowRun?.id ?? null,
+      attempt: workflowRun?.run_attempt ?? null,
+      htmlUrl: workflowRun?.html_url ?? null,
+    },
+    monitorSha: monitorSha ?? null,
+    jobs: jobs.map((job) => ({
+      id: job?.id ?? null,
+      name: job?.name ?? null,
+      runId: job?.run_id ?? null,
+      attempt: job?.run_attempt ?? null,
+      headSha: job?.head_sha ?? null,
+      conclusion: job?.conclusion ?? null,
+    })),
+    requiredContexts: {
+      expected: [...LANDED_REQUIRED_CONTEXTS],
+      observed: landed?.contexts ?? [],
+    },
+    remoteMain: landed?.remoteMain ?? null,
+    producer: null,
+    admission: {
+      terminalStatus: admission?.envelope?.terminalStatus ?? null,
+      requiredContexts: admission?.envelope?.requiredContexts ?? [],
+      liveRuleset: liveRuleset
+        ? {
+            id: liveRuleset.id ?? null,
+            name: liveRuleset.name ?? null,
+            requiredContexts: liveRuleset.requiredContexts ?? [],
+          }
+        : null,
+      workflow: workflowAdmission
+        ? {ok: workflowAdmission.ok === true, errors: workflowAdmission.errors ?? []}
+        : null,
+    },
+  };
+}
+
+export function buildPostMergeSourceEvidence({
+  workflowRun,
+  jobs = [],
+  producer,
+  landed,
+  admission,
+  liveRuleset,
+  workflowAdmission,
+  monitorSha = null,
+} = {}) {
+  const sourceEvidence = sourceEvidenceBase({workflowRun, jobs, landed, admission, liveRuleset, workflowAdmission, monitorSha});
+  const workflowResult = validatePostMergeWorkflowRun({workflowRun, targetSha: workflowRun?.head_sha, monitorSha});
+  if (!workflowResult.ok) return {...workflowResult, sourceEvidence};
+  if (producer?.sourceSha !== undefined && producer.sourceSha !== workflowResult.targetSha) {
+    const error = structuredError(
+      'producer-source-sha-mismatch',
+      workflowResult.targetSha,
+      producer?.sourceSha ?? 'missing',
+      'Download the producer release from the exact workflow_run target SHA.',
+    );
+    return {ok: false, status: 'nonpass', error: error.error, sourceEvidence};
+  }
+  const result = createDeliveryEnvelope({producer, landed});
+  if (!result.ok) return {...result, sourceEvidence};
+  sourceEvidence.producer = result.envelope.producer;
+  return {ok: true, status: 'pass', sourceEvidence};
+}
+
+function sourceEvidenceFinding(result, workflowRun) {
+  const evidence = result.ok
+    ? [{code: 'source-evidence-validated', detail: 'target run, ancestry, contexts, producer, and admission evidence validated'}]
+    : [{code: result.error?.code ?? 'source-evidence-unclassified', detail: result.error?.hint ?? 'source evidence did not pass'}];
+  const finding = {
+    classification: result.classification ?? (result.ok ? 'source-evidence-success' : 'source-evidence-nonpass'),
     red: !result.ok,
     actionable: !result.ok,
     evidence,
     head_sha: workflowRun.head_sha,
     html_url: workflowRun.html_url,
-    delivery: result,
+    sourceEvidence: result.sourceEvidence ?? null,
   };
+  if (!result.ok) {
+    finding.failureClass = 'admission';
+    finding.terminalStatus = 'failure';
+    finding.code = result.error?.code ?? 'source-evidence-nonpass';
+    finding.expected = result.error?.expected ?? 'Editor source evidence is complete and consistent';
+    finding.observed = result.error?.observed ?? 'missing';
+    finding.hint = result.error?.hint ?? 'Collect the exact workflow run source evidence and retry.';
+    finding.firstFailure = result.error ?? null;
+  }
+  return finding;
 }
 
 function admissionFinding(result, workflowRun) {
@@ -1103,24 +1417,30 @@ async function main() {
     ? classifyWorkflowRun({ run: workflowRun, relatedRuns, jobs, logText })
     : admissionFinding(admission, workflowRun);
   const producerManifest = readDeliveryManifest(process.env.PREREQUISITE_RELEASE_MANIFEST);
-  const deliveryMode = Boolean(process.env.PREREQUISITE_RELEASE_MANIFEST);
   let finalFinding = finding;
-  if (deliveryMode && admission.ok) {
-    const deliveryInput = deliveryInputFromWorkflow({
+  if (admission.ok) {
+    const landedEvidence = landedEvidenceFromWorkflow({
       workflowRun,
       jobs,
-      producer: producerManifest?.__readError ? null : producerManifest,
       remoteMainSha: nonEmptyString(process.env.REMOTE_MAIN_SHA),
       ancestor: process.env.LANDED_ANCESTOR,
     });
-    finalFinding = deliveryFinding(classifyPostMergeDelivery({
+    const sourceResult = buildPostMergeSourceEvidence({
       workflowRun,
       relatedRuns,
-      ...deliveryInput,
+      producer: producerManifest?.__readError ? null : producerManifest,
+      landed: landedEvidence.landed,
+      admission,
+      liveRuleset,
+      workflowAdmission,
       monitorSha: nonEmptyString(process.env.GITHUB_SHA),
-    }), workflowRun);
-    if (producerManifest?.__readError) {
-      finalFinding.evidence.push({code: 'producer-manifest-unreadable', detail: 'the downloaded producer manifest could not be parsed'});
+    });
+    if (sourceResult.ok) {
+      finalFinding.sourceEvidence = sourceResult.sourceEvidence;
+      addEvidence(finalFinding.evidence, 'source-evidence-validated', 'Editor-owned source evidence is complete for the target workflow run');
+      finalizeFinding(finalFinding, workflowRun);
+    } else {
+      finalFinding = sourceEvidenceFinding(sourceResult, workflowRun);
     }
   }
   if (externalTransportUnavailable) {
@@ -1129,7 +1449,7 @@ async function main() {
     finalFinding.red = true;
     finalFinding.actionable = true;
     addEvidence(finalFinding.evidence, 'github-api-unavailable', 'live GitHub workflow evidence could not be read');
-    if (!deliveryMode) finalizeFinding(finalFinding, workflowRun);
+    finalizeFinding(finalFinding, workflowRun);
   }
   writeSummary(finalFinding);
   if (reportPath) {

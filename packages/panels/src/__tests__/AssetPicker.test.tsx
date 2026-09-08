@@ -1,4 +1,4 @@
-// AssetPicker — click-to-browse modal for Inspector asset fields.
+// AssetPicker — UE-style anchored asset browser for Inspector asset fields.
 //
 // Guarantee under test: the picker only offers catalogued assets whose kind maps
 // (assetKindToType) to the field's expected asset type — so it can never present a
@@ -8,10 +8,10 @@
 // export and breaks sibling test files). Instead we keep the real module and only
 // override the two gateway read methods on the singleton, restoring them after.
 
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { renderToStaticMarkup } from 'react-dom/server';
-import React from 'react';
-import { gateway } from '@forgeax/editor-core';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { act, type ReactElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { bindViewportRuntimeClient, gateway } from '@forgeax/editor-core';
 
 import { AssetPicker } from '../AssetPicker';
 
@@ -24,7 +24,7 @@ const fakeCatalog = [
 ];
 
 const gw = gateway as unknown as { assetCatalog: unknown; describeAssetByGuid: unknown };
-const orig = { assetCatalog: gw.assetCatalog, describeAssetByGuid: gw.describeAssetByGuid };
+const origDescribeAssetByGuid = gw.describeAssetByGuid;
 const compatibleCatalog = (rows: readonly Record<string, unknown>[], assetType?: string) => ({
   ok: true as const,
   assets: assetType === undefined ? rows : rows.filter((row) => {
@@ -33,19 +33,73 @@ const compatibleCatalog = (rows: readonly Record<string, unknown>[], assetType?:
   }),
 });
 
+const runtime = {
+  version: 'viewport-runtime/v1',
+  runtimeId: 'asset-picker-test',
+  runtimeGeneration: 1,
+  carrierId: 'asset-picker-test-frame',
+  carrierKind: 'iframe',
+} as const;
+let catalogRows: readonly Record<string, unknown>[] = fakeCatalog;
+let disposeRuntime: (() => void) | undefined;
+
 beforeAll(() => {
-  gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog(fakeCatalog, options?.compatibleWith);
   gw.describeAssetByGuid = () => ({ ok: false });
+  disposeRuntime = bindViewportRuntimeClient(runtime, {
+    request: async (request) => {
+      const params = request.params;
+      const compatibleWith = params !== null
+        && typeof params === 'object'
+        && 'compatibleWith' in params
+        && typeof params.compatibleWith === 'string'
+        ? params.compatibleWith
+        : undefined;
+      return {
+        jsonrpc: '2.0',
+        version: 'editor-transport/v1',
+        id: request.id,
+        correlationId: request.correlationId,
+        result: {
+          version: 'viewport-runtime/v1',
+          runtime,
+          revision: 1,
+          status: 'ready',
+          value: { entries: compatibleCatalog(catalogRows, compatibleWith).assets },
+        },
+      };
+    },
+    dispose() {},
+  });
 });
 
 afterAll(() => {
-  gw.assetCatalog = orig.assetCatalog;
-  gw.describeAssetByGuid = orig.describeAssetByGuid;
+  disposeRuntime?.();
+  gw.describeAssetByGuid = origDescribeAssetByGuid;
 });
 
+afterEach(() => {
+  catalogRows = fakeCatalog;
+});
+
+async function renderPicker(element: ReactElement): Promise<string> {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(element);
+    await Promise.resolve();
+  });
+  const picker = document.body.querySelector('[data-testid="asset-picker"]');
+  const html = picker?.outerHTML ?? document.body.innerHTML;
+  act(() => root.unmount());
+  document.body.querySelectorAll('.fx-asset-picker, .fx-asset-picker-backdrop').forEach((node) => node.remove());
+  container.remove();
+  return html;
+}
+
 describe('AssetPicker', () => {
-  it('MeshAsset field → only mesh rows, materials filtered out', () => {
-    const html = renderToStaticMarkup(
+  it('MeshAsset field → only mesh rows, materials filtered out', async () => {
+    const html = await renderPicker(
       <AssetPicker assetType="MeshAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-cube');
@@ -54,24 +108,24 @@ describe('AssetPicker', () => {
     expect(html).toContain('Cube');
   });
 
-  it('MaterialAsset field → only material rows', () => {
-    const html = renderToStaticMarkup(
+  it('MaterialAsset field → only material rows', async () => {
+    const html = await renderPicker(
       <AssetPicker assetType="MaterialAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-red');
     expect(html).not.toContain('asset-picker-row-g-cube');
   });
 
-  it('renders the None (unbind) row when onClear is provided', () => {
-    const html = renderToStaticMarkup(
+  it('renders the None (unbind) row when onClear is provided', async () => {
+    const html = await renderPicker(
       <AssetPicker assetType="MeshAsset" onPick={() => {}} onClear={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-none');
-    expect(html).toContain('None (unbind)');
+    expect(html).toContain('None');
   });
 
-  it('empty state when no catalogued asset matches the type', () => {
-    const html = renderToStaticMarkup(
+  it('empty state when no catalogued asset matches the type', async () => {
+    const html = await renderPicker(
       <AssetPicker assetType="AudioClipAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-empty');
@@ -81,8 +135,8 @@ describe('AssetPicker', () => {
   // Regression (animation-preview M1): the catalogued kind the gltf/inline-pack
   // cooks emit for clips is 'animation-clip' (AnimationClipAsset.kind) — without
   // the mapping an AnimationPlayer clips slot's picker listed NOTHING.
-  it('AnimationClip field → catalogued animation-clip rows', () => {
-    const html = renderToStaticMarkup(
+  it('AnimationClip field → catalogued animation-clip rows', async () => {
+    const html = await renderPicker(
       <AssetPicker assetType="AnimationClip" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-run');
@@ -91,22 +145,21 @@ describe('AssetPicker', () => {
     expect(html).not.toContain('asset-picker-row-g-red');
   });
 
-  it('AudioClipAsset field → only audio rows', () => {
-    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog([
+  it('AudioClipAsset field → only audio rows', async () => {
+    catalogRows = [
       ...fakeCatalog,
       { guid: 'g-sfx', kind: 'audio', name: 'test_mp3', packageUrl: 'assets/test_mp3.mp3', authoring: { placement: { operation: 'spawnEntity' }, binding: { operation: 'bindAssetRef', target: { component: 'AudioSource', field: 'clip', assetType: 'AudioClipAsset', cardinality: 'single' }, requiredSlots: 1 } } },
-    ], options?.compatibleWith);
-    const html = renderToStaticMarkup(
+    ];
+    const html = await renderPicker(
       <AssetPicker assetType="AudioClipAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-sfx');
     expect(html).toContain('test_mp3');
     expect(html).not.toContain('asset-picker-row-g-cube');
-    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog(fakeCatalog, options?.compatibleWith);
   });
 
-  it('ParticleEffectAsset field → producer capability selects particle rows', () => {
-    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog([
+  it('ParticleEffectAsset field → producer capability selects particle rows', async () => {
+    catalogRows = [
       {
         guid: 'g-particle', kind: 'particle-effect', name: 'Burst', packageUrl: 'burst.pack',
         authoring: {
@@ -119,17 +172,16 @@ describe('AssetPicker', () => {
         },
       },
       ...fakeCatalog,
-    ], options?.compatibleWith);
-    const html = renderToStaticMarkup(
+    ];
+    const html = await renderPicker(
       <AssetPicker assetType="ParticleEffectAsset" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-particle');
     expect(html).not.toContain('asset-picker-row-g-cube');
-    gw.assetCatalog = (options?: { compatibleWith?: string }) => compatibleCatalog(fakeCatalog, options?.compatibleWith);
   });
 
-  it('AnimationClip field → imported animation-clip rows', () => {
-    const html = renderToStaticMarkup(
+  it('AnimationClip field → imported animation-clip rows', async () => {
+    const html = await renderPicker(
       <AssetPicker assetType="AnimationClip" onPick={() => {}} onClose={() => {}} />,
     );
     expect(html).toContain('asset-picker-row-g-walk');

@@ -67,6 +67,9 @@ export interface SessionApplierCtx {
     despawn(entity: number): unknown;
     allocSharedRef(type: unknown, asset: unknown): unknown;
     get(entity: number, component: unknown): unknown;
+    resolveComponent(name: string): unknown;
+    componentDefinition(name: string): unknown;
+    editorComponentSchema(name: string): unknown;
   };
   /** Gateway-owned lifecycle reporter. Appliers may publish executor facts
    * without owning a second operation status store. */
@@ -120,6 +123,8 @@ export interface RegisteredApplierDescriptor {
   readonly argsSchema?: unknown;
   readonly title?: string;
   readonly operationRun?: OperationRunDescriptor;
+  readonly confirmation?: SessionApplierMeta['confirmation'];
+  readonly recoveryActions?: readonly string[];
 }
 
 export interface ApplierRegistrySnapshot {
@@ -254,6 +259,11 @@ export function applierFor(
   return entry?.domain === domain ? entry.applier : undefined;
 }
 
+/** Whether the active operation contract is unavailable while a Play world is live. */
+export function applierRequiresEditMode(kind: string): boolean {
+  return activeEntry(kind)?.meta?.editModeOnly === true;
+}
+
 export function applierRegistrySnapshot(): ApplierRegistrySnapshot {
   return Object.freeze({
     revision: _applierRevision,
@@ -268,6 +278,8 @@ export function applierRegistrySnapshot(): ApplierRegistrySnapshot {
         ...(entry.meta?.operationRun === undefined
           ? {}
           : { operationRun: structuredClone(entry.meta.operationRun) }),
+        ...(entry.meta?.confirmation === undefined ? {} : { confirmation: structuredClone(entry.meta.confirmation) }),
+        ...(entry.meta?.recoveryActions === undefined ? {} : { recoveryActions: [...entry.meta.recoveryActions] }),
       })];
     })),
   });
@@ -303,10 +315,19 @@ export interface SessionApplierMeta {
   argsSchema?: unknown;
   /** Human-readable label for the command palette (M4). */
   title?: string;
+  /** Reject this session operation at the Gateway while Play owns the active world. */
+  editModeOnly?: boolean;
   /** Gateway-owned async lifecycle contract. A downstream applier that returns
    * a completion Promise declares this once so dispatch can create the same
    * request-correlated OperationRun used by builtin async operations. */
   operationRun?: OperationRunDescriptor;
+  /** Confirmation policy for a downstream operation descriptor. */
+  confirmation?: {
+    readonly required: boolean;
+    readonly reason?: string;
+  };
+  /** Machine-readable recovery actions for a downstream operation descriptor. */
+  recoveryActions?: readonly string[];
 }
 
 /** Error thrown by registerSessionApplier on a duplicate kind. Carries the

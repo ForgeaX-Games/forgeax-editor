@@ -19,7 +19,7 @@ export type { EntityHandle };
 
 export type EntityId = number;
 
-/** Provenance: which Workbench source produced this instance (enables edit-source
+/** Provenance: which extension source produced this instance (enables edit-source
  *  round-trip back to the originating plugin). */
 export interface EntitySource {
   plugin: string;

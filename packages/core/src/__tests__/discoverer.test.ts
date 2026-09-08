@@ -1,7 +1,7 @@
 // w16 + w17 + w18 — discoverer TDD red tests (co-commit: same file, shared fixture dir).
 //
 // w16: dual-enum hit — fixture TS scripts (defineComponent + defineSystem)
-//      scanned by discoverer → getRegisteredComponents() / getRegisteredSystems()
+//      scanned by discoverer → the target World's component catalog and schedule
 //      contain the fixture-defined names.
 //
 // w17: duplicate fail-fast — two modules defineComponent('Health', ...) →
@@ -22,7 +22,6 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 import { World, defineComponent, defineSystem } from '@forgeax/engine-ecs';
-import { getRegisteredComponents, getRegisteredSystems } from '@forgeax/engine-ecs';
 
 import {
   discoverModules,
@@ -46,17 +45,16 @@ function freshWorld(): World {
   return new World();
 }
 
-// ── Cleanup after each test (global registry is shared across tests!) ────────
-// Engine's defineComponent / defineSystem use module-level Map state.
-// Reset by clearing world-scoped state — the global registry persists
-// but we overwrite entries. We use a per-test cleanup that re-defines
-// components with known schemas to restore predictable state.
+// ── Cleanup after each test (each fixture owns its World catalog) ────────────
+// The discoverer projects each loaded plugin into the supplied World. The
+// World is discarded after every test, so no process-wide catalog cleanup is
+// needed.
 
 afterEach(() => {
   // Re-establish baseline registration state.
-  // (The engine global registry is module-level — individual fixture imports
+  // (Each fixture owns its World catalog — individual fixture imports
   //  overwrite entries, but we want a clean slate for each test.)
-  // We rely on the fixture modules overwriting in the global registry;
+  // We rely on the fixture modules registering into the target World;
   // the main invariant is that each test imports its own set of fixtures.
 });
 
@@ -73,11 +71,11 @@ describe('w16 — discoverer dual-enum hit', () => {
 
     // ── Components ──
     // Health should be registered (from health.ts)
-    const compNames = new Set([...getRegisteredComponents().keys()]);
+    const compNames = new Set([...world.components.entries().keys()]);
     expect(compNames.has('Health')).toBe(true);
 
     // ── Systems ──
-    const sysNames = new Set([...getRegisteredSystems().keys()]);
+    const sysNames = new Set(world.inspect().systems.map((system) => system.name));
     expect(sysNames.has('Movement')).toBe(true);
     expect(sysNames.has('Render')).toBe(true);
 
@@ -106,7 +104,7 @@ describe('w16 — discoverer dual-enum hit', () => {
 
     // The Health component from health.ts should be registered, even though
     // the relPath doesn't follow any sub-directory convention.
-    const compNames = new Set([...getRegisteredComponents().keys()]);
+    const compNames = new Set([...world.components.entries().keys()]);
     expect(compNames.has('Health')).toBe(true);
     expect(result.errors.length).toBe(0);
   });
@@ -173,11 +171,11 @@ describe('w18 — broken partial success', () => {
     const result = await discoverModules(world, scriptList);
 
     // Normal script's component should be registered.
-    const compNames = new Set([...getRegisteredComponents().keys()]);
+    const compNames = new Set([...world.components.entries().keys()]);
     expect(compNames.has('Stamina')).toBe(true);
 
     // Normal script's system should be registered.
-    const sysNames = new Set([...getRegisteredSystems().keys()]);
+    const sysNames = new Set(world.inspect().systems.map((system) => system.name));
     expect(sysNames.has('Regen')).toBe(true);
 
     // The broken script should appear in errors (not modules).

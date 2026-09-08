@@ -5,6 +5,8 @@ import {
   type AssetBrowserAsset,
   type AssetBrowserCatalogRelation,
   type ActiveSceneSourceReference,
+  type SourceAuthoringOperationDescriptor,
+  type SourceAuthoringRuntimeResult,
   type SourceAuthoringRuntime,
   type SourceMutationPreflightInput,
   type EditorOp,
@@ -27,13 +29,95 @@ export interface SourceCatalogRow {
   readonly sourceKey?: string;
   readonly revision?: unknown;
   readonly refs?: readonly string[];
+  readonly sourceOverrides?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly relations?: readonly { readonly type?: unknown; readonly from?: unknown; readonly to?: unknown }[];
   readonly sourceOverrideDescriptors?: readonly SourceOverrideDescriptor[];
+}
+
+export interface SourceAuthoringProducerPreflight {
+  readonly sourcePath: string;
+  readonly revision: string;
+  readonly meta: unknown;
 }
 
 interface MetaSubAsset {
   readonly guid?: unknown;
   readonly sourceKey?: unknown;
+}
+
+function validationFailure(hint: string): never {
+  const error = new Error(hint) as Error & { readonly code?: string; readonly retryable?: boolean };
+  Object.defineProperties(error, {
+    code: { value: 'asset-validation-failed' },
+    retryable: { value: false },
+  });
+  throw error;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function producerFacts(value: Record<string, unknown>): Record<string, unknown> {
+  const { materialSlotDefaultOverrides: _authored, ...producerOwned } = value;
+  return producerOwned;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function jsonFactsEqual(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function validateMeshMaterialSlotOverride(rows: readonly SourceCatalogRow[], op: EditorOp): void {
+  const command = op as { readonly guid?: unknown; readonly scope?: { readonly sourceKey?: unknown }; readonly override?: unknown };
+  if (typeof command.guid !== 'string' || typeof command.scope?.sourceKey !== 'string') return;
+  const guid = command.guid;
+  const sourceKey = command.scope.sourceKey;
+  const row = rows.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
+  const descriptor = row?.sourceOverrideDescriptors?.find((candidate) => (
+    candidate.sourceKey === sourceKey
+    && candidate.semantic === 'mesh-material-slot-defaults'
+  ));
+  if (descriptor === undefined) return;
+  if (row?.kind !== 'mesh') validationFailure('Mesh material-slot defaults can only target a catalogued Mesh output.');
+  const previous = record(row.sourceOverrides?.[sourceKey]);
+  const next = record(command.override);
+  if (previous === undefined || next === undefined) validationFailure('Mesh material-slot defaults require a producer-owned override object.');
+  if (!jsonFactsEqual(producerFacts(previous), producerFacts(next))) {
+    validationFailure('Mesh material-slot authoring may only change materialSlotDefaultOverrides; producer-owned topology is immutable.');
+  }
+  const slots = Array.isArray(previous.materialSlots) ? previous.materialSlots : [];
+  const activeKeys = new Set(slots.flatMap((value) => {
+    const slot = record(value);
+    if (slot === undefined || slot.tombstone === true) return [];
+    const key = typeof slot.sourceKey === 'string' ? slot.sourceKey : slot.slotName;
+    return typeof key === 'string' && key.length > 0 ? [key] : [];
+  }));
+  const before = record(previous.materialSlotDefaultOverrides) ?? {};
+  const after = record(next.materialSlotDefaultOverrides) ?? {};
+  const changedKeys = new Set([...Object.keys(before), ...Object.keys(after)].filter(
+    (key) => before[key] !== after[key],
+  ));
+  for (const key of changedKeys) {
+    if (!activeKeys.has(key)) validationFailure(`Material slot identity "${key}" is absent or removed in the current Mesh topology.`);
+    const materialGuid = after[key];
+    if (materialGuid === undefined || materialGuid === null) continue;
+    if (typeof materialGuid !== 'string') validationFailure(`Material slot "${key}" must contain a material GUID, null, or no override.`);
+    const material = rows.find((entry) => entry.guid.toLowerCase() === materialGuid.toLowerCase());
+    if (material?.kind !== 'material') validationFailure(`Material slot "${key}" references a GUID that is not a catalogued MaterialAsset.`);
+  }
 }
 
 export interface SourceAuthoringRuntimeDependencies {
@@ -42,6 +126,12 @@ export interface SourceAuthoringRuntimeDependencies {
   readonly triggerCook: (guid: string, signal?: AbortSignal) => ReturnType<typeof assetIO.triggerCook>;
   readonly activeSceneReferences: () => readonly ActiveSceneSourceReference[];
   readonly observePublication: NonNullable<SourceAuthoringRuntime['observePublication']>;
+  readonly preflightSource?: (input: {
+    readonly sourcePath: string;
+    readonly requestId: string;
+  }) => Promise<SourceAuthoringProducerPreflight>;
+  readonly structuredOperations?: readonly SourceAuthoringOperationDescriptor[];
+  readonly executeStructured?: (op: EditorOp) => Promise<SourceAuthoringRuntimeResult>;
 }
 
 function activeSceneReferencesFromGateway(): readonly ActiveSceneSourceReference[] {
@@ -124,9 +214,73 @@ function sourceRow(rows: readonly SourceCatalogRow[], op: EditorOp): SourceCatal
   return row;
 }
 
+function isProducerSource(row: SourceCatalogRow): boolean {
+  return row.sourcePath?.replace(/\\/g, '/').toLowerCase().endsWith('.pack.ts') === true;
+}
+
+function sourceOutputs(meta: unknown, sourceLabel: string): readonly { readonly guid: string; readonly sourceKey: string }[] {
+  const parsed = record(meta);
+  const subAssets = parsed?.subAssets;
+  if (!Array.isArray(subAssets)) throw new Error(`${sourceLabel} Meta has no producer-owned sub-assets`);
+  const outputs = subAssets.flatMap((entry) => {
+    const value = record(entry);
+    if (typeof value?.guid !== 'string' || typeof value.sourceKey !== 'string') return [];
+    return [{ guid: value.guid, sourceKey: value.sourceKey }];
+  });
+  if (outputs.length === 0) throw new Error(`${sourceLabel} Meta has no producer-owned sub-assets`);
+  return outputs;
+}
+
+function sourceOverrideDescriptors(rows: readonly SourceCatalogRow[]): readonly SourceOverrideDescriptor[] {
+  return [...new Map(
+    rows.flatMap((catalogRow) => catalogRow.sourceOverrideDescriptors ?? [])
+      .map((descriptor) => [descriptor.sourceKey, descriptor] as const),
+  ).values()];
+}
+
+function preflightInput(
+  rows: readonly SourceCatalogRow[],
+  revision: string,
+  outputs: readonly { readonly guid: string; readonly sourceKey: string }[],
+  activeSceneReferences: readonly ActiveSceneSourceReference[],
+): SourceMutationPreflightInput {
+  const assets = rows.map(browserAsset);
+  return {
+    browser: {
+      assets,
+      relations: assets.flatMap((asset) => asset.relations),
+    },
+    meta: {
+      metaRevision: revision,
+      subAssets: outputs,
+      sourceOverrideDescriptors: sourceOverrideDescriptors(rows),
+    },
+    activeSceneReferences,
+  };
+}
+
 async function readPreflightInput(deps: SourceAuthoringRuntimeDependencies, op: EditorOp): Promise<SourceMutationPreflightInput> {
   const rows = deps.catalog();
   const row = sourceRow(rows, op);
+  if (isProducerSource(row) && op.kind === 'asset.preflight') {
+    const requestId = (op as { readonly requestId?: unknown }).requestId;
+    if (deps.preflightSource === undefined) {
+      throw new Error(`No producer preflight is available for ${row.sourcePath}`);
+    }
+    if (typeof row.sourcePath !== 'string' || typeof requestId !== 'string') {
+      throw new Error('producer preflight requires a sourcePath and requestId');
+    }
+    const producer = await deps.preflightSource({ sourcePath: row.sourcePath, requestId });
+    if (producer.sourcePath !== row.sourcePath) {
+      throw new Error(`Producer preflight returned ${producer.sourcePath} for ${row.sourcePath}`);
+    }
+    return preflightInput(
+      rows,
+      producer.revision,
+      sourceOutputs(producer.meta, row.sourcePath),
+      deps.activeSceneReferences(),
+    );
+  }
   const snapshot = await deps.readMetaSidecar(metaPathFor(row));
   if (!snapshot.ok) {
     const error = new Error(snapshot.error.hint) as Error & { readonly code?: string };
@@ -147,22 +301,7 @@ async function readPreflightInput(deps: SourceAuthoringRuntimeDependencies, op: 
     return [{ guid: entry.guid, sourceKey: entry.sourceKey }];
   });
   if (outputs.length === 0) throw new Error('source Meta sidecar has no producer-owned sub-assets');
-  const assets = rows.map(browserAsset);
-  return {
-    browser: {
-      assets,
-      relations: assets.flatMap((asset) => asset.relations),
-    },
-    meta: {
-      metaRevision: snapshot.value.revision,
-      subAssets: outputs,
-      sourceOverrideDescriptors: [...new Map(
-        rows.flatMap((catalogRow) => catalogRow.sourceOverrideDescriptors ?? [])
-          .map((descriptor) => [descriptor.sourceKey, descriptor] as const),
-      ).values()],
-    },
-    activeSceneReferences: deps.activeSceneReferences(),
-  };
+  return preflightInput(rows, snapshot.value.revision, outputs, deps.activeSceneReferences());
 }
 
 /** Bind canonical catalog.reconcile to the live Engine public contract; this reads no Meta. */
@@ -184,6 +323,9 @@ export function createSourceAuthoringRuntime(
   return {
     getPreflightInput: (op) => readPreflightInput(deps, op),
     metaPath: (op) => metaPathFor(sourceRow(deps.catalog(), op)),
+    validateSourceOverride: (op) => validateMeshMaterialSlotOverride(deps.catalog(), op),
+    ...(deps.structuredOperations === undefined ? {} : { structuredOperations: deps.structuredOperations }),
+    ...(deps.executeStructured === undefined ? {} : { executeStructured: deps.executeStructured }),
     rebuild: async ({ op, signal }) => {
       const guid = (op as { readonly guid: string }).guid;
       const cooked = await deps.triggerCook(guid, signal);

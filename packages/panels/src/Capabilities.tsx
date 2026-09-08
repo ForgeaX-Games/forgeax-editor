@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   DIAGNOSTICS_SCHEMA_VERSION,
   dispatchActiveEditorOperation,
+  gateway,
   getViewportRuntimeClientSnapshot,
   listComponentSchemas,
   queryViewportRuntimeProjection,
@@ -317,7 +318,7 @@ function EngineExecutionPanel({ report }: { readonly report: ExecutionReport | u
 // getComponentSchema. Showing it makes the editor's vocabulary legible: every
 // component + field a human or AI can author. Read-only.
 export function CapabilitiesPanel() {
-  const schemas = listComponentSchemas();
+  const schemas = listComponentSchemas(gateway.activeWorld);
   const runtime = useRuntimeCapabilitiesProjection();
   return (
     <div className="panel" data-testid="panel-capabilities">

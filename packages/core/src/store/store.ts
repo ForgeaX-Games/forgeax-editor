@@ -148,6 +148,7 @@ export {
   configureEditorPageNavigation,
   getActiveEditorAsset,
   openEditorAssetPage,
+  subscribeActiveEditorAsset,
   useActiveEditorAsset,
 } from './page-navigation';
 export { registerAssetSelectAllHandler, triggerAssetSelectAll } from './asset-select-all';

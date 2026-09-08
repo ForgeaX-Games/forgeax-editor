@@ -122,7 +122,7 @@ export interface CameraOp {
 
 export interface CameraOps {
   readonly entries: readonly CameraOp[];
-  /** Run one op against this table only — no ledger entry, no global registry. */
+  /** Run one op against this table only — no ledger entry or shared catalog. */
   run(op: { kind: string }): CameraOpResult | undefined;
 }
 

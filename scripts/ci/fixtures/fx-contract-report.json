@@ -20,5 +20,49 @@
     "dirtyWorktree": "commit or stash changes before executing a local CI profile",
     "missingSetup": "run bun fx setup before executing engine-backed checks",
     "unsafeBoundary": "stop when trusted workflow admission cannot be proven"
+  },
+  "baselineInput": {
+    "schemaVersion": "forgeax-ci-baseline/v2",
+    "attemptProvenance": {
+      "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runId": 123456,
+      "runAttempt": 2,
+      "topologyId": "topology-ci-v2",
+      "graphDigest": "sha256:graph-ci-v2",
+      "rosterKey": "[build,smoke-play]",
+      "workflow": {"file": ".github/workflows/ci.yml", "name": "Editor CI"}
+    },
+    "criticalPath": {
+      "status": "no-claim",
+      "members": [],
+      "totalSeconds": null,
+      "noClaim": {"code": "topology-not-admitted", "expected": "accepted topology", "observed": "missing live packet", "hint": "Collect the exact run attempt packet."}
+    },
+    "requiredContexts": {
+      "status": "no-claim",
+      "contexts": [],
+      "noClaim": {"code": "required-contexts-unavailable", "expected": "live ruleset", "observed": "missing live packet", "hint": "Collect the current ruleset snapshot."}
+    },
+    "costFacts": {
+      "status": "unknown",
+      "archiveBytes": null,
+      "expandedInputBytes": {"status": "unknown"},
+      "expandedOutputBytes": {"status": "unknown"},
+      "cache": {"status": "unknown"}
+    },
+    "readiness": {
+      "status": "no-claim",
+      "delaySeconds": null,
+      "noClaim": {"code": "readiness-missing-side", "expected": "producer and consumer observations", "observed": "missing packet", "hint": "Collect both sides from the same attempt."}
+    },
+    "budgetClaim": null,
+    "noClaim": [{
+      "code": "budget-population-insufficient",
+      "expected": "at least 20 successful exact stable-roster samples",
+      "observed": 0,
+      "hint": "Collect independent successful attempts before claiming a budget.",
+      "affectedProvenance": null
+    }],
+    "rawPacket": {"available": false, "path": null}
   }
 }

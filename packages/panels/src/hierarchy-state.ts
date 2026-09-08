@@ -10,10 +10,12 @@ import {
   Visibility,
   worldComponentNames,
   worldEntityHandles,
+  type EditorWorldProjection,
   type EntityHandle,
   type RuntimeUiGraph,
 } from '@forgeax/editor-core';
 import { ChildOf, Children, Name } from '@forgeax/engine-scene';
+import { componentId } from '@forgeax/engine-ecs/internal';
 
 export const HIERARCHY_SCENE_FOLDER_ID = -1 as EntityHandle;
 /** Virtual folder for editorWorld chrome (orbit camera). Not an authored entity. */
@@ -66,6 +68,7 @@ export interface HierarchyStructureProjection {
 export interface HierarchyRuntimeProjection {
   readonly structure: HierarchyStructureProjection;
   readonly selectionIds: readonly EntityHandle[];
+  readonly editorWorld?: EditorWorldProjection;
 }
 
 export interface HierarchyRuntimeAccess {
@@ -127,7 +130,7 @@ const HIERARCHY_COMPONENTS = [Name, Visibility, ChildOf, Children] as const;
 function componentMutationEpochs(world: object): readonly number[] | undefined {
   const readEpoch = (world as { _getComponentMutationEpoch?: unknown })._getComponentMutationEpoch;
   if (typeof readEpoch !== 'function') return undefined;
-  return HIERARCHY_COMPONENTS.map((component) => Number(readEpoch.call(world, component.id)));
+  return HIERARCHY_COMPONENTS.map((component) => Number(readEpoch.call(world, componentId(component))));
 }
 
 function sameHierarchyRows(
@@ -468,9 +471,15 @@ export function resetHierarchyViewState(): void {
 
 export function toggleHierarchyShowEditorWorld(): void {
   const showEditorWorld = !snapshot.showEditorWorld;
+  const collapsed = new Set(snapshot.collapsed);
+  if (showEditorWorld) {
+    collapsed.delete(HIERARCHY_EDITOR_FOLDER_ID);
+  }
+  saveCollapsed(collapsed);
   nextSnapshot({
     ...snapshot,
     showEditorWorld,
+    collapsed,
     editorInspectionId: showEditorWorld ? snapshot.editorInspectionId : null,
   });
 }
@@ -559,14 +568,16 @@ export function revealHierarchyEntity(id: EntityHandle): void {
  *  name so Camera/Light/… lead ahead of arbitrary components. */
 export function getHierarchyFilterOptions(): readonly HierarchyFilterOption[] {
   const world = gateway.activeWorld;
+  // Studio teardown intentionally clears doc.world before the next game's
+  // createApp injects its World. Component reflection is World-local, so the
+  // filter control must stay empty during that short cross-game realm gap.
+  if (world == null) return [];
   const counts = new Map<string, number>();
-  if (world) {
-    // Structural name index (zero Error) instead of per-entity entComponents probe.
-    for (const names of worldComponentNames(world).values()) {
-      for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
+  // Structural name index (zero Error) instead of per-entity entComponents probe.
+  for (const names of worldComponentNames(world).values()) {
+    for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  return listComponentSchemas()
+  return listComponentSchemas(world)
     .map((schema) => schema.name)
     .sort(compareComponentNames)
     .map((id) => ({ id, label: id, count: counts.get(id) ?? 0 }));

@@ -66,6 +66,8 @@ export type SourceFileAbsenceResult =
   | { ok: true; absent: boolean }
   | { ok: false; error: CommandError };
 
+export type SourceFilePresenceResult = AssetIoResult<boolean>;
+
 export interface AssetIoError {
   readonly kind: 'http' | 'network';
   readonly hint: string;
@@ -198,6 +200,28 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
  * has to route around — the same fire-and-forget cache contract destroyAsset /
  * restoreAsset already rely on for their snapshots.
  */
+
+/** Transient import-route failures that settle once the pack watcher finishes indexing. */
+export function isRetryableCookTriggerFailure(
+  status: number,
+  body: { readonly error?: string; readonly hint?: string; readonly reason?: string; readonly code?: string },
+): boolean {
+  const error = body.error ?? '';
+  const hint = body.hint ?? body.reason ?? '';
+  const code = body.code ?? '';
+  if (status === 404 && (error === 'meta-not-found' || hint.includes('no source declares this GUID'))) {
+    return true;
+  }
+  if (status === 409 && error.startsWith('runtime-scope')) return true;
+  if (status === 410 && error.startsWith('runtime-scope-generation')) return true;
+  if (status === 503 && error === 'runtime-scope-unavailable') return true;
+  if (status === 422 && (code === 'stale-generation' || code === 'route-failed')) return true;
+  return false;
+}
+
+function isAbortSignalActive(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
 
 /**
  * The sole legal path for asset/pack writes outside of document appliers
@@ -362,6 +386,66 @@ export class AssetIOFacade {
           hint: `source file delete failed for ${resolvedPath}: ${(err as Error)?.message ?? String(err)}`,
           retryable: true,
           recoveryActions: ['operation.retry'],
+        },
+      };
+    }
+  }
+
+  /** Probe one source target before an import transaction writes anything. */
+  async probeSourceFile(resolvedPath: string): Promise<SourceFilePresenceResult> {
+    recordAssetLeaf('assetIO.probeSourceFile');
+    try {
+      const response = await fetch(`/api/files?path=${encodeURIComponent(resolvedPath)}&optional=1`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: {
+            kind: 'http',
+            status: response.status,
+            hint: `source target probe failed for ${resolvedPath} (HTTP ${response.status})`,
+          },
+        };
+      }
+      const body = await response.json().catch(() => ({})) as { exists?: unknown };
+      return { ok: true, value: body.exists !== false };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          kind: 'network',
+          hint: `source target probe failed for ${resolvedPath}: ${(err as Error)?.message ?? String(err)}`,
+        },
+      };
+    }
+  }
+
+  /** Atomically promote a staged source through the platform rename endpoint. */
+  async moveSourceFile(fromPath: string, toPath: string): Promise<AssetIoResult> {
+    recordAssetLeaf('assetIO.moveSourceFile');
+    try {
+      const response = await fetch('/api/files/rename', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from: fromPath, to: toPath }),
+      });
+      return response.ok
+        ? { ok: true, value: undefined }
+        : {
+          ok: false,
+          error: {
+            kind: 'http',
+            status: response.status,
+            hint: `source promotion failed (${fromPath} -> ${toPath}, HTTP ${response.status})`,
+          },
+        };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          kind: 'network',
+          hint: `source promotion network error (${fromPath} -> ${toPath}): ${(err as Error)?.message ?? String(err)}`,
         },
       };
     }
@@ -667,7 +751,11 @@ export class AssetIOFacade {
    *  The host binding supplies the only valid generation-scoped import route.
    *  Returns a structured success/failure result so the executor preserves the
    *  first decisive boundary instead of collapsing it into a generic error. */
-  async triggerCook(guid: string, signal?: AbortSignal): Promise<AssetIoResult> {
+  async triggerCook(
+    guid: string,
+    signal?: AbortSignal,
+    mode: 'rebuild' | 'cold-cook' = 'rebuild',
+  ): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.triggerCook');
     console.info('[import-diag] triggerCook', { guid });
     const importUrlBase = this.runtimeBinding?.importUrlBase;
@@ -676,21 +764,44 @@ export class AssetIOFacade {
       console.warn('[import-diag] triggerCook FAILED', { guid, reason: hint });
       return { ok: false, error: { kind: 'network', hint } };
     }
-    try {
-      const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}`;
-      const res = await fetch(url, { method: 'POST', signal });
-      console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: res.ok });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string; reason?: string; hint?: string };
-        const reason = body.reason ?? body.hint ?? `cook failed (${res.status})`;
-        console.warn('[import-diag] triggerCook FAILED', { guid, reason, body });
-        return { ok: false, error: { kind: 'http', status: res.status, hint: reason } };
+    const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}`;
+    const maxAttempts = 16;
+    const baseDelayMs = 100;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (isAbortSignalActive(signal)) {
+        return { ok: false, error: { kind: 'network', hint: 'triggerCook aborted before cook completed' } };
       }
-      return { ok: true, value: undefined };
-    } catch (err) {
-      console.error('[import-diag] triggerCook THREW', { guid }, err);
-      return { ok: false, error: { kind: 'network', hint: `triggerCook network error: ${(err as Error)?.message ?? String(err)}` } };
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'x-forgeax-import-mode': mode },
+          signal,
+        });
+        console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: res.ok, attempt });
+        if (res.ok) return { ok: true, value: undefined };
+
+        const body = await res.json().catch(() => ({})) as {
+          error?: string;
+          reason?: string;
+          hint?: string;
+          code?: string;
+        };
+        const reason = body.reason ?? body.hint ?? body.error ?? `cook failed (${res.status})`;
+        if (isRetryableCookTriggerFailure(res.status, body) && attempt < maxAttempts - 1) {
+          await new Promise<void>((resolve) => { setTimeout(resolve, baseDelayMs * (attempt + 1)); });
+          continue;
+        }
+        console.warn('[import-diag] triggerCook FAILED', { guid, reason, body, attempt });
+        return { ok: false, error: { kind: 'http', status: res.status, hint: String(reason) } };
+      } catch (err) {
+        if (isAbortSignalActive(signal)) {
+          return { ok: false, error: { kind: 'network', hint: 'triggerCook aborted before cook completed' } };
+        }
+        console.error('[import-diag] triggerCook THREW', { guid, attempt }, err);
+        return { ok: false, error: { kind: 'network', hint: `triggerCook network error: ${err instanceof Error ? err.message : String(err)}` } };
+      }
     }
+    return { ok: false, error: { kind: 'http', status: 404, hint: 'cook trigger timed out waiting for the catalog to accept the imported source' } };
   }
 
   /** Read raw source bytes from disk (for cook when no in-memory File exists).

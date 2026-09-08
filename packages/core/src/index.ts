@@ -72,8 +72,19 @@ export type {
   OperationRun,
   SessionApplier,
   SessionApplierMeta,
+  ThinAuthoringRunRequest,
+  ThinGatewayRunPort,
 } from './public/gateway';
-export type { GameplayIdentity } from './public/runtime';
+export type {
+  VersionControlGraph,
+  VersionControlOperationId,
+  VersionControlSnapshot,
+} from './public/gateway';
+export type {
+  GameplayIdentity,
+  GameplayOperationRequest,
+  GameplayOperationResult,
+} from './public/runtime';
 export type {
   AssetBrowserAsset,
   AssetBrowserCatalogRelation,
@@ -85,6 +96,7 @@ export type {
   AssetMutationOperation,
   AssetMutationRequest,
   AssetPreflightResult,
+  FbxDependencyCandidate,
   AssetWorkspaceSnapshot,
   DragAssetRef,
   ImportFileResult,
@@ -95,8 +107,30 @@ export type {
   ImportSubAsset,
   PackAsset,
   SceneActivationDescriptor,
+  SourceAuthoringOperationDescriptor,
+  SourceAuthoringRuntimeResult,
+  ScriptablePackDependencyProjection,
+  ScriptablePackDependencyStatus,
+  ScriptablePackEvidenceUsage,
+  ScriptablePackExternalEvidence,
+  ScriptablePackOutputReadModel,
+  ScriptablePackReadModel,
+  ScriptablePackReadModelFailure,
+  ScriptablePackReadModelInput,
+  ScriptablePackReadModelStatus,
+  ScriptablePackSourceReadModel,
+  ScriptablePackRecoveryAction,
+  ScriptablePackRecoveryInput,
+  ScriptablePackRecoveryPlan,
+  SourceAuthoringOperationManifestEntry,
   SourceAuthoringRuntime,
   SourceMutationPreflightInput,
+} from './public/assets';
+export {
+  projectScriptablePackCatalog,
+  projectScriptablePackReadModel,
+  sourceAuthoringOperationManifest,
+  SCRIPTABLE_PACK_READ_MODEL_SCHEMA,
 } from './public/assets';
 export { queryCompatibleAssetCatalog } from './assets/compatible-asset-catalog';
 export type {
@@ -104,6 +138,10 @@ export type {
   CompatibleAssetCatalogResult,
   CompatibleAssetCatalogRow,
 } from './assets/compatible-asset-catalog';
+export {
+  planScriptablePackRecovery,
+  recoveryActionsForScriptablePackError,
+} from './session/scriptable-pack-ops';
 
 // ── Eval channel (dev-accessible AI eval) ──
 // Consumed by edit-runtime to mount on globalThis.__forgeaxEval.
@@ -118,6 +156,14 @@ export type {
   GameReadDescriptor,
   GameReadRegistration,
 } from './io/game-projection';
+export type {
+  GameplayGateway,
+  RemoteGameplayDescriptors,
+  RemoteGameplayRequest,
+  RemoteGameplayResult,
+  RemoteGameplayTransport,
+} from './io/gameplay-operations';
+export { createRemoteGameplayGateway } from './io/gameplay-operations';
 
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
@@ -199,7 +245,8 @@ export {
   subscribeViewportRuntimeClient,
   waitViewportRuntimeOperationRun,
 } from './io/viewport-runtime-client';
-export { dispatchActiveEditorOperation } from './store/active-operation';
+export { dispatchActiveEditorOperation, dispatchAndWaitActiveEditorOperation } from './store/active-operation';
+export type { ActiveOperationResult } from './store/active-operation';
 export type {
   ViewportRuntimeClientSnapshot,
   ViewportRuntimeClientStatus,
@@ -343,7 +390,7 @@ export {
   FACING_PIVOT_NAME,
 } from './scene/skin-joints';
 export type { SkinJoint, SkinSocket } from './scene/skin-joints';
-// socket-calibration M2 (doc §3.6 数据导出): derived JSON projection of the
+// socket-calibration M2 (doc section 3.6 data export): derived JSON projection of the
 // authored socket + facing state — a read-only pure-numeric view of the scene
 // for one-click copy into external tools (scene-pack stays the SSOT).
 export { summarizeCalibration } from './scene/calibration-projection';
@@ -394,6 +441,17 @@ export type { AssetChatRef, MeshStatsWire } from './io/cross-panel-types';
 
 // ── Panel bridge (typed in-process event bus) ──
 export { panelBridge } from './io/panel-bridge';
+export {
+  createAuthoringToolClientTransport,
+  createProjectAuthoringGatewayProjection,
+} from './io/authoring-tool-client';
+export type {
+  AuthoringOperationDescriptor,
+  AuthoringRunRequest,
+  AuthoringRunResult,
+  AuthoringToolClientTransport,
+  AuthoringTransportError,
+} from './io/authoring-tool-client';
 export type { PanelBridgeEvents, EditorRefPayload } from './io/panel-bridge';
 export { installInterfaceBridge } from './io/interface-bridge';
 export type { InterfaceBridgeHandlers } from './io/interface-bridge';
@@ -496,6 +554,7 @@ export {
   clearMaterialPreviewParams,
   getMaterialPreviewParams,
   subscribeMaterialPreviewParams,
+  resolveMaterialPreviewDisplayValues,
 } from './assets/material-preview-staging';
 export {
   parseShaderParamSchemaIndex,
@@ -509,6 +568,7 @@ export type {
   MaterialParamDescriptor,
   MaterialParamRow,
   MaterialParamRowKind,
+  MaterialPublicationInspection,
   ShaderParamSchemaIndex,
 } from './assets/material-param-schema';
 export {
@@ -527,6 +587,20 @@ export {
 } from './assets/mi-staging';
 export type { MiStagingEntry } from './assets/mi-staging';
 export {
+  subscribeMaterialStaging,
+  getMaterialStaging,
+  isMaterialStagingDirty,
+  listDirtyMaterialStagingGuids,
+  openMaterialStaging,
+  updateMaterialStaging,
+  patchMaterialStagingParam,
+  resetMaterialStagingParam,
+  commitMaterialStaging,
+  discardMaterialStaging,
+  closeMaterialStaging,
+} from './assets/material-staging';
+export type { MaterialStagingEntry, MaterialStagingPayload } from './assets/material-staging';
+export {
   registerActivePageSaveHandler,
   trySaveActivePage,
 } from './assets/active-page-save';
@@ -544,7 +618,7 @@ export {
 export type { VisualQualityPreset } from './session/visual-quality';
 
 // ── Manifest (SSOT for panel IDs) ──
-export { EDITOR_PANELS } from './manifest';
+export { EDITOR_PANELS, EDITOR_PANEL_TITLES } from './manifest';
 export type { EditorPanelId } from './manifest';
 
 // ── Store (gateway singleton — gateway, selection, scene persistence) ──
@@ -627,6 +701,7 @@ export {
   configureEditorPageNavigation,
   getActiveEditorAsset,
   openEditorAssetPage,
+  subscribeActiveEditorAsset,
   useActiveEditorAsset,
 } from './store/store';
 export type { EditorPageNavigation } from './store/page-navigation';
@@ -744,7 +819,16 @@ export {
 export type { PathResolver } from './util/path-resolver';
 
 // ── Material pack-path clamping (ensure authoring under assets/) ──
-export { resolveMaterialCreateGameRelDir, clampMaterialPackPath } from './util/material-pack-path';
+export { resolveMaterialCreateGameRelDir, clampMaterialPackPath, isUnderAssetsDir } from './util/material-pack-path';
+export {
+  CATALOG_ROOT_REQUIRED_KINDS,
+  DEFAULT_LOCAL_CATALOG_ROOTS,
+  isUnderCatalogRoot,
+  kindRequiresCatalogRoot,
+  normalizeCatalogPath,
+  resolveCatalogAuthoringDir,
+} from './util/catalog-authoring-path';
+export type { CatalogRootRequiredKind } from './util/catalog-authoring-path';
 
 // ── Run conditions (`and` combinator for RunCondition-shaped predicates) ──
 export { and } from './session/run-conditions';

@@ -10,6 +10,7 @@ import {
   type CatalogDiagnostic,
   type CatalogLifecycle,
   type CatalogProjection,
+  type CatalogSubject,
 } from '@forgeax/engine-types';
 import { catalogStoragePath, resolveGamePath } from '@forgeax/editor-core';
 import type { CBAsset, CBFileFamily, CBViewItem } from './types';
@@ -53,6 +54,7 @@ export interface RegistryCatalogEntry {
   refs?: readonly string[];
   sourcePath?: string;
   sourceKey?: string;
+  subject?: CatalogSubject;
   revision?: string;
   metaRevision?: string;
   lifecycle?: CatalogLifecycle;
@@ -168,6 +170,7 @@ export function resolveCopyPath(path: string): string {
 export function fileFamilyOf(name: string): CBFileFamily {
   const lower = name.toLowerCase();
   if (lower.endsWith('.meta.json')) return 'meta';
+  if (lower.endsWith('.pack.ts')) return 'pack';
   if (lower.endsWith('.pack.json')) return lower.includes('scene') ? 'scene' : 'pack';
   if (lower.endsWith('.scene.json') || lower === 'scene.json') return 'scene';
   if (lower.endsWith('.colliders.json')) return 'data';
@@ -183,19 +186,43 @@ export function fileFamilyOf(name: string): CBFileFamily {
 }
 
 /**
- * Family for a disk file that may carry catalog assets. Scene identity follows
- * the engine SSOT — a pack is a scene iff it holds an `assets[].kind === 'scene'`
- * (same rule as `findAllScenePacks`) — not the filename heuristic. This lets any
- * `*.pack.json` scene (e.g. `scenes/level1.pack.json`) classify as `scene`
- * regardless of its stem, so the filter axis, context menu and icon all agree
- * with what the engine actually treats as a scene.
+ * Family for a disk file that may carry catalog assets. Authored `*.pack.json`
+ * scene identity follows the engine SSOT (`assets[].kind === 'scene'`), but a
+ * `*.pack.ts` remains a ScriptablePack source regardless of its output kinds.
+ * The latter is an authoring capability, not a single produced asset; promoting
+ * it to Scene would hide the source-level inspect/rebuild/cold-cook operations.
  */
+/**
+ * A resource group = a source file that owns MORE THAN ONE catalog member.
+ * Grouping is decided purely by the parent→child DATA relationship (the members
+ * a file's `sourcePath` maps to), NOT by the file extension/family or the
+ * producer `subject`: a glb/fbx that unpacked into mesh/material/texture and an
+ * authored `.pack.json` holding several particle-effects are BOTH groups — each
+ * has multiple sub-assets extracted under it.
+ *
+ * A single member is just one asset, not a group, so `assetCount <= 1` never
+ * folds.
+ */
+export function isResourceGroup(assetCount: number): boolean {
+  return assetCount > 1;
+}
+
 export function fileFamilyOfWithAssets(
   name: string,
   assets: readonly { kind: string }[],
 ): CBFileFamily {
-  if (assets.some((a) => a.kind === 'scene')) return 'scene';
-  return fileFamilyOf(name);
+  // ScriptablePack source (`*.pack.ts`) is an authoring capability, not a single
+  // produced asset — it keeps the `pack` family (and its inspect/rebuild/cold-cook
+  // actions) even when it emits a scene asset. Return early, BEFORE the scene
+  // promotion below, so a procedural scene pack is never flattened to `scene`.
+  if (name.toLowerCase().endsWith('.pack.ts')) return 'pack';
+  const byName = fileFamilyOf(name);
+  // Scene identity is only derived from assets for CONTENT-typed pack files
+  // (`*.pack.json`). A concrete source file keeps its extension family: a `.glb`
+  // imports a glTF `scene` sub-asset but is a `model`, not a scene. Without this
+  // `byName === 'pack'` guard every glb/fbx was misclassified as `scene`.
+  if (byName === 'pack' && assets.some((a) => a.kind === 'scene')) return 'scene';
+  return byName;
 }
 
 const FILE_KIND_FALLBACK_LABELS: Record<CBFileFamily, string> = {
@@ -291,7 +318,7 @@ export function menuIconForId(id: string): string {
 
 export function fileSpecificMenuItems(
   t: TFunction,
-  file: { family: CBFileFamily },
+  file: { family: CBFileFamily; name?: string },
   firstAsset?: Pick<CBAsset, 'sourcePath'>,
   sceneProjection?: { sceneGuid?: string; defaultSceneGuid: string | null },
 ): { id: string; label: string; icon: string; disabled?: boolean }[] {
@@ -317,7 +344,13 @@ export function fileSpecificMenuItems(
     case 'pack':
       return [
         { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
-        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined },
+        ...(file.name?.toLowerCase().endsWith('.pack.ts')
+          ? [
+              { id: 'asset-source-inspect', label: 'Inspect Asset Source', icon: 'search' },
+              { id: 'asset-source-rebuild', label: 'Rebuild Asset Source', icon: 'refresh-cw' },
+              { id: 'asset-source-cold-cook', label: 'Cold Cook Asset Source', icon: 'flame' },
+            ]
+          : [{ id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined }]),
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'meta':
@@ -356,7 +389,8 @@ export function fileSpecificMenuItems(
 
 export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): CBAsset {
   // packPath is the CRUD target on disk — NOT the runtime load URL. For an
-  // internal `.pack.json` asset the CRUD target is the pack's SOURCE path. In a
+  // internal `.pack.json` or ScriptablePack `.pack.ts` asset the CRUD target is
+  // the pack's SOURCE path. In a
   // standalone editor packageUrl and sourcePath coincide (both game-relative), but
   // in a host that serves assets through a preview route (Studio) packageUrl is a
   // serve URL under the host's preview games directory (e.g.
@@ -368,9 +402,9 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
   // (FBX/GLB/HDR/audio/font) packageUrl points at a DDC artefact
   // (`*.{guid}.bin` or `/__forgeax-ddc/{guid}.pack.json`) that has no stable
   // mapping back to the source. An authored pack can also be projected through
-  // that DDC URL in dev, so sourcePath owns the distinction: a `.pack.json`
-  // source remains a pack CRUD target; an imported source uses its `.meta.json`
-  // sidecar.
+  // that DDC URL in dev, so sourcePath owns the distinction: a `.pack.json` or
+  // `.pack.ts` source remains a pack CRUD target; an imported source uses its
+  // `.meta.json` sidecar.
   const packPath = catalogStoragePath(e) ?? e.packageUrl;
   const lastKnownGood = e.lastKnownGood ?? e.projection?.lastKnownGood;
   return {
@@ -382,6 +416,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
     packPath,
     ...(e.sourcePath ? { sourcePath: e.sourcePath } : {}),
     ...(e.sourceKey ? { sourceKey: e.sourceKey } : {}),
+    ...(e.subject ? { subject: e.subject } : {}),
     ...(e.revision ? { revision: e.revision } : {}),
     ...(e.metaRevision ? { metaRevision: e.metaRevision } : {}),
     ...(e.lifecycle ? { lifecycle: e.lifecycle } : {}),

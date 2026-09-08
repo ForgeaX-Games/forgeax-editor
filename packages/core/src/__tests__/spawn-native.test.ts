@@ -31,6 +31,7 @@ import {
 } from '@forgeax/engine-assets-runtime';
 import { applyCommand, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ import type { EditorOp, EditSession } from '../types';
 // → engine handle read via entHandle (doc.entities deleted).
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld([MeshFilter, MeshRenderer, PointLight, DirectionalLight, SpotLight]);
   return session;
 }
 

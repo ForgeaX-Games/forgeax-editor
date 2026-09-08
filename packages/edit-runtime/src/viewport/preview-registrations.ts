@@ -12,14 +12,17 @@
 import {
   registerMaterialInstancePreview,
   registerMeshPreview,
+  registerTexturePreview,
   registerVfxPreview,
 } from '@forgeax/editor-panels';
 import { MaterialPreviewViewport } from './MaterialPreviewViewport';
 import { MeshPreviewViewport } from './MeshPreviewViewport';
+import { TexturePreviewViewport } from './TexturePreviewViewport';
 import { VfxPreviewViewport } from './VfxPreviewViewport';
 
 export function registerEditorPreviewViewports(): void {
   registerMaterialInstancePreview(MaterialPreviewViewport);
   registerMeshPreview(MeshPreviewViewport);
+  registerTexturePreview(TexturePreviewViewport);
   registerVfxPreview(VfxPreviewViewport);
 }

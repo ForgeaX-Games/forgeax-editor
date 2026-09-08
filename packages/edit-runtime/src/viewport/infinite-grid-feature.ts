@@ -1,12 +1,10 @@
 import {
-  RenderFeaturePreparationFailedError,
-  RenderFeaturePreparedStateMismatchError,
   type RenderFeature,
-  type RenderFeaturePreparedRef,
-  type RenderFeatureTargetHandle,
-  type Renderer,
+  type RenderFeaturePlan,
+  type RenderFeaturePlanContext,
 } from '@forgeax/engine-render';
-import { err, ok, type Result } from '@forgeax/engine-types';
+import { ok } from '@forgeax/engine-types';
+import './shaders/infinite-grid.wgsl';
 
 export const INFINITE_GRID_FEATURE_ID = 'editor.infinite-grid';
 export const INFINITE_GRID_PASS_NAME = 'editor.infinite-grid';
@@ -146,183 +144,80 @@ interface InfiniteGridFeatureOptions {
   readonly isVisible?: () => boolean;
 }
 
-function unavailable(
-  operation: string,
-  resourceKind: 'pipeline' | 'bindings' | 'attachment',
-  resourceName: string,
-  reason = 'required scene target is unavailable',
-): Result<never, import('@forgeax/engine-render').RenderError> {
-  return err(
-    new RenderFeaturePreparationFailedError(
-      INFINITE_GRID_FEATURE_ID,
-      0,
-      operation,
-      resourceKind,
-      resourceName,
-      reason,
-      'next-frame',
-    ),
-  );
-}
-
-function findTarget(
-  targets: readonly RenderFeatureTargetHandle[],
-  kind: RenderFeatureTargetHandle['kind'],
-): RenderFeatureTargetHandle | undefined {
-  return targets.find((target) => target.kind === kind);
-}
-
-function targetSignature(
-  colorTarget: RenderFeatureTargetHandle,
-  depthTarget: RenderFeatureTargetHandle,
-): string {
-  return [colorTarget, depthTarget]
-    .map((target) => `${target.kind}:${target.resource}:${target.format}:${target.sampleCount}`)
-    .join('|');
+function createInfiniteGridPlan(context: RenderFeaturePlanContext): RenderFeaturePlan {
+  const colorTarget = context.targets.find((target) => target.name === 'color');
+  const depthTarget = context.targets.find((target) => target.name === 'depth');
+  const program = 'editor.infinite-grid.program';
+  const bindings = 'editor.infinite-grid.bindings';
+  return {
+    resources: [
+      {
+        kind: 'graphics-program',
+        name: program,
+        program: {
+          shader: INFINITE_GRID_SHADER_ID,
+          vertexLayout: 'none',
+          colorFormats: [colorTarget?.format ?? 'rgba16float'],
+          depthFormat: depthTarget?.format ?? 'depth24plus',
+          sampleCount: colorTarget?.sampleCount ?? 1,
+          topology: 'triangle-list',
+          renderState: {
+            cullMode: 'none',
+            // Keep the grid behind any geometry that owns the same or a nearer
+            // depth. The grid is viewport chrome, not an overlay that should
+            // win a depth tie against authored geometry.
+            depthCompare: 'less',
+            depthWriteEnabled: false,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          },
+        },
+      },
+      {
+        kind: 'graphics-bindings',
+        name: bindings,
+        program,
+        // The shader imports the shared `forgeax_view` UBO and does not declare
+        // a depth-texture binding. The depth target remains an attachment (and
+        // is therefore part of graph topology), but must not be projected as a
+        // group-0 resource; doing so asks the graph resolver to bind a texture
+        // view against `pbr-view-bgl` and invalidates the first frame.
+        values: { group: 0 },
+      },
+    ],
+    passes: [
+      {
+        kind: 'raster',
+        name: INFINITE_GRID_PASS_NAME,
+        colorAttachments: [{ target: 'color', loadOp: 'load', storeOp: 'store' }],
+        depthStencilAttachment: {
+          target: 'depth',
+          depthLoadOp: 'load',
+          depthStoreOp: 'store',
+        },
+        draws: [
+          {
+            program,
+            bindings: [bindings],
+            vertexData: [],
+            vertexLayout: 'none',
+            draw: { kind: 'draw', vertexCount: 3, instanceCount: 1 },
+          },
+        ],
+      },
+    ],
+  };
 }
 
 export function createInfiniteGridFeature(
   options: InfiniteGridFeatureOptions = {},
 ): RenderFeature<InfiniteGridFrame> {
-  let pipeline: RenderFeaturePreparedRef<'pipeline'> | undefined;
-  let bindings: RenderFeaturePreparedRef<'bindings'> | undefined;
-  let colorTarget: RenderFeatureTargetHandle | undefined;
-  let depthTarget: RenderFeatureTargetHandle | undefined;
-  let preparedTargetSignature: string | undefined;
-
-  const clearPreparedState = (): void => {
-    pipeline = undefined;
-    bindings = undefined;
-    colorTarget = undefined;
-    depthTarget = undefined;
-    preparedTargetSignature = undefined;
-  };
-
   return {
     identity: INFINITE_GRID_FEATURE_ID,
     requiredMaterialShaders: [INFINITE_GRID_SHADER_ID],
     extract: () => ok({ visible: options.isVisible?.() ?? true }),
-    prepare: (data, context) => {
-      clearPreparedState();
-      if (!data.visible) return ok(undefined);
-
-      const nextColorTarget = findTarget(context.targets, 'scene-color');
-      const nextDepthTarget = findTarget(context.targets, 'scene-depth');
-      if (nextColorTarget === undefined) return unavailable('find-scene-color', 'attachment', 'scene-color');
-      if (nextDepthTarget === undefined) return unavailable('find-scene-depth', 'attachment', 'scene-depth');
-      if (nextColorTarget.sampleCount !== nextDepthTarget.sampleCount) {
-        return unavailable(
-          'validate-scene-targets',
-          'attachment',
-          'scene-depth',
-          'scene color/depth sample count mismatch',
-        );
-      }
-      const preparedPipeline = context.graphics.preparePipeline('infinite-grid-pipeline', {
-        shader: INFINITE_GRID_SHADER_ID,
-        vertexLayout: 'none',
-        colorFormats: [nextColorTarget.format],
-        depthFormat: nextDepthTarget.format,
-        sampleCount: nextColorTarget.sampleCount,
-        topology: 'triangle-list',
-        renderState: {
-          cullMode: 'none',
-          depthCompare: 'less',
-          depthWriteEnabled: false,
-          blend: {
-            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          },
-        },
-      });
-      if (!preparedPipeline.ok) return preparedPipeline;
-      const preparedBindings = context.graphics.prepareBindings('infinite-grid-view', {
-        pipeline: preparedPipeline.value,
-        values: { group: 0, sceneDepth: nextDepthTarget },
-      });
-      if (!preparedBindings.ok) return preparedBindings;
-      pipeline = preparedPipeline.value;
-      bindings = preparedBindings.value;
-      colorTarget = nextColorTarget;
-      depthTarget = nextDepthTarget;
-      preparedTargetSignature = targetSignature(nextColorTarget, nextDepthTarget);
-      return ok(undefined);
-    },
-    contribute: (data, context) => {
-      if (!data.visible) return ok(undefined);
-      if (pipeline === undefined || bindings === undefined || colorTarget === undefined || depthTarget === undefined) {
-        return unavailable('contribute', 'pipeline', 'infinite-grid-pipeline');
-      }
-      if (pipeline.generation !== bindings.generation) {
-        return err(new RenderFeaturePreparedStateMismatchError({
-          featureIdentity: INFINITE_GRID_FEATURE_ID,
-          order: 0,
-          stage: 'contribute',
-          operation: 'validate-prepared-generation',
-          resourceKind: 'bindings',
-          reason: 'generation-mismatch',
-          expectedGeneration: pipeline.generation,
-          actualGeneration: bindings.generation,
-          recovery: 'next-frame',
-        }));
-      }
-      const activeColorTarget = findTarget(context.targets, 'scene-color');
-      const activeDepthTarget = findTarget(context.targets, 'scene-depth');
-      if (activeColorTarget === undefined || activeDepthTarget === undefined) {
-        return unavailable('contribute-targets', 'attachment', 'scene-color');
-      }
-      if (preparedTargetSignature !== targetSignature(activeColorTarget, activeDepthTarget)) {
-        return err(new RenderFeaturePreparedStateMismatchError({
-          featureIdentity: INFINITE_GRID_FEATURE_ID,
-          order: 0,
-          stage: 'contribute',
-          operation: 'validate-prepared-targets',
-          resourceKind: 'attachment',
-          reason: 'format-mismatch',
-          expectedFormat: preparedTargetSignature ?? 'prepared-targets',
-          actualFormat: targetSignature(activeColorTarget, activeDepthTarget),
-          recovery: 'next-frame',
-        }));
-      }
-      return context.staging.addGraphicsPass(INFINITE_GRID_PASS_NAME, {
-        attachments: {
-          colors: [{ resource: colorTarget, format: colorTarget.format, loadOp: 'load', storeOp: 'store' }],
-          depthStencil: {
-            resource: depthTarget,
-            format: depthTarget.format,
-            depthLoadOp: 'load',
-            depthStoreOp: 'store',
-          },
-        },
-        draws: [{
-          kind: 'draw',
-          pipeline,
-          bindings: [bindings],
-          vertexData: [],
-          vertexLayout: 'none',
-          command: { vertexCount: 3, instanceCount: 1 },
-        }],
-      });
-    },
-    recover: () => {
-      clearPreparedState();
-      return ok(undefined);
-    },
+    plan: (data, context) => ok(data.visible ? createInfiniteGridPlan(context) : { resources: [], passes: [] }),
   };
-}
-
-export async function installInfiniteGridShader(renderer: Pick<Renderer, 'shader'>): Promise<void> {
-  const artifact = await import('./shaders/infinite-grid.wgsl');
-  const source = artifact.default.wgsl;
-  const existing = renderer.shader.findMaterialArtifact(INFINITE_GRID_SHADER_ID);
-  if (existing.ok) {
-    if (existing.value.source !== source || existing.value.paramSchema.length !== 0) {
-      throw new Error(`ShaderRegistry: existing '${INFINITE_GRID_SHADER_ID}' artifact does not match the current infinite-grid shader`);
-    }
-    return;
-  }
-  renderer.shader.installMaterialArtifact(INFINITE_GRID_SHADER_ID, {
-    source,
-    paramSchema: [],
-  });
 }

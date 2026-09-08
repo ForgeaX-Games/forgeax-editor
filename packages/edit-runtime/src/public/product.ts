@@ -18,6 +18,20 @@ export type {
   ProductContractManifest,
 } from '@forgeax/editor-product';
 
+export {
+  createReferenceCreationEntry,
+  createReferenceCreationRuntime,
+  createReferenceCreationSkill,
+} from '@forgeax/editor-product';
+export type {
+  ReferenceCreationEntry,
+  ReferenceCreationEntryOptions,
+  ReferenceCreationFinalReport,
+  ReferenceCreationJournalStore,
+  ReferenceCreationNativeEntitySpec,
+  ReferenceCreationSkillDescriptor,
+} from '@forgeax/editor-product';
+
 export { createAssetWorkspace } from '@forgeax/editor-product';
 export type {
   AssetWorkspace,
@@ -144,4 +158,27 @@ export type {
   TransportResponse,
   TransportService,
   TransportServiceOptions,
+} from '@forgeax/editor-product';
+
+// Keep the renderer-owner admission contract discoverable through the root
+// @forgeax/editor/product facade consumed by Studio and browser clients.
+export {
+  RENDERER_OWNER_ADMISSION_IDENTITY_FIELDS,
+  RENDERER_OWNER_ADMISSION_MODES,
+  RENDERER_OWNER_ADMISSION_OPERATION,
+  RENDERER_OWNER_ADMISSION_OWNER,
+  RENDERER_OWNER_ADMISSION_RECOVERY,
+  RENDERER_OWNER_ADMISSION_SCHEMA,
+  createRendererOwnerAdmissionRegistration,
+  validateRendererOwnerAdmissionRequest,
+  validateRendererOwnerAdmissionResult,
+} from '@forgeax/editor-product';
+export type {
+  RendererOwnerAdmissionFailure,
+  RendererOwnerAdmissionIdentity,
+  RendererOwnerAdmissionMode,
+  RendererOwnerAdmissionObservation,
+  RendererOwnerAdmissionRequest,
+  RendererOwnerAdmissionResult,
+  RendererOwnerAdmissionValidation,
 } from '@forgeax/editor-product';

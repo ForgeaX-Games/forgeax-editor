@@ -12,6 +12,7 @@ import { World } from '@forgeax/engine-ecs';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { EngineFacade } from '../io/engine-facade';
 import { _resetSchemaCache } from '../scene/schema';
+import { applyEditorComponentMeta } from '../scene/editor-component-meta';
 import {
   clearAnimationPreviews,
   hasAnimationPreview,
@@ -21,6 +22,7 @@ import {
   restoreAnimationPreviewsOutside,
   snapshotAnimationPreview,
 } from '../session/animation-preview';
+import { createCoreTestWorld } from './fixtures/world';
 
 void AnimationPlayer;
 
@@ -45,7 +47,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   clearAnimationPreviews();
-  world = new World();
+  world = createCoreTestWorld();
+  applyEditorComponentMeta(world);
   engine = new EngineFacade(world as never);
 });
 

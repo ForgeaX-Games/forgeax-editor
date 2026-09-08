@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test';
 
-import type { CapabilityDescriptor } from '../capability';
+import {
+  capabilityGapError,
+  isCapabilityGapError,
+  type CapabilityDescriptor,
+} from '../capability';
 
 test('capability descriptors declare permission and confirmation boundaries', async () => {
   const { isCapabilityDescriptor } = await import('../capability');
@@ -37,4 +41,28 @@ test('a capability rejection keeps recovery actions separate from its message', 
   expect(error.code).toBe('permission-denied');
   expect(error.recoveryActions).toEqual(['permission.request']);
   expect(error.message).not.toContain('permission.request');
+});
+
+test('capability gaps expose stable owner recovery fields without parsing hint text', () => {
+  const error = capabilityGapError({
+    capabilityId: 'scene.createAsset',
+    capabilityGeneration: 'g0',
+    stage: 'preflight',
+    owner: '@forgeax/editor-core OperationRun/applier contract owner',
+    expected: 'request-correlated terminal OperationRun',
+    recoveryAction: 'owner.repair',
+    diagnosticId: 'q5-create-asset-terminal-run',
+  });
+
+  expect(error).toMatchObject({
+    code: 'capability-gap',
+    stage: 'preflight',
+    owner: '@forgeax/editor-core OperationRun/applier contract owner',
+    expected: 'request-correlated terminal OperationRun',
+    retryable: false,
+    recoveryAction: 'owner.repair',
+    diagnosticId: 'q5-create-asset-terminal-run',
+    capabilityGeneration: 'g0',
+  });
+  expect(isCapabilityGapError(error)).toBe(true);
 });

@@ -15,7 +15,9 @@ export const FORBIDDEN_ROOT_ENTRIES = [
 
 export function findRootLayoutViolations(rootEntries) {
   const present = new Set(rootEntries);
+  const rootExtensionOwnsSource = present.has('src') && present.has('forgeax-extension.json');
   return FORBIDDEN_ROOT_ENTRIES
+    .filter((entry) => entry !== 'src' || !rootExtensionOwnsSource)
     .filter((entry) => present.has(entry))
     .map((entry) => `${entry}: move repository-owned source, tests, types, or CI configuration under its owner`);
 }

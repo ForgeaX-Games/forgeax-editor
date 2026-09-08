@@ -1,4 +1,5 @@
 {
+  "packageManager": "bun@1.3.14",
   "name": "@forgeax/editor",
   "version": "0.1.0",
   "private": false,
@@ -61,12 +62,12 @@
     "./viewport": "./packages/edit-runtime/src/viewport/ViewportComponent.tsx",
     "./previews": "./packages/edit-runtime/src/viewport/preview-registrations.ts",
     "./viewport-runtime": "./packages/edit-runtime/src/runtime/viewport-runtime-broadcast.ts",
+    "./version-control": "./packages/edit-runtime/src/public/version-control.ts",
     "./visual-source": "./packages/edit-runtime/src/viewport/visual-source.ts",
     "./package.json": "./package.json"
   },
   "workspaces": [
     "packages/*",
-    "packages/contracts/types",
     "packages/interface/packages/*",
     "packages/engine/packages/*"
   ],
@@ -91,6 +92,7 @@
     "ci:fast": "bun fx ci --fast",
     "ci:full": "bun fx ci --full",
     "ci:contract": "bun scripts/ci/editor-ci-contract.mjs",
+    "ci:channel-align": "node packages/engine/scripts/check-ci-channel-alignment.mjs",
     "ci:prerequisite": "node scripts/ci/prerequisite-release.mjs",
     "ci:delivery": "bun scripts/ci/editor-ci-contract.mjs --delivery",
     "ci:browser-release": "bun scripts/ci/browser-release-measurement.mjs",
@@ -101,6 +103,7 @@
     "test:scripts": "bun test scripts/__tests__ scripts/ci/__tests__ scripts/lib/__tests__ apps/standalone/__tests__ skills/forgeax-editor-gateway/scripts/__tests__",
     "perf:chrome": "bun scripts/chrome-performance.mjs",
     "lint": "bun run test:scripts && bun run test:layout && node scripts/lint-no-root-docs.mjs && node scripts/lint-sync-channel-panels.mjs && node scripts/lint-no-bare-engine-shim.mjs && node scripts/lint-no-second-world.mjs && node scripts/lint-no-any-in-store.mjs && node scripts/lint-play-vag-boundary.mjs && node scripts/lint-gameplay-carrier-boundary.mjs && node scripts/lint-readme-bilingual.mjs && node scripts/lint-op-via-gateway.mjs && node scripts/lint-unique-mutator.mjs && node scripts/lint-single-keydown-router.mjs && node scripts/lint-no-ui-file-mutation.mjs && node scripts/lint-no-store-setter-sugar.mjs && node scripts/lint-wasm-before-dist.mjs && node scripts/lint-clean-preserves-wasm.mjs && node scripts/lint-no-direct-pack-crud.mjs && node scripts/lint-fx-no-studio-port.mjs",
+    "forgeax-extension": "bun scripts/forgeax-extension.ts",
     "lint:sync-channel": "node scripts/lint-sync-channel-panels.mjs",
     "lint:engine-shim": "node scripts/lint-no-bare-engine-shim.mjs",
     "lint:dep": "dependency-cruiser --output-type err-html -c scripts/ci/dependency-cruiser.cjs packages",
@@ -110,6 +113,7 @@
     "test:j5": "bun fx build --game games/sample --out /tmp/forgeax-editor-j5-ci && bun scripts/static-build-smoke.mjs /tmp/forgeax-editor-j5-ci sample host-games",
     "test:j4": "bun run test:e2e apps/standalone/e2e/__tests__/j4-runner.spec.ts",
     "test:e2e": "playwright test",
+    "test:version-control": "bun -F @forgeax/platform-io test test/files-router.test.ts test/file-backend.test.ts test/file-io.test.ts test/safe-path.test.ts test/friendly-path.test.ts test/version-control-executable.test.ts test/version-control-root.test.ts test/version-control-status.test.ts test/version-control-init.test.ts test/version-control-graph.test.ts test/version-control-recovery.test.ts test/version-control-publish.test.ts test/version-control-security.test.ts test/version-control-route.test.ts test/game-host-router.test.ts test/game-version-control.test.ts test/game-version-control-security.test.ts test/version-control-scale.test.ts && bun -F @forgeax/editor-core test && bun -F @forgeax/editor-edit-runtime test && bun -F @forgeax/interface test && bun run test:e2e apps/standalone/e2e/__tests__/version-control.spec.ts apps/standalone/e2e/__tests__/version-control-generation.spec.ts",
     "test:e2e:install": "playwright install --with-deps chromium",
     "selfcheck": "node scripts/selfcheck.mjs",
     "test:product-headless": "bun scripts/product-conformance.ts --headless",
@@ -117,14 +121,20 @@
     "test:product-evidence": "bun scripts/product-evidence-matrix.ts"
   },
   "dependencies": {
+    "@forgeax/app-shell": "0.65.1",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-edit-runtime": "workspace:*",
     "@forgeax/editor-product": "workspace:*",
     "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-devkit": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
+    "@forgeax/engine-tool-runtime": "workspace:*",
+    "@forgeax/engine-vfx": "workspace:*",
     "@forgeax/interface": "workspace:*",
     "@forgeax/platform-io": "workspace:*",
-    "@forgeax/types": "workspace:*",
+    "@forgeax/types": "^0.1.2",
     "hono": "^4.6.0",
     "lucide-react": "^0.460.0",
     "zod": "^3.25.0"
@@ -145,14 +155,21 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.3",
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cosmokit": "1.8.2",
     "autoprefixer": "10.5.4",
     "dependency-cruiser": "^17.4.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
     "tailwindcss": "3.4.19",
     "tailwindcss-animate": "1.0.7",
     "typescript": "^5.6.3",
     "vite": "^8.0.0",
     "yaml": "^2.4.2"
+  },
+  "overrides": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "vite": "8.0.10"
   }
 }

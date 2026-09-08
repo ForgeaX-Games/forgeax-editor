@@ -15,7 +15,7 @@
 //   research F-4 (webServer array + 10s expect.poll fallback)
 
 import { defineConfig } from '@playwright/test';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -25,7 +25,7 @@ import { basename, join, resolve } from 'node:path';
 const e2eHostPort = process.env.FORGEAX_E2E_PORT ?? '15290';
 const e2eEditPort = process.env.FORGEAX_E2E_EDIT_PORT ?? '15280';
 const e2eApiPort = process.env.FORGEAX_E2E_API_PORT ?? '15281';
-const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15173';
+const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15273';
 const e2eTemplateHostPort = process.env.FORGEAX_E2E_TEMPLATE_PORT ?? '15490';
 const e2eTemplateEditPort = process.env.FORGEAX_E2E_TEMPLATE_EDIT_PORT ?? '15480';
 const e2eTemplateApiPort = process.env.FORGEAX_E2E_TEMPLATE_API_PORT ?? '15481';
@@ -39,12 +39,29 @@ const e2eBridgePort = process.env.FORGEAX_E2E_BRIDGE_PORT
 const e2eTemplateBridgePort = process.env.FORGEAX_E2E_TEMPLATE_BRIDGE_PORT
   ?? deriveBridgePort(e2eTemplateHostPort, '15496');
 const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
+const e2eSpoolDir = join(process.cwd(), '.e2e-tmp');
+const e2eJsonOutput = join(e2eSpoolDir, 'editor-results.json');
+const e2eArtifactDir = join(e2eSpoolDir, 'playwright-artifacts');
 const e2eRuntimeScopeId = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? 'standalone-sample';
 const e2eRuntimeGeneration = process.env.FORGEAX_RUNTIME_GENERATION ?? '1';
+const e2eTemplateRuntimeScopeId = process.env.FORGEAX_E2E_TEMPLATE_RUNTIME_SCOPE_ID
+  ?? 'standalone-new-game-template';
+const e2eTemplateRuntimeGeneration = process.env.FORGEAX_E2E_TEMPLATE_RUNTIME_GENERATION ?? '1';
+const e2eSkipSampleStack = process.env.FORGEAX_E2E_SKIP_SAMPLE_STACK === '1';
+const e2eSkipTemplateStack = process.env.FORGEAX_E2E_SKIP_TEMPLATE_STACK === '1';
 // Save E2E must exercise real file IO without rewriting the tracked sample.
 // The copy is exact, isolated to this Playwright process, and removed only at
 // process exit; the browser still addresses it as the game slug "sample".
 const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
+// ScriptablePack sources execute in an isolated Node worker, outside Vite's
+// workspace aliases. Keep the copied game's real package imports resolvable
+// without copying or reinstalling the entire workspace dependency tree. The
+// isolated ScriptablePack worker cannot consume Vite aliases, and the root
+// node_modules intentionally contains only a hoisted subset of engine
+// packages, so point at the complete graph owned by Play Runtime. The link sits
+// at the copied workspace boundary while all authored game writes remain
+// confined to the copy.
+symlinkSync(resolve('packages/play-runtime/node_modules'), join(e2eTempRoot, 'node_modules'), 'dir');
 // Each webServer below is a real, concurrent Vite process. Vite's default
 // cache directories live beside the shared package sources, so the sample and
 // template stacks can otherwise race while writing the same optimized React /
@@ -52,6 +69,8 @@ const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
 // stack one private root; the three configs split that root by Vite role.
 const e2eSampleViteCacheRoot = join(e2eTempRoot, 'vite-cache', 'sample');
 const e2eTemplateViteCacheRoot = join(e2eTempRoot, 'vite-cache', 'template');
+const e2eSamplePlayDdcRoot = join(e2eSampleViteCacheRoot, 'play-runtime-ddc');
+const e2eTemplatePlayDdcRoot = join(e2eTemplateViteCacheRoot, 'play-runtime-ddc');
 const e2eGameDir = join(e2eTempRoot, 'sample');
 cpSync(resolve('games/sample'), e2eGameDir, {
   recursive: true,
@@ -60,7 +79,16 @@ cpSync(resolve('games/sample'), e2eGameDir, {
   // fixtures in the temp game and must start from a schema-valid baseline.
   filter: (source) => {
     const name = basename(source);
-    return !name.startsWith('diag') && !name.startsWith('_diag');
+    // The fixture root gets one explicit workspace node_modules link below.
+    // Do not copy a stale per-game install from a developer checkout: it can
+    // shadow the workspace packages that ScriptablePack's isolated worker
+    // resolves from the fixture's nearest node_modules.
+    // `.forgeax` is gitignored DDC build cache; its `v2/staging/<hash>-<uuid>/`
+    // entries are transient, so an entry removed while cpSync walks aborts the
+    // whole copy with `ENOENT … lstat …/v2/staging/…`. DDC is derived state and
+    // is rebuilt on first use, so the fixture must start without it.
+    return name !== 'node_modules' && name !== '.forgeax'
+      && !name.startsWith('diag') && !name.startsWith('_diag');
   },
 });
 // New-game template journey (docs/2026-08-06-new-game-template-journey-e2e-plan
@@ -73,7 +101,9 @@ cpSync(resolve('games/sample'), e2eGameDir, {
 const e2eTemplateGameDir = join(e2eTempRoot, 'new-game-template');
 cpSync(resolve('packages/engine/templates/game-default'), e2eTemplateGameDir, {
   recursive: true,
-  filter: (src) => basename(src) !== 'node_modules',
+  // Same two exclusions as the sample copy above: no stale per-game install,
+  // and no transient DDC staging that can vanish mid-walk.
+  filter: (src) => basename(src) !== 'node_modules' && basename(src) !== '.forgeax',
 });
 // Stage the real producer input before any fresh backend/catalog process starts.
 // J1's disposable source fixture must exist before all three webServers start:
@@ -98,7 +128,8 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
-  reporter: 'list',
+  reporter: [['json', { outputFile: e2eJsonOutput }], ['list']],
+  outputDir: e2eArtifactDir,
   timeout: 120_000,
   expect: {
     // Ten-second poll budget covers cold-start dev server + first VAG_*
@@ -112,10 +143,11 @@ export default defineConfig({
     actionTimeout: 15_000,
     baseURL: `http://127.0.0.1:${e2eHostPort}`,
     headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
+    viewport: { width: 1920, height: 1080 },
     trace: 'off',
   },
   webServer: [
-    {
+    ...(e2eSkipSampleStack ? [] : [{
       // Editor shell host on :15290 — renders <DockShell hideChatAndForge /> and
       // starts the same host + Edit Runtime + Gateway bridge as standalone.
       //
@@ -158,9 +190,10 @@ export default defineConfig({
         FORGEAX_PLAY_RUNTIME_PORT: e2eEnginePort,
         FORGEAX_GAME_DIR: e2eGameDir,
         FORGEAX_VITE_CACHE_ROOT: e2eSampleViteCacheRoot,
+        FORGEAX_DDC_PROJECT_ROOT: e2eSamplePlayDdcRoot,
         FORGEAX_GAME_ID: 'sample',
-        FORGEAX_RUNTIME_SCOPE_ID: 'e2e-sample',
-        FORGEAX_RUNTIME_GENERATION: '1',
+        FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
+        FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
         FORGEAX_GAMES_URL_PREFIX: 'host-games',
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
         FORGEAX_GAME_API_PORT: e2eApiPort,
@@ -182,8 +215,8 @@ export default defineConfig({
       url: `http://127.0.0.1:${e2eApiPort}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
-    },
-    {
+    },]),
+    ...(e2eSkipTemplateStack ? [] : [{
       // New-game template journey (.forgeax-harness/docs/2026-08-06-new-game-template-journey-e2e-plan
       // D-2): a SECOND standalone host on :15490 booted against the fresh
       // canonical-template copy — same `bun run dev:standalone` shape as webServer #1 with
@@ -201,8 +234,8 @@ export default defineConfig({
         FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
         FORGEAX_VITE_CACHE_ROOT: e2eTemplateViteCacheRoot,
         FORGEAX_BRIDGE_PORT: e2eTemplateBridgePort,
-        FORGEAX_RUNTIME_SCOPE_ID: 'standalone-new-game-template',
-        FORGEAX_RUNTIME_GENERATION: '1',
+        FORGEAX_RUNTIME_SCOPE_ID: e2eTemplateRuntimeScopeId,
+        FORGEAX_RUNTIME_GENERATION: e2eTemplateRuntimeGeneration,
         FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
       },
       url: `http://127.0.0.1:${e2eTemplateHostPort}`,
@@ -224,9 +257,10 @@ export default defineConfig({
         FORGEAX_PLAY_RUNTIME_PORT: e2eTemplateEnginePort,
         FORGEAX_GAME_DIR: e2eTemplateGameDir,
         FORGEAX_VITE_CACHE_ROOT: e2eTemplateViteCacheRoot,
+        FORGEAX_DDC_PROJECT_ROOT: e2eTemplatePlayDdcRoot,
         FORGEAX_GAME_ID: 'new-game-template',
-        FORGEAX_RUNTIME_SCOPE_ID: 'e2e-new-game-template',
-        FORGEAX_RUNTIME_GENERATION: '1',
+        FORGEAX_RUNTIME_SCOPE_ID: e2eTemplateRuntimeScopeId,
+        FORGEAX_RUNTIME_GENERATION: e2eTemplateRuntimeGeneration,
         FORGEAX_GAMES_URL_PREFIX: 'host-games',
         FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
         FORGEAX_GAME_API_PORT: e2eTemplateApiPort,
@@ -246,7 +280,7 @@ export default defineConfig({
       url: `http://127.0.0.1:${e2eTemplateApiPort}/api/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
-    },
+    },]),
   ],
   projects: [
     {

@@ -29,7 +29,8 @@ export interface PanelBridgeEvents {
     source?: 'local-op' | 'disk-watch';
     mutation?:
       | { kind: 'renamed'; guid: string; name: string }
-      | { kind: 'deleted'; guid: string };
+      | { kind: 'deleted'; guid: string }
+      | { kind: 'changed'; guid: string };
   };
   /**
    * Asset filesystem/write operation FAILED asynchronously (after the applier

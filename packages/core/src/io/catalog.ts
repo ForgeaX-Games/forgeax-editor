@@ -17,6 +17,10 @@ import type {
   CatalogReplicaSnapshot,
 } from '@forgeax/engine-assets-runtime';
 import type { CommandError, EditorOp } from '../types';
+import {
+  VERSION_CONTROL_OPERATION_IDS,
+  type VersionControlOperationDescriptor,
+} from './version-control-schema';
 
 // ── ArgsSchema (D-3 lightweight JSON-Schema subset) ────────────────────────
 
@@ -93,6 +97,11 @@ export interface OpDescriptor {
   readonly sugar?: boolean;
   /** OperationRun lifecycle metadata projected by the owning Gateway. */
   readonly operationRun?: OperationRunDescriptor;
+  /** User/AI confirmation policy owned by the operation descriptor. */
+  readonly confirmation?: {
+    readonly required: boolean;
+    readonly reason?: string;
+  };
   /** Product execution barrier derived from the operation's owning descriptor. */
   readonly completion?: {
     readonly kind: 'asset-visible' | 'asset-write';
@@ -102,15 +111,29 @@ export interface OpDescriptor {
   readonly destructive?: boolean;
   /** Canonical machine-readable recovery actions for the operation. */
   readonly recoveryActions?: readonly string[];
+  /** Opaque capability generation for fail-closed discovery projections. */
+  readonly capabilityGeneration?: string;
+  /** Current owner seam status; blocked is still discoverable and serializable. */
+  readonly capabilityStatus?: 'callable' | 'blocked';
+  readonly stage?: string;
+  readonly owner?: string;
+  readonly recoveryAction?: string;
+  readonly diagnosticId?: string;
 }
 
 export type GatewayOpAvailability =
   | { readonly available: true }
   | {
     readonly available: false;
-    readonly code: 'applier-unavailable';
+    readonly code: 'applier-unavailable' | 'capability-blocked';
     readonly reason: string;
     readonly resolution?: string;
+    readonly capabilityGeneration?: string;
+    readonly stage?: string;
+    readonly owner?: string;
+    readonly expected?: string;
+    readonly recoveryAction?: string;
+    readonly diagnosticId?: string;
   };
 
 /** Gateway-owned live projection: static contract plus current executor fact. */
@@ -121,6 +144,7 @@ export interface GatewayOpDescriptor extends Omit<OpDescriptor, 'source'> {
 
 export interface GatewayOpSnapshot {
   readonly revision: number;
+  readonly capabilityGeneration?: string;
   readonly ops: readonly GatewayOpDescriptor[];
 }
 
@@ -330,6 +354,58 @@ export function getOp(id: string): OpDescriptor | undefined {
   return op === undefined ? undefined : snapshotOp(op);
 }
 
+const versionControlRun: OperationRunDescriptor = {
+  acceptedStatuses: ['accepted', 'running'],
+  terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+  read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+  retry: { requiresNewRequestId: true },
+  retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+  cancellable: false,
+};
+
+const versionControlSchemas: Readonly<Record<string, ArgsSchema>> = {
+  configureGitExecutable: {
+    type: 'object', properties: {
+      kind: { type: 'string', enum: ['configureGitExecutable'] },
+      candidatePath: { type: 'string', minLength: 1 },
+      requestId: { type: 'string', minLength: 1 },
+    }, required: ['kind', 'requestId'], additionalProperties: false,
+  },
+  initializeGameRepository: {
+    type: 'object', properties: {
+      kind: { type: 'string', enum: ['initializeGameRepository'] },
+      requestId: { type: 'string', minLength: 1 },
+    }, required: ['kind', 'requestId'], additionalProperties: false,
+  },
+  publishGameVersion: {
+    type: 'object', properties: {
+      kind: { type: 'string', enum: ['publishGameVersion'] },
+      tag: { type: 'string', minLength: 1 }, message: { type: 'string' },
+      expectedSnapshotId: { type: 'string', minLength: 1 }, expectedCommit: { type: 'string', minLength: 1 },
+      requestId: { type: 'string', minLength: 1 },
+    }, required: ['kind', 'tag', 'expectedSnapshotId', 'requestId'], additionalProperties: false,
+  },
+  switchGameVersion: {
+    type: 'object', properties: {
+      kind: { type: 'string', enum: ['switchGameVersion'] },
+      tag: { type: 'string', minLength: 1 }, expectedCommit: { type: 'string', minLength: 1 },
+      requestId: { type: 'string', minLength: 1 },
+    }, required: ['kind', 'tag', 'expectedCommit', 'requestId'], additionalProperties: false,
+  },
+};
+
+/** Discoverable descriptors for the four Gateway session operations. */
+export function versionControlOperationDescriptors(): readonly VersionControlOperationDescriptor[] {
+  return Object.freeze(VERSION_CONTROL_OPERATION_IDS.map((id) => ({
+    id,
+    domain: 'session' as const,
+    argsSchema: structuredClone(versionControlSchemas[id]!) as ArgsSchema,
+    confirmation: { required: true as const, reason: 'Version-control changes affect the current game repository.' },
+    operationRun: structuredClone(versionControlRun),
+    recoveryActions: Object.freeze(['version-control.refresh', 'run.wait', 'run.retry']),
+  }))) as readonly VersionControlOperationDescriptor[];
+}
+
 // ── Builtin catalog seeding ─────────────────────────────────────────────────
 // Registered at module eval time — SSOT for ALL editor operations.
 // Each entry's argsSchema mirrors the EditorOp discriminated union in types.ts.
@@ -375,9 +451,18 @@ const builtinOps: ReadonlyArray<{
         // batch INDEX) — 0 is a real handle → `INVALID_PARENT`. Outside a transaction,
         // read the created handle from `dispatch(...).result.created[]` instead.
         _id: { type: 'number', description: 'transaction-only NEGATIVE forward-reference id (e.g. -1); a later sub-op references it as `parent`/`entity` to point at this spawn before its real handle exists. See the note above; use dispatch().result.created[] outside a transaction.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to await the authored entity creation terminal run.' },
       },
     },
     title: 'Spawn Entity',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: false,
+    },
   },
   {
     id: 'destroyEntity', domain: 'document',
@@ -1276,6 +1361,20 @@ const builtinOps: ReadonlyArray<{
             additionalProperties: false,
           },
         },
+        sourceFiles: {
+          type: 'array',
+          description: 'Bounded dependency closure for an FBX root; each file keeps its source-relative path and is copied before cooking.',
+          items: {
+            type: 'object',
+            properties: {
+              destPath: { type: 'string', minLength: 1 },
+              relativePath: { type: 'string', minLength: 1 },
+              base64: { type: 'string', minLength: 1 },
+            },
+            required: ['destPath', 'relativePath', 'base64'],
+            additionalProperties: false,
+          },
+        },
         skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for path-only callers).' },
         requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.' },
       },
@@ -1442,6 +1541,28 @@ const builtinOps: ReadonlyArray<{
       required: ['path', 'newName'],
     },
     title: 'Rename Source File',
+  },
+  { id: 'moveDirectory', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing directory path to move (same jailbreak rules as deleteDirectory.path).' },
+        targetDir: { type: 'string', description: 'Game-relative destination PARENT directory (e.g. "assets/levels"). Empty string defaults to "assets". The basename is preserved; the applier rejects moving a directory into itself or a descendant, and a no-op move into the current parent.' },
+      },
+      required: ['path', 'targetDir'],
+    },
+    title: 'Move Directory',
+  },
+  { id: 'moveSourceFile', domain: 'session',
+    argsSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing source file path to move (e.g. "assets/Fox.glb"). Its .meta.json sidecar moves with it.' },
+        targetDir: { type: 'string', description: 'Game-relative destination PARENT directory. Empty string defaults to "assets". The basename is preserved; the applier rejects a no-op move into the current parent.' },
+      },
+      required: ['path', 'targetDir'],
+    },
+    title: 'Move Source File',
   },
   { id: 'revealInFileManager', domain: 'session',
     argsSchema: {

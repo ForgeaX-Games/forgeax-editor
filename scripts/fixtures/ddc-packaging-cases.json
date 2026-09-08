@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "forgeax-ddc-packaging-fixtures/v1",
+  "revision": "fixture-revision",
+  "allowedNondeterministicFields": ["generatedAt", "buildId", "durationMs"],
+  "cases": [
+    {"mode": "cold", "cachePolicy": "enabled", "expectedPath": "cold"},
+    {"mode": "warm", "cachePolicy": "enabled", "expectedPath": "warm"},
+    {"mode": "shared-disabled", "cachePolicy": "disabled", "expectedPath": "cold"},
+    {"mode": "cache-unwritable", "cachePolicy": "unwritable", "expectedPath": "cold"}
+  ]
+}

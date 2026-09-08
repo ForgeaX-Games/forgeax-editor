@@ -4,7 +4,7 @@
 
 import { useMemo } from 'react';
 import { resolveGamePath } from '@forgeax/editor-core';
-import type { AssetBrowserCatalogRoot, AssetBrowserSnapshot } from '@forgeax/editor-core';
+import type { AssetBrowserCatalogRoot, AssetBrowserSnapshot, ScriptablePackReadModel } from '@forgeax/editor-core';
 import type { CBAsset } from '../types';
 import { registryEntryToCBAsset, type DiskTreeNode } from '../content-browser-format';
 import { useAssetBrowserSnapshot } from './useAssetBrowserSnapshot';
@@ -20,6 +20,7 @@ export interface CBDataResult {
   diskTree: DiskTreeNode | null;
   fetchDiskDirs: () => Promise<void>;
   workspaceSnapshot: AssetWorkspaceSnapshot;
+  scriptablePacks: readonly ScriptablePackReadModel[];
 }
 
 function relativeDir(path: string): string {
@@ -134,5 +135,6 @@ export function useCBData(
     diskTree,
     fetchDiskDirs: async () => { await reload(); },
     workspaceSnapshot,
+    scriptablePacks: snapshot.scriptablePacks,
   };
 }

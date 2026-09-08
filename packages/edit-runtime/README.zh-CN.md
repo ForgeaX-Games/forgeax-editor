@@ -2,6 +2,48 @@
 
 > ForgeaX 编辑模式权威 Runtime：在一个可替换 carrier realm 中启动 Gateway、Edit/Play World、AssetRegistry、GPU canvas、相机和引擎拥有的 VFX Runtime。carrier 可以是 iframe、browser page 或 Tauri WebView；外层 panel 只消费 projection 并派发 Runtime operation。
 
+## Project authoring ToolClient transport
+
+Authoring UI 意图只有一条 typed 路径：
+
+```mermaid
+flowchart LR
+  UI["Editor 页面 projection"] --> T["typed ToolClient transport"]
+  T --> H["standalone Node host"]
+  H --> E["Project-installed contribution"]
+  E --> F["Project 文件与 terminal artifact"]
+```
+
+UI 可以调用 `list`、`describe`、`run`，但不会在本地执行 material/mesh/VFX
+更新。`Save` 发送一份 Snapshot 与 `expectedRevision`；host 返回 terminal，
+或返回带 draft evidence 的结构化 `authoring-revision-conflict`。成功后
+Runtime 必须从 Project 文件刷新 projection。
+
+> [!IMPORTANT]
+> Engine Tool Runtime 的 Project Entry 是冷发现 authority。缺失 operation
+> 必须返回 `authoring-operation-unavailable`，不能由页面 registry、Editor
+> closure 或隐藏 executor 静默替代。
+
+## 材质 publication projection
+
+Runtime 暴露唯一按 GUID 查询的只读入口：`{ kind: 'material.inspection', guid }`。它通过既有 viewport projection 返回 cooked `MaterialPublicationInspection`，不创建 material registry、schema cache 或 Gateway operation。调用方先展示 readiness 与 publication identity，再按需展开 source closure、参数契约、refs、receipt 和 owner diagnostics。
+
+Transport URL 与 carrier identity 只是 provenance，不能用于比较 publication，也不能推断另一种材质身份。Inspector 和 console 调用方按结构化 error code 与 recovery 字段分支，不解析 message；Play runtime 不直接 import `@forgeax/editor-core`。
+
+## 可见 carrier provider offer
+
+Node host 可通过 `createToolCarrierHost` 发布经过认证且短生命周期的
+carrier。浏览器 Runtime 只接收 POD offer 与带 generation 栅栏的
+`ToolCarrierProvider`，不会接收 Editor World、Renderer、Canvas、Project
+writer、插件清单、第二 ToolClient 或第二执行器。
+
+若没有显式配置 `FORGEAX_CARRIER_ENDPOINT` 与
+`FORGEAX_CARRIER_BEARER_TOKEN`，standalone host 返回结构化的
+`carrier-unavailable`。这是明确的 unavailable 状态，不是隐藏的本地
+fallback。`start` 之后 provider 退出会使本次 AI run 终止；只有从序列化
+快照重试时，host 才能重新 offer carrier。人类 Resource Editor 与 Play
+session 保持独立的 World/Renderer/Canvas、draft、undo 和 cancellation 身份。
+
 > [!IMPORTANT]
 > Runtime 服务（zustand store、实体操作、右键菜单、dock 桥接、面板 manifest）由 `@forgeax/editor-core` 持有。如需使用 `bus`、`dispatch`、`useSelection` 等，应从 `@forgeax/editor-core` 导入。
 
@@ -61,7 +103,7 @@ Runtime operation discovery 遵循统一 applier registry 的 live projection。
 
 Preview canvas 与 Shell panel 同域，但 command 仍是 canonical Runtime operation。forward carrier handshake 成功后，Shell 转移一个经 source、origin、Runtime identity、generation 和 one-shot challenge 认证的第二个 `MessagePort`。reverse port 只承载按 `kind + assetGuid + generation` 绑定的通用 executor lease，不承载第二套 capability catalog 或 raw World/controller reference。
 
-VFX workbench 在 lease 存活期间绑定 `vfx.preview.play`、`pause`、`reset`、`seek`、`setEmitterMask`、`frameBounds` 和 `setBoundsVisible`。Human toolbar handler 与 AI caller 都使用 `dispatchViewportRuntimeOperation`。断开、资产替换或 generation 变化会移除这些 applier，并用 structured stale/disconnected failure 拒绝进行中的操作。Preview pause 冻结 mini-world scheduler，不改 authored `ParticleEffectPlayer.playing`。
+VFX 创作页面在 lease 存活期间绑定 `vfx.preview.play`、`pause`、`reset`、`seek`、`setEmitterMask`、`frameBounds` 和 `setBoundsVisible`。Human toolbar handler 与 AI caller 都使用 `dispatchViewportRuntimeOperation`。断开、资产替换或 generation 变化会移除这些 applier，并用 structured stale/disconnected failure 拒绝进行中的操作。Preview pause 冻结 mini-world scheduler，不改 authored `ParticleEffectPlayer.playing`。
 
 ## Play dirty policy
 

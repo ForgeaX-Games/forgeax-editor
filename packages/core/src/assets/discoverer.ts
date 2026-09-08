@@ -1,34 +1,18 @@
-// discoverer.ts — module discoverer: import → dual-enum → world registration (M4 w21/w22).
+// discoverer.ts — load native Cordis game Plugins into one World.
 //
-// Flow:
-//   1. Receives script list from server manifest endpoint (w20).
-//   2. Per-script: dynamic import with cache-busting.
-//   3. Reads getRegisteredComponents() / getRegisteredSystems() registry delta.
-//   4. Registers systems verbatim into the caller-supplied world (D-7: no
-//      notEditing gate — game systems tick freely in the world they land in;
-//      edit mode simply never drives discovery against its active schedule).
-//
-// Error handling (w22):
-//   - Duplicate component/system name → fail-fast DiscoverError (.code/.expected/.hint).
-//     Detects redefinition (same key, different value) across modules.
-//   - Import failure → broken partial success (DiscoverError in result.errors).
-//
-// Anchors:
-//   plan-strategy D-3/D-4: discoverer + errors + duplicate gate
-//   requirements AC-07/09/10: dual-enum hit, duplicate gate, broken state
-//   charter P3: explicit failure — structured errors with property access
+// Game modules are not evaluated for global ECS side effects. Each module is
+// validated through the Engine app owner (`loadGame`), then installed into a
+// World-local Cordis realm (`createWorldContext`). Component leases and system
+// registration therefore belong to the World that will actually run them.
 
-import { getRegisteredComponents, getRegisteredSystems, Update } from '@forgeax/engine-ecs';
-import type { SystemHandle, World } from '@forgeax/engine-ecs';
+import { loadGame, type Plugin } from '@forgeax/engine-app';
+import { createWorldContext } from '@forgeax/engine-ecs';
+import type { Context } from '@forgeax/engine-plugin';
+import type { World } from '@forgeax/engine-ecs';
 import { DiscoverErrorCode } from './discoverer-errors';
 import type { DiscoverError } from './discoverer-errors';
-// Re-export so consumers/tests can import the error type from the discoverer barrel.
+
 export type { DiscoverError } from './discoverer-errors';
-
-// Local alias for the engine `World` class type (imported type-only).
-type EcsWorld = World;
-
-// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface DiscoveredModule {
   readonly relPath: string;
@@ -40,72 +24,12 @@ export interface DiscoveredModule {
 export interface DiscoverResult {
   readonly modules: DiscoveredModule[];
   readonly errors: DiscoverError[];
+  /** Realms retained by the caller for the lifetime of the World. */
+  readonly contexts: readonly Context[];
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 let _importCounter = 0;
 
-/**
- * Snapshot both keys AND values of the global registries.
- * Engine silently overwrites duplicate keys -- we detect redefinition by
- * comparing value references before vs after import.
- */
-function snapshotRegistries(): {
-  components: Map<string, unknown>;
-  systems: Map<string, unknown>;
-} {
-  return {
-    components: new Map(getRegisteredComponents()),
-    systems: new Map(getRegisteredSystems()),
-  };
-}
-
-/**
- * Compute which component/system names were newly added or redefined
- * (existing key with changed value) by the last import.
- */
-function diffRegistries(
-  before: { components: Map<string, unknown>; systems: Map<string, unknown> },
-): {
-  components: string[];
-  systems: string[];
-  redefinedComps: string[];
-  redefinedSystems: string[];
-} {
-  const comps: string[] = [];
-  const systems: string[] = [];
-  const redefinedComps: string[] = [];
-  const redefinedSystems: string[] = [];
-
-  for (const [k, v] of getRegisteredComponents()) {
-    const prev = before.components.get(k);
-    if (prev === undefined) {
-      comps.push(k);
-    } else if (prev !== v) {
-      redefinedComps.push(k);
-    }
-  }
-
-  for (const [k, v] of getRegisteredSystems()) {
-    const prev = before.systems.get(k);
-    if (prev === undefined) {
-      systems.push(k);
-    } else if (prev !== v) {
-      redefinedSystems.push(k);
-    }
-  }
-
-  return { components: comps, systems, redefinedComps, redefinedSystems };
-}
-
-/**
- * Create a structured error object.
- *
- * Uses Object.create + defineProperties to ensure .code / .expected / .hint
- * are own properties with proper descriptors, so `'code' in err` (and property
- * access) work across all JS engines including JavaScriptCore (Bun).
- */
 function makeError(
   code: string,
   expected: string,
@@ -113,7 +37,6 @@ function makeError(
   relPath?: string,
 ): DiscoverError {
   const base = new Error(`[${code}] ${expected}`);
-  // Build a wrapper that delegates to the base Error but has our own properties.
   const props: PropertyDescriptorMap = {
     code: { value: code, enumerable: true, writable: false, configurable: true },
     expected: { value: expected, enumerable: true, writable: false, configurable: true },
@@ -122,111 +45,115 @@ function makeError(
     name: { value: 'DiscoverError', enumerable: true, writable: false, configurable: true },
     stack: { value: base.stack, enumerable: false, writable: false, configurable: true },
   };
-  if (relPath !== undefined) {
-    props.relPath = { value: relPath, enumerable: true, writable: false, configurable: true };
-  }
+  if (relPath !== undefined) props.relPath = { value: relPath, enumerable: true, writable: false, configurable: true };
   return Object.create(Error.prototype, props) as DiscoverError;
 }
 
-// ── Core ─────────────────────────────────────────────────────────────────────
+function moduleResolver(absPath: string): (slug: string) => Promise<{ readonly default?: unknown; readonly [key: string]: unknown }> {
+  return async () => import(/* @vite-ignore */ `${absPath}?t=${Date.now()}&i=${_importCounter++}`);
+}
+
+function deltaNames(before: readonly string[], after: readonly string[]): string[] {
+  const previous = new Set(before);
+  return after.filter((name) => !previous.has(name));
+}
 
 /**
- * Discover and register all game-logic modules from the provided script list.
- *
- * @throws DiscoverError on duplicate component/system (fail-fast).
+ * Load each game module as a native Cordis Plugin and install it in `world`.
+ * The old global-registry diff path is intentionally gone: the World catalog
+ * and schedule inspection are the only discovery surfaces.
  */
 export async function discoverModules(
-  world: EcsWorld,
+  world: World,
   scripts: Array<{ relPath: string; absPath: string }>,
 ): Promise<DiscoverResult> {
   const modules: DiscoveredModule[] = [];
   const errors: DiscoverError[] = [];
-
+  const contexts: Context[] = [];
   const seenComponents = new Map<string, string>();
   const seenSystems = new Map<string, string>();
 
   for (const script of scripts) {
-    const before = snapshotRegistries();
-
-    // Dynamic import with cache-busting query param (prevents module cache
-    // from hanging on previously-failed modules).
-    const cacheKey = `?t=${Date.now()}&i=${_importCounter++}`;
-    try {
-      await import(/* @vite-ignore */ `${script.absPath}${cacheKey}`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      errors.push(
-        makeError(
-          DiscoverErrorCode.MODULE_IMPORT_FAILED,
-          `Module at ${script.relPath} should be importable`,
-          `Fix syntax or missing imports in ${script.relPath}: ${msg}`,
-          script.relPath,
-        ),
-      );
+    const beforeComponents = [...world.components.entries().keys()];
+    const beforeSystems = world.inspect().systems.map((system) => system.name);
+    const loaded = await loadGame(script.relPath, moduleResolver(script.absPath));
+    if (!loaded.ok) {
+      errors.push(makeError(
+        DiscoverErrorCode.MODULE_IMPORT_FAILED,
+        loaded.error.expected,
+        `${loaded.error.hint} (${script.relPath})`,
+        script.relPath,
+      ));
       continue;
     }
 
-    const delta = diffRegistries(before);
-
-    // ── Duplicate detection ──
-    const allComps = [...delta.components, ...delta.redefinedComps];
-    const allSystems = [...delta.systems, ...delta.redefinedSystems];
-
-    for (const compName of allComps) {
-      const existingRel = seenComponents.get(compName);
-      if (existingRel !== undefined && existingRel !== script.relPath) {
+    let context: Context;
+    try {
+      context = await createWorldContext(world, [loaded.value as Plugin]);
+    } catch (thrown: unknown) {
+      const conflict = thrown as {
+        readonly code?: unknown;
+        readonly detail?: { readonly componentName?: unknown; readonly systemName?: unknown };
+      };
+      if (conflict.code === 'component-name-conflict' && typeof conflict.detail?.componentName === 'string') {
+        const name = conflict.detail.componentName;
+        const previous = seenComponents.get(name);
         throw makeError(
           DiscoverErrorCode.DUPLICATE_COMPONENT,
-          `Unique component name expected — '${compName}' already defined in ${existingRel}`,
-          `Rename '${compName}' in ${script.relPath} or ${existingRel}`,
+          `Unique component name expected — '${name}' already defined in ${previous ?? 'another plugin'}`,
+          `Rename '${name}' in ${script.relPath} or ${previous ?? 'the previous plugin'}`,
           script.relPath,
         );
       }
-      seenComponents.set(compName, script.relPath);
-    }
-
-    for (const sysName of allSystems) {
-      const existingRel = seenSystems.get(sysName);
-      if (existingRel !== undefined && existingRel !== script.relPath) {
+      if (conflict.code === 'system-name-conflict' && typeof conflict.detail?.systemName === 'string') {
+        const name = conflict.detail.systemName;
+        const previous = seenSystems.get(name);
         throw makeError(
           DiscoverErrorCode.DUPLICATE_SYSTEM,
-          `Unique system name expected — '${sysName}' already defined in ${existingRel}`,
-          `Rename '${sysName}' in ${script.relPath} or ${existingRel}`,
+          `Unique system name expected — '${name}' already defined in ${previous ?? 'another plugin'}`,
+          `Rename '${name}' in ${script.relPath} or ${previous ?? 'the previous plugin'}`,
           script.relPath,
         );
       }
-      seenSystems.set(sysName, script.relPath);
+      const msg = thrown instanceof Error ? thrown.message : String(thrown);
+      errors.push(makeError(
+        DiscoverErrorCode.MODULE_IMPORT_FAILED,
+        `Plugin at ${script.relPath} should activate in the target World`,
+        `Fix plugin activation in ${script.relPath}: ${msg}`,
+        script.relPath,
+      ));
+      continue;
     }
+    contexts.push(context);
 
-    // ── Register systems into world ──
-    // D-7 (M6): registration-surface removal replaces the old "register + freeze"
-    // shape. Game systems are registered verbatim (with their own runIf, if any)
-    // into the world the caller hands us. There is NO notEditing gate anymore:
-    // - In PLAY, this world is the transient playWorld (play-assemble.ts) whose
-    //   shape matches a standalone game runtime, so game systems tick freely —
-    //   the same-shape precedent play-assemble already documents ("no notEditing
-    //   gate").
-    // - In EDIT, discovered game systems are simply never registered into the
-    //   active-ticking editorWorld schedule: after M4 forked editorWorld from
-    //   sceneWorld, editor assembly does not drive discoverModules against the
-    //   edit-mode schedule, so game systems are structurally absent from what
-    //   ticks in edit mode — freezing them is unnecessary. Structure (not a
-    //   run-condition gate) enforces "game logic does not run while editing".
-    // (plan-strategy D-7, requirements C4 / S8 / AC-10.)
-    for (const sysName of allSystems) {
-      const handle = getRegisteredSystems().get(sysName);
-      if (handle) {
-        world.addSystem(Update, handle).unwrap();
+    const components = deltaNames(beforeComponents, [...world.components.entries().keys()]);
+    const systems = deltaNames(beforeSystems, world.inspect().systems.map((system) => system.name));
+    for (const name of components) {
+      const previous = seenComponents.get(name);
+      if (previous !== undefined && previous !== script.relPath) {
+        throw makeError(
+          DiscoverErrorCode.DUPLICATE_COMPONENT,
+          `Unique component name expected — '${name}' already defined in ${previous}`,
+          `Rename '${name}' in ${script.relPath} or ${previous}`,
+          script.relPath,
+        );
       }
+      seenComponents.set(name, script.relPath);
     }
-
-    modules.push({
-      relPath: script.relPath,
-      absPath: script.absPath,
-      components: allComps,
-      systems: allSystems,
-    });
+    for (const name of systems) {
+      const previous = seenSystems.get(name);
+      if (previous !== undefined && previous !== script.relPath) {
+        throw makeError(
+          DiscoverErrorCode.DUPLICATE_SYSTEM,
+          `Unique system name expected — '${name}' already defined in ${previous}`,
+          `Rename '${name}' in ${script.relPath} or ${previous}`,
+          script.relPath,
+        );
+      }
+      seenSystems.set(name, script.relPath);
+    }
+    modules.push({ relPath: script.relPath, absPath: script.absPath, components, systems });
   }
 
-  return { modules, errors };
+  return { modules, errors, contexts };
 }

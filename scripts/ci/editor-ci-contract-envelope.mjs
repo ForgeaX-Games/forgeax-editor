@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { validatePortabilityReport } from './editor-ci-report.mjs';
 
 const PRODUCER_CONTRACT = JSON.parse(readFileSync(new URL('./editor-ci-contract.json', import.meta.url), 'utf8'));
 
@@ -48,6 +49,14 @@ export const ENVELOPE_FIELDS = [
   'firstFailure',
   'attempts',
   'sloClaim',
+];
+
+export const PORTABILITY_ENVELOPE_FIELDS = [
+  'sourceSha',
+  'platform',
+  'stage',
+  'capability',
+  'matrix',
 ];
 
 export const DELIVERY_PRODUCER_FIELDS = Object.freeze([
@@ -792,6 +801,9 @@ export function createDeliveryEnvelope({producer, landed, consumerReports = [], 
 export function normalizeEnvelope(input) {
   const envelope = {};
   for (const field of ENVELOPE_FIELDS) envelope[field] = input[field] ?? null;
+  if (input.checkId === 'editor-portability') {
+    for (const field of PORTABILITY_ENVELOPE_FIELDS) envelope[field] = input[field] ?? null;
+  }
   envelope.attempts = Array.isArray(input.attempts) ? structuredClone(input.attempts) : [];
   envelope.provenance = isObject(input.provenance) ? structuredClone(input.provenance) : input.provenance;
   envelope.firstFailure = input.firstFailure === undefined ? null : structuredClone(input.firstFailure);
@@ -878,6 +890,21 @@ export function validateEnvelope(envelope) {
   }
   if (envelope.terminalStatus !== 'failure' && envelope.failureClass !== null) {
     return { ok: false, error: envelopeIssue('failure-class-without-failure', 'null failureClass for a non-failure result', envelope.failureClass, 'Only classify a failure when terminalStatus is failure.') };
+  }
+  if (envelope.checkId === 'editor-portability') {
+    const portabilityResult = validatePortabilityReport(envelope);
+    if (!portabilityResult.ok) {
+      const error = portabilityResult.error;
+      return {
+        ok: false,
+        error: envelopeIssue(
+          error.code.replace(/^report-/, 'envelope-'),
+          error.expected,
+          error.observed,
+          error.hint,
+        ),
+      };
+    }
   }
   return { ok: true };
 }

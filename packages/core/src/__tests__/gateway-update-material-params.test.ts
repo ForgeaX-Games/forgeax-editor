@@ -24,6 +24,12 @@ import { assetIO, type AssetEntry } from '../io/asset-io-facade';
 import { validatePackShell } from '../scene/scene-pack';
 import type { EditorOp, EditSession } from '../types';
 import { setPathResolver } from '../util/path-resolver';
+import { bindViewportRuntimeClient } from '../io/viewport-runtime-client';
+import {
+  VIEWPORT_RUNTIME_CONTRACT_VERSION,
+  type MessagePortTransportClient,
+  type ViewportRuntimeIdentity,
+} from '@forgeax/editor-product';
 import '../session/material-ops'; // applier registration side effect
 
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
@@ -70,6 +76,7 @@ function setup(): { gateway: EditGateway } {
 describe('updateMaterialParams — envelope AssetRef[] → wire string[] projection', () => {
   let written: AssetEntry[] = [];
   let writtenPaths: string[] = [];
+  let unbindRuntime: (() => void) | null = null;
   const originalWritePackEntry = assetIO.writePackEntry;
 
   beforeEach(() => {
@@ -84,6 +91,8 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
   });
 
   afterEach(() => {
+    unbindRuntime?.();
+    unbindRuntime = null;
     assetIO.writePackEntry = originalWritePackEntry;
     setPathResolver(null);
   });
@@ -100,6 +109,47 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
     expect(r.ok).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(writtenPaths).toEqual(['sample/assets/base-material.pack.json']);
+  });
+
+  it('projects a runtime serve-mount pack path into writable host storage', async () => {
+    const slug = 'sample';
+    setPathResolver((relativePath) => relativePath ? `.forgeax/games/${slug}/${relativePath}` : `.forgeax/games/${slug}`);
+    const identity: ViewportRuntimeIdentity = {
+      version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
+      runtimeId: 'edit-runtime',
+      runtimeGeneration: 1,
+      carrierId: 'frame-1',
+      carrierKind: 'iframe',
+    };
+    const noopClient: MessagePortTransportClient = {
+      request: () => Promise.reject(new Error('unused')),
+      dispose() {},
+    };
+    unbindRuntime = bindViewportRuntimeClient(identity, noopClient, [
+      { root: 'assets', catalogPrefix: `host-games/${slug}/assets` },
+    ]);
+    const { gateway } = setup();
+    const registry = gateway.doc.registry!;
+    const originalListCatalog = registry.listCatalog.bind(registry);
+    registry.listCatalog = (() => originalListCatalog().map((entry) => ({
+      ...entry,
+      packageUrl: `/preview/host-games/${slug}/assets/base-material.pack.json`,
+      sourcePath: `host-games/${slug}/assets/base-material.pack.json`,
+    }))) as typeof registry.listCatalog;
+
+    const op = {
+      kind: 'updateMaterialParams',
+      packPath: `host-games/${slug}/assets/base-material.pack.json`,
+      guid: MATERIAL_GUID,
+      paramPatch: { roughness: 0.23 },
+    } as unknown as EditorOp & { packPath: string };
+    const result = gateway.dispatch(op, 'human');
+    expect(result.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(op.packPath).toBe(`.forgeax/games/${slug}/assets/base-material.pack.json`);
+    expect(writtenPaths).toEqual([`.forgeax/games/${slug}/assets/base-material.pack.json`]);
+    expect(writtenPaths.every((path) => !path.includes('/host-games/'))).toBe(true);
   });
 
   it('prefills _oldRefs / _oldEntry.refs as GUID STRINGS, not AssetRef objects', () => {

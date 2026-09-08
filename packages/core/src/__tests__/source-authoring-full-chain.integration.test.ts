@@ -52,6 +52,7 @@ describe('source authoring full Gateway chain', () => {
     uninstall = installSourceAuthoringOps({
       getPreflightInput: async () => sourceInput,
       metaPath: () => 'assets/mesh.meta.json',
+      validateSourceOverride: () => undefined,
       commitSourceOverrides: async () => { events.push('cas'); },
       rebuild: async () => { events.push('rebuild'); },
     });
@@ -71,6 +72,7 @@ describe('source authoring full Gateway chain', () => {
         status: 'succeeded',
         operationId: 'asset.preflight',
         result: {
+          revision: 'meta:r1',
           source: {
             revisionSource: 'meta',
             expectedRevision: 'meta:r1',
@@ -94,6 +96,7 @@ describe('source authoring full Gateway chain', () => {
     const runtime: SourceAuthoringRuntime = {
       getPreflightInput: async () => sourceInput,
       metaPath: () => 'assets/mesh.meta.json',
+      validateSourceOverride: () => undefined,
       commitSourceOverrides: async () => { events.push('cas'); },
       rebuild: async () => { events.push('rebuild'); },
       observePublication: async () => { events.push('observe'); },
@@ -108,6 +111,33 @@ describe('source authoring full Gateway chain', () => {
       value: { status: 'succeeded', operationId: 'saveAssetSourceOverride' },
     });
     expect(events).toEqual(['cas', 'rebuild', 'observe']);
+  });
+
+  test('runs semantic override validation before the Meta CAS boundary', async () => {
+    const events: string[] = [];
+    uninstall = installSourceAuthoringOps({
+      getPreflightInput: async () => sourceInput,
+      metaPath: () => 'assets/mesh.meta.json',
+      validateSourceOverride: async () => {
+        events.push('validate');
+        const error = new Error('material GUID is not catalogued') as Error & { code?: string };
+        error.code = 'asset-validation-failed';
+        throw error;
+      },
+      commitSourceOverrides: async () => { events.push('cas'); },
+      rebuild: async () => { events.push('rebuild'); },
+    });
+    const gateway = sourceGateway();
+    gateway.dispatch(sourceOperation('req-validation-before-cas'), 'ai');
+
+    await expect(gateway.waitOperationRun('req-validation-before-cas')).resolves.toMatchObject({
+      ok: true,
+      value: {
+        status: 'failed',
+        error: { code: 'asset-validation-failed', phase: 'validation' },
+      },
+    });
+    expect(events).toEqual(['validate']);
   });
 
   const failures = [
@@ -178,6 +208,7 @@ describe('source authoring full Gateway chain', () => {
       const runtime: SourceAuthoringRuntime = {
         getPreflightInput: async () => sourceInput,
         metaPath: () => 'assets/mesh.meta.json',
+        validateSourceOverride: () => undefined,
         commitSourceOverrides: async () => {
           if (scenario.failAt === 'cas') throw new AssetResourceConflictError('meta:r1', 'meta:r2');
         },
@@ -224,6 +255,7 @@ describe('source authoring full Gateway chain', () => {
     const runtime: SourceAuthoringRuntime = {
       getPreflightInput: async () => sourceInput,
       metaPath: () => 'assets/mesh.meta.json',
+      validateSourceOverride: () => undefined,
       commitSourceOverrides: async () => undefined,
       rebuild: async () => {
         throw sourceFailure('asset-meta-read-failed', 'ddc:desired', 'ddc:lkg');

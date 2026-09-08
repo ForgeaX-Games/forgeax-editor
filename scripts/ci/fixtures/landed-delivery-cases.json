@@ -131,5 +131,15 @@
       "expectedStatus": "pending",
       "expectedCode": "landed-required-contexts-missing"
     }
+  ],
+  "portabilityCases": [
+    {"name": "missing aggregate artifact", "artifact": null, "expectedStatus": "pending", "expectedCode": "portability-artifact-missing"},
+    {"name": "aggregate run identity is missing", "mutation": {"workflowRunId": null}, "expectedStatus": "pending", "expectedCode": "portability-artifact-run-identity-missing"},
+    {"name": "aggregate belongs to another workflow run", "mutation": {"workflowRunId": 802}, "expectedStatus": "nonpass", "expectedCode": "portability-run-mismatch"},
+    {"name": "aggregate belongs to another workflow attempt", "mutation": {"workflowRunAttempt": 1}, "expectedStatus": "nonpass", "expectedCode": "portability-attempt-mismatch"},
+    {"name": "aggregate source SHA differs from workflow target", "mutation": {"sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "expectedStatus": "nonpass", "expectedCode": "portability-aggregate-invalid"},
+    {"name": "one platform is missing", "mutation": {"platforms": ["linux", "windows"]}, "expectedStatus": "nonpass", "expectedCode": "portability-aggregate-invalid"},
+    {"name": "one terminal stage is missing", "mutation": {"terminalResults": []}, "expectedStatus": "nonpass", "expectedCode": "portability-aggregate-invalid"},
+    {"name": "platform stage failure cannot be hidden by green aggregate", "mutation": {"terminalStatus": "pass", "failureStage": "windows:install"}, "expectedStatus": "nonpass", "expectedCode": "portability-aggregate-invalid"}
   ]
 }

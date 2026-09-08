@@ -132,6 +132,29 @@ describe('AC-03 false branch — projectOps cannot produce an id not in its inpu
     const projected = projectOps(synthetic);
     expect(projected.map((p) => p.id)).toEqual(['synthetic.only']);
   });
+
+  it('preserves confirmation, run lifecycle and recovery metadata for UI/AI callers', () => {
+    const operationRun = {
+      acceptedStatuses: ['accepted'] as const,
+      terminalStatuses: ['succeeded', 'failed', 'cancelled'] as const,
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only' as const, maxTerminalRuns: 4 },
+      cancellable: false,
+    };
+    const listed: readonly OpDescriptor[] = [{
+      id: 'switchGameVersion', domain: 'session', source: 'builtin', argsSchema: null,
+      confirmation: { required: true, reason: 'Repository state changes.' },
+      operationRun,
+      recoveryActions: ['version-control.refresh', 'run.wait', 'run.retry'],
+    }];
+    expect(projectOps(listed)).toEqual([{
+      id: 'switchGameVersion', domain: 'session', argsSchema: null,
+      confirmation: { required: true, reason: 'Repository state changes.' },
+      operationRun,
+      recoveryActions: ['version-control.refresh', 'run.wait', 'run.retry'],
+    }]);
+  });
 });
 
 // ── AC-01 structural guard: no inlined op-definition constant table in source ──

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useAssetRefDrop } from './use-asset-ref-drop';
 import {
   ensureAssetCataloged,
   gateway,
@@ -7,7 +8,7 @@ import {
   panelBridge,
 } from '@forgeax/editor-core';
 import type { SelectedAsset } from '@forgeax/editor-core';
-import { AssetPicker } from './AssetPicker';
+import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from './AssetPicker';
 import { PropertyRow } from './asset-inspector/PropertyRow';
 import './inspector.css';
 
@@ -36,40 +37,33 @@ interface TextureSlotProps {
   canEdit: boolean;
   onAssign: (textureGuid: string) => void;
   onClear: () => void;
-  onBrowse: () => void;
+  onBrowse: (anchor: AssetPickerAnchor) => void;
 }
 
 function TextureSlot({ label, guid, canEdit, onAssign, onClear, onBrowse }: TextureSlotProps) {
-  const [dropHot, setDropHot] = useState(false);
-
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDropHot(true);
-  }, []);
-  const handleDragLeave = useCallback(() => setDropHot(false), []);
-  const handleDragOver = useCallback((e: React.DragEvent) => e.preventDefault(), []);
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDropHot(false);
-    const json = e.dataTransfer.getData('application/x-forgeax-asset');
-    if (!json) return;
-    try {
-      const ref = JSON.parse(json) as { guid?: string; kind?: string };
-      if (!ref.guid || !DROPPABLE_TEXTURE_KINDS.has(ref.kind ?? '')) return;
-      onAssign(ref.guid);
-    } catch { /* malformed drag payload */ }
-  }, [onAssign]);
+  const {
+    dropClassName,
+    onDragEnter,
+    onDragLeave,
+    onDragOver,
+    onDrop,
+  } = useAssetRefDrop({
+    assetType: 'TextureAsset',
+    readOnly: !canEdit,
+    acceptKinds: DROPPABLE_TEXTURE_KINDS,
+    onBind: onAssign,
+  });
 
   const shortGuid = guid && guid.length > 18 ? `${guid.slice(0, 18)}…` : guid;
 
   return (
     <div
-      className={`mat-tex-slot${dropHot ? ' drop-hot' : ''}`}
+      className={`mat-tex-slot${dropClassName ? ` ${dropClassName}` : ''}`}
       data-testid={`mat-${label}`}
-      onDragEnter={canEdit ? handleDragEnter : undefined}
-      onDragLeave={canEdit ? handleDragLeave : undefined}
-      onDragOver={canEdit ? handleDragOver : undefined}
-      onDrop={canEdit ? handleDrop : undefined}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       <div className="mat-tex-slot-header">
         <span className="mat-tex-slot-label">{label}</span>
@@ -86,7 +80,14 @@ function TextureSlot({ label, guid, canEdit, onAssign, onClear, onBrowse }: Text
         <div className="mat-tex-empty">Drop or browse TextureAsset</div>
       )}
       {canEdit && (
-        <button className="mat-browse-btn" onClick={onBrowse} title={`Browse ${label}`}>
+        <button
+          className="mat-browse-btn"
+          onClick={(event) => {
+            const rect = anchorFromElement(event.currentTarget);
+            if (rect) onBrowse(rect);
+          }}
+          title={`Browse ${label}`}
+        >
           📁 Browse
         </button>
       )}
@@ -171,7 +172,7 @@ export function MaterialEditorPanel(): ReactElement {
 
   const [localMetallic, setLocalMetallic] = useState(metallic);
   const [localRoughness, setLocalRoughness] = useState(roughness);
-  const [pickerTarget, setPickerTarget] = useState<string | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<{ key: string; anchor: AssetPickerAnchor } | null>(null);
 
   useEffect(() => { setLocalMetallic(metallic); }, [metallic]);
   useEffect(() => { setLocalRoughness(roughness); }, [roughness]);
@@ -340,7 +341,7 @@ export function MaterialEditorPanel(): ReactElement {
                 canEdit={canEdit}
                 onAssign={(textureGuid) => handleAssignTexture(key, textureGuid)}
                 onClear={() => handleClearTexture(key)}
-                onBrowse={() => setPickerTarget(key)}
+                onBrowse={(anchor) => setPickerTarget({ key, anchor })}
               />
             ))}
           </div>
@@ -348,9 +349,10 @@ export function MaterialEditorPanel(): ReactElement {
           {pickerTarget && (
             <AssetPicker
               assetType="TextureAsset"
-              currentGuid={textureFields.find((f) => f.key === pickerTarget)?.guid ?? undefined}
-              onPick={(guid) => { handleAssignTexture(pickerTarget, guid); setPickerTarget(null); }}
-              onClear={() => { handleClearTexture(pickerTarget); setPickerTarget(null); }}
+              anchor={pickerTarget.anchor}
+              currentGuid={textureFields.find((f) => f.key === pickerTarget.key)?.guid ?? undefined}
+              onPick={(guid) => { handleAssignTexture(pickerTarget.key, guid); setPickerTarget(null); }}
+              onClear={() => { handleClearTexture(pickerTarget.key); setPickerTarget(null); }}
               onClose={() => setPickerTarget(null)}
             />
           )}

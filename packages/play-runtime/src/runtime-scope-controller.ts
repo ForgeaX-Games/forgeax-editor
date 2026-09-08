@@ -18,6 +18,7 @@ export interface RuntimeScopeControllerOptions {
   readonly initial?: RuntimeScopeCommand;
   readonly prepareGameMount?: (gameDir: string, gameId: string) => void | Promise<void>;
   readonly resolveRoots: (gameDir: string, gameId: string) => readonly string[];
+  readonly resolveProjectDdcRoot: (gameDir: string, gameId: string) => string;
   readonly resolveCatalogRoots: (gameDir: string, gameId: string) => readonly RuntimeCatalogRoot[];
 }
 
@@ -115,6 +116,40 @@ function respond(res: ServerResponse, statusCode: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function commandIdentity(command: RuntimeScopeCommand): string {
+  return JSON.stringify([
+    command.gameId,
+    command.scopeId,
+    command.generation,
+    command.gameDir,
+  ]);
+}
+
+function isReadyBinding(binding: RuntimeAssetBinding): boolean {
+  return binding.status === 'ready' || binding.status === 'degraded';
+}
+
+function errorCode(error: unknown): string {
+  if (error !== null && typeof error === 'object') {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
+  return 'runtime-scope-bind-failed';
+}
+
+function redactedBindError(error: unknown): {
+  readonly error: 'runtime-scope-bind-failed';
+  readonly code: string;
+  readonly detail: string;
+} {
+  const code = errorCode(error);
+  return {
+    error: 'runtime-scope-bind-failed',
+    code,
+    detail: code,
+  };
+}
+
 /**
  * Own the Play sidecar's single active-game binding. The browser can observe
  * the binding, but only the server-side credentialed control route may change
@@ -122,21 +157,56 @@ function respond(res: ServerResponse, statusCode: number, body: unknown): void {
  */
 export function createRuntimeScopeController(options: RuntimeScopeControllerOptions) {
   let serial = Promise.resolve();
-  let lastGeneration = 0;
-
+  let initialBind: Promise<RuntimeAssetBinding | undefined> | undefined;
+  let initialBindError: unknown;
+  let committed: { readonly identity: string; readonly binding: RuntimeAssetBinding } | undefined;
+  const inFlight = new Map<string, Promise<RuntimeAssetBinding>>();
   const rebind = (command: RuntimeScopeCommand): Promise<RuntimeAssetBinding> => {
+    const identity = commandIdentity(command);
+    if (committed?.identity === identity) return Promise.resolve(committed.binding);
+    const existing = inFlight.get(identity);
+    if (existing !== undefined) return existing;
+
     const run = serial.then(async () => {
-      if (command.generation <= lastGeneration) {
-        throw new Error(`runtime generation ${command.generation} is not newer than ${lastGeneration}`);
+      if (committed?.identity === identity) return committed.binding;
+      const currentGeneration = options.pack.runtimeBinding()?.generation;
+      if (currentGeneration !== undefined && command.generation <= currentGeneration) {
+        throw Object.assign(
+          new Error(`runtime generation ${command.generation} is not newer than ${currentGeneration}`),
+          { code: 'runtime-generation-stale' },
+        );
       }
       await options.prepareGameMount?.(command.gameDir, command.gameId);
       const roots = options.resolveRoots(command.gameDir, command.gameId);
+      const projectDdcRoot = options.resolveProjectDdcRoot(command.gameDir, command.gameId);
       const catalogRoots = options.resolveCatalogRoots(command.gameDir, command.gameId);
-      const binding = await options.pack.rebind(makeBinding(command, options.base, catalogRoots), roots);
-      lastGeneration = command.generation;
+      const binding = await options.pack.rebind(
+        makeBinding(command, options.base, catalogRoots),
+        roots,
+        projectDdcRoot,
+      );
+      if (
+        binding.gameId !== command.gameId
+        || binding.scopeId !== command.scopeId
+        || binding.generation !== command.generation
+      ) {
+        throw Object.assign(
+          new Error('runtime rebind returned a binding for a different game generation'),
+          { code: 'runtime-binding-mismatch' },
+        );
+      }
+      if (!isReadyBinding(binding)) {
+        throw new Error(`runtime generation ${command.generation} did not become ready (${binding.status})`);
+      }
+      committed = { identity, binding };
       return binding;
     });
     serial = run.then(() => undefined, () => undefined);
+    inFlight.set(identity, run);
+    void run.then(
+      () => inFlight.delete(identity),
+      () => inFlight.delete(identity),
+    );
     return run;
   };
 
@@ -146,9 +216,21 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
       server.middlewares.use(async (req, res, next) => {
         const url = (req.url ?? '').split('?')[0];
         if (url === '/__pack/runtime-binding.json' && req.method !== 'POST') {
-          const binding = options.pack.runtimeBinding();
+          // The Vite server can accept browser traffic before the first pack
+          // scan has published its binding. Keep the probe attached to that
+          // same promise instead of returning a transient `transitioning`
+          // snapshot and making every consumer invent its own timeout.
+          if (initialBind !== undefined) {
+            await initialBind;
+          }
+          const binding = committed?.binding ?? options.pack.runtimeBinding();
           if (binding === undefined) {
             respond(res, 503, { error: 'runtime-scope-unbound', status: 'unbound' });
+          } else if (
+            initialBindError !== undefined
+            && (binding.status === 'transitioning' || binding.status === 'unavailable')
+          ) {
+            respond(res, 503, { ...redactedBindError(initialBindError), status: binding.status });
           } else {
             respond(res, 200, binding);
           }
@@ -171,16 +253,15 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           const command = parseCommand(JSON.parse(await readBody(req)));
           respond(res, 200, await rebind(command));
         } catch (error) {
-          respond(res, 409, {
-            error: 'runtime-scope-bind-failed',
-            detail: error instanceof Error ? error.message : String(error),
-          });
+          respond(res, 409, redactedBindError(error));
         }
       });
 
       if (options.initial !== undefined) {
-        void rebind(options.initial).catch((error) => {
+        initialBind = rebind(options.initial).catch((error) => {
+          initialBindError = error;
           console.warn('[forgeax] initial runtime scope bind failed:', error);
+          return undefined;
         });
       }
     },

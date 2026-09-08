@@ -20,7 +20,16 @@ describe('AssetPreviewMaterial is schema-driven', () => {
     const panel = source('asset-inspector/AssetPreviewMaterial.tsx');
     expect(panel).toContain('resolveMaterialParamSchema');
     expect(panel).toContain('deriveMaterialParamRows');
-    expect(panel).toContain('ensureShaderParamSchemaIndex');
+    expect(panel).toContain('parameterContract');
+    expect(panel).not.toContain('ensureShaderParamSchemaIndex');
+    expect(panel).not.toContain('parseShaderParamSchemaIndex');
+  });
+
+  it('reads the production Engine MaterialReady contract before schema resolution', () => {
+    const panel = source('asset-inspector/AssetPreviewMaterial.tsx');
+    expect(panel).toContain('getMaterialReadiness(asset.guid)');
+    expect(panel).toContain("materialReadiness?.status === 'Ready'");
+    expect(panel).toContain('materialReadiness.parameterContract');
   });
 
   it('has no hard-coded parameter or texture-slot whitelist', () => {
@@ -38,8 +47,15 @@ describe('AssetPreviewMaterial is schema-driven', () => {
 
   it('routes in-progress drags through the transient preview channel, commits through the ledger', () => {
     const panel = source('asset-inspector/AssetPreviewMaterial.tsx');
+    // In-progress drags still preview live through the transient channel from
+    // within the panel body...
     expect(panel).toContain('setMaterialPreviewParam');
-    expect(panel).toContain("kind: 'updateMaterialParams'");
+    // ...but the ledger commit was lifted out of the panel body: Save is now a
+    // header panelAction (asset-editors-contributions saveActiveMaterial), which
+    // delegates to the registered Material PageController and host ToolClient.
+    const contributions = source('asset-editors-contributions.tsx');
+    expect(contributions).toContain("host.commands.execute('editor.save')");
+    expect(contributions).toContain('editor.save');
   });
 
   it('projects Two Sided / Blend from the authored pass renderState', () => {
@@ -48,17 +64,20 @@ describe('AssetPreviewMaterial is schema-driven', () => {
     expect(panel).toContain('mat-render-state');
   });
 
-  it('the preview viewport owns overlay teardown on the post-commit assetsChanged', () => {
-    // The panel deliberately does NOT clear staging on dispatch: the viewport
-    // drops the overlay when the re-resolved (post-write) values land, so the
-    // preview never flickers back to the pre-commit value in between.
+  it('the preview viewport keeps staging buffer values when catalog rebuild lags', () => {
     const viewport = readFileSync(
       resolve(import.meta.dir, '../../../edit-runtime/src/viewport/MaterialPreviewViewport.tsx'),
       'utf8',
     );
-    expect(viewport).toContain('clearMaterialPreviewParams');
-    expect(viewport).toContain('getMaterialPreviewParams');
+    expect(viewport).toContain('resolveMaterialPreviewDisplayValues');
+    expect(viewport).toContain('subscribeMaterialStaging');
+    expect(viewport).toContain('isMaterialStagingDirty');
     expect(viewport).toContain('assetsChanged');
+    const staging = readFileSync(
+      resolve(import.meta.dir, '../../../core/src/assets/material-preview-staging.ts'),
+      'utf8',
+    );
+    expect(staging).toContain('staging.staging.values');
   });
 });
 

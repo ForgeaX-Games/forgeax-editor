@@ -2,12 +2,12 @@
  * Content Browser → scene spawn (Add to Scene / drag-drop).
  * Single-realm: panels and viewport share the same host window.
  */
-import { resolveComponent } from '@forgeax/engine-ecs';
+import { componentDefinition } from '@forgeax/engine-ecs';
 import { walkMaterialPassesOverSharedRefs } from '@forgeax/engine-assets-runtime';
 import { gateway, broadcastAssetsChanged, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
 import { instantiateSceneRefUnderWorldDetailed } from '../store/scene-persistence';
 import type { SceneInstantiationCleanup, SceneInstantiationError } from '../store/persistence/disk-io';
-import { recoverMeshOriginalMaterialGuids, stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
+import { stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
 import { planAssetPlacement } from '../assets/asset-placement-plan';
 import { registerApplier } from '../io/appliers';
 import { syncAnimationSlotColumns, type AnimationSlotSyncIo } from './animation-slot-sync';
@@ -15,8 +15,99 @@ import { broadcastAssetsError } from '../store/assets-error-bus';
 import { fieldSchema } from './schema';
 import { planGroupedArrayPatch } from './array-edit';
 import type { EntityHandle } from './scene-types';
+import type { ScenePublicationFence } from '@forgeax/engine-assets-runtime';
 import type { AssetChatRef } from '../io/cross-panel-types';
 import type { CommandError } from '../types';
+
+export interface GeneratedSceneOverride {
+  readonly member: EntityHandle;
+  readonly component: string;
+  readonly field: string;
+  readonly value: unknown;
+}
+
+export interface GeneratedSceneOverrideState {
+  readonly members: ReadonlySet<EntityHandle>;
+  /** Keys are `${member}:${component}:${field}` and are producer-owned. */
+  readonly fields: ReadonlySet<string>;
+}
+
+export interface GeneratedSceneOverrideContext {
+  readonly sourcePath?: string;
+  readonly sourceKey?: string;
+  readonly generation?: number;
+  readonly publicationFence?: ScenePublicationFence;
+}
+
+export interface GeneratedSceneStaleOverrideError extends CommandError {
+  readonly code: 'generated-scene-stale-override';
+  readonly member: EntityHandle;
+  readonly component: string;
+  readonly field: string;
+  readonly sourcePath?: string;
+  readonly sourceKey?: string;
+  readonly generation?: number;
+  readonly retryable: false;
+  readonly recoveryActions: readonly string[];
+}
+
+export type GeneratedSceneOverrideValidation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: GeneratedSceneStaleOverrideError };
+
+const staleOverrideActions = Object.freeze([
+  'asset.preflight',
+  'revealInFileManager',
+  'promoteImportedScene',
+  'asset-source.clone',
+] as const);
+
+function overrideKey(override: GeneratedSceneOverride): string {
+  return `${override.member}:${override.component}:${override.field}`;
+}
+
+/** Validate an override against the current producer-owned member structure. */
+export function validateGeneratedSceneOverride(
+  override: GeneratedSceneOverride,
+  state: GeneratedSceneOverrideState,
+  context: GeneratedSceneOverrideContext = {},
+): GeneratedSceneOverrideValidation {
+  const memberPresent = state.members.has(override.member);
+  const fieldPresent = state.fields.has(overrideKey(override));
+  if (memberPresent && fieldPresent) return { ok: true };
+  return {
+    ok: false,
+    error: {
+      code: 'generated-scene-stale-override',
+      hint: memberPresent
+        ? `Generated Scene field ${override.component}.${override.field} no longer exists in this publication.`
+        : `Generated Scene member ${override.member} no longer exists in this publication.`,
+      member: override.member,
+      component: override.component,
+      field: override.field,
+      ...(context.sourcePath === undefined ? {} : { sourcePath: context.sourcePath }),
+      ...(context.sourceKey === undefined ? {} : { sourceKey: context.sourceKey }),
+      ...(context.generation === undefined ? {} : { generation: context.generation }),
+      retryable: false,
+      recoveryActions: staleOverrideActions,
+    },
+  };
+}
+
+/** Apply only exact member/field matches; stale overrides never retarget. */
+export function projectGeneratedSceneOverrides(
+  overrides: readonly GeneratedSceneOverride[],
+  state: GeneratedSceneOverrideState,
+  context: GeneratedSceneOverrideContext = {},
+): { readonly ok: true; readonly value: readonly GeneratedSceneOverride[] } | { readonly ok: false; readonly error: GeneratedSceneStaleOverrideError } {
+  const accepted: GeneratedSceneOverride[] = [];
+  for (const override of overrides) {
+    const validation = validateGeneratedSceneOverride(override, state, context);
+    if (!validation.ok) return validation;
+    accepted.push(override);
+  }
+  return { ok: true, value: accepted };
+}
 
 function toDragRef(ref: AssetChatRef): DragAssetRef {
   return {
@@ -44,21 +135,6 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
     gatewayRev: gateway.rev,
   })}`);
 
-  // feat-20260708 M1 path 1 (plan-strategy D-4, AC-02/AC-04): for a mesh ref,
-  // recover the source glTF per-submesh material GUIDs BEFORE building the spawn
-  // command, so they ride an EditorPendingMeshMaterials marker (drag-asset-spawn.ts)
-  // that the edit-runtime resolver turns into MeshRenderer.materials[]. This REPLACES
-  // the old `Material.submeshMaterials` death-write — `Material` was deleted by the
-  // world-container collapse, so spawnComponentData dropped it without a trace:
-  // recovered materials never reached the world and vanished on reopen/Play
-  // (AGENTS.md #2 / AC-04). Best-effort: any recovery miss leaves it single-material.
-  const materialGuids = kind === 'mesh' ? await recoverMeshOriginalMaterialGuids(ref) : undefined;
-  console.info(`[placement-diag] reference.dependencies ${JSON.stringify({
-    guid: ref.guid,
-    kind,
-    materialGuids: materialGuids ?? [],
-  })}`);
-
   // Phantom-ref guard input: the live catalog GUIDs, when a registry is bound
   // (always in the dev shell; absent in registry-less headless envs where the
   // validation is skipped rather than rejecting every spawn).
@@ -66,7 +142,6 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
     ? gateway.assetCatalog().map((row) => row.guid)
     : undefined;
   const plan = planAssetPlacement(ref, {
-    ...(materialGuids ? { materialGuids } : {}),
     ...(catalogGuids !== undefined ? { catalogGuids } : {}),
   });
   console.info(`[placement-diag] reference.plan ${JSON.stringify(plan.ok
@@ -349,7 +424,7 @@ type BindAssetRefEffect =
 function hasActiveSkinBinding(entity: number): boolean {
   try {
     const world = gateway.doc.world;
-    const skin = resolveComponent('Skin');
+    const skin = world?.components.resolve('Skin');
     if (!world || !skin) return false;
     const result = world.get(entity as EntityHandle, skin);
     if (!result.ok || !result.value) return false;
@@ -373,6 +448,28 @@ function firstMaterialShader(handle: number): string | undefined {
   }
 }
 
+function isSkinnedMaterialShader(shader: string | undefined): boolean {
+  return shader === 'forgeax::pbr-skin' || shader === 'forgeax::default-standard-pbr-skin';
+}
+
+/** Pre-write Skin <-> pbr-skin guard shared by bindAssetRef and drag-spawn placement. */
+export function validateMeshRendererMaterialBinding(
+  entity: number,
+  guids: string[],
+  handles: number[],
+  requestId = 'material-placement',
+): CommandError | undefined {
+  return validateMaterialBinding(
+    requestId,
+    entity,
+    'MeshRenderer',
+    'materials',
+    'MaterialAsset',
+    guids,
+    handles,
+  );
+}
+
 function validateMaterialBinding(
   requestId: string,
   entity: number,
@@ -390,7 +487,7 @@ function validateMaterialBinding(
   for (let i = 0; i < handles.length; i++) {
     const shader = firstMaterialShader(handles[i] ?? 0);
     if (shader === undefined) continue;
-    const materialIsSkinned = shader === 'forgeax::pbr-skin';
+    const materialIsSkinned = isSkinnedMaterialShader(shader);
     if (materialIsSkinned === targetIsSkinned) continue;
     return {
       code: 'asset-bind-incompatible',
@@ -469,14 +566,15 @@ async function bindAssetRefBody(
   // group or the strict document validator correctly rejects a length change as
   // a temporarily desynchronised SoA write (e.g. AnimationPlayer clips/times/
   // weights/speeds).
-  const isArrayField = fieldSchema(component, field)?.arrayMeta !== undefined;
+  const fieldDefinition = fieldSchema(component, field, gateway.activeWorld);
+  const isArrayField = fieldDefinition?.arrayMeta !== undefined && fieldDefinition.type !== 'vec';
   const current = readComponentData(entity, component) ?? {};
   const requestedValue = slot === undefined
     ? (isScalarSharedField(component, field) ? (handles[0] ?? 0) : handles)
     : (handles[0] ?? 0);
   let patch: Record<string, unknown> = { [field]: requestedValue };
   if (isArrayField) {
-    const planned = planGroupedArrayPatch({ component, field, value: requestedValue, ...(slot === undefined ? {} : { slot }) }, current);
+    const planned = planGroupedArrayPatch({ component, field, value: requestedValue, ...(slot === undefined ? {} : { slot }) }, current, gateway.activeWorld);
     if (!planned.ok) {
       return {
         ok: false,
@@ -544,11 +642,10 @@ function readComponentField(entity: number, component: string, field: string): u
 
 function readComponentData(entity: number, component: string): Record<string, unknown> | undefined {
   try {
-    const w = gateway.doc.world as unknown as { get(e: number, tok: unknown): { ok: boolean; value?: Record<string, unknown> } } | undefined;
-    if (!w) return undefined;
-    const tok = resolveComponent(component);
+    const w = gateway.activeWorld;
+    const tok = w.components.resolve(component);
     if (!tok) return undefined;
-    const r = w.get(entity, tok);
+    const r = w.get(entity as EntityHandle, tok);
     if (!r.ok || !r.value) return undefined;
     const out: Record<string, unknown> = {};
     for (const [field, value] of Object.entries(r.value)) {
@@ -567,8 +664,8 @@ function readComponentData(entity: number, component: string): Record<string, un
  *  is not. Defaults to array-form on an unknown field (the safe multi-slot shape). */
 function isScalarSharedField(component: string, field: string): boolean {
   try {
-    const tok = resolveComponent(component) as { schema?: Record<string, string> } | undefined;
-    const t = tok?.schema?.[field];
+    const tok = gateway.activeWorld.components.resolve(component);
+    const t = tok === undefined ? undefined : componentDefinition(tok).fields[field]?.type;
     return typeof t === 'string' && t.startsWith('shared<');
   } catch {
     return false;

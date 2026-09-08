@@ -38,10 +38,11 @@ import type { EditorOp, EditSession, CommandError } from '../types';
 // singleton gateway door directly; the side-effect import keeps registration.
 import '../store/selection';
 import { gateway } from '../store/gateway';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createSession(): EditSession {
   const s = createEditSession();
-  s.world = new World();
+  s.world = createCoreTestWorld();
   return s;
 }
 

@@ -11,8 +11,8 @@
 //   3. POST /api/files {path:<slug>/scenes/x.pack.json, content} → WRITE (B2!)
 //   4. GET the just-written path                → persisted content matches
 //   5. write outside the game (../escape)       → rejected (confinement holds)
-//   6. prefs wire (createPrefsRouter, the 2nd reused L1 router): GET empty
-//      workspace-layout → 200 json null; PUT a layout → ok; GET back → persisted
+//   6. prefs wire (createPrefsRouter, the 2nd reused L1 router): GET the empty
+//      browser-localStorage mirror; PUT a page-layout entry; GET it back
 //   7. tree optional=1: absent dir &optional=1 → 200 {tree:null}; without it → 404
 //
 // B0/B1 (can't start / read-only) would fail step 3. A studio server running is
@@ -167,31 +167,31 @@ async function main() {
       check('POST escaping game dir → rejected (400)', r.status === 400, `status ${r.status}`);
     }
 
-    // (6) prefs wire — the SECOND reused platform-io L1 router (createPrefsRouter,
-    //     §5 复用不另写后端). The client GET/PUTs /api/prefs/workbench-layout/* on
-    //     boot + every layout change; without this router those 404'd in --game
-    //     mode. Gate it the same way as /api/files so the reuse can't be焊回去.
-    //     (workbench-api-rename: workspace-layout → workbench-layout, ids scene/ai.)
+    // (6) prefs wire — Page layout is browser-localStorage-owned. Interface
+    //     stores versioned page layouts under forgeax:project:*:page-layout:*,
+    //     then browser-prefs-sync mirrors those keys through this platform-io
+    //     endpoint for export/import. Gate that current wire end to end.
     {
-      // empty workbench-layout → 200 + json null (not 404, not SPA html)
-      const rGet = await fetch(`${base}/api/prefs/workbench-layout/scene`);
+      const prefsUrl = `${base}/api/prefs/browser-localStorage`;
+      const rGet = await fetch(prefsUrl);
       const ct = rGet.headers.get('content-type') ?? '';
-      check('GET /api/prefs/workbench-layout → 200 json', rGet.status === 200 && ct.includes('application/json'), `status ${rGet.status} ct ${ct}`);
-      check('empty layout → null', (await rGet.json()) === null);
+      const empty = await rGet.json();
+      check('GET /api/prefs/browser-localStorage → 200 json', rGet.status === 200 && ct.includes('application/json'), `status ${rGet.status} ct ${ct}`);
+      check('empty browser prefs → versioned empty entries', empty?.v === 1 && Object.keys(empty?.entries ?? {}).length === 0, JSON.stringify(empty));
 
-      // PUT a layout → ok, then GET it back (persists under <game>/.forgeax/prefs)
-      const layout = { panels: { main: {} }, ts: 'b2-prefs' };
-      const rPut = await fetch(`${base}/api/prefs/workbench-layout/scene`, {
+      const layoutKey = `forgeax:project:${slug}:page-layout:editor:center`;
+      const layout = JSON.stringify({ schemaVersion: 1, pageTypeId: 'forgeax.editor', layoutVersion: 1, layout: { grid: {} } });
+      const rPut = await fetch(prefsUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(layout),
+        body: JSON.stringify({ v: 1, exportedAt: '2026-01-01T00:00:00.000Z', entries: { [layoutKey]: layout } }),
       });
       const putBody = await rPut.json();
-      check('PUT /api/prefs/workbench-layout → 200 ok', rPut.status === 200 && putBody?.ok === true, `status ${rPut.status} ${JSON.stringify(putBody)}`);
+      check('PUT /api/prefs/browser-localStorage → 200 ok', rPut.status === 200 && putBody?.ok === true && putBody?.keys === 1, `status ${rPut.status} ${JSON.stringify(putBody)}`);
 
-      const rBack = await fetch(`${base}/api/prefs/workbench-layout/scene`);
+      const rBack = await fetch(prefsUrl);
       const back = await rBack.json();
-      check('GET written layout → persisted content matches', back?.ts === 'b2-prefs', JSON.stringify(back));
+      check('GET mirrored page layout → persisted content matches', back?.entries?.[layoutKey] === layout, JSON.stringify(back));
     }
 
     // (7) tree optional=1 — expected-absent dir probes (editor scene/asset

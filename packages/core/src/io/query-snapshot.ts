@@ -20,21 +20,15 @@
 //   plan-strategy §2 D-5: querySnapshot full-open + three-layer value safety
 //   requirements AC-14/15/16: any registered component queryable + snapshot
 //     isolation + explicit failure for unknowns
-//   research F-4: resolveComponent / getRegisteredComponents / world.query are
-//     public; schema reflection via Component.schema
+//   research F-4: World-local resolveComponent / world.components / world.query
+//     are public; schema reflection via Component definition
 //   research RD-7: safety layer has no complete precedent, implemented here
 //   plan-tasks t25: delete whitelist + resolveComponent + structured return
 //   plan-tasks t26: opaque-handle + snap-copy + skipped fields
 
-import type { Component, ComponentSchema } from '@forgeax/engine-ecs';
-import {
-  resolveComponent,
-  getRegisteredComponents,
-  isManagedField,
-  isManagedArrayField,
-  isEntityField,
-} from '@forgeax/engine-ecs';
-import type { World } from '@forgeax/engine-ecs';
+import type { Component, World } from '@forgeax/engine-ecs';
+import { componentDefinition } from '@forgeax/engine-ecs';
+import { isManagedField, isManagedArrayField, isEntityField } from '@forgeax/engine-ecs/internal';
 import type { EntityId } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -147,10 +141,9 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
   // Resolve each component name to its token. Unknown → explicit error (AC-16).
   const tokens: Component[] = [];
   for (const name of allNames) {
-    const tok = resolveComponent(name);
+    const tok = _world.components.resolve(name);
     if (!tok) {
-      const registered = getRegisteredComponents();
-      const knownNames = Array.from(registered.keys()).sort();
+      const knownNames = Array.from(_world.components.entries().keys()).sort();
       // Suggest similar names
       const hints = (knownNames as string[]).filter((n) => n.toLowerCase() === name.toLowerCase());
       const suggestion = hints.length > 0
@@ -170,19 +163,19 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
   if (tokens.length === 0) return { ok: true, rows: [] };
 
   // Build a name→schema map for value-safety classification (t26)
-  const nameToSchema = new Map<string, ComponentSchema>();
+  const nameToSchema = new Map<string, ReturnType<typeof componentDefinition>['fields']>();
   for (const tok of tokens) {
-    nameToSchema.set(tok.name, tok.schema as ComponentSchema);
+    nameToSchema.set(tok.name, componentDefinition(tok).fields);
   }
 
   // The persistent Query is the engine's only public query constructor.
   // Components with fields belong in `read` so row.get() is legal; zero-field
   // tags belong in `with` because asking for tag data is intentionally rejected.
   const dataTokens = tokens.filter(
-    (token) => token.name !== 'Entity' && Object.keys(token.schema).length > 0,
+    (token) => token.name !== 'Entity' && Object.keys(componentDefinition(token).fields).length > 0,
   );
   const tagTokens = tokens.filter(
-    (token) => token.name !== 'Entity' && Object.keys(token.schema).length === 0,
+    (token) => token.name !== 'Entity' && Object.keys(componentDefinition(token).fields).length === 0,
   );
   const query = _world.query({ read: dataTokens, with: tagTokens }).unwrap();
 
@@ -199,7 +192,8 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
       }
       const value = queryRow.get(token) as Record<string, unknown>;
       const fields: Record<string, unknown> = {};
-      for (const [fieldName, fieldType] of Object.entries(schema)) {
+      for (const [fieldName, reflection] of Object.entries(schema)) {
+        const fieldType = reflection.type;
         const rawValue = value[fieldName];
         // The row API resolves authored strings and materializes arrays through
         // the same World storage owner. Copy arrays again at the Gateway seam so

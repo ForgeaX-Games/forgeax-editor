@@ -2,11 +2,13 @@
 //
 // feat-20260709-editor-world-partition-editorworld-super-composite / M4 (w18).
 //
-// editorWorld is the editor's OWN engine World — it carries only editor-authored
-// entities (the orbit camera + gizmo/param-gizmo overlays), never the authored
-// scene. It is a bare `new World()` plus `transformPlugin()` (the sole writer of
-// the derived Transform.world mat4 — plugin-factories.ts), which is all the
-// renderer needs to read a per-frame-updated transform for those entities.
+// editorWorld is the editor's OWN engine World — it carries only editor-owned
+// entities (the orbit camera + residual selection chrome), never the authored
+// scene. Transform/parameter Gizmos are frame-local DebugDraw overlays rather
+// than editorWorld renderables. It is a bare `new World()` plus
+// `transformPlugin()` (the sole writer of the derived Transform.world mat4 —
+// plugin-factories.ts), which is all the renderer needs for the camera and any
+// remaining editor-world chrome.
 //
 // This mirrors play-assemble.ts:187/199's precedent: an editor-side `new World()`
 // is a LEGAL construction (lint-no-second-world scans the engine submodule diff
@@ -22,7 +24,7 @@
 //   AGENTS.md invariant 4 (editor-side new World() out of no-second-world scan)
 
 import { World } from '@forgeax/engine-ecs';
-import { scenePlugin as transformPlugin } from '@forgeax/engine-scene';
+import { registerPropagateTransforms } from '@forgeax/engine-scene';
 
 /**
  * Build a fresh editorWorld with only the transform system registered.
@@ -34,8 +36,9 @@ import { scenePlugin as transformPlugin } from '@forgeax/engine-scene';
  */
 export function createEditorWorld(): World {
   const world = new World();
-  // transformPlugin.build(world) registers propagateTransforms — the sole writer
-  // of Transform.world, which the renderer reads for the camera + gizmo entities.
-  transformPlugin().build(world);
+  // registerPropagateTransforms(world) registers propagateTransforms — the sole writer
+  // of Transform.world, which the renderer reads for the camera + residual
+  // editor-world chrome.
+  registerPropagateTransforms(world);
   return world;
 }

@@ -11,3 +11,7 @@
 在自己的浏览器 realm 中使用 Vite 生成的模块 manifest；两条发现路径都调用同一个
 `@forgeax/engine-app` loader，因此共享 engine 所有的组件与 system 注册策略，而不共享
 host 适配器。
+
+共享的 `editorComponentVocabularyPlugin()` 是 Edit/Play 组合边界上的最小注册配置，负责
+在场景物化前注册序列化结构组件（`Entity`、`Disabled`、`ParticleEffectPlayer`）。可选能力
+插件（例如 `skinningPlugin()`）仍由各宿主在组合边界显式接入。

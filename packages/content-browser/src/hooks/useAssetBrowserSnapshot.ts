@@ -22,6 +22,7 @@ const EMPTY_SNAPSHOT: AssetBrowserSnapshot = Object.freeze({
   assets: Object.freeze([]),
   sources: Object.freeze([]),
   diagnostics: Object.freeze([]),
+  scriptablePacks: Object.freeze([]),
 });
 
 export interface UseAssetBrowserSnapshotResult {

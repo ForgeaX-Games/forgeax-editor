@@ -24,7 +24,9 @@ test('the editor workflow declares an explicit pool for every self-hosted job', 
 test('editor CI routes ordinary jobs to standard and browser smoke to heavy', () => {
   const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
   const pools = Object.fromEntries(
-    checkWorkflowText(workflow, 'ci.yml').selectors.map((selector) => [selector.job, selector.pool]),
+    checkWorkflowText(workflow, 'ci.yml').selectors
+      .filter((selector) => selector.kind === 'self-hosted')
+      .map((selector) => [selector.job, selector.pool]),
   );
   assert.deepEqual(pools, {
     'docs-policy': 'standard',
@@ -32,6 +34,7 @@ test('editor CI routes ordinary jobs to standard and browser smoke to heavy', ()
     'submodule-pin': 'standard',
     'b2-self-boot': 'standard',
     typecheck: 'standard',
+    'smoke-play-shard': 'heavy',
     'smoke-play': 'heavy',
   });
 });

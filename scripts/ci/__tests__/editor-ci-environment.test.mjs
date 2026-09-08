@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
+import { parse as parseYaml } from 'yaml';
 import {
   assertBunVersion,
   buildEnvironmentRecord,
@@ -107,17 +108,26 @@ test('CI workflow routes build pools through the pinned environment action', () 
   assert.match(workflow, /CI_WASM_PACK_VERSION:\s+0\.14\.0/);
   assert.doesNotMatch(workflow, /bun-version:\s*latest/);
   assert.doesNotMatch(workflow, /\bbunx\b/);
-  assert.match(workflow, /\$CI_BUN_PATH" x playwright install-deps chromium/);
-  assert.match(workflow, /\$CI_BUN_PATH" x playwright install chrome-beta/);
-  assert.match(workflow, /\$CI_BUN_PATH" x playwright install chromium/);
-  assert.match(workflow, /\$CI_BUN_PATH" x playwright install --dry-run chromium/);
-  assert.doesNotMatch(workflow, /^\s*run:\s*bun\b/m);
+  const workflowDefinition = parseYaml(workflow);
+  for (const [jobId, job] of Object.entries(workflowDefinition.jobs ?? {})) {
+    if (job.if === '${{ false }}') continue;
+    for (const step of job.steps ?? []) {
+      if (typeof step.run === 'string') {
+        assert.doesNotMatch(step.run, /^\s*bun\b/m, `${jobId} must use the admitted Bun runtime`);
+      }
+    }
+  }
   assert.match(workflow, /run: '\"\$CI_BUN_PATH\" run test:scripts'/);
   assert.match(workflow, /run: '\"\$CI_BUN_PATH\" scripts\/selfcheck-standalone-b2\.mjs'/);
   assert.equal(
     workflow.match(/uses:\s+\.\/\.github\/actions\/editor-ci-environment/g)?.length,
     4,
   );
+  const smokeEnvironmentAction = readFileSync(resolve('.github/actions/smoke-play-environment/action.yml'), 'utf8');
+  assert.match(smokeEnvironmentAction, /\$CI_BUN_PATH" x playwright install-deps chromium/);
+  assert.match(smokeEnvironmentAction, /\$CI_BUN_PATH" x playwright install chrome-beta/);
+  assert.match(smokeEnvironmentAction, /\$CI_BUN_PATH" x playwright install chromium/);
+  assert.match(smokeEnvironmentAction, /\$CI_BUN_PATH" x playwright install --dry-run chromium/);
   const environmentAction = readFileSync(resolve('.github/actions/editor-ci-environment/action.yml'), 'utf8');
   assert.match(environmentAction, /HOME=\$state_root\/home/);
   assert.match(environmentAction, /export HOME="\$state_root\/home"/);
@@ -152,4 +162,46 @@ test('CI workflow routes build pools through the pinned environment action', () 
   const admissionSource = readFileSync(resolve('scripts/ci/bun-runtime-admission.mjs'), 'utf8');
   assert.match(admissionSource, /CI_BUN_BINARY_SHA256/);
   assert.match(environmentAction, /Verify isolated Bun runtime/);
+});
+
+test('editor CI environment requires an explicit shard isolation key', () => {
+  const action = parseYaml(readFileSync(resolve('.github/actions/editor-ci-environment/action.yml'), 'utf8'));
+  const isolationKey = action.inputs?.['isolation-key'];
+
+  assert.ok(isolationKey, 'editor-ci-environment must declare isolation-key');
+  assert.equal(isolationKey.required, true, 'isolation-key must be required');
+
+  const actionText = readFileSync(resolve('.github/actions/editor-ci-environment/action.yml'), 'utf8');
+  assert.match(actionText, /isolation-key/);
+  assert.match(actionText, /CI_ENVIRONMENT_STATE_DIR/);
+  assert.match(actionText, /BUN_RUNTIME_TRANSPILER_CACHE_PATH/);
+  assert.match(actionText, /TMPDIR=/);
+  assert.match(actionText, /HOME=/);
+  assert.match(actionText, /isolation_key="\$\{\{ inputs\.isolation-key \}\}"/);
+  assert.match(actionText, /isolation_key="\$\{isolation_key\/\/\[\^A-Za-z0-9_\.-\]\/\-\}"/);
+  assert.match(actionText, /state_root=.*\$\{isolation_key\}/);
+  assert.match(actionText, /short_tmp_root=.*\$\{isolation_key\}/);
+  assert.match(actionText, /PLAYWRIGHT_BROWSERS_PATH=\$state_root\/playwright-browsers/);
+  assert.match(actionText, /BUN_INSTALL_CACHE_DIR=\$state_root\/bun-install-cache/);
+
+  const workflow = parseYaml(readFileSync(resolve('.github/workflows/ci.yml'), 'utf8'));
+  const expectedKeys = {
+    'prerequisite-release': 'prerequisite-release',
+    'b2-self-boot': 'b2-self-boot',
+    typecheck: 'typecheck',
+    'smoke-play': 'smoke-play',
+  };
+  for (const [jobId, expectedKey] of Object.entries(expectedKeys)) {
+    const environmentStep = workflow.jobs[jobId].steps.find(
+      (step) => step.uses === './.github/actions/editor-ci-environment',
+    );
+    assert.equal(environmentStep?.with?.['isolation-key'], expectedKey, `${jobId} must bind its isolation key`);
+  }
+
+  const smokeEnvironment = parseYaml(readFileSync(resolve('.github/actions/smoke-play-environment/action.yml'), 'utf8'));
+  assert.equal(smokeEnvironment.inputs?.['isolation-key']?.required, true);
+  const smokeStep = smokeEnvironment.runs.steps.find(
+    (step) => step.uses === './.github/actions/editor-ci-environment',
+  );
+  assert.equal(smokeStep?.with?.['isolation-key'], '${{ inputs.isolation-key }}');
 });

@@ -17,6 +17,7 @@ import {
   dirOfPath,
   fileFamilyOfWithAssets,
   fileKindLabel,
+  isResourceGroup,
   normalizeGameRelativePath,
   type DiskTreeNode,
   type SourceTreeNode,
@@ -26,6 +27,8 @@ import type { FavoritesAPI } from './useFavorites';
 import type { FilterAPI } from './useFilter';
 import type { SortAPI } from './useSort';
 import type { NavHistoryAPI } from './useNavHistory';
+import { projectScriptablePackBrowserTree, type ScriptablePackBrowserTree } from '../source-authoring/scriptable-pack-projection';
+import type { ScriptablePackReadModel } from '@forgeax/editor-core';
 
 export interface CBDerivedViewInputs {
   allAssets: CBAsset[];
@@ -38,6 +41,8 @@ export interface CBDerivedViewInputs {
   sort: SortAPI;
   nav: NavHistoryAPI;
   expandedPacks: Set<string>;
+  /** Canonical Engine projections supplied by the host; never rebuilt here. */
+  scriptablePacks?: readonly ScriptablePackReadModel[];
 }
 
 export interface CBDerivedView {
@@ -55,10 +60,11 @@ export interface CBDerivedView {
   sortedAssets: CBAsset[];
   registryOnlyAssets: CBAsset[];
   viewItems: CBViewItem[];
+  scriptablePackTrees: readonly ScriptablePackBrowserTree[];
 }
 
 export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
-  const { allAssets, gameSlug, diskTree, catalogAssetRoots, favorites, favoritesOnly, filter, sort, nav, expandedPacks } = inputs;
+  const { allAssets, gameSlug, diskTree, catalogAssetRoots, favorites, favoritesOnly, filter, sort, nav, expandedPacks, scriptablePacks = [] } = inputs;
   const { t } = useTranslation();
 
   // Scope the catalog to THIS game's declared asset roots. Each kept entry
@@ -109,6 +115,12 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
         // Scene family is derived from the catalog `kind`, not the filename, so
         // it stays aligned with findAllScenePacks / getSceneList.
         const family = fileFamilyOfWithAssets(node.name, assets);
+        // Resource-group folding is decided by the parent→child DATA relation,
+        // not the file family or producer subject: any source file that owns more
+        // than one catalog member folds (a glb/fbx unpacked into mesh/material/…
+        // AND an authored `.pack.json` holding several assets alike). A lone
+        // member never folds.
+        const isAssetPackage = isResourceGroup(assets.length);
         files.push({
           type: 'file',
           path: rel,
@@ -116,7 +128,10 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
           name: node.name,
           family,
           assets,
-          kindLabel: fileKindLabel(t, family),
+          isAssetPackage,
+          kindLabel: isAssetPackage
+            ? t('editor.contentBrowser.fileKinds.assetPackage')
+            : fileKindLabel(t, family),
           isFavorite: favorites.isFavorite({ kind: 'path', path: rel }),
         });
       }
@@ -357,28 +372,71 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   }, [diskFilePaths, filter.activeFilterCount, scopedAssets, sortedAssets]);
 
   // Single ordered array shared by the view AND multi-select — handleClick
-  // resolves items by flat index, so both must see the same order.
+  // resolves items by flat index, so both must see the same order. The array
+  // stays FLAT (a file's sub-assets are pushed right after it); the group-lane
+  // visual is composed purely at the CBGrid render layer, which re-slices these
+  // contiguous runs by each file's own `assets` guids — so grouping never
+  // perturbs the select index contract.
   //
-  // viewMode === 'asset': folders + disk files + auto-expanded pack sub-assets.
-  //
-  // viewMode === 'file': folders + raw disk files; pack/meta files with
-  // sub-assets can be manually toggled open via the chevron or double-click.
+  // Expansion is now uniform across both view modes (accordion, decision 4):
+  //   - normal: a file projects its sub-assets only when it is the one expanded
+  //     pack — the old `viewMode === 'asset'` auto-expand-everything is gone so
+  //     asset-root and file mode share the group-card → lane interaction.
+  //   - search (decision 1): every asset-bearing file is force-expanded so all
+  //     sub-assets flatten into the view; CBGrid drops the lanes while searching.
+  const searchActive = filter.searchQuery.trim() !== '';
+  const kindFilterActive = filter.kindFilterActive;
+  const matchesAsset = filter.matchesAsset;
   const viewItems = useMemo<CBViewItem[]>(() => {
+    // Asset-kind filter (decision: asset detail) -> asset-centric flat view. The
+    // selected kinds cut across every pack in the current folder, so we drop
+    // folders/files/lanes entirely and list just the matching assets (pack
+    // sub-assets + direct catalog assets), deduped by guid and name-sorted.
+    if (kindFilterActive) {
+      const out: CBAsset[] = [];
+      const seen = new Set<string>();
+      const pushMatch = (asset: CBAsset) => {
+        if (seen.has(asset.guid) || !matchesAsset(asset)) return;
+        seen.add(asset.guid);
+        out.push(asset);
+      };
+      for (const file of filesInPath) for (const asset of nestedAssetsOf(file)) pushMatch(asset);
+      for (const asset of sortedAssets) pushMatch(asset);
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      return out;
+    }
+
     const items: CBViewItem[] = [...visibleFoldersInPath];
 
     for (const file of filesInPath) {
+      // A file with no catalog content is a plain, non-expandable card.
+      if (file.assets.length === 0) { items.push(file); continue; }
+      const members = nestedAssetsOf(file); // already favorites-filtered
+      // 1:1 (a scene / material / single-texture pack …) — the file card and its
+      // one asset carry identical meaning, so we PROMOTE the asset card and drop
+      // the file card entirely. No fold: the lone asset is the top-level tile.
+      // Its former file-level actions (set current scene, audition) are grafted
+      // onto the asset card's context menu by the host (see handleContextMenu).
+      if (file.assets.length === 1) {
+        if (members.length > 0) items.push(...members);
+        continue;
+      }
+      // ≥2 members → a genuine container: the file card folds its members and
+      // reveals them inline only when expanded (search force-expands everything
+      // so every match surfaces in one flat pass).
       items.push(file);
-      const expanded = viewMode === 'asset' || expandedPacks.has(file.path);
-      // A scene pack is classified as `scene` by the canonical asset kind, but
-      // it is still an asset-bearing file and must project its catalog rows in
-      // asset-root mode (and when manually expanded in file mode).
-      if (!expanded || file.assets.length === 0) continue;
-      items.push(...nestedAssetsOf(file));
+      const expanded = searchActive || expandedPacks.has(file.path);
+      if (expanded && members.length > 0) items.push(...members);
     }
     items.push(...registryOnlyAssets);
 
     return items;
-  }, [expandedPacks, filesInPath, nestedAssetsOf, registryOnlyAssets, viewMode, visibleFoldersInPath]);
+  }, [expandedPacks, filesInPath, kindFilterActive, matchesAsset, nestedAssetsOf, registryOnlyAssets, searchActive, sortedAssets, visibleFoldersInPath]);
+
+  const scriptablePackTrees = useMemo(
+    () => Object.freeze(scriptablePacks.map(projectScriptablePackBrowserTree)),
+    [scriptablePacks],
+  );
 
   return {
     scopedAssets,
@@ -393,5 +451,6 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     sortedAssets,
     registryOnlyAssets,
     viewItems,
+    scriptablePackTrees,
   };
 }

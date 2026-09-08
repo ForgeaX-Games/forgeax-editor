@@ -45,13 +45,13 @@ export function projectCatalogPathToRoots(
 /**
  * Derive the authored storage container from the producer catalog.
  *
- * Internal assets live directly in their source `.pack.json`; imported outputs
- * are edited through the source sidecar. Runtime DDC and `/preview/` URLs are
- * never writable storage locations.
+ * Authored pack assets live directly in their source `.pack.json` or
+ * `.pack.ts`; imported outputs are edited through the source sidecar. Runtime
+ * DDC and `/preview/` URLs are never writable storage locations.
  */
 export function catalogStoragePath(locator: CatalogStorageLocator): string | null {
   const sourcePath = locator.sourcePath?.replace(/^\//, '');
-  if (sourcePath?.endsWith('.pack.json')) return sourcePath;
+  if (sourcePath?.endsWith('.pack.json') || sourcePath?.endsWith('.pack.ts')) return sourcePath;
   if (sourcePath) return `${sourcePath}.meta.json`;
 
   const packageUrl = locator.packageUrl.replace(/^\//, '');

@@ -13,6 +13,14 @@ describe('editor repository layout contract', () => {
     ])).toEqual([]);
   });
 
+  test('accepts a root extension source owned by its manifest', () => {
+    expect(findRootLayoutViolations([
+      'config',
+      'forgeax-extension.json',
+      'src',
+    ])).toEqual([]);
+  });
+
   test('rejects source, test, types, and dependency configuration at root', () => {
     expect(findRootLayoutViolations([
       'src',

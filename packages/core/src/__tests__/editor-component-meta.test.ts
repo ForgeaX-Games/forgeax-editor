@@ -6,29 +6,31 @@
 // Component.meta map after the engine registers its components.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
-import { ChildOf, Children } from '@forgeax/engine-scene';
-import { defineComponent, getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { ChildOf, Children, scenePlugin } from '@forgeax/engine-scene';
+import { createWorldContext, defineComponent, Entity, World } from '@forgeax/engine-ecs';
 import { getComponentSchema, isComponentHidden, _resetSchemaCache } from '../scene/schema';
 import {
   applyEditorComponentMeta,
   editorMetaOf,
   EDITOR_COMPONENT_META,
-  _resetEditorComponentMeta,
 } from '../scene/editor-component-meta';
 
 // Reference the runtime tokens so their modules (and thus registration) load.
 void ChildOf;
 void Children;
 
-beforeAll(() => {
-  _resetSchemaCache();
-  _resetEditorComponentMeta();
+const world = new World();
+
+beforeAll(async () => {
+  world.components.register(Entity).unwrap();
+  await createWorldContext(world, [scenePlugin()]);
+  _resetSchemaCache(world);
 });
 
 describe('editor component meta overlay', () => {
   it('injects meta.editor onto internal components post-registration', () => {
-    applyEditorComponentMeta();
-    const registry = getRegisteredComponents();
+    applyEditorComponentMeta(world);
+    const registry = world.components.entries();
     for (const name of ['Entity', 'Children', 'ChildOf']) {
       const comp = registry.get(name);
       expect(comp, `${name} should be registered`).toBeDefined();
@@ -37,18 +39,18 @@ describe('editor component meta overlay', () => {
   });
 
   it('does NOT pollute the engine token beyond the editor namespace', () => {
-    const childOf = getRegisteredComponents().get('ChildOf')!;
+    const childOf = world.components.resolve('ChildOf')!;
     // Engine never sets `editorHidden`; the overlay lives strictly under `editor`.
-    expect((childOf.meta as Record<string, unknown>).editorHidden).toBeUndefined();
+    expect((childOf as unknown as Record<string, unknown>).editorHidden).toBeUndefined();
     expect(editorMetaOf(childOf)).toEqual({ hidden: true });
   });
 
   it('isComponentHidden reflects the overlay (internal hidden, business visible)', () => {
-    expect(isComponentHidden('Entity')).toBe(true);
-    expect(isComponentHidden('Children')).toBe(true);
-    expect(isComponentHidden('ChildOf')).toBe(true);
-    expect(isComponentHidden('Transform')).toBe(false);
-    expect(isComponentHidden('MeshRenderer')).toBe(false);
+    expect(isComponentHidden('Entity', world)).toBe(true);
+    expect(isComponentHidden('Children', world)).toBe(true);
+    expect(isComponentHidden('ChildOf', world)).toBe(true);
+    expect(isComponentHidden('Transform', world)).toBe(false);
+    expect(isComponentHidden('MeshRenderer', world)).toBe(false);
   });
 
   it('config SSOT marks exactly the internal components as hidden', () => {
@@ -83,13 +85,14 @@ describe('editor component meta overlay', () => {
   // per-name: late-registered components are injected on a later call.
   it('late-registered components still receive the overlay (per-name guard)', () => {
     const name = 'R1_OverlayLateRegistrationFixture';
-    if (resolveComponent(name) === undefined) {
+    if (world.components.resolve(name) === undefined) {
       // First apply while the fixture is NOT registered — skipped, must not latch.
-      applyEditorComponentMeta({ [name]: { bespoke: { editorId: 'late-fixture-editor' } } });
-      defineComponent(name, { value: 'f32' });
+      applyEditorComponentMeta(world, { [name]: { bespoke: { editorId: 'late-fixture-editor' } } });
+      const token = defineComponent(name, { value: 'f32' });
+      world.components.register(token).unwrap();
     }
-    applyEditorComponentMeta({ [name]: { bespoke: { editorId: 'late-fixture-editor' } } });
-    _resetSchemaCache();
-    expect(getComponentSchema(name)?.bespoke?.editorId).toBe('late-fixture-editor');
+    applyEditorComponentMeta(world, { [name]: { bespoke: { editorId: 'late-fixture-editor' } } });
+    _resetSchemaCache(world);
+    expect(getComponentSchema(name, world)?.bespoke?.editorId).toBe('late-fixture-editor');
   });
 });

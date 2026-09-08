@@ -40,5 +40,15 @@
     "requiredContextsRef": "requiredContexts",
     "requiredContexts": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"],
     "measurementRequired": false
+  },
+  "portabilityAssertions": {
+    "required": false,
+    "platforms": ["linux", "windows", "macos"],
+    "entries": {
+      "scheduled": {"event": "schedule", "profile": "nightly/scheduled"},
+      "manual": {"event": "workflow_dispatch", "profile": "nightly/scheduled"},
+      "main-push": {"event": "push", "branch": "main", "profile": "main"}
+    },
+    "requiredContexts": ["b2-self-boot", "typecheck", "submodule-pin", "smoke-play"]
   }
 }

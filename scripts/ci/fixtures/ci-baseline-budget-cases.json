@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "forgeax-ci-baseline-budget-cases/v1",
+  "cases": [
+    {
+      "name": "success threshold",
+      "owner": "ci-baseline",
+      "expectedJobNames": ["build", "smoke"],
+      "acceptedTopology": {
+        "topologyId": "topology-ci-v2",
+        "graphDigest": "sha256:graph-ci-v2",
+        "rosterKey": "[build,smoke]",
+        "workflow": {
+          "file": ".github/workflows/ci.yml",
+          "name": "Editor CI"
+        }
+      },
+      "successCondition": {
+        "label": "completed run and every admitted job concluded success",
+        "runStatus": "completed",
+        "runConclusion": "success",
+        "jobStatus": "completed",
+        "jobConclusion": "success"
+      },
+      "mixedPopulationCases": [
+        {"name": "failure mixed", "expectedCode": "budget-population-failure-mixed"},
+        {"name": "roster mixed", "expectedCode": "budget-population-roster-mismatch"},
+        {"name": "topology mixed", "expectedCode": "budget-population-topology-mismatch"},
+        {"name": "retry folded", "expectedCode": "budget-population-attempt-duplicate"},
+        {"name": "source mixed", "expectedCode": "budget-population-source-mismatch"}
+      ],
+      "sampleIds": [
+        "sample-01", "sample-02", "sample-03", "sample-04", "sample-05",
+        "sample-06", "sample-07", "sample-08", "sample-09", "sample-10",
+        "sample-11", "sample-12", "sample-13", "sample-14", "sample-15",
+        "sample-16", "sample-17", "sample-18", "sample-19", "sample-20"
+      ],
+      "sampleTemplate": {
+        "run": {
+          "id": 1000,
+          "status": "completed",
+          "conclusion": "success",
+          "event": "push",
+          "branch": "main",
+          "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00"
+        },
+        "jobs": [
+          {"name": "build", "status": "completed", "conclusion": "success"},
+          {"name": "smoke", "status": "completed", "conclusion": "success"}
+        ],
+        "rosterKey": "[build,smoke]",
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00",
+          "runId": 1000,
+          "runAttempt": 1,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[build,smoke]",
+          "workflow": {
+            "file": ".github/workflows/ci.yml",
+            "name": "Editor CI"
+          }
+        }
+      }
+    }
+  ]
+}

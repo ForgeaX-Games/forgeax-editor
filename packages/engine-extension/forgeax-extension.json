@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "id": "forgeax.engine.runtime",
+  "version": "1.0.0",
+  "kind": "engine",
+  "displayName": { "en": "ForgeaX Engine Runtime" },
+  "entry": { "backend": "./dist/engine-baseline.js" },
+  "contributes": { "contributions": ["engine.preview", "engine.runtime"], "capabilities": ["engine.preview.create", "engine.runtime.attach"] },
+  "variants": ["web", "desktop"]
+}

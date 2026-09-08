@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "forgeax-ci-baseline-error-cases/v2",
+  "cases": [
+    {
+      "name": "missing needs",
+      "operation": "missing-needs",
+      "expectedCode": "workflow-needs-missing",
+      "graph": {
+        "workflows": [{ "file": "ci.yml", "jobs": [{ "id": "build", "name": "build", "needs": ["missing"], "condition": null }] }]
+      }
+    },
+    {
+      "name": "cycle",
+      "operation": "cycle",
+      "expectedCode": "workflow-cycle",
+      "graph": {
+        "workflows": [{ "file": "ci.yml", "jobs": [
+          { "id": "a", "name": "a", "needs": ["b"], "condition": null },
+          { "id": "b", "name": "b", "needs": ["a"], "condition": null }
+        ] }]
+      }
+    },
+    {
+      "name": "unadmitted topology",
+      "operation": "unadmitted-topology",
+      "expectedCode": "topology-not-admitted",
+      "graph": {
+        "workflows": [{ "file": "ci.yml", "jobs": [
+          { "id": "conditional", "name": "conditional", "needs": [], "condition": "github.event_name == 'push'" }
+        ] }]
+      }
+    },
+    {
+      "name": "mixed attempt",
+      "operation": "mixed-attempt",
+      "expectedCode": "mixed-attempt",
+      "provenances": [
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 1,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        },
+        {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-ci-v2",
+          "graphDigest": "sha256:graph-ci-v2",
+          "rosterKey": "[[\"build\"]]",
+          "workflow": { "file": ".github/workflows/ci.yml", "name": "Editor CI" }
+        }
+      ]
+    }
+  ],
+  "m3Cases": [
+    {"name": "missing producer", "hintPattern": "Collect"},
+    {"name": "missing consumer", "hintPattern": "Collect"},
+    {"name": "reversed readiness time", "hintPattern": "Check"},
+    {"name": "readiness provenance mismatch", "hintPattern": "Collect"},
+    {"name": "same artifact name with different identity", "hintPattern": "Join"}
+  ]
+}

@@ -78,7 +78,7 @@ function parseArgs(argv) {
 }
 
 async function waitForEditor(page) {
-  await page.locator('.fx-dockwrap').waitFor({ state: 'visible', timeout: 60_000 });
+  await page.locator('.fx-dockregion-DockShell').waitFor({ state: 'visible', timeout: 60_000 });
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const runtime = page.frames().find((frame) => {

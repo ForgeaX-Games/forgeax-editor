@@ -47,8 +47,8 @@ import { worldRootHandles } from '../entity-state';
 import type { ScenePersistenceContext, LoadedInlineSnapshot } from '../scene-persistence';
 import type { CommandError, EditorOp, EditSession } from '../../types';
 import type { EntityHandle, WorldType } from '../../scene/scene-types';
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
-import type { SceneAsset } from '@forgeax/engine-types';
+import { resolveAssetHandle, scenePublicationFenceFromCatalog, type AssetRegistry } from '@forgeax/engine-assets-runtime';
+import type { CatalogEntry, SceneAsset } from '@forgeax/engine-types';
 import { assetIO, type AssetResourceTransactionPort } from '../../io/asset-io-facade';
 import type { ImportedPreviewSessionState } from '../../io/scene-authoring-session';
 import { normalizeAnimationPlayerSceneAsset } from '../../scene/animation-slot-sync';
@@ -60,6 +60,31 @@ import {
 import { createEngineFacade } from '../../io/engine-facade';
 import { normalizeMaterialPackEntries } from '../../io/material-pack-refs';
 import { normalizeMaterialInstancePackEntries } from '../../assets/material-instance-schema';
+
+const SCENE_READINESS_RETRY_LIMIT = 3;
+
+function isTransientSceneReadinessError(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; expected?: unknown; hint?: unknown };
+  return candidate.code === 'asset-parse-failed'
+    && typeof candidate.expected === 'string'
+    && candidate.expected.includes('all referenced assets to be public-ready')
+    && typeof candidate.hint === 'string'
+    && candidate.hint.includes('retry after every referenced GUID has loaded successfully');
+}
+async function loadSceneWithReadinessRetry(
+  registry: AssetRegistry,
+  guid: Parameters<AssetRegistry['loadByGuid']>[0],
+): ReturnType<AssetRegistry['loadByGuid']> {
+  let result = await registry.loadByGuid(guid);
+  for (let attempt = 1; attempt < SCENE_READINESS_RETRY_LIMIT; attempt++) {
+    if (result.ok || !isTransientSceneReadinessError(result.error)) return result;
+    await registry.refreshCatalog();
+    await new Promise<void>((resolve) => setTimeout(resolve, attempt * 25));
+    result = await registry.loadByGuid(guid);
+  }
+  return result;
+}
 
 /** The single-pointer gateway surface disk-io needs — a structural mirror of
  *  EditGateway (the same DI shape run-lifecycle's RunGateway uses). Headless
@@ -137,6 +162,49 @@ function normalizeAndCatalogSceneAsset(
     throw new Error(`normalized scene catalog failed: ${cataloged.error.code}`);
   }
   return cataloged.value as SceneAsset;
+}
+
+/** Attach the Engine-owned publication tuple to authored mount records at the
+ * persistence boundary. Derived SceneInstance members are never collected here;
+ * only the authored mount source and its current Catalog fence are persisted. */
+export function attachPublicationFences(scene: SceneAsset, registry: AssetRegistry, world?: WorldType): SceneAsset {
+  if (scene.mounts === undefined || scene.mounts.length === 0) return scene;
+  // The pack-index and Catalog replica are two projections of one Engine
+  // publication. During a watcher/catalog handoff the replica can still carry
+  // the prior tuple while loadByGuid has already refreshed packIndexCache. Use
+  // the latest complete pack-index publication for fence derivation, falling
+  // back to the replica for rows that are not present there. This keeps save
+  // bound to the same complete tuple that a fresh Play world will validate.
+  const entriesByGuid = new Map(
+    (registry.catalogSnapshot()?.entries ?? []).map((entry) => [entry.guid.toLowerCase(), entry]),
+  );
+  for (const [guid, rawEntry] of registry.packIndexCache ?? []) {
+    const sourcePath = rawEntry.sourcePath;
+    if (rawEntry.publication === undefined || sourcePath === undefined) continue;
+    const candidate: CatalogEntry = { ...rawEntry, guid, sourcePath };
+    entriesByGuid.set(guid.toLowerCase(), candidate);
+  }
+  const entries = [...entriesByGuid.values()];
+  const mounts = scene.mounts.map((mount) => {
+    const sourceGuid = typeof mount.source === 'string'
+      ? mount.source
+      : world === undefined
+        ? undefined
+        : (() => {
+          const resolved = resolveAssetHandle<SceneAsset>(world, mount.source as never);
+          return resolved.ok && resolved.value.kind === 'scene'
+            ? registry._guidForAsset(resolved.value)
+            : undefined;
+        })();
+    if (sourceGuid === undefined) return mount;
+    const fence = scenePublicationFenceFromCatalog(entries, sourceGuid);
+    return fence.ok ? { ...mount, publicationFence: fence.value } : mount;
+  });
+  return { ...scene, mounts };
+}
+
+function reportPackRoundtripBoundary(event: Record<string, unknown>): void {
+  console.info(`[pack-roundtrip-boundary] ${JSON.stringify(event)}`);
 }
 
 /**
@@ -405,13 +473,59 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
   /** @internal-store — disk-watch READS this to filter ws events to THIS game's
    *  scene file (D-6 seam). */
   function scenePath(): string | null {
-    if (ctx.authoringSession.mode !== 'authored') return null;
-    if (ctx.currentSceneId === 'default') return null;
+    let path: string | null = null;
+    if (ctx.authoringSession.mode !== 'authored') {
+      reportPackRoundtripBoundary({
+        phase: 'save-precondition',
+        mode: ctx.authoringSession.mode,
+        sceneId: ctx.currentSceneId,
+        sceneFile: ctx.currentSceneFile,
+        sceneList: ctx.sceneList,
+        path,
+      });
+      return path;
+    }
+    if (ctx.currentSceneId === 'default') {
+      reportPackRoundtripBoundary({
+        phase: 'save-precondition',
+        mode: ctx.authoringSession.mode,
+        sceneId: ctx.currentSceneId,
+        sceneFile: ctx.currentSceneFile,
+        sceneList: ctx.sceneList,
+        path,
+      });
+      return path;
+    }
     if (ctx.currentSceneFile) {
       const entry = ctx.sceneList.find((s) => s.id === ctx.currentSceneFile);
-      if (entry) return deps.resolveGamePath(entry.pack);
+      if (entry) path = deps.resolveGamePath(entry.pack);
     }
-    return deps.resolveGamePath('scene.pack.json');
+    // A discovered scene manifest (or a declared default GUID) is the modern
+    // level model. If it has no resolvable current scene, keep the editor on an
+    // empty world. Falling through here would reinterpret an unresolved modern
+    // scene as the legacy top-level `scene.pack.json` and issue a guaranteed
+    // 404 for games that intentionally have no editable default yet.
+    if (path === null && (ctx.sceneList.length > 0 || ctx.defaultSceneGuid !== null)) {
+      reportPackRoundtripBoundary({
+        phase: 'save-precondition',
+        mode: ctx.authoringSession.mode,
+        sceneId: ctx.currentSceneId,
+        sceneFile: ctx.currentSceneFile,
+        sceneList: ctx.sceneList,
+        path,
+      });
+      return path;
+    }
+    if (path === null) path = deps.resolveGamePath('scene.pack.json');
+    reportPackRoundtripBoundary({
+      phase: 'save-precondition',
+      mode: ctx.authoringSession.mode,
+      sceneId: ctx.currentSceneId,
+      sceneFile: ctx.currentSceneFile,
+      sceneList: ctx.sceneList,
+      path,
+    });
+    return path;
   }
 
   /** The scene asset GUID to persist for the active scene. Prefers the GUID we
@@ -461,8 +575,8 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     }
     // Strip only the engine-internal Disabled marker. Visibility is authored
     // data and must remain in the SceneAsset so Edit and Play agree.
-    const strippedAsset = stripDisabledMarker(assetR.value) as SceneAsset;
-    const packR = serializeSceneAssetToPack(strippedAsset, sceneGuid);
+    const strippedAsset = attachPublicationFences(stripDisabledMarker(assetR.value) as SceneAsset, reg, w);
+    const packR = serializeSceneAssetToPack(strippedAsset, w.components.entries(), sceneGuid);
     if (!packR.ok) {
       console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
       return null;
@@ -495,6 +609,13 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     console.info(
       `[editor-core][diag] worldToPack: sceneGuid=${sceneGuid}, rootHandles=${rootHandles.length}, assets before append=${preAppendCount}, after=${postAppendCount}, orphanMerged=${orphanMerged}`,
     );
+    reportPackRoundtripBoundary({
+      phase: 'world-to-pack',
+      sceneGuid: sceneGuid ?? null,
+      rootHandles,
+      serializedPack: packObj,
+      canonicalRevision: canonicalScenePackRevision(packObj),
+    });
     return JSON.stringify(packObj, null, 2) + '\n';
   }
 
@@ -606,8 +727,14 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       if (!parsed.ok) return false;
       // Fetch + parse before touching the current world. A load failure leaves
       // the current scene intact.
-      const loadRes = await reg.loadByGuid(parsed.value);
+      const loadRes = await loadSceneWithReadinessRetry(reg, parsed.value);
       if (!loadRes.ok) {
+        reportPackRoundtripBoundary({
+          phase: 'load-or-instantiate',
+          sceneGuid,
+          loadByGuid: { ok: false, error: loadRes.error },
+          instantiateFlat: null,
+        });
         console.warn(`[editor-core] scene asset load failed guid=${sceneGuid}: ${JSON.stringify(loadRes.error)}`);
         return false;
       }
@@ -615,6 +742,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
       const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) {
+        reportPackRoundtripBoundary({
+          phase: 'load-or-instantiate',
+          sceneGuid,
+          loadByGuid: { ok: true, entityCount: sceneAsset.entities.length },
+          instantiateFlat: { ok: false, error: instRes.error },
+        });
         console.warn(`[editor-core] scene instantiateFlat failed guid=${sceneGuid}: ${JSON.stringify(instRes.error)}`);
         return false;
       }
@@ -630,6 +763,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       }
       teardownCurrentScene(new Set(stagedRoots.map((root) => root as number)));
       ctx.currentSceneEntities = stagedRoots;
+      reportPackRoundtripBoundary({
+        phase: 'load-or-instantiate',
+        sceneGuid,
+        loadByGuid: { ok: true, entityCount: sceneAsset.entities.length },
+        instantiateFlat: { ok: true, topLevelEntityCount: stagedRoots.length },
+      });
       stagedRoots = [];
       return true;
     } catch (error) {
@@ -730,7 +869,13 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       }
       const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
       const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
-      const instRes = reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
+      const fence = scenePublicationFenceFromCatalog(
+        reg.catalogSnapshot()?.entries ?? [],
+        sceneGuid,
+      );
+      const instRes = fence.ok
+        ? reg.instantiateWithPublicationFence(sceneHandle, w, parentHandle as EntityHandle, fence.value)
+        : reg.instantiate(sceneHandle, w, parentHandle as EntityHandle);
       if (!instRes.ok) {
         console.warn('[editor-core] instantiateSceneRefUnderWorld: instantiate failed:', (instRes.error as { code?: string })?.code);
         return unavailable('scene-instantiate-failed', 'scene asset could not be instantiated', instRes.error);
@@ -848,7 +993,24 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
    *  loadSceneByGuid (AC-09). */
   async function doLoadDocFromDisk(): Promise<boolean> {
     const p = scenePath();
-    if (!p) return false;
+    if (!p) {
+      // A declared defaultScene can be a generated/imported catalog output whose
+      // source is not an authored *.pack.json (for example a ScriptablePack
+      // *.pack.ts). There is deliberately no fake disk path to read or save back
+      // to: open the authoritative catalog asset directly and keep scenePath()
+      // null so persistence remains fail-closed.
+      const catalogSceneGuid = ctx.defaultSceneGuid;
+      if (catalogSceneGuid === null) return false;
+      const loaded = await loadSceneByGuid(catalogSceneGuid);
+      if (!loaded) return false;
+      ctx.currentSceneGuid = catalogSceneGuid;
+      ctx.loadedInlineAssetFloor = null;
+      ctx.loadedInlineAssets = null;
+      ctx.loadedEntityFloor = null;
+      ctx.isDirty = false;
+      deps.notifyDocChanged();
+      return true;
+    }
     const reg = gateway.doc.registry;
     const previousLoadState = {
       currentSceneGuid: ctx.currentSceneGuid,
@@ -1097,6 +1259,14 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     const acceptedRevision = options.acceptedRevision ?? deps.gateway.rev ?? 0;
     let content: string | null;
     try {
+      // Publication fences are derived from the Engine catalog during
+      // serialization. Reconcile that SSOT first so a catalog watcher update
+      // cannot leave the saved mount bound to an older generated publication.
+      const registry = gateway.doc.registry;
+      if (registry !== undefined) {
+        await registry.refreshCatalog?.();
+        await registry.reconcileCatalog();
+      }
       content = deps.serializeForSave === undefined
         ? serializedPack()
         : deps.serializeForSave(gateway.doc, sceneGuidForSave());

@@ -1,0 +1,60 @@
+/* material-toolbar — compact search field for the Material properties panel
+   header. Mirrors the Inspector `.dp-search` skin but sized to sit inline in the
+   panel-header action row next to the flat command buttons. */
+
+/* The search fills the header's growing center zone: stretch every wrapper the
+   panel-header puts between the zone and our field (all `flex: 0 0 auto` by
+   default), scoped to this one control so other header controls are untouched. */
+.fx-panel-header-zone[data-zone='center']
+  .fx-panel-toolbar:has(.fx-panel-control[data-control='material.search']) {
+  flex: 1 1 auto;
+  width: 100%;
+}
+.fx-panel-toolbar-item:has(> .fx-panel-control[data-control='material.search']) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fx-panel-control[data-control='material.search'] {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.fx-matbar-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: var(--color-background-elevated);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.fx-matbar-search:focus-within {
+  border-color: var(--color-brand-line);
+}
+
+.fx-matbar-search .mag {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+
+.fx-matbar-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-family: var(--prim-font-sans);
+}
+
+.fx-matbar-search input::placeholder {
+  color: var(--color-text-tertiary);
+}

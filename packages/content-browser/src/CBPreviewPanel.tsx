@@ -10,11 +10,12 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ResizeHandle } from '@forgeax/editor-core';
 import { AssetThumbnail } from '@forgeax/editor-ui';
+import { FilePreview } from '@forgeax/editor-file-preview';
 import { colorForAssetKind, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind } from './content-browser-icons';
 import { CBUiAssetPreview } from './CBUiAssetPreview';
-import { CBFontPreview } from './CBFontPreview';
 import { dirOfPath, type PreviewFileInfo } from './content-browser-format';
 import { realPayload } from './hooks';
+import { fileSupportsDualPreview, type CBFilePreviewMode } from './preview-file-source';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
 
 export interface CBPreviewPanelProps {
@@ -30,6 +31,54 @@ export interface CBPreviewPanelProps {
   onDragEnd: () => void;
 }
 
+function previewItemKey(item: CBViewItem | null): string | null {
+  if (!item) return null;
+  return item.type === 'asset' ? item.guid : item.path;
+}
+
+function assetRowName(assets: readonly CBAsset[], asset: CBAsset): string {
+  const nameCounts = new Map<string, number>();
+  for (const entry of assets) nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  return (nameCounts.get(asset.name) ?? 0) > 1 ? `${asset.name} · ${asset.kind}` : asset.name;
+}
+
+function FileAssetList({ file }: { file: CBFile }): ReactNode {
+  return (
+    <div className="cb-preview-asset-list">
+      {file.assets.map(asset => (
+        <div className="cb-preview-asset-row" key={asset.guid}>
+          <AssetThumbnail kind={asset.kind} payload={realPayload(asset.guid, asset.payload)} packPath={asset.packPath} size={30} />
+          <div>
+            <div>{assetRowName(file.assets, asset)}</div>
+            <div className="kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
+          </div>
+          <span className="guid">{asset.guid.slice(0, 10)}...</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FileSourcePreview({ file, previewInfo }: { file: CBFile; previewInfo: PreviewFileInfo | null }): ReactNode {
+  const rawUrl = `/api/files/raw?path=${encodeURIComponent(file.diskPath)}`;
+  const dotIndex = file.name.lastIndexOf('.');
+  const ext = dotIndex >= 0 ? file.name.slice(dotIndex + 1).toLowerCase() : '';
+  return (
+    <FilePreview
+      input={{
+        path: file.diskPath,
+        name: file.name,
+        family: file.family,
+        ext,
+        mime: previewInfo?.mime ?? '',
+        size: previewInfo?.size ?? 0,
+        content: previewInfo?.content,
+        rawUrl,
+      }}
+    />
+  );
+}
+
 export function CBPreviewPanel({
   previewItem,
   foldersInPath,
@@ -41,9 +90,21 @@ export function CBPreviewPanel({
 }: CBPreviewPanelProps): ReactNode {
   const { t } = useTranslation();
   const [previewInfo, setPreviewInfo] = useState<PreviewFileInfo | null>(null);
+  const [filePreviewMode, setFilePreviewMode] = useState<CBFilePreviewMode>('assets');
+  const previewKey = previewItemKey(previewItem);
+
+  useEffect(() => {
+    setFilePreviewMode('assets');
+  }, [previewKey]);
 
   useEffect(() => {
     if (!previewItem || previewItem.type !== 'file') {
+      setPreviewInfo(null);
+      return;
+    }
+    const needsSource = previewItem.assets.length === 0
+      || (fileSupportsDualPreview(previewItem) && filePreviewMode === 'source');
+    if (!needsSource) {
       setPreviewInfo(null);
       return;
     }
@@ -57,7 +118,7 @@ export function CBPreviewPanel({
         if (!cancelled) setPreviewInfo(null);
       });
     return () => { cancelled = true; };
-  }, [previewItem]);
+  }, [previewItem, filePreviewMode]);
 
   // Empty placeholder — keeps the panel (and its resize handle) mounted so the
   // layout is identical whether or not something is selected.
@@ -85,6 +146,7 @@ export function CBPreviewPanel({
     : previewItem.type === 'file'
       ? <FileFamilyIcon family={previewItem.family} />
       : <ContentBrowserIcon name={iconNameForAssetKind(previewItem.kind)} />;
+  const showDualPreview = previewItem.type === 'file' && fileSupportsDualPreview(previewItem);
 
   let body: ReactNode;
   if (previewItem.type === 'folder') {
@@ -108,39 +170,12 @@ export function CBPreviewPanel({
       </div>
     );
   } else if (previewItem.type === 'file') {
-    const rawUrl = `/api/files/raw?path=${encodeURIComponent(previewItem.diskPath)}`;
     if (previewItem.assets.length > 0) {
-      // Sub-assets of an imported source (a.glb → mesh/material/texture) all
-      // inherit the source filename from the registry, so a plain list reads as
-      // N identical "a.glb" rows. Suffix the kind when a name repeats so each
-      // row is distinguishable (the guid column disambiguates any residual tie).
-      const nameCounts = new Map<string, number>();
-      for (const a of previewItem.assets) nameCounts.set(a.name, (nameCounts.get(a.name) ?? 0) + 1);
-      const rowName = (a: CBAsset) => ((nameCounts.get(a.name) ?? 0) > 1 ? `${a.name} · ${a.kind}` : a.name);
-      body = (
-        <div className="cb-preview-asset-list">
-          {previewItem.assets.map(asset => (
-            <div className="cb-preview-asset-row" key={asset.guid}>
-              <AssetThumbnail kind={asset.kind} payload={realPayload(asset.guid, asset.payload)} packPath={asset.packPath} size={30} />
-              <div>
-                <div>{rowName(asset)}</div>
-                <div className="kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
-              </div>
-              <span className="guid">{asset.guid.slice(0, 10)}...</span>
-            </div>
-          ))}
-        </div>
-      );
-    } else if (previewItem.family === 'image') {
-      body = <div className="cb-preview-media"><img src={rawUrl} alt={previewItem.name} /></div>;
-    } else if (previewItem.family === 'audio') {
-      body = <div className="cb-preview-media"><audio controls src={rawUrl} /></div>;
-    } else if (previewItem.family === 'font') {
-      body = <CBFontPreview rawUrl={rawUrl} name={previewItem.name} />;
-    } else if (previewInfo?.content != null) {
-      body = <pre className="cb-preview-code">{previewInfo.content}</pre>;
+      body = filePreviewMode === 'source' && showDualPreview
+        ? <FileSourcePreview file={previewItem} previewInfo={previewInfo} />
+        : <FileAssetList file={previewItem} />;
     } else {
-      body = <div className="cb-preview-note">{t('editor.contentBrowser.preview.noTextPreview')}</div>;
+      body = <FileSourcePreview file={previewItem} previewInfo={previewInfo} />;
     }
   } else {
     body = previewItem.kind === 'ui' ? (
@@ -181,6 +216,28 @@ export function CBPreviewPanel({
           </div>
           <button className="cb-preview-close" type="button" onClick={onClose}>×</button>
         </div>
+        {showDualPreview && (
+          <div className="cb-preview-mode-bar" role="tablist" aria-label={t('editor.contentBrowser.preview.modeAssets')}>
+            <button
+              type="button"
+              role="tab"
+              className={`cb-preview-mode-btn${filePreviewMode === 'assets' ? ' is-active' : ''}`}
+              aria-selected={filePreviewMode === 'assets'}
+              onClick={() => setFilePreviewMode('assets')}
+            >
+              {t('editor.contentBrowser.preview.modeAssets')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={`cb-preview-mode-btn${filePreviewMode === 'source' ? ' is-active' : ''}`}
+              aria-selected={filePreviewMode === 'source'}
+              onClick={() => setFilePreviewMode('source')}
+            >
+              {t('editor.contentBrowser.preview.modeSource')}
+            </button>
+          </div>
+        )}
         <div className="cb-preview-body">{body}</div>
       </aside>
     </>

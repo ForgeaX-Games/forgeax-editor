@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { pickNativeImportFiles } from '../native-file-picker';
+import { pickNativeImportFiles, resetNativeImportPickerAvailabilityForTests } from '../native-file-picker';
 
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
+  resetNativeImportPickerAvailabilityForTests();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  resetNativeImportPickerAvailabilityForTests();
 });
 
 describe('native import file picker', () => {
@@ -55,5 +57,17 @@ describe('native import file picker', () => {
 
     globalThis.fetch = (async () => { throw new Error('offline'); }) as unknown as typeof globalThis.fetch;
     expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+  });
+
+  it('caches unavailable hosts so later calls skip the network round trip', async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response('missing', { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+    expect(calls).toBe(1);
   });
 });

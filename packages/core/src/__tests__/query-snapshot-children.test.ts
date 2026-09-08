@@ -22,10 +22,11 @@ import type { EditorOp, EditSession } from '../types';
 import type { WithEntityId } from '../types';
 import { applyCommand, createEditSession } from '../session/document';
 import { querySnapshot } from '../io/query-snapshot';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

@@ -13,6 +13,9 @@ import {
   validateFinalProjection,
   validateBrowserReleaseDiscovery,
   validateEvidenceEnvelope,
+  validateBrowserReleasePortfolio,
+  projectSharedFactReference,
+  validateSharedFactReference,
 } from '../browser-release-portfolio.mjs';
 import { validateContract } from '../editor-ci-contract.mjs';
 import { createAdmissionEnvelope } from '../editor-ci-contract-envelope.mjs';
@@ -327,6 +330,8 @@ test('CLI projection order gates aggregate and transfer on the same index', () =
   const rawDirectory = join(directory, 'raw');
   const indexPath = join(directory, 'index.json');
   const aggregatePath = join(directory, 'aggregate.json');
+  const baselinePath = join(directory, 'baseline.json');
+  const sharedReferencePath = join(directory, 'shared-reference.json');
   const admissionPath = join(directory, 'admission.json');
   const attestorPath = join(directory, 'attestor.json');
   const attestor = createMeasurementAttestor();
@@ -336,6 +341,28 @@ test('CLI projection order gates aggregate and transfer on the same index', () =
     publicKey: attestor.publicKey,
     fingerprint: attestor.fingerprint,
   }));
+  const baselineEvidence = {
+    schemaVersion: 'forgeax-ci-baseline/v2',
+    admissionGeneration: indexFixture.provenance.admissionGeneration,
+    attemptProvenance: {
+      sourceSha: indexFixture.provenance.sourceSha,
+      runId: 123,
+      runAttempt: 2,
+      topologyId: 'topology-1',
+      graphDigest: 'sha256:graph-1',
+      rosterKey: '[build,smoke-play]',
+      workflow: {file: '.github/workflows/ci.yml', name: 'Editor CI'},
+    },
+    facts: {
+      criticalPath: {status: 'observed', members: ['build'], totalSeconds: 10},
+      costFacts: {status: 'observed', artifact: {identity: {id: 88, digest: 'sha-artifact'}}},
+      readiness: {status: 'no-claim', delaySeconds: null},
+    },
+  };
+  writeFileSync(baselinePath, JSON.stringify(baselineEvidence));
+  const reference = projectSharedFactReference(baselineEvidence);
+  assert.equal(reference.ok, true, JSON.stringify(reference.errors));
+  writeFileSync(sharedReferencePath, JSON.stringify(reference.value));
   mkdirSync(rawDirectory);
   writeIntegrationRawSet(rawDirectory, attestor);
 
@@ -343,11 +370,33 @@ test('CLI projection order gates aggregate and transfer on the same index', () =
   assert.equal(validate.status, 0, `${validate.stdout}\n${validate.stderr}`);
   assert.equal(JSON.parse(readFileSync(indexPath, 'utf8')).status, 'pass');
 
-  const project = spawnSync('bun', ['scripts/ci/browser-release-measurement.mjs', 'project-topology', '--measurements', indexPath, '--contract', 'scripts/ci/editor-ci-contract.json', '--admission', admissionPath, '--output', aggregatePath], {encoding: 'utf8'});
+  const project = spawnSync('bun', ['scripts/ci/browser-release-measurement.mjs', 'project-topology', '--measurements', indexPath, '--contract', 'scripts/ci/editor-ci-contract.json', '--admission', admissionPath, '--baseline-evidence', baselinePath, '--shared-fact-reference', sharedReferencePath, '--output', aggregatePath], {encoding: 'utf8'});
   assert.equal(project.status, 0, `${project.stdout}\n${project.stderr}`);
   const aggregate = JSON.parse(readFileSync(aggregatePath, 'utf8'));
   assert.equal(aggregate.phase, 'projected');
   assert.equal(aggregate.topology.measurementDigest, JSON.parse(readFileSync(indexPath, 'utf8')).measurementDigest);
+  assert.deepEqual(aggregate.sharedFactReference.attemptProvenance, baselineEvidence.attemptProvenance);
+  assert.deepEqual(aggregate.sharedFactReference.artifactIdentity, {id: 88, digest: 'sha-artifact'});
+  assert.equal(aggregate.sharedFactReference.factReferences.length, 3);
+  assert.ok(aggregate.sharedFactReference.factReferences.every((fact) => fact.source === 'ci-baseline' && fact.digest.startsWith('sha256:')));
+
+  const missingBaseline = spawnSync('bun', ['scripts/ci/browser-release-measurement.mjs', 'project-topology', '--measurements', indexPath, '--contract', 'scripts/ci/editor-ci-contract.json', '--admission', admissionPath, '--output', join(directory, 'missing-baseline.json')], {encoding: 'utf8'});
+  assert.notEqual(missingBaseline.status, 0);
+  assert.equal(JSON.parse(missingBaseline.stderr.trim()).code, 'baseline-fact-reference-missing');
+
+  const staleReference = structuredClone(reference.value);
+  staleReference.admissionGeneration += 1;
+  writeFileSync(sharedReferencePath, JSON.stringify(staleReference));
+  const generationDrift = spawnSync('bun', ['scripts/ci/browser-release-measurement.mjs', 'project-topology', '--measurements', indexPath, '--contract', 'scripts/ci/editor-ci-contract.json', '--admission', admissionPath, '--baseline-evidence', baselinePath, '--shared-fact-reference', sharedReferencePath, '--output', join(directory, 'generation-drift.json')], {encoding: 'utf8'});
+  assert.notEqual(generationDrift.status, 0);
+  assert.equal(JSON.parse(generationDrift.stderr.trim()).code, 'baseline-fact-reference-generation-drift');
+
+  const artifactDrift = structuredClone(reference.value);
+  artifactDrift.artifactIdentity.id = 99;
+  writeFileSync(sharedReferencePath, JSON.stringify(artifactDrift));
+  const artifactDriftResult = spawnSync('bun', ['scripts/ci/browser-release-measurement.mjs', 'project-topology', '--measurements', indexPath, '--contract', 'scripts/ci/editor-ci-contract.json', '--admission', admissionPath, '--baseline-evidence', baselinePath, '--shared-fact-reference', sharedReferencePath, '--output', join(directory, 'artifact-drift.json')], {encoding: 'utf8'});
+  assert.notEqual(artifactDriftResult.status, 0);
+  assert.equal(JSON.parse(artifactDriftResult.stderr.trim()).code, 'baseline-fact-reference-artifact-drift');
 
   const failedDirectory = join(directory, 'failed-raw');
   mkdirSync(failedDirectory);
@@ -381,4 +430,107 @@ test('final topology claim rejects stale, provisional, mixed, or incomplete evid
       mutation.name,
     );
   }
+});
+
+test('browser projection shares only the current baseline attempt reference', () => {
+  const baseline = {
+    schemaVersion: 'forgeax-ci-baseline/v2',
+    admissionGeneration: 'generation-7',
+    attemptProvenance: {
+      sourceSha: 'a'.repeat(40),
+      runId: 123,
+      runAttempt: 2,
+      topologyId: 'topology-1',
+      graphDigest: 'sha256:graph-1',
+      rosterKey: '[build,smoke-play]',
+      workflow: {file: '.github/workflows/ci.yml', name: 'Editor CI'},
+    },
+    criticalPath: {status: 'observed', members: ['build'], totalSeconds: 10},
+    costFacts: {status: 'observed', archiveBytes: 20, artifact: {identity: {id: 88, digest: 'sha-artifact'}}},
+    readiness: {status: 'no-claim', delaySeconds: null},
+    budgetClaim: null,
+  };
+  const reference = projectSharedFactReference(baseline);
+  assert.equal(reference.ok, true);
+  assert.equal(reference.value.source, 'ci-baseline');
+  assert.equal(reference.value.admissionGeneration, 'generation-7');
+  assert.deepEqual(reference.value.attemptProvenance, baseline.attemptProvenance);
+  assert.deepEqual(reference.value.factFields, ['criticalPath', 'costFacts', 'readiness']);
+  assert.equal(Object.hasOwn(reference.value, 'budgetClaim'), false);
+  assert.equal(Object.hasOwn(reference.value, 'admission'), false);
+  assert.equal(validateSharedFactReference(reference.value, baseline).ok, true);
+  assert.equal(validateBrowserReleasePortfolio(portfolio, {sharedFactReference: reference.value}).ok, true);
+});
+
+test('production portfolio projection carries and validates the current shared fact reference', () => {
+  const index = healthyMeasurementIndex();
+  const aggregate = aggregateUnitResults(index, portfolio);
+  const baselineEvidence = {
+    schemaVersion: 'forgeax-ci-baseline/v2',
+    admissionGeneration: 'generation-7',
+    attemptProvenance: {
+      sourceSha: 'a'.repeat(40),
+      runId: 123,
+      runAttempt: 2,
+      topologyId: 'topology-1',
+      graphDigest: 'sha256:graph-1',
+      rosterKey: '[build,smoke-play]',
+      workflow: {file: '.github/workflows/ci.yml', name: 'Editor CI'},
+    },
+    facts: {
+      criticalPath: {status: 'observed', members: ['build'], totalSeconds: 10},
+      costFacts: {status: 'observed', artifact: {identity: {id: 88, digest: 'sha-artifact'}}},
+      readiness: {status: 'no-claim', delaySeconds: null},
+    },
+  };
+  const projected = projectPortfolioTopology(index, portfolio, {aggregate: aggregate.value, baselineEvidence});
+  assert.equal(projected.ok, true, JSON.stringify(projected.errors));
+  assert.equal(projected.value.sharedFactReference.artifactIdentity.id, 88);
+  assert.equal(projected.value.sharedFactReference.factReferences.length, 3);
+  assert.equal(validateFinalProjection(projected.value, index, portfolio, {baselineEvidence}).ok, true);
+
+  const missingArtifact = structuredClone(baselineEvidence);
+  delete missingArtifact.facts.costFacts.artifact.identity;
+  const missing = projectPortfolioTopology(index, portfolio, {aggregate: aggregate.value, baselineEvidence: missingArtifact});
+  assert.equal(missing.ok, false);
+  assert.equal(missing.errors[0].code, 'baseline-fact-reference-artifact-missing');
+
+  const reference = projected.value.sharedFactReference;
+  const drifted = projectPortfolioTopology(index, portfolio, {
+    aggregate: aggregate.value,
+    baselineEvidence,
+    sharedFactReference: {...reference, admissionGeneration: 'generation-stale'},
+  });
+  assert.equal(drifted.ok, false);
+  assert.equal(drifted.errors[0].code, 'baseline-fact-reference-generation-drift');
+  assert.equal(projected.value.topology.units.every((unit) => unit.parentCheckId === 'smoke-play'), true);
+});
+
+test('browser shared reference fails closed without changing browser admission semantics', () => {
+  const baseline = {
+    schemaVersion: 'forgeax-ci-baseline/v2',
+    admissionGeneration: 'generation-7',
+    attemptProvenance: {
+      sourceSha: 'a'.repeat(40), runId: 123, runAttempt: 2,
+      topologyId: 'topology-1', graphDigest: 'sha256:graph-1', rosterKey: '[build]',
+      workflow: {file: '.github/workflows/ci.yml', name: 'Editor CI'},
+    },
+    criticalPath: {status: 'observed', members: ['build'], totalSeconds: 10},
+    costFacts: {status: 'observed', artifact: {identity: {id: 88, digest: 'sha-artifact'}}},
+    readiness: {status: 'no-claim', delaySeconds: null},
+  };
+  const reference = projectSharedFactReference(baseline).value;
+  for (const mutation of [
+    ['missing reference', null, 'baseline-fact-reference-missing'],
+    ['generation drift', {...reference, admissionGeneration: 'generation-8'}, 'baseline-fact-reference-generation-drift'],
+    ['attempt drift', {...reference, attemptProvenance: {...reference.attemptProvenance, runAttempt: 3}}, 'baseline-fact-reference-provenance-drift'],
+  ]) {
+    const candidate = mutation[1];
+    const validation = validateBrowserReleasePortfolio(portfolio, {sharedFactReference: candidate, baselineEvidence: baseline});
+    assert.equal(validation.ok, false, mutation[0]);
+    assert.equal(validation.errors[0].code, mutation[2], mutation[0]);
+    assert.equal(typeof validation.errors[0].hint, 'string', mutation[0]);
+  }
+  assert.equal(portfolio.parentCheckId, 'smoke-play');
+  assert.equal(portfolio.measurement.required, false);
 });

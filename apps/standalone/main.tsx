@@ -7,21 +7,20 @@
 // carrier boundary can later be hosted by a page or Tauri WebView without
 // changing the Runtime contract.
 
-import { StrictMode, useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import '@forgeax/interface/styles/global.css';
+import { StrictMode, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '@forgeax/interface/App';
 import { applyTheme } from '@forgeax/design/theme';
-import { initI18n } from '@forgeax/interface/i18n';
-import { type PanelDescriptor } from '@forgeax/interface/components/DockShell/panelRenderers';
+import { changeLanguage, initI18n, type Locale } from '@forgeax/interface/i18n';
 // ADR 0025 M1: the shell is assembled through AppExtension manifests passed to
 // <App overrides={{ extensions }}/> — the panelRenderers escape-hatch prop was
 // removed in interface#112. panels-editor is interface's built-in factory for
 // the ep:* dock panels + surfaces; the custom extension below carries the
-// leftover fields (workbench layout seed + editor bridge hooks).
+// remaining fields (built-in Page layout seed + editor bridge hooks).
 import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
-import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
-import { configureWorkbenchClient, useShellStore } from '@forgeax/interface/store';
+import { configureStudioDomainClients, useShellStore } from '@forgeax/interface/store';
 import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
@@ -29,6 +28,9 @@ import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
 // remain lightweight in-process components in the shell.
 import { ViewportRuntimeFrame } from '@forgeax/editor-edit-runtime/runtime-frame';
 import { ViewportComponent } from '@forgeax/editor-edit-runtime/viewport/viewport-component';
+import { StandaloneEditRealm } from './StandaloneEditRealm';
+import { createHostRuntimeGenerationAuthority } from '@forgeax/editor-edit-runtime/host-boot';
+import { versionControlStatusBarExtension } from '@forgeax/editor-edit-runtime';
 // Preview-slot wiring is SSOT'd behind the ./previews facade subpath so every
 // host (standalone, Studio) registers the same three preview viewports.
 import { registerEditorPreviewViewports } from '@forgeax/editor/previews';
@@ -37,31 +39,18 @@ import { registerEditorPreviewViewports } from '@forgeax/editor/previews';
 // `./panels` export (-> packages/panels/src/manifest.ts), the same
 // self-import pattern as `@forgeax/editor/app-kit` above.
 import {
-  EDITOR_PANEL_COMPONENTS,
+  createEditorPanelsExtension,
+  renderEditorPanel,
 } from '@forgeax/editor/panels';
 registerEditorPreviewViewports();
-// EDITOR_PANELS id-list SSOT (editor-core manifest) — feeds v9 editorPanelIds
-// + the panels registry keys, same source studio's editorRenderers uses.
-import { EDITOR_PANELS } from '@forgeax/editor-core/manifest';
-import {
-  bindViewportRuntimeClient,
-  forwardViewportRuntimeTransportRequest,
-} from '@forgeax/editor-core';
+import { bindViewportRuntimeClient } from '@forgeax/editor-core';
 import {
   createBroadcastViewportRuntimeClient,
   subscribeBroadcastViewportRuntimeReady,
   type MessagePortTransportClient,
   type ViewportRuntimeIdentity,
 } from '@forgeax/editor/viewport-runtime';
-import {
-  createBrowserPanelPopupController,
-  installPanelPopupClient,
-  readPanelPopupIdentity,
-  type PanelPopupEventTarget,
-  type PanelPopupWindow,
-} from '@forgeax/editor-product';
 import { installInterfaceBridge, setContextMenuRenderer, createEditorPanelContributionsExtension, createEditorPageExtension } from '@forgeax/editor/bridge';
-import '@forgeax/interface/styles/global.css';
 import '@forgeax/editor-edit-runtime/theme.css';
 import './standalone-chrome.css';
 import './standalone-menu.css';
@@ -90,8 +79,8 @@ import { dispatchAction, registerAction } from '@forgeax/interface/lib/action-re
 // here was silently missing from studio, killing its G/Esc keyboard path).
 import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
 import { projectViewportRuntimeOps } from '@forgeax/editor-edit-runtime/gateway-action-projection';
-import { setPathResolver } from '@forgeax/editor-core';
-import { isPanelVisible } from '@forgeax/interface/components/DockShell/DockRegion';
+import { setPathResolver, trySaveActivePage } from '@forgeax/editor-core';
+import { isDockPanelVisible } from '@forgeax/app-shell/dock';
 import { installSettingsPanelRedirect, SETTINGS_PANEL_ID } from './settings-redirect';
 import { createStandaloneGameClient } from './game-service-client';
 
@@ -100,17 +89,34 @@ import { createStandaloneGameClient } from './game-service-client';
 // product surfaces, but it must not omit the shared visual foundation.
 applyTheme('dark');
 initI18n();
+const requestedLocale = new URLSearchParams(window.location.search).get('lang');
+if (requestedLocale === 'en' || requestedLocale === 'zh') {
+  changeLanguage(requestedLocale as Locale);
+}
 
 // Contextual F2/Delete/Mod+A have moved to focused widget scopes. This bridge
 // remains only for shortcuts that have not yet migrated.
+// TEMPORARY: FORGEAX_STANDALONE_FORCE_IFRAME forces iframe carrier for smoke
+// tests where GPU device-lost on page reload is not yet gracefully handled.
+// Remove once single-realm mode handles disposal on navigation; all hosts
+// should then default to in-process rendering unconditionally.
+declare const __FORGEAX_STANDALONE_FORCE_IFRAME__: boolean;
+const isIframeMode = new URLSearchParams(window.location.search).has('iframe')
+  || __FORGEAX_STANDALONE_FORCE_IFRAME__;
+
 function makeKeyboardRouterDeps(): KeyboardRouterDeps {
   const deps = buildKeyboardRouterDeps() as KeyboardRouterDeps;
+  if (!isIframeMode) {
+    // In-process mode: gateway is live in this page — use it directly.
+    return deps;
+  }
   return {
     ...deps,
-    // The shell owns the one global shortcut listener, while the iframe Runtime
-    // owns Gateway and document dirtiness. Reuse the Runtime-projected action;
-    // never dispatch against the shell's inert editor-core singleton.
+    // iframe mode: the shell's editor-core singleton has no live doc; route
+    // save through the action registry which is projected from the iframe Runtime.
+    // Active resource pages save through their page controller first.
     save: () => {
+      if (trySaveActivePage()) return;
       void dispatchAction(
         'saveDocToDisk',
         { requestId: `save-human-${crypto.randomUUID()}` },
@@ -129,7 +135,7 @@ declare const __FORGEAX_RUNTIME_BINDING__: import('@forgeax/engine-types').Runti
 // The standalone build is one game slot per host. A New Game submission
 // materializes into that slot, then reloads the document so the compile-time
 // engine/game-root wiring consumes the newly-created files on the next boot.
-configureWorkbenchClient(createStandaloneGameClient(() => {
+configureStudioDomainClients(createStandaloneGameClient(() => {
   window.setTimeout(() => window.location.reload(), 0);
 }));
 
@@ -142,94 +148,7 @@ configureWorkbenchClient(createStandaloneGameClient(() => {
 //   editorPanelIds — the ep:* id list DockShell registers (SSOT: editor-core
 //     manifest). Its absence renders every editor panel as "Panel not mounted".
 // Mirrors studio's editorRenderers.tsx (the v9 reference assembly), minus the
-// studio-only chat/agents/overlays/detached/hostSDK slots.
-const panelPopupListeners = new Map<string, Set<() => void>>();
-const isPanelHostPage = window.location.pathname.startsWith('/panel-host');
-
-function emitPanelPopupChanged(panelId: string): void {
-  for (const listener of panelPopupListeners.get(panelId) ?? []) listener();
-}
-
-function subscribePanelPopup(panelId: string, listener: () => void): () => void {
-  const listeners = panelPopupListeners.get(panelId) ?? new Set<() => void>();
-  listeners.add(listener);
-  panelPopupListeners.set(panelId, listeners);
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) panelPopupListeners.delete(panelId);
-  };
-}
-
-function EditorPanelBody({ id }: { id: string }): ReactNode {
-  const Comp = EDITOR_PANEL_COMPONENTS[id];
-  const poppedOut = useSyncExternalStore(
-    (listener) => subscribePanelPopup(id, listener),
-    () => !isPanelHostPage && panelPopupController.isOpen(id),
-    () => false,
-  );
-  if (poppedOut) {
-    return (
-      <div className="surface-placeholder" data-panel={id} data-panel-popup-active="1">
-        <div className="surface-placeholder-title">{EDITOR_PANEL_TITLES[id] ?? id} is open in another window</div>
-        <button type="button" onClick={() => panelPopupController.close(id)}>Dock back</button>
-      </div>
-    );
-  }
-  if (Comp) {
-    return (
-      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-        {!isPanelHostPage && (
-          <button
-            type="button"
-            data-testid={`panel-popup-${id}`}
-            title={`Open ${EDITOR_PANEL_TITLES[id] ?? id} in a window`}
-            style={{ position: 'absolute', top: 4, right: 4, zIndex: 20 }}
-            onClick={() => {
-              void panelPopupController.open(id, EDITOR_PANEL_TITLES[id] ?? id).then((result) => {
-                if (result.ok) emitPanelPopupChanged(id);
-              });
-            }}
-          >
-            ⧉
-          </button>
-        )}
-        <Comp />
-      </div>
-    );
-  }
-  return (
-    <div className="surface-placeholder" data-panel={id} data-panel-unmounted="1">
-      <div className="surface-placeholder-title">Panel not mounted</div>
-    </div>
-  );
-}
-
-// Tab labels for the dock panels. The id list remains EDITOR_PANELS; this map
-// is host-owned display metadata used to fill PanelDescriptor.title.
-const EDITOR_PANEL_TITLES: Record<string, string> = {
-  hierarchy: 'Hierarchy', assets: 'Content Browser', inspector: 'Inspector',
-  history: 'History', capabilities: 'Capabilities',
-  launcher: 'Launcher', 'asset-overview': 'Asset Overview',
-  'asset-properties': 'Properties', 'mesh-slots': 'Material Slots',
-  'mesh-preview': 'Preview',
-  'mat-preview': 'Preview', 'mi-preview': 'Preview', 'mi-properties': 'Properties',
-  'input-map-properties': 'Input Map Properties',
-  'vfx-system': 'System Outline', 'vfx-preview': 'Preview', 'vfx-timeline': 'Timeline',
-  'vfx-details': 'Details', 'vfx-diagnostics': 'Diagnostics',
-  settings: 'Settings',
-};
-
-const standalonePanels: Record<string, PanelDescriptor> = Object.fromEntries(
-  EDITOR_PANELS.map((id, i) => [id, {
-    title: EDITOR_PANEL_TITLES[id] ?? id,
-    order: 100 + i,
-    ...(id === 'hierarchy'
-      ? { header: { visible: true, showTitle: false } }
-      : {}),
-    render: () => <EditorPanelBody id={id} />,
-  }]),
-);
-
+// Studio-only chat/agents/overlays/detached/extension-transport slots.
 // One replaceable carrier owns the authoritative Runtime realm. The shell keeps
 // its dock/panels alive when this iframe reloads; game identity is injected into
 // the edit-runtime build by the same fx process that starts this host.
@@ -241,19 +160,41 @@ const STANDALONE_VIEWPORT_RUNTIME = {
   carrierKind: 'iframe',
 } as const;
 
-const panelPopupController = createBrowserPanelPopupController({
-  eventTarget: window as unknown as PanelPopupEventTarget,
-  origin: window.location.origin,
-  runtime: STANDALONE_VIEWPORT_RUNTIME,
-  openWindow: (url, name, features) => window.open(url, name, features) as unknown as PanelPopupWindow | null,
-  createChannel: () => new MessageChannel(),
-  forward: forwardViewportRuntimeTransportRequest,
-  timeoutMs: 30_000,
-  onClosed: emitPanelPopupChanged,
-});
-
 function StandaloneSceneEditor(): ReactNode {
-  const detachedRuntime = new URLSearchParams(window.location.search).has('runtimeId');
+  const params = new URLSearchParams(window.location.search);
+  const detachedRuntime = params.has('runtimeId');
+  const forceIframe = params.has('iframe');
+
+  // Detached runtime (popup / Tauri window): in-process ViewportComponent only.
+  if (detachedRuntime) {
+    return (
+      <ViewportComponent
+        gameSlug={__FORGEAX_GAME_SLUG__}
+        gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
+        runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
+      />
+    );
+  }
+
+  // ?iframe fallback: legacy dual-realm path (for debugging / gradual rollback).
+  if (forceIframe) {
+    return <StandaloneIframeEditor />;
+  }
+
+  // Default: single-realm in-process engine (same architecture as Studio).
+  return (
+    <StandaloneEditRealm
+      gameSlug={__FORGEAX_GAME_SLUG__}
+      gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
+      runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
+    />
+  );
+}
+
+/** Legacy iframe-based viewport carrier, kept as ?iframe fallback. */
+function StandaloneIframeEditor(): ReactNode {
+  const authorityRef = useRef(createHostRuntimeGenerationAuthority(STANDALONE_VIEWPORT_RUNTIME));
+  const [runtime, setRuntime] = useState(() => authorityRef.current.snapshot());
   const disposeActionsRef = useRef<(() => void) | null>(null);
   const connectionRef = useRef<object | null>(null);
   const onClient = useCallback((client: unknown | null) => {
@@ -280,19 +221,20 @@ function StandaloneSceneEditor(): ReactNode {
     disposeActionsRef.current?.();
     disposeActionsRef.current = null;
   }, []);
-  if (detachedRuntime) {
-    return (
-      <ViewportComponent
-        gameSlug={__FORGEAX_GAME_SLUG__}
-        gameRoot={__FORGEAX_GAME_SLUG__ ?? undefined}
-        runtimeBinding={__FORGEAX_RUNTIME_BINDING__ ?? undefined}
-      />
-    );
-  }
+  useEffect(() => {
+    const onGenerationReady = (event: Event): void => {
+      const detail = (event as CustomEvent<{ runtimeGeneration?: unknown }>).detail;
+      if (detail?.runtimeGeneration !== runtime.runtimeGeneration + 1) return;
+      setRuntime(authorityRef.current.advance());
+    };
+    window.addEventListener('forgeax-generation-ready', onGenerationReady);
+    return () => window.removeEventListener('forgeax-generation-ready', onGenerationReady);
+  }, [runtime.runtimeGeneration]);
   return (
     <ViewportRuntimeFrame
       src="/editor/"
-      runtime={STANDALONE_VIEWPORT_RUNTIME}
+      runtime={runtime}
+      reuseCarrierOnGenerationChange
       onClient={onClient}
       onCapabilitiesChanged={onCapabilitiesChanged}
     />
@@ -339,7 +281,7 @@ function StandaloneViewportRuntimeWindowBridge(): ReactNode {
   return null;
 }
 
-/** Fields no interface factory covers: the workbench layout seed and the
+/** Fields no Interface factory covers: the built-in Page layout seed and the
  *  editor bridge hooks — one custom extension keeps them on the same
  *  contributePanels channel (mirrors studio's studio.editor-integration).
  *  setup() also installs the TopBar-gear redirect: the studio settings
@@ -350,7 +292,7 @@ const standaloneEditorIntegrationExtension: AppExtension = {
   requires: ['panels'],
   setup(ctx) {
     const disposePanels = ctx.contributePanels({
-      builtinWorkbenchLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
+      builtinPageLayouts: { scene: DEFAULT_EDITOR_DOCK_LAYOUT },
       editor: {
         setContextMenuRenderer,
         installBridge: installInterfaceBridge,
@@ -362,7 +304,7 @@ const standaloneEditorIntegrationExtension: AppExtension = {
     const disposeRedirect = installSettingsPanelRedirect(
       useShellStore,
       ctx.bus,
-      () => isPanelVisible(SETTINGS_PANEL_ID),
+      () => isDockPanelVisible(SETTINGS_PANEL_ID),
     );
     return () => {
       disposeRedirect();
@@ -378,14 +320,11 @@ const standaloneEditorIntegrationExtension: AppExtension = {
  *  overrides prop stays referentially stable. */
 const STANDALONE_OVERRIDES = {
   extensions: [
-    createPanelsEditorExtension({
-      editorPanelIds: [...EDITOR_PANELS],
-      panels: standalonePanels,
-      surfaces: { SceneEditor: StandaloneSceneEditor },
-    }),
+    createEditorPanelsExtension({ SceneEditor: StandaloneSceneEditor }),
     createEditorPanelContributionsExtension(),
-    createEditorPageExtension((id) => <EditorPanelBody id={id} />),
+    createEditorPageExtension(renderEditorPanel),
     standaloneEditorIntegrationExtension,
+    versionControlStatusBarExtension,
   ] as readonly AppExtension[],
 } as const;
 
@@ -491,34 +430,6 @@ function boot(): void {
   }
 }
 
-function bootPanelHost(): void {
-  const identity = readPanelPopupIdentity(window.location.search);
-  const opener = window.opener as unknown as PanelPopupWindow | null;
-  if (identity === null || opener === null) {
-    document.body.textContent = 'Panel popup handshake is unavailable.';
-    return;
-  }
-  const disposeClient = installPanelPopupClient({
-    eventTarget: window as unknown as PanelPopupEventTarget,
-    opener,
-    origin: new URL(window.location.search ? new URLSearchParams(window.location.search).get('hostOrigin') ?? window.location.origin : window.location.origin).origin,
-    identity,
-    onClient: (client) => {
-      const unbind = bindViewportRuntimeClient(identity.runtime, client);
-      window.addEventListener('beforeunload', unbind, { once: true });
-    },
-  });
-  window.addEventListener('beforeunload', disposeClient, { once: true });
-  const appRoot = document.getElementById('app') ?? document.body;
-  createRoot(appRoot).render(
-    <StrictMode>
-      <EditorOverlayProvider>
-        <EditorPanelBody id={identity.panelId} />
-      </EditorOverlayProvider>
-    </StrictMode>,
-  );
-}
-
 function bootDetachedSurface(): void {
   const surface = decodeSurfaceFromLocation();
   if (surface === null) return;
@@ -543,6 +454,5 @@ function bootDetachedSurface(): void {
   });
 }
 
-if (isPanelHostPage) bootPanelHost();
-else if (decodeSurfaceFromLocation() !== null) bootDetachedSurface();
+if (decodeSurfaceFromLocation() !== null) bootDetachedSurface();
 else boot();

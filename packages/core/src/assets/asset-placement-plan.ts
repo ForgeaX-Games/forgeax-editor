@@ -41,8 +41,6 @@ export type AssetPlacementPlanResult =
 export interface AssetPlacementPlanOptions {
   /** Required for the request-correlated scene session operation. */
   readonly requestId?: string;
-  /** Used by mesh drag to preserve recovered per-submesh material refs. */
-  readonly materialGuids?: readonly string[];
   /** Resolved scene sub-asset GUID when the source ref came from a meta file. */
   readonly sceneGuid?: string;
   /** Live catalog GUIDs (gateway.assetCatalog()) for phantom-ref validation.
@@ -118,7 +116,7 @@ export function planAssetPlacement(
     }
   }
 
-  const spawn = buildSpawnEntityFromDragRef(ref, options.materialGuids ? { materialGuids: [...options.materialGuids] } : undefined);
+  const spawn = buildSpawnEntityFromDragRef(ref);
   if (!spawn) {
     return { ok: false, error: { code: 'placement-unavailable', hint: `producer advertised spawnEntity but no spawn plan exists for asset kind '${ref.kind ?? ''}'` } };
   }

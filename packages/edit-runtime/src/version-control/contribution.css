@@ -1,0 +1,353 @@
+.fx-version-control-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 4px 8px;
+}
+
+.fx-version-control-summary strong {
+  color: var(--color-text-primary);
+}
+
+.fx-version-control-summary span,
+.fx-version-control-state {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+}
+
+.fx-version-control-progress {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 4px 6px;
+}
+
+.fx-version-control-progress::before {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--color-divider-default);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: fx-version-control-spin 700ms linear infinite;
+  content: '';
+}
+
+@keyframes fx-version-control-spin {
+  to { transform: rotate(360deg); }
+}
+
+.fx-version-control-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 2px 8px;
+}
+
+.fx-version-control-menu button {
+  width: 100%;
+  min-height: 26px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 5px 7px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.fx-version-control-menu button:hover:not(:disabled) {
+  background: var(--color-interaction-hover);
+  color: var(--color-text-primary);
+}
+
+.fx-version-control-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.fx-version-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: min(320px, 42vh);
+  position: relative;
+  border-top: 1px solid var(--color-divider-default);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-top: 6px;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.fx-version-graph-node {
+  display: flex;
+  height: var(--fx-version-row-height, 38px);
+  box-sizing: border-box;
+  flex: 0 0 var(--fx-version-row-height, 38px);
+  min-width: 0;
+  position: relative;
+  border-left: 2px solid transparent;
+  padding: 4px 6px 4px calc(var(--fx-version-lane-width, 24px) + 6px);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.fx-version-graph-svg {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  left: 0;
+  width: var(--fx-version-lane-width, 24px);
+  height: var(--fx-version-graph-height, 0px);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fx-version-graph-connection {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.fx-version-graph-marker {
+  fill: var(--color-background-elevated);
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.fx-version-graph-marker.is-current {
+  fill: var(--color-brand-primary, #d4ff48);
+  stroke: var(--color-brand-primary, #d4ff48);
+}
+
+.fx-version-graph-content {
+  display: flex;
+  min-width: 0;
+  position: relative;
+  flex-direction: column;
+  gap: 3px;
+  z-index: 2;
+}
+
+.fx-version-graph-node.is-current {
+  /* The SVG lane owns the relationship signal; avoid a second bright rail
+   * at the card edge competing with the ancestry lines. */
+  border-left-color: transparent;
+  background: var(--color-interaction-selected-brand, rgba(212, 255, 72, 0.12));
+  color: var(--color-text-primary);
+}
+
+.fx-version-graph-primary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fx-version-graph-message {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fx-version-graph-hash {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 1px 0;
+  color: var(--color-text-tertiary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.fx-version-graph-hash:hover {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.fx-version-graph-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 5px;
+  padding-left: 1px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fx-version-graph-tag {
+  color: var(--primary);
+}
+
+.fx-version-graph-tag.is-current {
+  color: var(--color-brand-primary, #d4ff48);
+  font-weight: 700;
+}
+
+.fx-version-graph-latest {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.fx-version-graph-parent {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.fx-version-control-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--color-divider-default);
+  padding: 8px 4px 2px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.fx-version-control-dialog h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.fx-version-control-dialog form,
+.fx-version-control-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fx-version-control-dialog input,
+.fx-version-control-dialog textarea,
+.fx-version-control-dialog select {
+  min-width: 0;
+  border: 1px solid var(--color-divider-default);
+  border-radius: 4px;
+  padding: 4px 5px;
+  color: var(--color-text-primary);
+  background: var(--color-background-elevated);
+  font: inherit;
+}
+
+.fx-version-control-dialog textarea {
+  min-height: 42px;
+  resize: vertical;
+}
+
+.fx-version-control-dialog-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.fx-version-control-dialog-actions button {
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font: inherit;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.fx-version-control-button-primary {
+  border-color: var(--color-brand-primary, #d4ff48) !important;
+  color: var(--color-text-on-bright-primary, #000000);
+  background: var(--color-brand-primary, #d4ff48);
+  font-weight: 600;
+}
+
+.fx-version-control-button-primary:hover:not(:disabled) {
+  border-color: var(--color-brand-primary-hover, #c5f038) !important;
+  background: var(--color-brand-primary-hover, #c5f038);
+}
+
+.fx-version-control-button-secondary {
+  border-color: var(--color-divider-default) !important;
+  color: var(--color-text-secondary);
+  background: var(--color-interaction-hover);
+}
+
+.fx-version-control-button-secondary:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-tertiary) !important;
+  background: var(--color-interaction-selected-neutral, var(--color-interaction-hover));
+}
+
+.fx-version-control-dialog-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.fx-version-control-dialog-actions button:focus-visible,
+.fx-version-graph-hash:focus-visible,
+.fx-version-control-install-git:focus-visible {
+  outline: 2px solid var(--color-accent-blue-default, #8ecbff);
+  outline-offset: 2px;
+}
+
+.fx-version-control-install-git {
+  color: var(--color-accent-blue-default, #8ecbff);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.fx-version-control-install-git:hover {
+  color: var(--color-text-primary);
+}
+
+.fx-version-control-changes {
+  /* Keep the popover usable when a save touches many files. The list owns
+   * scrolling so the tag/message controls remain reachable below it. */
+  max-height: min(220px, 35vh);
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-left: 16px;
+  padding-right: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+}
+
+.fx-version-control-target,
+.fx-version-control-dialog p {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+}
+
+.fx-version-control-feedback {
+  border-top: 1px solid var(--color-divider-default);
+  padding: 5px 4px 0;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+}
+
+.fx-version-control-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

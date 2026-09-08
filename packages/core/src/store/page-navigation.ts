@@ -65,7 +65,7 @@ export function openEditorAssetPage(asset: SelectedAsset): Promise<void> {
   return activeNavigation().openAsset(asset);
 }
 
-function subscribeActiveEditorAsset(listener: () => void): () => void {
+export function subscribeActiveEditorAsset(listener: () => void): () => void {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 }

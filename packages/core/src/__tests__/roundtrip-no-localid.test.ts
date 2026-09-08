@@ -26,7 +26,7 @@ import { World } from '@forgeax/engine-ecs';
 import {
   rootsToSceneAsset,
 } from '@forgeax/engine-runtime';
-import { Name, Transform, ChildOf } from '@forgeax/engine-scene';
+import { Name, Transform, ChildOf, worldGetSceneInstanceState, worldInstantiateScene } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneEntity, LocalEntityId } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
@@ -35,6 +35,7 @@ import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession, childrenOf } from '../session/document';
 import { entComponent, entName, worldEntityHandles } from '../store/entity-state';
+import { createCoreTestWorld } from './fixtures/world';
 
 function makeMockShaderRegistry(): ShaderRegistry {
   const mockDevice: ShaderRegistryDevice = {
@@ -78,13 +79,13 @@ describe('w26 — M3 integration (round-trip / stale-handle / hierarchy-live)', 
   // ── (a) AC-03 round-trip, editor holds no localId ────────────────────────
   it('(a) AC-03: round-trip preserves content; editor session has no id namespace', () => {
     const registry = makeRegistry();
-    const worldA = new World();
+    const worldA = createCoreTestWorld();
     const asset = buildSceneAsset([
       { name: 'Ground', pos: { x: 0, y: 0, z: 0 } },
       { name: 'Prop', pos: { x: 5, y: 0, z: -2 } },
     ]);
     const hA = worldA.allocSharedRef('SceneAsset', asset);
-    const rA = worldA.instantiateScene(hA);
+    const rA = worldInstantiateScene(worldA, hA);
     expect(rA.ok).toBe(true);
     if (!rA.ok) return;
 
@@ -94,8 +95,8 @@ describe('w26 — M3 integration (round-trip / stale-handle / hierarchy-live)', 
     expect(saved.ok).toBe(true);
     if (!saved.ok) return;
 
-    const worldB = new World();
-    const rB = worldB.instantiateScene(worldB.allocSharedRef('SceneAsset', saved.value));
+    const worldB = createCoreTestWorld();
+    const rB = worldInstantiateScene(worldB, worldB.allocSharedRef('SceneAsset', saved.value));
     expect(rB.ok).toBe(true);
 
     // Editor session bound to the reloaded world carries no internal id bag.
@@ -112,7 +113,7 @@ describe('w26 — M3 integration (round-trip / stale-handle / hierarchy-live)', 
   // ── (b) AC-14 stale-entity-handle after play/stop ────────────────────────
   it('(b) AC-14: a play-mode handle accessed after stop yields stale-entity-handle', () => {
     const session = createEditSession();
-    const editWorld = new World();
+    const editWorld = createCoreTestWorld();
     session.world = editWorld;
     spawn(editWorld, 'EditOnly'); // occupies edit slot 0 / gen 0
     const gw = new EditGateway(session);
@@ -122,7 +123,7 @@ describe('w26 — M3 integration (round-trip / stale-handle / hierarchy-live)', 
     // stale check. Bump the play entity's generation (despawn a throwaway slot-0
     // entity, then spawn) so its handle (slot 0 / gen 1) is a value the gen-0-only
     // editWorld never contains — making the post-stop staleness unambiguous.
-    const playWorld = new World();
+    const playWorld = createCoreTestWorld();
     const throwaway = spawn(playWorld, 'Throwaway');
     playWorld.despawn(throwaway);
     const playEnt = spawn(playWorld, 'RuntimeThing');
@@ -148,11 +149,11 @@ describe('w26 — M3 integration (round-trip / stale-handle / hierarchy-live)', 
   // ── (c) AC-09 hierarchy-live: runtime spawn appears in the walk ──────────
   it('(c) AC-09: a runtime-spawned entity appears in the play-mode hierarchy walk', () => {
     const session = createEditSession();
-    session.world = new World();
+    session.world = createCoreTestWorld();
     spawn(session.world as unknown as World, 'EditRoot');
     const gw = new EditGateway(session);
 
-    const playWorld = new World();
+    const playWorld = createCoreTestWorld();
     const playRoot = spawn(playWorld, 'PlayRoot');
     gw.enterPlay(playWorld);
 

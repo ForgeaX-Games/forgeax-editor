@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
+import type { AssetPublicationEnvelope, CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
 import { createAssetBrowserReadModel, type AssetBrowserRegistry } from '../assets/asset-browser-read-model';
 
 function catalogEntry(guid: string, observedAt: number): CatalogEntry {
@@ -34,11 +34,74 @@ function catalogEntry(guid: string, observedAt: number): CatalogEntry {
   } as unknown as CatalogEntry;
 }
 
+function scriptablePublication(outputGuid: string): AssetPublicationEnvelope {
+  const sourcePath = 'assets/last-output.pack.ts';
+  const sourceRevision = 'sha256:source';
+  const digest = 'sha256:publication';
+  const outputSetDigest = 'sha256:output-set';
+  const output = { guid: outputGuid, sourceKey: 'scene/main', kind: 'scene', digest: 'sha256:scene', refs: [] };
+  return {
+    schemaVersion: 'asset-publication/1',
+    sourcePath,
+    sourceRevision,
+    generation: 1,
+    digest,
+    outputSetDigest,
+    outputs: [output],
+    receipt: {
+      schemaVersion: 'asset-publication-receipt/1',
+      sourcePath,
+      sourceRevision,
+      inputFingerprint: 'sha256:input',
+      outputDigest: digest,
+      outputSetDigest,
+      externalEvidence: [],
+    },
+    externalEvidence: [],
+  };
+}
+
+function scriptableEntry(publication: AssetPublicationEnvelope): CatalogEntry {
+  const output = publication.outputs[0]!;
+  return {
+    guid: output.guid,
+    kind: output.kind,
+    packageUrl: 'assets/last-output.scene.pack.json',
+    sourcePath: publication.sourcePath,
+    sourceKey: output.sourceKey,
+    publication,
+  } as unknown as CatalogEntry;
+}
+
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 }
 
 describe('AssetBrowserReadModel full Catalog projection', () => {
+  it('includes source-only ScriptablePack files in the canonical browser projection', async () => {
+    const registry: AssetBrowserRegistry = { listCatalog: () => [] };
+    const model = createAssetBrowserReadModel({
+      registry,
+      resolveGamePath: (path) => path ? `/game/${path}` : '/game',
+      catalogRoots: [{ root: 'assets', catalogPrefix: 'catalog/assets' }],
+      fetch: async (path) => path.startsWith('/api/files/tree')
+        ? response({ tree: { type: 'dir', name: 'game', path: '/game', children: [
+          { type: 'dir', name: 'assets', path: '/game/assets', children: [
+            { type: 'file', name: 'unpublished.pack.ts', path: '/game/assets/unpublished.pack.ts' },
+          ] },
+        ] } })
+        : response({}, 404),
+    });
+
+    const snapshot = await model.refresh();
+    expect(snapshot.scriptablePacks).toHaveLength(1);
+    expect(snapshot.scriptablePacks[0]).toMatchObject({
+      status: 'unpublished',
+      source: { path: 'assets/unpublished.pack.ts', outputs: [] },
+      outputs: [],
+    });
+  });
+
   it('preserves every producer fact and only replaces the affected GUID', async () => {
     const first = catalogEntry('GUID-ONE', 1);
     const stable = catalogEntry('GUID-STABLE', 1);
@@ -111,5 +174,78 @@ describe('AssetBrowserReadModel full Catalog projection', () => {
 
     const snapshot = await model.refresh();
     expect(snapshot.assets[0]?.projection?.lastKnownGood).toEqual({ packageUrl: 'lkg-2' });
+  });
+
+  it('clears the ScriptablePack projection when its last output is removed', async () => {
+    const publication = scriptablePublication('GUID-LAST-OUTPUT');
+    let snapshot = { version: 1, entries: [scriptableEntry(publication)], stale: false, diagnostics: [] };
+    const listeners = new Set<(delta: CatalogDelta) => void>();
+    const registry: AssetBrowserRegistry = {
+      listCatalog: () => { throw new Error('incremental Catalog snapshot is required'); },
+      catalogSnapshot: () => snapshot,
+      subscribeCatalog: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const model = createAssetBrowserReadModel({
+      registry,
+      resolveGamePath: (path) => path ? `/game/${path}` : '/game',
+      catalogRoots: [{ root: 'assets', catalogPrefix: 'catalog/assets' }],
+      fetch: async (path) => path.startsWith('/api/files/tree')
+        ? response({ tree: { type: 'dir', name: 'assets', path: '/game/assets', children: [] } })
+        : response({}, 404),
+    });
+
+    await model.refresh();
+    expect(model.snapshot().scriptablePacks).toHaveLength(1);
+
+    snapshot = { version: 2, entries: [], stale: false, diagnostics: [] };
+    for (const listener of listeners) listener({ added: [], changed: [], removed: [publication.outputs[0]!.guid] });
+
+    expect(model.snapshot().scriptablePacks).toEqual([]);
+  });
+
+  it('projects external dependency rows from the complete Catalog during an incremental pack delta', async () => {
+    const dependency = scriptablePublication('GUID-DEPENDENCY');
+    const parentBase = scriptablePublication('GUID-PARENT');
+    const evidence = [{ guid: 'GUID-DEPENDENCY', usage: 'content' as const, generation: dependency.generation, digest: dependency.outputs[0]!.digest }];
+    const parent: AssetPublicationEnvelope = {
+      ...parentBase,
+      sourcePath: 'assets/parent.pack.ts',
+      externalEvidence: evidence,
+      receipt: { ...parentBase.receipt, sourcePath: 'assets/parent.pack.ts', externalEvidence: evidence },
+    };
+    const depRow = scriptableEntry(dependency);
+    const parentRow = scriptableEntry(parent);
+    let catalog = { version: 1, entries: [depRow, parentRow], stale: false, diagnostics: [] };
+    const listeners = new Set<(delta: CatalogDelta) => void>();
+    const registry: AssetBrowserRegistry = {
+      listCatalog: () => { throw new Error('incremental Catalog snapshot is required'); },
+      catalogSnapshot: () => catalog,
+      subscribeCatalog: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    };
+    const model = createAssetBrowserReadModel({
+      registry,
+      resolveGamePath: (path) => path ? `/game/${path}` : '/game',
+      catalogRoots: [{ root: 'assets', catalogPrefix: 'catalog/assets' }],
+      fetch: async (path) => path.startsWith('/api/files/tree')
+        ? response({ tree: { type: 'dir', name: 'assets', path: '/game/assets', children: [] } })
+        : response({}, 404),
+    });
+
+    await model.refresh();
+    expect(model.snapshot().scriptablePacks.find((pack) => pack.source.path === parent.sourcePath)?.dependencies).toMatchObject([
+      { guid: 'GUID-DEPENDENCY', status: 'ready', generation: dependency.generation, digest: dependency.outputs[0]!.digest },
+    ]);
+
+    catalog = { version: 2, entries: [depRow, parentRow], stale: false, diagnostics: [] };
+    for (const listener of listeners) listener({ added: [], changed: [parentRow], removed: [] });
+    const refreshedDependency = model.snapshot().scriptablePacks
+      .find((pack) => pack.source.path === parent.sourcePath)?.dependencies[0];
+    expect(refreshedDependency).toMatchObject({
+      guid: 'GUID-DEPENDENCY', status: 'ready', generation: dependency.generation, digest: dependency.outputs[0]!.digest,
+    });
+    expect(refreshedDependency?.diagnostic).toBeUndefined();
   });
 });

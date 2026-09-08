@@ -20,17 +20,23 @@ import type { EntityHandle } from '../scene/scene-types';
 // Use the CANONICAL built-in components from the runtime barrel — never
 // re-define 'Name'/'Transform' with a local schema. A second
 // defineComponent('Transform', …) overwrites the canonical token in the shared
-// global registry, corrupting every other test in the same process (the tokens
+// shared catalog, corrupting every other test in the same process (the tokens
 // their entities were spawned with stop resolving). The runtime Transform
 // carries extra fields (quat*, world) the assertions here ignore.
 import {
   rootsToSceneAsset,
 } from '@forgeax/engine-runtime';
-import { Name as TestName, Transform as TestTransform } from '@forgeax/engine-scene';
+import {
+  Name as TestName,
+  Transform as TestTransform,
+  worldGetSceneInstanceState,
+  worldInstantiateScene,
+} from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { LocalEntityId, SceneEntity } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -77,7 +83,7 @@ function buildSceneAsset(entities: Array<{ name: string; pos: Vec3 }>) {
  * Matches the engine test pattern: entityToLocalId.keys() iterates members in spawn order.
  */
 function firstMember(world: World, root: EntityHandle): EntityHandle {
-  const stateRes = world.getSceneInstanceState(root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) throw new Error('getSceneInstanceState failed');
   const first = stateRes.value.entityToLocalId.keys().next();
   if (first.done) throw new Error('entityToLocalId empty');
@@ -85,7 +91,7 @@ function firstMember(world: World, root: EntityHandle): EntityHandle {
 }
 
 function collectNames(world: World, root: EntityHandle): string[] {
-  const stateRes = world.getSceneInstanceState(root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return [];
   const names: string[] = [];
   for (const ent of stateRes.value.entityToLocalId.keys()) {
@@ -99,10 +105,10 @@ function collectNames(world: World, root: EntityHandle): string[] {
 
 describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
   it('(a) allocSharedRef + instantiateScene → world has the entity with correct Name', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const asset = buildSceneAsset([{ name: 'Box', pos: { x: 1, y: 2, z: 3 } }]);
     const handle = world.allocSharedRef('SceneAsset', asset);
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -125,7 +131,7 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
   });
 
   it('(b) instantiateScene with parent → scene root is child of parent', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const parent = world.spawn({
       component: TestName,
       data: { value: 'Container' },
@@ -135,7 +141,7 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
 
     const asset = buildSceneAsset([{ name: 'Child', pos: { x: 5, y: 0, z: 0 } }]);
     const handle = world.allocSharedRef('SceneAsset', asset);
-    const r = world.instantiateScene(handle, parent.value);
+    const r = worldInstantiateScene(world, handle, parent.value);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
 
@@ -150,14 +156,14 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
   });
 
   it('(c) multi-entity scene → all entities instantiated in world', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const asset = buildSceneAsset([
       { name: 'A', pos: { x: 0, y: 0, z: 0 } },
       { name: 'B', pos: { x: 1, y: 1, z: 1 } },
       { name: 'C', pos: { x: 2, y: 2, z: 2 } },
     ]);
     const handle = world.allocSharedRef('SceneAsset', asset);
-    const r = world.instantiateScene(handle);
+    const r = worldInstantiateScene(world, handle);
 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -170,13 +176,13 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
     const registry = makeRegistry();
 
     // Build scene in world A.
-    const worldA = new World();
+    const worldA = createCoreTestWorld();
     const asset = buildSceneAsset([
       { name: 'Ground', pos: { x: 0, y: 0, z: 0 } },
       { name: 'Box', pos: { x: 1, y: 2, z: 3 } },
     ]);
     const handleA = worldA.allocSharedRef('SceneAsset', asset);
-    const rA = worldA.instantiateScene(handleA);
+    const rA = worldInstantiateScene(worldA, handleA);
     expect(rA.ok).toBe(true);
     if (!rA.ok) return;
     const rootA = rA.value.root;
@@ -194,9 +200,9 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
     expect(sceneAsset.entities.length).toBeGreaterThanOrEqual(2);
 
     // "Load": allocate in fresh world and instantiate.
-    const worldB = new World();
+    const worldB = createCoreTestWorld();
     const handleB = worldB.allocSharedRef('SceneAsset', sceneAsset);
-    const rB = worldB.instantiateScene(handleB);
+    const rB = worldInstantiateScene(worldB, handleB);
     expect(rB.ok).toBe(true);
     if (!rB.ok) return;
 
@@ -204,7 +210,7 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
     expect(namesB).toEqual(['Box', 'Ground']);
 
     // Verify a position survived.
-    const stateB = worldB.getSceneInstanceState(rB.value.root);
+    const stateB = worldGetSceneInstanceState(worldB, rB.value.root);
     expect(stateB.ok).toBe(true);
     if (!stateB.ok) return;
 

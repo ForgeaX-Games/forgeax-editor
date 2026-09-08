@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from 'bun:test';
-import { resolveCloneUrl } from '../sync-harness.mjs';
+import { buildCloneArgs, resolveCloneUrl } from '../sync-harness.mjs';
 
 const trueProbe = () => true;
 const falseProbe = () => false;
@@ -49,5 +49,38 @@ describe('editor sync-harness resolveCloneUrl', () => {
     expect(buf).toHaveLength(1);
     expect(buf[0]).toMatch(/no GitHub SSH key or GH_TOKEN detected/);
     expect(buf[0]).toMatch(/forgeax-editor-harness/);
+  });
+});
+
+describe('editor sync-harness clone plan', () => {
+  it('keeps the normal clone compatible with the existing full harness flow', () => {
+    expect(buildCloneArgs('https://example.test/harness.git', '/tmp/harness', false)).toEqual([
+      'clone',
+      '--quiet',
+      'https://example.test/harness.git',
+      '/tmp/harness',
+    ]);
+  });
+
+  it('uses a shallow blob-filtered docs clone for a worktree fallback', () => {
+    expect(buildCloneArgs('https://example.test/harness.git', '/tmp/harness', true)).toEqual([
+      'clone',
+      '--quiet',
+      '--depth=1',
+      '--no-tags',
+      '--single-branch',
+      '--filter=blob:none',
+      '--sparse',
+      '--no-checkout',
+      'https://example.test/harness.git',
+      '/tmp/harness',
+    ]);
+  });
+
+  it('keeps setup environment policy outside the sync clone argument owner', () => {
+    const args = buildCloneArgs('https://example.test/harness.git', '/tmp/harness', true);
+    expect(args.some((arg) => arg.startsWith('FORGEAX_'))).toBe(false);
+    expect(args).toContain('--sparse');
+    expect(args).toContain('--filter=blob:none');
   });
 });

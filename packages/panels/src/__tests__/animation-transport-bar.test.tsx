@@ -20,6 +20,9 @@ import AnimationTransportBar from '../AnimationTransportBar';
 void AnimationPlayer;
 
 const world = new World();
+const nameLease = world.components.register(Name);
+const animationPlayerLease = world.components.register(AnimationPlayer);
+if (!nameLease.ok || !animationPlayerLease.ok) throw new Error('component registration failed in test setup');
 const clip = world.allocSharedRef('AnimationClip', { kind: 'animation-clip', duration: 4 });
 // Every fixture entity carries Name — entComponent's liveness probe
 // (world.get(handle, Name)) treats a Name-less handle as stale.
@@ -51,6 +54,8 @@ beforeAll(() => {
 
 afterAll(() => {
   doc.world = origWorld;
+  animationPlayerLease.value.dispose();
+  nameLease.value.dispose();
 });
 
 describe('AnimationTransportBar', () => {

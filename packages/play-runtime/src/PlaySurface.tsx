@@ -45,6 +45,7 @@ type Mode = 'desktop' | 'mobile';
 type Orient = 'portrait' | 'landscape';
 
 const FPS_STALL_MS = 500;
+const CARRIER_FAILURE_MS = 3_000;
 const PROBE_INTERVAL_MS = 250;
 
 // ── Health forwarding ────────────────────────────────────────────────────────
@@ -58,6 +59,15 @@ function forwardHealth(level: HealthLevel, code: string, message: string): void 
   try {
     window.parent?.postMessage({ type: 'forgeax:health', level, source: 'play', code, message }, '*');
   } catch { /* parent might be cross-origin / gone */ }
+}
+
+function carrierFailureHealth(failure: { code: string; stage: string; hint: string; message?: string }): { code: string; message: string } {
+  const message = failure.message ?? failure.hint;
+  if (failure.code === 'device-lost' || failure.code === 'context-lost') return { code: failure.code, message };
+  if (failure.code.includes('webgpu')) return { code: 'webgpu-init-failed', message };
+  if (failure.code.startsWith('play-carrier-') || failure.stage === 'handshake') return { code: 'play-bootstrap-failed', message };
+  if (failure.stage === 'heartbeat') return { code: 'viewport-runtime-disconnected', message };
+  return { code: 'renderer-error', message };
 }
 
 function forwardCarrierMessage(message: unknown): void {
@@ -121,6 +131,8 @@ export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const lastHeartbeatRef = useRef<number>(Date.now());
   const hasReceivedFpsRef = useRef<boolean>(false);
+  const reportedLivenessRef = useRef<string | null>(null);
+  const reportedCarrierFailureRef = useRef<string | null>(null);
 
   // ── Deferred game-load while hidden (keep-alive contention guard) ────────────
   // With the shell's keep-alive layer, BOTH the Play and Edit surfaces stay mounted
@@ -205,9 +217,15 @@ export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
           return;
         }
         forwardCarrierMessage(r.data);
+        lastHeartbeatRef.current = Date.now();
         if (r.data.payload.failure) {
           const failure = r.data.payload.failure;
-          forwardHealth('error', failure.code, failure.message ?? failure.hint);
+          const health = carrierFailureHealth(failure);
+          const key = `${health.code}\n${health.message}`;
+          if (reportedCarrierFailureRef.current !== key) {
+            reportedCarrierFailureRef.current = key;
+            forwardHealth('error', health.code, health.message);
+          }
         }
         return;
       }
@@ -220,7 +238,12 @@ export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
         }
         forwardCarrierMessage(r.data);
         const failure = r.data.payload.failure;
-        forwardHealth('error', failure.code, failure.message ?? failure.hint);
+        const health = carrierFailureHealth(failure);
+        const key = `${health.code}\n${health.message}`;
+        if (reportedCarrierFailureRef.current !== key) {
+          reportedCarrierFailureRef.current = key;
+          forwardHealth('error', health.code, health.message);
+        }
         return;
       }
 
@@ -233,6 +256,8 @@ export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
         setFps(r.data.payload.fps);
         lastHeartbeatRef.current = Date.now();
         hasReceivedFpsRef.current = true;
+        reportedLivenessRef.current = null;
+        reportedCarrierFailureRef.current = null;
         setIsFirstFrameLoading(false);
         // A live frame means the viewport recovered — clear any fatal banner.
         setFatal(null);
@@ -363,8 +388,11 @@ export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
     const tick = async () => {
       if (cancelled) return;
       if (hasReceivedFpsRef.current) {
-        timer = setTimeout(tick, PROBE_INTERVAL_MS);
-        return;
+        const elapsed = Date.now() - lastHeartbeatRef.current;
+        if (elapsed <= CARRIER_FAILURE_MS) {
+          timer = setTimeout(tick, PROBE_INTERVAL_MS);
+          return;
+        }
       }
       let up = false;
       try {
@@ -379,13 +407,25 @@ export function PlaySurface({ slug, runtimeBinding }: PlaySurfaceProps) {
       observed++;
       if (!up) {
         consecutiveDown++;
-        if (consecutiveDown >= DOWN_CONFIRM_TICKS) confirmedDown = true;
+        if (consecutiveDown >= DOWN_CONFIRM_TICKS) {
+          confirmedDown = true;
+          if (hasReceivedFpsRef.current && Date.now() - lastHeartbeatRef.current > CARRIER_FAILURE_MS
+            && reportedLivenessRef.current !== 'viewport-runtime-disconnected') {
+            reportedLivenessRef.current = 'viewport-runtime-disconnected';
+            forwardHealth('error', 'viewport-runtime-disconnected', 'The preview runtime stopped responding and its URL is unreachable.');
+          }
+        }
       } else {
         const recovered = confirmedDown;
         consecutiveDown = 0;
         confirmedDown = false;
         const armed = !hasReceivedFpsRef.current;
         const underBudget = reloadCount < MAX_PROBE_RELOADS;
+        if (hasReceivedFpsRef.current && Date.now() - lastHeartbeatRef.current > CARRIER_FAILURE_MS
+          && reportedLivenessRef.current !== 'renderer-process-terminated') {
+          reportedLivenessRef.current = 'renderer-process-terminated';
+          forwardHealth('error', 'renderer-process-terminated', 'The preview stopped publishing frames while its runtime URL remained reachable.');
+        }
         if (recovered && armed && underBudget && observed > DOWN_CONFIRM_TICKS && Date.now() - lastReloadAt > 800) {
           lastReloadAt = Date.now();
           reloadCount++;

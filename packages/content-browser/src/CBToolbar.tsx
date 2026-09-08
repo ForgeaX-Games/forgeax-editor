@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { buildAcceptString, dispatchActiveEditorOperation, generateAssetGuid, logImport, resolveGamePath, panelBridge, validateAssetBasename } from '@forgeax/editor-core';
+import {
+  buildAcceptString,
+  dispatchActiveEditorOperation,
+  generateAssetGuid,
+  kindRequiresCatalogRoot,
+  logImport,
+  resolveCatalogAuthoringDir,
+  resolveGamePath,
+  panelBridge,
+  validateAssetBasename,
+} from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import {
   Button,
@@ -16,20 +26,41 @@ import { importFiles, type ImportProgress } from './import-pipeline';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { createMaterialInstanceAndOpen } from './create-material-instance';
 import { createInputMapAndOpen } from './create-input-map';
+import {
+  createNameScopeForAssetKind,
+  generateDefaultCreateName,
+  type SiblingNameData,
+} from './sibling-name';
 import { ContentBrowserIcon } from './content-browser-icons';
 import { requestSaveAll } from './save-all-bus';
-import { pickNativeImportFiles } from './native-file-picker';
+import { pickNativeImportFiles, isNativeImportPickerCachedUnavailable } from './native-file-picker';
+import type { CatalogAssetRoot } from './catalog-root';
+import { creatableKindAllowedAtPath, localCatalogRoots } from './catalog-authoring-ui';
+
+const DEFAULT_CATALOG_ROOTS: readonly CatalogAssetRoot[] = [{ root: 'assets', catalogPrefix: 'assets' }];
 
 interface Props {
   currentPath: string;
   onReload: () => void;
   onImportProgress?: (progress: ImportProgress | null) => void;
+  siblingNameData?: SiblingNameData;
+  onNavigatePath?: (path: string) => void;
+  catalogAssetRoots?: readonly CatalogAssetRoot[];
 }
 
-export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
+export function CBToolbar({
+  currentPath,
+  onReload,
+  onImportProgress,
+  siblingNameData,
+  onNavigatePath: _onNavigatePath,
+  catalogAssetRoots = DEFAULT_CATALOG_ROOTS,
+}: Props) {
   const { t } = useTranslation();
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const acceptString = buildAcceptString();
 
   // Game-relative directory for authoring ops (appliers resolve to disk).
@@ -40,6 +71,8 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
   useEffect(() => {
     const input = fileInputRef.current;
+    folderInputRef.current?.setAttribute('webkitdirectory', '');
+    folderInputRef.current?.setAttribute('directory', '');
     logImport('CBToolbar.mount', {
       currentPath,
       basePath,
@@ -65,10 +98,32 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
   const handleCreateAsset = useCallback((spec: CreatableAssetSpec) => {
     setAddMenuOpen(false);
     void (async () => {
+      const localRoots = localCatalogRoots(catalogAssetRoots);
+      let targetDir: string;
+      if (kindRequiresCatalogRoot(spec.kind)) {
+        const resolved = resolveCatalogAuthoringDir(currentPath, localRoots);
+        if (!resolved.ok) {
+          toast.error(spec.kind === 'material' ? 'createMaterial' : 'createAsset', {
+            description: t('editor.contentBrowser.catalogAuthoringOutsideAssets'),
+          });
+          return;
+        }
+        targetDir = resolved.dir;
+      } else {
+        targetDir = packDir;
+      }
+
+      const defaultName = siblingNameData
+        ? generateDefaultCreateName(
+          spec.defaultNamePrefix,
+          createNameScopeForAssetKind(spec.kind, targetDir),
+          siblingNameData,
+        )
+        : spec.defaultNamePrefix;
       const name = (await contentBrowserPrompt({
         title: t('editor.contentBrowser.actions.createAsset', { label: spec.label }),
         label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
-        defaultValue: spec.defaultNamePrefix,
+        defaultValue: defaultName,
         placeholder: spec.defaultNamePrefix,
         confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
         cancelText: t('editor.contentBrowser.dialogs.cancel'),
@@ -84,6 +139,18 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
         },
       }))?.trim();
       if (!name) return;
+
+      if (spec.kind === 'scriptable-pack') {
+        const result = await dispatchActiveEditorOperation({
+          kind: 'asset-source.create',
+          sourcePath: `${targetDir}/${name}.pack.ts`,
+          name,
+          initialOutput: { sourceKey: 'scene/main', kind: 'scene', name: `${name} Scene` },
+          requestId: crypto.randomUUID(),
+        }, 'human');
+        if (!result.ok) toast.error('asset-source.create', { description: result.error.hint });
+        return;
+      }
 
       if (spec.kind === 'scene') {
         const requestId = crypto.randomUUID();
@@ -105,30 +172,30 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
           baseColor: [1, 1, 1, 1],
           metallic: 0,
           roughness: 0.5,
-          packPath: `${packDir}/Materials.pack.json`,
+          packPath: `${targetDir}/Materials.pack.json`,
         }, 'human');
         return;
       }
 
       if (spec.kind === 'material-instance') {
-        await createMaterialInstanceAndOpen(name, packDir);
+        await createMaterialInstanceAndOpen(name, targetDir);
         return;
       }
 
       if (spec.kind === 'input-map') {
-        await createInputMapAndOpen(name, packDir);
+        await createInputMapAndOpen(name, targetDir);
         return;
       }
 
       void dispatchActiveEditorOperation({
         kind: 'createAsset',
-        packPath: `${packDir}/${name}.pack.json`,
+        packPath: `${targetDir}/${name}.pack.json`,
         guid: generateAssetGuid(),
         assetKind: spec.kind,
         name,
       }, 'human');
     })();
-  }, [packDir, t]);
+  }, [catalogAssetRoots, currentPath, packDir, siblingNameData, t]);
 
   const handleNewFolder = useCallback(() => {
     setAddMenuOpen(false);
@@ -184,6 +251,7 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
 
     if (errors.length === 0) setTimeout(() => onImportProgress?.(null), 3000);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (folderInputRef.current) folderInputRef.current.value = '';
   }, [basePath, currentPath, onImportProgress, onReload]);
 
   const handleImport = useCallback(() => {
@@ -196,6 +264,11 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
       hasFbx: acceptString.includes('.fbx'),
       acceptDom: input?.getAttribute('accept') ?? input?.accept ?? null,
     });
+    if (!input) return;
+    if (!projectPath || isNativeImportPickerCachedUnavailable()) {
+      input.click();
+      return;
+    }
     void (async () => {
       const nativePick = await pickNativeImportFiles(projectPath);
       if (nativePick.kind === 'selected') {
@@ -203,9 +276,13 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
         return;
       }
       if (nativePick.kind === 'cancelled') return;
-      input?.click();
+      input.click();
     })();
   }, [acceptString, basePath, currentPath, importSelectedFiles, projectPath]);
+
+  const handleImportFolder = useCallback(() => {
+    folderInputRef.current?.click();
+  }, []);
 
   const handleFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -232,23 +309,46 @@ export function CBToolbar({ currentPath, onReload, onImportProgress }: Props) {
               {t('editor.contentBrowser.actions.createFolder')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            {CREATABLE_ASSET_KINDS.map(spec => (
+            {CREATABLE_ASSET_KINDS.map(spec => {
+              if (!creatableKindAllowedAtPath(spec.kind, currentPath, catalogAssetRoots)) return null;
+              return (
               <DropdownMenuItem key={spec.kind} size="sm" onClick={() => handleCreateAsset(spec)}>
                 <span className="cb-add-menu-icon">
                   <ContentBrowserIcon name={spec.icon} />
                 </span>
                 {spec.label}
               </DropdownMenuItem>
-            ))}
+              );
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Button size="sm" variant="subtle" onClick={handleImport}>
-          {t('editor.contentBrowser.actions.import')}
-        </Button>
+        <DropdownMenu modal={false} open={importMenuOpen} onOpenChange={setImportMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="subtle">{t('editor.contentBrowser.actions.import')}</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" interactionScope={CONTENT_BROWSER_INTERACTION_SCOPE}>
+            <DropdownMenuItem size="sm" onClick={handleImport}>
+              {t('editor.contentBrowser.actions.import')}
+            </DropdownMenuItem>
+            <DropdownMenuItem size="sm" onClick={handleImportFolder}>
+              {t('editor.contentBrowser.actions.importFolder')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Input
           ref={fileInputRef}
           data-cb-file-input="1"
+          size="sm"
+          type="file"
+          multiple
+          accept={acceptString}
+          style={{ display: 'none' }}
+          onChange={e => void handleFileSelected(e)}
+        />
+        <Input
+          ref={folderInputRef}
+          data-cb-folder-input="1"
           size="sm"
           type="file"
           multiple

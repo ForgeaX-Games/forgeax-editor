@@ -1,4 +1,10 @@
 import type { EditGateway } from './gateway';
+import type {
+  GameActionDescriptor,
+  GameProjectionResult,
+  GameProjectionValue,
+  GameReadDescriptor,
+} from './game-projection';
 import {
   GAMEPLAY_CARRIER_CONTRACT_VERSION,
   GAMEPLAY_CONTRACT_DESCRIPTION,
@@ -64,12 +70,33 @@ export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): G
   };
 }
 
-type GameplayGateway = Pick<
+export type GameplayGateway = Pick<
   EditGateway,
   'invokeGameAction' | 'readGameState' | 'listGameActions' | 'listGameReads'
 > & {
   readonly playPhase: EditGateway['playPhase'];
 };
+
+export type RemoteGameplayRequest =
+  | { readonly operation: 'describe' }
+  | { readonly operation: 'run'; readonly id: string; readonly args: unknown }
+  | { readonly operation: 'read'; readonly id: string };
+
+export type RemoteGameplayResult =
+  | { readonly ok: true; readonly data?: unknown }
+  | { readonly ok: false; readonly error: { readonly code: string; readonly hint: string; readonly retryable?: boolean } };
+
+export interface RemoteGameplayDescriptors {
+  readonly actions: readonly GameActionDescriptor[];
+  readonly reads: readonly GameReadDescriptor[];
+}
+
+export interface RemoteGameplayTransport {
+  descriptors(): RemoteGameplayDescriptors;
+  request(request: RemoteGameplayRequest): Promise<RemoteGameplayResult>;
+}
+
+const REMOTE_READ_ATTEMPTS = 2;
 
 const unavailable = (hint: string): GameplayProducerResult => ({ ok: false, error: { code: 'surface-unavailable', hint } });
 
@@ -232,7 +259,8 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
     async input(action) {
       if (gateway.playPhase !== 'play') return unavailable('input requires an active live Play projection');
       const result = await gateway.invokeGameAction('input', action);
-      return result.ok ? { ok: true } : result;
+      if (!result.ok) return result;
+      return result.value === undefined ? { ok: true } : { ok: true, data: result.value };
     },
     async query(query) {
       if (gateway.playPhase !== 'play') return unavailable('query requires an active live Play projection');
@@ -244,6 +272,58 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
       if (!capture) return unavailable('capture requires a live canvas capture surface');
       const result = await capture.captureGameplayFrame();
       return result.ok ? { ok: true, data: result.value } : result;
+    },
+  };
+}
+
+/** Adapt a disposable iframe's projection RPC to the normal Gateway-shaped producer. */
+export function createRemoteGameplayGateway(
+  transport: RemoteGameplayTransport,
+  getPlayPhase: () => EditGateway['playPhase'],
+): GameplayGateway {
+  const unavailableResult = <T>(): GameProjectionResult<T> => ({
+    ok: false,
+    error: {
+      code: 'game-projection-unavailable',
+      hint: 'game projections are available only while the remote Play carrier is active',
+    },
+  });
+  const remoteFailure = <T>(result: RemoteGameplayResult): GameProjectionResult<T> => {
+    if (result.ok) return { ok: true, value: result.data as T };
+    return {
+      ok: false,
+      error: {
+        code: result.error.code as never,
+        hint: result.error.hint,
+      },
+    };
+  };
+  const readRemoteGameplay = async (id: string): Promise<RemoteGameplayResult> => {
+    let result: RemoteGameplayResult = {
+      ok: false,
+      error: {
+        code: 'game-projection-unavailable',
+        hint: 'remote Play did not answer the gameplay projection request',
+        retryable: true,
+      },
+    };
+    for (let attempt = 0; attempt < REMOTE_READ_ATTEMPTS; attempt += 1) {
+      result = await transport.request({ operation: 'read', id });
+      if (result.ok || result.error.retryable !== true || getPlayPhase() !== 'play') return result;
+    }
+    return result;
+  };
+  return {
+    get playPhase() { return getPlayPhase(); },
+    listGameActions: () => transport.descriptors().actions,
+    listGameReads: () => transport.descriptors().reads,
+    invokeGameAction: async (id, args) => {
+      if (getPlayPhase() !== 'play') return unavailableResult();
+      return remoteFailure<GameProjectionValue | undefined>(await transport.request({ operation: 'run', id, args }));
+    },
+    readGameState: async (id) => {
+      if (getPlayPhase() !== 'play') return unavailableResult();
+      return remoteFailure<GameProjectionValue>(await readRemoteGameplay(id));
     },
   };
 }

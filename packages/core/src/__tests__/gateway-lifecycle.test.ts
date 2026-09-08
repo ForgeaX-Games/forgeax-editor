@@ -26,6 +26,7 @@ import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession, CommandError } from '../types';
 import type { DispatchResult } from '../io/gateway';
 import { createEditSession } from '../session/document';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Lifecycle API types (expected after m1-w5 impl) ──────────────────────────
 // These define the shape EditGateway will expose after m1-w4 + m1-w5.
@@ -57,7 +58,7 @@ function lifecycleOf(bus: EditGateway): LifecycleAPI {
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

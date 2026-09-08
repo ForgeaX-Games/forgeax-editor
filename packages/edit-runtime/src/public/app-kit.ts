@@ -1,7 +1,7 @@
 /**
  * AppKit SDK — re-export shim. The SSOT now lives in the interface layer
  * (`@forgeax/interface/app-kit`), because AppKit is a business-agnostic app
- * framework: any app (editor, future chat/workbench) is mounted through it.
+ * framework: any independent app (Editor, Chat, or future product surface) is mounted through it.
  *
  * This shim keeps `@forgeax/editor/app-kit` working for existing consumers
  * while the implementation lives one layer down. The dependency direction is

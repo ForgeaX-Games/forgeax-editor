@@ -16,7 +16,6 @@ describe('non-World panels subscription red path', () => {
     expect(source('History.tsx')).toContain('data-testid="panel-history"');
     expect(source('Capabilities.tsx')).toContain('data-testid="panel-capabilities"');
     expect(source('Launcher.tsx')).toContain('data-testid="panel-launcher"');
-    expect(source('AssetEditors.tsx')).toContain('data-testid="panel-asset-overview"');
     expect(source('AssetEditors.tsx')).toContain('data-testid="panel-asset-properties"');
     expect(source('AssetEditors.tsx')).toContain('data-testid="panel-mesh-slots"');
   });

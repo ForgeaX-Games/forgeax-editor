@@ -62,22 +62,21 @@ describe('DEFAULT_EDITOR_DOCK_LAYOUT', () => {
 describe('DEFAULT_ASSET_EDITOR_DOCK_LAYOUT', () => {
   test('is a separate closed panel domain from Level', () => {
     expect(collectViews(DEFAULT_ASSET_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
-      'ep:asset-overview',
       'ep:asset-properties',
     ]);
-    expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:asset-overview']).toBeUndefined();
     expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:asset-properties']).toBeUndefined();
   });
 
   test('mesh pages alone own the material-slot panel', () => {
     expect(collectViews(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
-      'ep:asset-overview',
       'ep:asset-properties',
       'ep:mesh-preview',
       'ep:mesh-slots',
+      'ep:uv-editor',
     ]);
     expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mesh-preview']).toBeDefined();
     expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeDefined();
+    expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:uv-editor']).toBeDefined();
     expect(DEFAULT_ASSET_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
     expect(DEFAULT_EDITOR_DOCK_LAYOUT.panels['ep:mesh-slots']).toBeUndefined();
     expect(DEFAULT_MESH_EDITOR_DOCK_LAYOUT.panels['ep:mat-preview']).toBeUndefined();
@@ -98,9 +97,8 @@ describe('DEFAULT_MI_EDITOR_DOCK_LAYOUT', () => {
 });
 
 describe('DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT', () => {
-  test('pairs the material preview viewport with properties + overview', () => {
+  test('pairs the material preview viewport with properties', () => {
     expect(collectViews(DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT.grid.root).sort()).toEqual([
-      'ep:asset-overview',
       'ep:asset-properties',
       'ep:mat-preview',
     ]);

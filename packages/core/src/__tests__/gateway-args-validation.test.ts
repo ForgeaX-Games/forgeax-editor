@@ -29,10 +29,11 @@ import type { EditorOp, EditSession } from '../types';
 // Session/transient appliers register as a store-module eval side effect; pull
 // them in so the dispatch path routes to a real applier (not UNKNOWN_OP).
 import '../store/store';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 
@@ -192,6 +193,7 @@ describe('solo round-14 — builtin document op args validation', () => {
     const PhysicsMode = defineComponent(componentName, {
       mode: { type: 'enum', default: 1, labels: { static: 0, dynamic: 1, kinematic: 2 } },
     });
+    gw.doc.world.components.register(PhysicsMode);
     const spawned = gw.dispatch({
       kind: 'spawnEntity',
       name: 'PhysicsEnumTarget',

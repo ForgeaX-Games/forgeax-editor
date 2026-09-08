@@ -36,6 +36,17 @@ export const EXECUTION_HOMES = [
 ];
 export const REQUIRED_CONTEXTS = LANDED_REQUIRED_CONTEXTS;
 export const FAILURE_CLASSES = ['admission', 'environment', 'source', 'external-transport'];
+export const PORTABILITY_PLATFORMS = ['linux', 'windows', 'macos'];
+export const PORTABILITY_STAGES = [
+  'checkout',
+  'install',
+  'setup',
+  'wasm',
+  'zero-binary',
+  'type-static',
+  'capability-probe',
+  'smoke',
+];
 export const PORTFOLIO_SCHEMA_VERSION = 'forgeax-browser-release-portfolio/v1';
 export const PORTFOLIO_SOURCE_PATH_PATTERN = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9_][a-z0-9._-]*)*$/;
 export const PORTFOLIO_EVIDENCE_FIELDS = [
@@ -46,6 +57,43 @@ export const PORTFOLIO_EVIDENCE_FIELDS = [
   'expected',
   'observed',
 ];
+export const BASELINE_EVIDENCE_SCHEMA_VERSION = 'forgeax-ci-baseline/v2';
+export const BASELINE_TOP_INDEX_LAYERS = [
+  'summary',
+  'schema',
+  'facts',
+  'claims',
+  'no-claims',
+  'raw-packet',
+];
+export const BASELINE_TOP_INDEX_FIELDS = [
+  'attemptProvenance',
+  'criticalPath',
+  'requiredContexts',
+  'costFacts',
+  'readiness',
+  'budgetClaim',
+  'noClaim',
+  'integrationIndex',
+];
+export const BASELINE_SHARED_FACT_FIELDS = [
+  'sourceSha',
+  'runId',
+  'runAttempt',
+  'topologyId',
+  'graphDigest',
+  'rosterKey',
+  'workflow',
+];
+export const BROWSER_INTEGRATION_COMMAND = 'bun run ci:browser-release -- project-topology';
+export const BROWSER_INTEGRATION_INPUTS = [
+  '--admission',
+  '--measurements',
+  '--output',
+  '--baseline-evidence',
+  '--shared-fact-reference',
+];
+export const BROWSER_CLAIM_BOUNDARY = ['admission', 'parentCheck', 'population', 'claim'];
 export const PREREQUISITE_RELEASE_SCHEMA_VERSION = 'forgeax-prerequisite-release/v1';
 export const PREREQUISITE_PAYLOAD_CLASSES = [
   'engine-dist',
@@ -446,6 +494,56 @@ export function validateDeliveryState(input, options = {}) {
 
 export const validateDelivery = validateDeliveryState;
 
+function deliveryJoinFailure(status, code, expected, observed, hint, blocker, requiredEvidence, nextAction, extra = {}) {
+  return {
+    ok: false,
+    status,
+    error: deliveryIssue(code, expected, observed, hint),
+    handoff: {
+      blocker,
+      owner: 'release owner',
+      requiredEvidence,
+      nextAction,
+    },
+    ...extra,
+  };
+}
+
+/**
+ * Join the editor source delivery and floating harness delivery without
+ * promoting either repository's local state to remote evidence.
+ */
+export function validateDeliveryJoin(input, options = {}) {
+  const state = validateDeliveryState(input, options);
+  if (!state.ok) return state;
+  const landedSha = state.landed.landedSha;
+  const sourceDelivery = input?.sourceDelivery;
+  if (sourceDelivery?.commitSha !== landedSha) {
+    return deliveryJoinFailure(
+      'nonpass',
+      'delivery-source-sha-mismatch',
+      landedSha,
+      sourceDelivery?.commitSha ?? 'missing',
+      'The editor source commit and landed SHA must identify the same delivered revision.',
+      'editor source delivery is not the landed revision',
+      ['editor source commit SHA', 'landed SHA'],
+      'Record the merged editor SHA and rebuild the two-repository delivery join.',
+    );
+  }
+  return {
+    ok: true,
+    status: 'pass',
+    landed: state.landed,
+    admission: state.admission,
+    source: {
+      repository: sourceDelivery.repository,
+      commitSha: sourceDelivery.commitSha,
+      changedPaths: [...sourceDelivery.changedPaths],
+    },
+    harness: state.harness,
+  };
+}
+
 function issue(code, expected, observed, hint) {
   return { code, expected, observed, hint };
 }
@@ -532,6 +630,26 @@ function validateProfilesSchema(profiles) {
         `Use checkId strings in profiles.${index}.`,
       );
     }
+  }
+  return null;
+}
+
+function validatePortabilitySchema(contract) {
+  const portability = contract.portability;
+  if (!isObject(portability)) return issue('portability-index-missing', 'portability is an object', portability, 'Declare the producer-owned portability index in the existing CI contract.');
+  const check = contract.checks.find((entry) => entry.checkId === 'editor-portability');
+  if (!check) return issue('portability-check-missing', 'editor-portability check is declared', 'missing', 'Add editor-portability to the existing non-required check catalog.');
+  if (portability.required !== false) return issue('portability-required-invalid', false, portability.required, 'Keep portability non-required so the existing PR/main gate roster does not change.');
+  if (JSON.stringify(portability.platforms) !== JSON.stringify(PORTABILITY_PLATFORMS)) return issue('portability-platforms-invalid', PORTABILITY_PLATFORMS, portability.platforms, 'Declare the fixed Linux, Windows, and macOS portability platform set.');
+  if (JSON.stringify(portability.stages) !== JSON.stringify(PORTABILITY_STAGES)) return issue('portability-stages-invalid', PORTABILITY_STAGES, portability.stages, 'Declare the fixed portability stage sequence in the producer-owned index.');
+  if (!isObject(portability.entries) || !['scheduled', 'manual', 'main-push'].every((entry) => isObject(portability.entries[entry]))) {
+    return issue('portability-entries-invalid', ['scheduled', 'manual', 'main-push'], portability.entries, 'Declare scheduled, manual, and main-push portability entries in one index.');
+  }
+  if (portability.entries.scheduled.event !== 'schedule' || portability.entries.manual.event !== 'workflow_dispatch' || portability.entries['main-push'].event !== 'push' || portability.entries['main-push'].branch !== 'main') {
+    return issue('portability-entries-invalid', 'schedule, workflow_dispatch, and push/main entries', portability.entries, 'Bind each portability entry to its real CI event and preserve the landed main-push path.');
+  }
+  if (!isObject(portability.artifact) || typeof portability.artifact.name !== 'string' || typeof portability.artifact.path !== 'string') {
+    return issue('portability-artifact-invalid', 'artifact.name and artifact.path strings', portability.artifact, 'Declare the structured portability artifact location for downstream consumers.');
   }
   return null;
 }
@@ -629,6 +747,83 @@ function validatePortfolioSchema(portfolio) {
     if (typeof portfolio.discovery[field] !== 'string' || portfolio.discovery[field].length === 0) return issue('portfolio-discovery-field-invalid', `discovery.${field} is a non-empty string`, portfolio.discovery[field], `Declare discovery.${field} so every unmatched candidate has an explicit disposition.`);
   }
   if (!isObject(portfolio.profiles) || !isObject(portfolio.profiles['browser-journey']) || !isObject(portfolio.profiles['release-script'])) return issue('portfolio-profiles-invalid', 'browser-journey and release-script profile objects', portfolio.profiles, 'Declare profile-owned unit and evidence fields without creating a second roster.');
+  return null;
+}
+
+function validateIntegrationIndex(integrationIndex, portability) {
+  if (!isObject(integrationIndex)) {
+    return issue(
+      'integration-index-missing',
+      'baselineEvidence.topIndex.integrationIndex is an object',
+      integrationIndex ?? 'missing',
+      'Read the single integration index before selecting browser or portability evidence.',
+    );
+  }
+  const browser = integrationIndex.browser;
+  if (!isObject(browser)) return issue('integration-index-browser-invalid', 'browser integration object', browser, 'Use the existing project-topology command and shared fact reference inputs.');
+  if (browser.command !== BROWSER_INTEGRATION_COMMAND) return issue('integration-index-browser-command-invalid', BROWSER_INTEGRATION_COMMAND, browser.command, 'Use the existing browser project-topology command; do not create a second command registry.');
+  if (JSON.stringify(browser.inputs) !== JSON.stringify(BROWSER_INTEGRATION_INPUTS)) return issue('integration-index-browser-inputs-invalid', BROWSER_INTEGRATION_INPUTS, browser.inputs, 'Expose both baseline evidence and shared fact reference inputs.');
+  if (!isObject(browser.sharedFactReference) || browser.sharedFactReference.schema !== 'baselineEvidence.sharedFactReference') return issue('integration-index-shared-reference-invalid', 'baselineEvidence.sharedFactReference', browser.sharedFactReference, 'Point browser consumers at the baseline-owned shared fact reference schema.');
+  if (JSON.stringify(browser.sharedFactReference.fields) !== JSON.stringify(BASELINE_SHARED_FACT_FIELDS)) return issue('integration-index-shared-fields-invalid', BASELINE_SHARED_FACT_FIELDS, browser.sharedFactReference.fields, 'Reuse the baseline attempt provenance fields without copying facts.');
+  if (JSON.stringify(browser.claimBoundary) !== JSON.stringify(BROWSER_CLAIM_BOUNDARY)) return issue('integration-index-claim-boundary-invalid', BROWSER_CLAIM_BOUNDARY, browser.claimBoundary, 'Keep browser admission, parent, population, and claim ownership independent.');
+
+  const portabilityIndex = integrationIndex.portability;
+  if (!isObject(portabilityIndex)) return issue('integration-index-portability-invalid', 'portability integration object', portabilityIndex, 'Expose disabled portability as an explicit no-claim projection.');
+  if (portabilityIndex.status !== 'disabled' || portabilityIndex.required !== false) return issue('integration-index-portability-enabled', {status: 'disabled', required: false}, {status: portabilityIndex.status, required: portabilityIndex.required}, 'Keep editor portability disabled and outside the accepted path.');
+  if (portabilityIndex.reason !== 'editor-portability execution is disabled') return issue('integration-index-portability-reason-invalid', 'editor-portability execution is disabled', portabilityIndex.reason, 'Explain the disabled boundary without claiming a platform observation.');
+  if (!isObject(portabilityIndex.artifact) || portabilityIndex.artifact.name !== 'editor-portability-aggregate' || portabilityIndex.artifact.path !== 'editor-portability-aggregate.json') return issue('integration-index-portability-artifact-invalid', {name: 'editor-portability-aggregate', path: 'editor-portability-aggregate.json'}, portabilityIndex.artifact, 'Reference the existing portability aggregate location.');
+  if (!isObject(portabilityIndex.noClaim) || portabilityIndex.noClaim.code !== 'portability-disabled' || portabilityIndex.noClaim.expected !== 'optional portability projection' || portabilityIndex.noClaim.observed !== 'skipped') return issue('integration-index-portability-no-claim-invalid', {code: 'portability-disabled', expected: 'optional portability projection', observed: 'skipped'}, portabilityIndex.noClaim, 'Expose a structured disabled/no-claim state instead of a pass result.');
+  if (isObject(portability?.artifact) && JSON.stringify(portabilityIndex.artifact) !== JSON.stringify(portability.artifact)) return issue('integration-index-portability-artifact-drift', portability.artifact, portabilityIndex.artifact, 'Reference the existing portability artifact instead of duplicating a different location.');
+  return null;
+}
+
+function validateBaselineEvidenceSchema(baselineEvidence, portability) {
+  if (!isObject(baselineEvidence)) {
+    return issue('baseline-evidence-missing', 'baselineEvidence is an object', baselineEvidence ?? 'missing', 'Expose the existing baseline owner through the contract top index.');
+  }
+  if (baselineEvidence.schemaVersion !== BASELINE_EVIDENCE_SCHEMA_VERSION) {
+    return issue('baseline-evidence-schema-version', BASELINE_EVIDENCE_SCHEMA_VERSION, baselineEvidence.schemaVersion, 'Use the baseline v2 schema owned by scripts/ci/ci-baseline.mjs.');
+  }
+  if (baselineEvidence.owner !== 'editor-ci' || baselineEvidence.factsOwner !== 'scripts/ci/ci-baseline.mjs' || baselineEvidence.collector !== 'scripts/ci/collect-ci-baseline.mjs') {
+    return issue(
+      'baseline-evidence-owner-invalid',
+      {owner: 'editor-ci', factsOwner: 'scripts/ci/ci-baseline.mjs', collector: 'scripts/ci/collect-ci-baseline.mjs'},
+      {owner: baselineEvidence.owner, factsOwner: baselineEvidence.factsOwner, collector: baselineEvidence.collector},
+      'Keep the current baseline facts owner and read-only collector as the only evidence source.',
+    );
+  }
+  if (!isObject(baselineEvidence.topIndex)) return issue('baseline-evidence-top-index-invalid', 'baselineEvidence.topIndex is an object', baselineEvidence.topIndex, 'Declare the progressive summary, schema, facts, claim, no-claim, and raw packet layers.');
+  if (JSON.stringify(baselineEvidence.topIndex.layers) !== JSON.stringify(BASELINE_TOP_INDEX_LAYERS)) {
+    return issue('baseline-evidence-layers-invalid', BASELINE_TOP_INDEX_LAYERS, baselineEvidence.topIndex.layers, 'Keep the baseline discovery order stable for context-limited consumers.');
+  }
+  if (JSON.stringify(baselineEvidence.topIndex.fields) !== JSON.stringify(BASELINE_TOP_INDEX_FIELDS)) {
+    return issue('baseline-evidence-fields-invalid', BASELINE_TOP_INDEX_FIELDS, baselineEvidence.topIndex.fields, 'Expose the stable baseline field vocabulary without aliases or copied facts.');
+  }
+  if (baselineEvidence.topIndex.rawPacket !== 'raw packet reference') {
+    return issue('baseline-evidence-raw-packet-invalid', 'raw packet reference', baselineEvidence.topIndex.rawPacket, 'Keep raw GitHub packet access as the final progressive-disclosure layer.');
+  }
+  const integrationIssue = validateIntegrationIndex(baselineEvidence.topIndex.integrationIndex, portability);
+  if (integrationIssue) return integrationIssue;
+  if (!isObject(baselineEvidence.sharedFactReference) || baselineEvidence.sharedFactReference.source !== 'baseline attempt facts') {
+    return issue('baseline-evidence-shared-reference-invalid', 'sharedFactReference.source is baseline attempt facts', baselineEvidence.sharedFactReference, 'Reference the baseline attempt facts; do not copy packets into contract or browser projections.');
+  }
+  if (JSON.stringify(baselineEvidence.sharedFactReference.fields) !== JSON.stringify(BASELINE_SHARED_FACT_FIELDS)) {
+    return issue('baseline-evidence-shared-fields-invalid', BASELINE_SHARED_FACT_FIELDS, baselineEvidence.sharedFactReference.fields, 'Reuse the attempt provenance identity fields for every shared fact reference.');
+  }
+  const factReferences = baselineEvidence.sharedFactReference.factReferences;
+  if (!Array.isArray(factReferences) || JSON.stringify(factReferences.map((reference) => ({field: reference?.field, source: reference?.source}))) !== JSON.stringify([
+    {field: 'criticalPath', source: 'ci-baseline'},
+    {field: 'costFacts', source: 'ci-baseline'},
+    {field: 'readiness', source: 'ci-baseline'},
+  ]) || factReferences.some((reference) => reference?.digest !== 'sha256:<canonical-fact-block>')) {
+    return issue('baseline-evidence-fact-references-invalid', 'digest-backed criticalPath/costFacts/readiness references', factReferences ?? null, 'Declare verifiable baseline fact references instead of copying only field names.');
+  }
+  if (baselineEvidence.sharedFactReference.artifactIdentity !== 'costFacts.artifact.identity') {
+    return issue('baseline-evidence-artifact-reference-invalid', 'costFacts.artifact.identity', baselineEvidence.sharedFactReference.artifactIdentity, 'Expose the exact artifact identity path used by the shared baseline fact reference.');
+  }
+  if (!isObject(baselineEvidence.budget) || baselineEvidence.budget.minimumSuccessfulExactStableRoster !== 20) {
+    return issue('baseline-evidence-budget-invalid', {minimumSuccessfulExactStableRoster: 20}, baselineEvidence.budget, 'Keep the owner-bound budget gate at twenty successful exact stable-roster attempts.');
+  }
   return null;
 }
 
@@ -888,6 +1083,8 @@ function validateSchema(contract) {
   ]) {
     if (schemaIssue) return schemaIssue;
   }
+  const baselineEvidenceIssue = validateBaselineEvidenceSchema(contract.baselineEvidence, contract.portability);
+  if (baselineEvidenceIssue) return baselineEvidenceIssue;
   return null;
 }
 
@@ -1007,6 +1204,8 @@ function validatePolicy(contract) {
 export function validateContract(contract) {
   const schemaIssue = validateSchema(contract);
   if (schemaIssue) return result([schemaIssue]);
+  const portabilityIssue = validatePortabilitySchema(contract);
+  if (portabilityIssue) return result([portabilityIssue]);
   const identityIssue = validateIdentity(contract);
   if (identityIssue) return result([identityIssue]);
   const policyIssue = validatePolicy(contract);
@@ -1033,6 +1232,8 @@ export function projectContract(contract) {
     roster: checks,
     profiles: structuredClone(contract.profiles),
     requiredContexts: structuredClone(contract.requiredContexts),
+    baselineEvidence: structuredClone(contract.baselineEvidence),
+    portability: structuredClone(contract.portability),
     prerequisiteRelease: structuredClone(contract.prerequisiteRelease),
     browserReleasePortfolio: projectBrowserReleasePortfolio(contract),
     resultEnvelope: {
@@ -1188,7 +1389,7 @@ export function runCli(args = process.argv.slice(2)) {
     } catch (error) {
       return cliIssue('delivery-input-unreadable', 'readable JSON delivery evidence', String(error), 'Provide a readable JSON evidence file produced from the landed and harness delivery boundaries.');
     }
-    const deliveryResult = validateDeliveryState(deliveryInput, {
+    const deliveryResult = validateDeliveryJoin(deliveryInput, {
       requiredContexts: contract.requiredContexts.map((entry) => entry.context),
     });
     if (!deliveryResult.ok) return deliveryResult;

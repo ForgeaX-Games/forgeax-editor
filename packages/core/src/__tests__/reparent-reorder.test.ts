@@ -15,10 +15,11 @@ import { gateway } from '../store/store';
 import { createEditSession, childrenOf } from '../session/document';
 import { reparentMany, reparentAt, reparentEntity } from '../session/ops';
 import type { EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 function freshDoc(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

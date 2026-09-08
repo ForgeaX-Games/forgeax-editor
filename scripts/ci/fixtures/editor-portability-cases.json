@@ -1,0 +1,266 @@
+{
+  "platforms": ["linux", "windows", "macos"],
+  "stages": [
+    "checkout",
+    "install",
+    "setup",
+    "wasm",
+    "zero-binary",
+    "type-static",
+    "capability-probe",
+    "smoke"
+  ],
+  "requiredStages": [
+    "checkout",
+    "install",
+    "setup",
+    "wasm",
+    "zero-binary",
+    "type-static"
+  ],
+  "invalidSourceSha": "9999999999999999999999999999999999999999",
+  "aggregateMutations": {
+    "missing-platform": "missing-platform",
+    "duplicate-platform": "duplicate-platform",
+    "source-sha-drift": "source-sha-drift",
+    "missing-stage": "missing-stage",
+    "duplicate-stage": "duplicate-stage",
+    "cross-os-cache": "cross-os-cache",
+    "tracked-wasm": "tracked-wasm"
+  },
+  "aggregateExpectedErrors": {
+    "missing-platform": "matrix-platform-set-incomplete",
+    "duplicate-platform": "matrix-platform-duplicate",
+    "source-sha-drift": "matrix-source-sha-mismatch",
+    "missing-stage": "platform-stage-set-incomplete",
+    "duplicate-stage": "platform-stage-duplicate",
+    "cross-os-cache": "platform-cache-provenance-invalid",
+    "tracked-wasm": "zero-binary-violation"
+  },
+  "capabilityCases": {
+    "headed-supported": {
+      "browserChannel": "chrome-beta",
+      "probes": {
+        "headed": {
+          "ok": true,
+          "facts": {
+            "navigatorGpu": true,
+            "adapter": true,
+            "device": true,
+            "features": ["bgra8unorm-storage"],
+            "backend": "vulkan"
+          }
+        }
+      },
+      "expected": {
+        "result": "supported",
+        "browserMode": "headed",
+        "browserChannel": "chrome-beta",
+        "navigatorGpu": true,
+        "adapter": true,
+        "device": true,
+        "features": ["bgra8unorm-storage"],
+        "backend": "vulkan"
+      }
+    },
+    "headless-fallback": {
+      "browserChannel": "chromium",
+      "probes": {
+        "headed": {
+          "ok": false,
+          "error": "headed browser launch is unavailable"
+        },
+        "headless": {
+          "ok": true,
+          "facts": {
+            "navigatorGpu": true,
+            "adapter": true,
+            "device": true,
+            "features": [],
+            "backend": "swiftshader"
+          }
+        }
+      },
+      "expected": {
+        "result": "supported",
+        "browserMode": "headless",
+        "browserChannel": "chromium",
+        "navigatorGpu": true,
+        "adapter": true,
+        "device": true,
+        "features": [],
+        "backend": "swiftshader"
+      }
+    },
+    "navigator-missing": {
+      "browserChannel": "chromium",
+      "probes": {
+        "headed": {"ok": true, "facts": {"navigatorGpu": false}},
+        "headless": {"ok": true, "facts": {"navigatorGpu": false}}
+      },
+      "expected": {"result": "bounded-non-applicable"}
+    },
+    "adapter-missing": {
+      "browserChannel": "chromium",
+      "probes": {
+        "headed": {"ok": true, "facts": {"navigatorGpu": true, "adapter": false}},
+        "headless": {"ok": true, "facts": {"navigatorGpu": true, "adapter": false}}
+      },
+      "expected": {"result": "bounded-non-applicable"}
+    },
+    "device-missing": {
+      "browserChannel": "chromium",
+      "probes": {
+        "headed": {"ok": true, "facts": {"navigatorGpu": true, "adapter": true, "device": false}},
+        "headless": {"ok": true, "facts": {"navigatorGpu": true, "adapter": true, "device": false}}
+      },
+      "expected": {"result": "bounded-non-applicable"}
+    },
+    "features-backend-missing": {
+      "browserChannel": "chromium",
+      "probes": {
+        "headed": {"ok": true, "facts": {"navigatorGpu": true, "adapter": true, "device": true, "features": [], "backend": null}},
+        "headless": {"ok": true, "facts": {"navigatorGpu": true, "adapter": true, "device": true, "features": [], "backend": null}}
+      },
+      "expected": {"result": "bounded-non-applicable"}
+    },
+    "both-unavailable": {
+      "browserChannel": "chrome-beta",
+      "probes": {
+        "headed": {"ok": false, "error": "headed browser launch is unavailable"},
+        "headless": {"ok": false, "error": "headless browser launch is unavailable"}
+      },
+      "expected": {"result": "bounded-non-applicable", "browserMode": "unavailable"}
+    }
+  },
+  "failureControls": {
+    "missing-toolchain": {
+      "kind": "missing-toolchain",
+      "stage": "setup",
+      "code": "required-toolchain-missing"
+    },
+    "stage-failure": {
+      "kind": "stage-failure",
+      "stage": "type-static",
+      "code": "deliberate-stage-failure"
+    },
+    "capability-unavailable": {
+      "kind": "capability-unavailable",
+      "expectedResult": "bounded-non-applicable"
+    },
+    "external-transport": {
+      "first": {
+        "failureClass": "external-transport",
+        "code": "transport-first",
+        "expected": "transport succeeds",
+        "observed": "connection reset",
+        "hint": "Retry the external transport once."
+      },
+      "second": {
+        "failureClass": "external-transport",
+        "code": "transport-second",
+        "expected": "transport succeeds",
+        "observed": "connection reset again",
+        "hint": "Repair the external transport and rerun."
+      }
+    }
+  },
+  "smokeCases": {
+    "headed": {
+      "capability": {
+        "result": "supported",
+        "browserMode": "headed",
+        "browserChannel": "chrome-beta",
+        "navigatorGpu": true,
+        "adapter": true,
+        "device": true,
+        "features": ["bgra8unorm-storage"],
+        "backend": "vulkan"
+      },
+      "expected": {"mode": "headed", "terminalStatus": "pass"}
+    },
+    "headless": {
+      "capability": {
+        "result": "supported",
+        "browserMode": "headless",
+        "browserChannel": "chromium",
+        "navigatorGpu": true,
+        "adapter": true,
+        "device": true,
+        "features": [],
+        "backend": "swiftshader"
+      },
+      "expected": {"mode": "headless", "terminalStatus": "pass"}
+    },
+    "bounded": {
+      "capability": {
+        "result": "bounded-non-applicable",
+        "browserMode": "unavailable",
+        "browserChannel": "chromium",
+        "navigatorGpu": false,
+        "adapter": false,
+        "device": false,
+        "features": [],
+        "backend": null,
+        "boundary": "Neither headed nor headless exposed a usable WebGPU path.",
+        "hint": "Provision a supported browser and rerun the native portability job."
+      },
+      "expected": {"mode": "unavailable", "terminalStatus": "skipped"}
+    }
+  },
+  "aiRecovery": {
+    "contract": {
+      "portability": {
+        "checkId": "editor-portability",
+        "artifact": {"path": "editor-portability-aggregate.json"},
+        "entries": {
+          "scheduled": {"event": "schedule", "profile": "nightly/scheduled"},
+          "manual": {"event": "workflow_dispatch", "profile": "nightly/scheduled"},
+          "main-push": {"event": "push", "branch": "main", "profile": "main"}
+        }
+      }
+    },
+    "expected": {
+      "checkId": "editor-portability",
+      "profile": "nightly/scheduled",
+      "artifactPath": "editor-portability-aggregate.json",
+      "sourceSha": "1111111111111111111111111111111111111111",
+      "platform": "linux",
+      "stage": "install",
+      "code": "transport-second",
+      "retryable": false,
+      "action": "repair-and-rerun"
+    }
+  },
+  "valid": {
+    "sourceSha": "1111111111111111111111111111111111111111",
+    "recursivePins": [
+      {"path": "packages/engine", "pin": "2222222222222222222222222222222222222222"},
+      {"path": "packages/interface", "pin": "3333333333333333333333333333333333333333"}
+    ],
+    "platformIdentity": {
+      "os": "linux",
+      "architecture": "x64",
+      "runnerImage": "ubuntu-24.04",
+      "toolchain": {
+        "bun": "1.3.14",
+        "bunRevision": "bun-revision",
+        "node": "22.13.0",
+        "pnpm": "11.7.0",
+        "rust": "rustc 1.93.0",
+        "wasmPack": "wasm-pack 0.14.0",
+        "emscripten": "emcc 4.0.0"
+      }
+    },
+    "stageHandlers": {
+      "checkout": {"ok": true},
+      "install": {"ok": true},
+      "setup": {"ok": true},
+      "wasm": {"ok": true},
+      "zero-binary": {"ok": true, "trackedBinaryFiles": []},
+      "type-static": {"ok": true},
+      "capability-probe": {"ok": true, "capability": {"result": "supported", "browserMode": "headless", "browserChannel": "chromium", "navigatorGpu": true, "adapter": true, "device": true, "features": [], "backend": "webgpu"}},
+      "smoke": {"ok": true}
+    }
+  }
+}

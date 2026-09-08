@@ -10,6 +10,12 @@ import process from 'node:process';
 
 const ROOT = process.env.GITHUB_WORKSPACE ?? process.cwd();
 
+// Scriptable Scene publication requires the Engine template-scene producer
+// baseline. Keep this immutable lower bound beside the gate so a gitlink that
+// predates the approved producer cannot pass merely because it is reachable
+// from a newer branch tip.
+const ENGINE_MINIMUM_BASELINE = '57c2271bf2ab03474c876a8702d0776dcfa991a2';
+
 function run(command, args, cwd = ROOT) {
   const result = spawnSync(command, args, {
     cwd,
@@ -69,6 +75,16 @@ try {
     run('git', fetchArgs, directory);
 
     const main = run('git', ['rev-parse', 'FETCH_HEAD'], directory);
+
+    // The CI checkout is intentionally shallow. Fetching main must happen
+    // before validating the immutable Engine baseline because the baseline may
+    // not be present in the one-commit checkout even though it is an ancestor
+    // of the fetched branch.
+    if (path === 'packages/engine') {
+      run('git', ['cat-file', '-e', `${ENGINE_MINIMUM_BASELINE}^{commit}`], directory);
+      run('git', ['merge-base', '--is-ancestor', ENGINE_MINIMUM_BASELINE, pin], directory);
+    }
+
     run('git', ['merge-base', '--is-ancestor', pin, main], directory);
     console.log(`[submodule-pin] ${path}: ${pin} is reachable from main (${main})`);
   }

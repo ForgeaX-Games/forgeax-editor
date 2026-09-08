@@ -25,6 +25,7 @@ import { EditGateway } from '../io/gateway';
 import { registerApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // RED phase: EditGateway doesn't have applier tables yet.
 // After m1-w6, documentAppliers / sessionAppliers / transientAppliers exist.
@@ -33,7 +34,7 @@ import type { EditorOp, EditSession } from '../types';
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

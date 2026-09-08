@@ -25,10 +25,15 @@
 // Run (fx.ts wires this): FORGEAX_GAME_DIR=<dir> bun apps/standalone/game-backend.ts
 //   env FORGEAX_GAME_API_PORT overrides the port (default 15281).
 
-import { createFilesRouter, createPrefsRouter, singleGameFileBackend } from '@forgeax/platform-io';
+import { createFilesRouter, createPrefsRouter, createVersionControlRouter, singleGameFileBackend } from '@forgeax/platform-io';
+import { createToolClient, type ToolClient } from '@forgeax/engine-devkit';
+import type { ToolDescriptor } from '@forgeax/engine-tool-runtime';
+import { createScriptablePackAuthoringGateway } from '@forgeax/engine-pack/source';
+import { createFileSystemScriptablePackAuthoringPort, loadScriptablePack } from '@forgeax/engine-pack/source-node';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { cp, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { basename, join, relative, resolve } from 'node:path';
 import { GAME_TEMPLATE_SLUG_RE, listGameTemplates } from './template-catalog';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
@@ -41,6 +46,94 @@ const port = Number(process.env.FORGEAX_GAME_API_PORT ?? 15281);
 const instanceRootAbs = resolve(gameDir);
 const gameSlug = basename(instanceRootAbs);
 const engineTemplatesRoot = resolve(import.meta.dir, '../../packages/engine/templates');
+
+const authoredTextExtensions = new Set(['.json', '.ts', '.tsx', '.js', '.jsx', '.md']);
+
+async function authoredFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.forgeax') continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile() && authoredTextExtensions.has(entry.name.slice(entry.name.lastIndexOf('.')))) files.push(path);
+    }
+  };
+  await visit(root);
+  return files;
+}
+
+async function sourceIncomingRefs(sourcePath: string, sourceKey?: string): Promise<readonly string[]> {
+  if (sourceKey === undefined) return [];
+  const loaded = await loadScriptablePack(resolve(gameDir, sourcePath), { metadataOnly: true });
+  if (!loaded.ok) return [];
+  const output = loaded.value.assets[sourceKey];
+  if (output === undefined) return [];
+  const guid = AssetGuid.format(output.guid);
+  const sourceAbs = resolve(gameDir, sourcePath);
+  const references: string[] = [];
+  for (const path of await authoredFiles(gameDir)) {
+    if (path === sourceAbs) continue;
+    const contents = await readFile(path, 'utf8').catch(() => '');
+    if (contents.includes(guid)) references.push(relative(gameDir, path).replace(/\\/g, '/'));
+  }
+  return references.sort();
+}
+
+const sourceAuthoring = createScriptablePackAuthoringGateway(
+  createFileSystemScriptablePackAuthoringPort({
+    gameRoot: gameDir,
+    incomingRefs: sourceIncomingRefs,
+    // Source mutation writes already notify both standalone producer watchers.
+    // Explicit rebuild has no content write, so publish the same source event
+    // without adding a second cooker in the API process.
+    rebuild: async (sourcePath) => {
+      const now = new Date();
+      await utimes(resolve(gameDir, sourcePath), now, now);
+      return { ok: true, value: undefined };
+    },
+  }),
+);
+
+// The standalone host is only the physical transport for the Engine ToolClient.
+// Project Entries provide the producer contributions; this process never creates
+// an authoring registry or a fallback executor of its own.
+let toolClientPromise: Promise<ToolClient> | undefined;
+async function getToolClient(): Promise<ToolClient> {
+  toolClientPromise ??= createToolClient({ projectRoot: gameDir });
+  try {
+    return await toolClientPromise;
+  } catch (error) {
+    toolClientPromise = undefined;
+    throw error;
+  }
+}
+
+function wireToolDescriptor(descriptor: ToolDescriptor): Record<string, unknown> {
+  return {
+    ...descriptor,
+    argsSchema: descriptor.argsSchema.describe === undefined
+      ? {}
+      : { describe: descriptor.argsSchema.describe },
+    resultSchema: descriptor.resultSchema.describe === undefined
+      ? {}
+      : { describe: descriptor.resultSchema.describe },
+  };
+}
+
+function wireUnavailable(error: unknown): Response {
+  return new Response(JSON.stringify({
+    ok: false,
+    error: {
+      code: 'tool-runtime-unavailable',
+      expected: 'the active Project Entry to expose a build-realm ToolPlugin',
+      hint: 'Install or repair the Project authoring ToolPlugin, then retry cold discovery.',
+      retryable: true,
+      recoveryActions: ['tool-runtime.offer', 'tool-runtime.retry'],
+      detail: { cause: error instanceof Error ? error.message : String(error) },
+    },
+  }), { status: 503, headers: { 'content-type': 'application/json' } });
+}
 
 interface GameManifest {
   id?: unknown;
@@ -117,7 +210,16 @@ async function createStandaloneGame(input: { slug?: unknown; name?: unknown; bri
   }
 
   const existingEntries = await readdir(gameDir, { withFileTypes: true }).catch(() => []);
-  const isEmptyHostScaffold = existingEntries.length === 2
+  // Smoke and standalone hosts may mount the workspace dependency graph as a
+  // directory symlink before New Game materializes the template. The project
+  // DDC is also host-owned metadata under .forgeax. Neither is authored game
+  // content, so keep the scaffold contract based on the package/assets pair
+  // rather than rejecting the otherwise-empty slot.
+  const authoredScaffoldEntries = existingEntries.filter(
+    (entry) => entry.name !== '.forgeax'
+      && (entry.name !== 'node_modules' || !entry.isSymbolicLink()),
+  );
+  const isEmptyHostScaffold = authoredScaffoldEntries.length === 2
     && existingEntries.some((entry) => entry.name === 'package.json' && entry.isFile())
     && existingEntries.some((entry) => entry.name === 'assets' && entry.isDirectory())
     && (await readdir(join(gameDir, 'assets')).catch(() => [])).length === 0;
@@ -192,9 +294,11 @@ try {
 //     console noise, but now the layout actually persists into the game.
 const filesBackend = singleGameFileBackend(gameDir);
 const filesRouter = createFilesRouter(filesBackend);
+const versionControlRouter = createVersionControlRouter({ gameRoot: gameDir });
 const PREFIXES = [
   { prefix: '/api/files', router: filesRouter, isFiles: true },
   { prefix: '/api/prefs', router: createPrefsRouter(gameDir), isFiles: false },
+  { prefix: '/api/version-control', router: versionControlRouter, isFiles: false },
 ] as const;
 
 /** Strong file revision used by AssetIO's source-sidecar CAS contract. */
@@ -274,7 +378,7 @@ const server = Bun.serve({
     if (url.pathname === '/api/health') {
       // Runtime carriers use this stable absolute root as their managed-instance
       // identity. iframe, page and Tauri WebView hosts all consume the same fact.
-      return new Response(JSON.stringify({ ok: true, uptime: process.uptime(), port, instanceRootAbs }), {
+      return new Response(JSON.stringify({ ok: true, uptime: process.uptime(), port, instanceRootAbs, runtimeGeneration: 1 }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -348,6 +452,123 @@ const server = Bun.serve({
     if (url.pathname === '/api/events/stream') {
       return emptyEventStream();
     }
+    if (url.pathname === '/api/tool-client/events' && req.method === 'GET') {
+      // Event observation is intentionally best-effort in the standalone host;
+      // the Engine ToolClient remains the only run authority.
+      return emptyEventStream();
+    }
+    if (url.pathname === '/api/tool-runtime/operations' && req.method === 'GET') {
+      try {
+        const client = await getToolClient();
+        return new Response(JSON.stringify({ operations: client.list().map(wireToolDescriptor) }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } catch (error) {
+        return wireUnavailable(error);
+      }
+    }
+    if (url.pathname.startsWith('/api/tool-runtime/operations/') && req.method === 'GET') {
+      const operationId = decodeURIComponent(url.pathname.slice('/api/tool-runtime/operations/'.length));
+      try {
+        const descriptor = (await getToolClient()).describe(operationId);
+        if (descriptor === undefined) {
+          return new Response(JSON.stringify({
+            error: {
+              code: 'tool-capability-unavailable',
+              expected: `tool ${operationId} to exist in the Project-derived catalog`,
+              hint: 'Install the Project ToolPlugin or choose one of the discovered operation ids.',
+              retryable: false,
+              recoveryActions: ['tool-runtime.discover'],
+            },
+          }), { status: 404, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ operation: wireToolDescriptor(descriptor) }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } catch (error) {
+        return wireUnavailable(error);
+      }
+    }
+    if (url.pathname === '/api/tool-runtime/run' && req.method === 'POST') {
+      let body: Record<string, unknown>;
+      try {
+        const parsed = await req.json();
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new TypeError('request must be a JSON object');
+        body = parsed as Record<string, unknown>;
+      } catch (error) {
+        return new Response(JSON.stringify({
+          error: {
+            code: 'tool-invalid-args',
+            expected: 'a JSON object containing operationId and args',
+            hint: error instanceof Error ? error.message : 'repair the ToolClient request',
+            retryable: false,
+            recoveryActions: ['tool-runtime.describe'],
+          },
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      if (typeof body.operationId !== 'string') {
+        return new Response(JSON.stringify({
+          error: {
+            code: 'tool-invalid-args',
+            expected: 'operationId to be a string',
+            hint: 'Choose an operation from ToolClient.list().',
+            retryable: false,
+            recoveryActions: ['tool-runtime.discover'],
+          },
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      try {
+        const terminal = await (await getToolClient()).run(body.operationId, body.args);
+        return new Response(JSON.stringify(terminal), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } catch (error) {
+        return wireUnavailable(error);
+      }
+    }
+    if (url.pathname === '/api/carrier/offer' && req.method === 'POST') {
+      // The standalone Node host only forwards a complete Engine CarrierOffer
+      // supplied by an authenticated provider. It never manufactures an offer
+      // from endpoint/token fragments or creates an Editor-side carrier owner.
+      const encodedOffer = process.env.FORGEAX_CARRIER_OFFER_JSON;
+      if (encodedOffer === undefined) {
+        return new Response(JSON.stringify({ ok: false, error: { code: 'carrier-unavailable', expected: 'an Engine CarrierOffer supplied by an authenticated provider', hint: 'No authenticated ephemeral provider is offered by this standalone host.' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      try {
+        const offer = JSON.parse(encodedOffer);
+        return new Response(JSON.stringify({ ok: true, offer }), { status: 200, headers: { 'content-type': 'application/json' } });
+      } catch (cause) {
+        return new Response(JSON.stringify({ ok: false, error: { code: 'carrier-offer-invalid', expected: 'valid JSON matching Engine CarrierOffer', hint: 'Configure FORGEAX_CARRIER_OFFER_JSON from the authenticated provider.', detail: { cause: cause instanceof Error ? cause.message : String(cause) } } }), { status: 503, headers: { 'content-type': 'application/json' } });
+      }
+    }
+    if (url.pathname === '/api/carrier/release' && req.method === 'POST') {
+      // Release is intentionally idempotent: the Engine provider owns lease cleanup.
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.pathname === '/api/assets/source/execute' && req.method === 'POST') {
+      let operation: Parameters<typeof sourceAuthoring.execute>[0];
+      try {
+        operation = await req.json() as typeof operation;
+      } catch {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: {
+            code: 'pack-source-operation-invalid',
+            hint: 'Source authoring operation body must be valid JSON.',
+            retryable: false,
+            recoveryActions: ['inspect-operation-schema'],
+          },
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      const result = await sourceAuthoring.execute(operation);
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (url.pathname === '/api/validation/project' && req.method === 'POST') {
       let options: { maxBytes?: number; maxEntities?: number } = {};
       try {
@@ -366,7 +587,7 @@ const server = Bun.serve({
         // The existing validator is the producer-owned J5 fact source. Keep it
         // in the Bun host because it reads the confined game filesystem.
         const { validateGameProject } = await import('../scripts/game-validation.mjs');
-        const result = validateGameProject(gameDir, options);
+        const result = await validateGameProject(gameDir, options);
         return new Response(JSON.stringify(result), {
           status: 200,
           headers: { 'content-type': 'application/json' },

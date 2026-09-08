@@ -19,6 +19,7 @@ import {
   DEFAULT_ADMISSION_ALLOWLIST,
   projectAdmissionChanges,
   selectHarnessDelivery,
+  validateDeliveryJoin,
   validateDeliveryState,
 } from '../editor-ci-contract.mjs';
 
@@ -141,6 +142,14 @@ test('all terminal results normalize to the same machine-readable envelope', () 
   }
 });
 
+test('local editor report keeps sloClaim separate from baseline budget claims', () => {
+  const input = failureInput('environment', false);
+  input.budgetClaim = {owner: 'ci-baseline', sampleCount: 20};
+  const envelope = normalizeEnvelope(input);
+  assert.equal(envelope.sloClaim, null);
+  assert.equal(Object.hasOwn(envelope, 'budgetClaim'), false);
+});
+
 test('retry policy is bounded by failure class and transient evidence', () => {
   for (const mutation of fixture.cases) {
     const envelope = normalizeEnvelope(failureInput(mutation.failureClass, mutation.transient));
@@ -148,6 +157,84 @@ test('retry policy is bounded by failure class and transient evidence', () => {
     assert.equal(retry.retry, mutation.expectedRetry, mutation.name);
     assert.equal(retry.maxAttempts, mutation.expectedMaxAttempts, mutation.name);
   }
+});
+
+function portabilityInput(stage, terminalStatus = 'failure') {
+  const input = failureInput('environment', false);
+  return {
+    ...input,
+    checkId: 'editor-portability',
+    profile: 'nightly/scheduled',
+    executionHome: 'nightly/scheduled',
+    terminalStatus,
+    failureClass: terminalStatus === 'failure' ? 'environment' : null,
+    code: terminalStatus === 'failure' ? input.code : null,
+    expected: terminalStatus === 'failure' ? input.expected : null,
+    observed: terminalStatus === 'failure' ? input.observed : null,
+    hint: terminalStatus === 'failure' ? input.hint : null,
+    firstFailure: terminalStatus === 'failure' ? input.firstFailure : null,
+    sourceSha: 'a'.repeat(40),
+    platform: {
+      os: 'linux',
+      architecture: 'x64',
+      runnerImage: 'ubuntu-24.04',
+      toolchain: {bun: '1.3.14', bunRevision: 'bun-revision', node: '22.13.0', pnpm: '11.7.0', rust: '1.93.0', wasmPack: '0.14.0', emscripten: '4.0.10'},
+    },
+    stage,
+    capability: terminalStatus === 'skipped'
+      ? {
+        result: 'bounded-non-applicable',
+        browserMode: 'unavailable',
+        browserChannel: 'chromium',
+        navigatorGpu: false,
+        adapter: false,
+        device: false,
+        features: [],
+        backend: null,
+        boundary: 'no supported path',
+        hint: 'install a supported browser capability and rerun',
+      }
+      : {result: 'supported', browserMode: 'headless', browserChannel: 'chromium', navigatorGpu: true, adapter: true, device: true, features: [], backend: 'webgpu'},
+    matrix: {
+      kind: 'platform',
+      sourceSha: 'a'.repeat(40),
+      platforms: ['linux'],
+      terminalResults: [{platform: 'linux', stage, terminalStatus, sourceSha: 'a'.repeat(40)}],
+    },
+  };
+}
+
+test('portability envelope validates structured fields and bounded skipped stages', () => {
+  for (const mutation of fixture.portabilityCases) {
+    const normalized = normalizeEnvelope(portabilityInput(mutation.stage, mutation.terminalStatus));
+    const result = validateEnvelope(normalized);
+    assert.equal(result.ok, mutation.expectedValid, mutation.name);
+  }
+});
+
+test('portability envelope rejects missing projection fields and duplicate terminal units', () => {
+  for (const field of ['sourceSha', 'platform', 'stage', 'capability', 'matrix']) {
+    const normalized = normalizeEnvelope(portabilityInput('checkout', 'pass'));
+    delete normalized[field];
+    const result = validateEnvelope(normalized);
+    assert.equal(result.ok, false, field);
+    assert.equal(result.error.code, 'envelope-portability-field-missing', field);
+    assert.equal(result.error.expected, field, field);
+  }
+
+  const duplicate = normalizeEnvelope(portabilityInput('smoke', 'pass'));
+  duplicate.matrix.terminalResults.push({platform: 'linux', stage: 'smoke', terminalStatus: 'pass', sourceSha: 'a'.repeat(40)});
+  const duplicateResult = validateEnvelope(duplicate);
+  assert.equal(duplicateResult.ok, false);
+  assert.equal(duplicateResult.error.code, 'envelope-matrix-terminal-duplicate');
+});
+
+test('portability envelope rejects bounded skipped for required stages', () => {
+  const normalized = normalizeEnvelope(portabilityInput('install', 'skipped'));
+  const result = validateEnvelope(normalized);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'envelope-skipped-stage-invalid');
+  assert.equal(typeof result.error.hint, 'string');
 });
 
 test('missing envelope fields are structured failures rather than thrown strings', () => {
@@ -318,6 +405,34 @@ test('delivery state keeps landed, admission, and harness boundaries distinct', 
   assert.equal(pendingResult.phase, 'harness');
   assert.equal(pendingResult.status, 'pending');
   assert.equal(pendingResult.error.code, 'harness-remote-push-missing');
+});
+
+test('independent editor and floating harness remotes must join before delivery is complete', () => {
+  const input = {
+    ...clone(landedFixture.approvedInput),
+    ...clone(harnessFixture.approvedInput),
+  };
+  for (const candidate of harnessFixture.joinCases) {
+    const candidateInput = clone(input);
+    for (const [path, replacement] of Object.entries(candidate.mutate ?? {})) {
+      const parts = path.split('.');
+      const last = parts.pop();
+      const parent = parts.reduce((current, part) => current[part], candidateInput);
+      parent[last] = replacement;
+    }
+    const result = validateDeliveryJoin(candidateInput);
+    assert.equal(result.ok, candidate.valid === true, candidate.name);
+    assert.equal(result.status, candidate.valid ? 'pass' : candidate.expectedStatus, candidate.name);
+    if (!candidate.valid) {
+      assert.equal(result.error.code, candidate.expectedCode, candidate.name);
+      assert.equal(typeof result.error.hint, 'string', candidate.name);
+      assert.notEqual(result.error.expected, undefined, candidate.name);
+      assert.notEqual(result.error.observed, undefined, candidate.name);
+      assert.equal(typeof result.handoff.owner, 'string', candidate.name);
+      assert.ok(Array.isArray(result.handoff.requiredEvidence), candidate.name);
+      assert.equal(typeof result.handoff.nextAction, 'string', candidate.name);
+    }
+  }
 });
 
 test('producer delivery identity contains the complete immutable join fields', () => {

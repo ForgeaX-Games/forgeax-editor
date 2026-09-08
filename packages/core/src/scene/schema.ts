@@ -1,12 +1,12 @@
 // schema.ts — engine-reflected component schema registry
 //
-// ALL component schemas are derived AT RUNTIME from the engine's ECS introspection
-// APIs (getRegisteredComponents → Component.fields → FieldReflection).
-// Zero hand-maintained REGISTRY — the engine IS the single source of truth.
+// ALL component schemas are derived AT RUNTIME from the World-local ECS catalog
+// (`world.components.entries()` → Component.fields → FieldReflection).
+// Zero hand-maintained REGISTRY — the World catalog IS the single source of truth.
 //
 // Component filtering:
 //   - transient components                    → excluded
-//   - RELATIONSHIP_COMPONENTS (ChildOf, …)    → excluded
+//   - relationship components (ChildOf, …)    → excluded
 //   - explicit exclude list (Entity, Skin, …) → excluded
 //
 // Field type mapping (engine → editor):
@@ -18,11 +18,11 @@
 
 import type {
   Component,
-  FieldShapeKind,
   FieldReflection,
-  SchemaFieldType,
+  World,
 } from '@forgeax/engine-ecs';
-import { getRegisteredComponents, RELATIONSHIP_COMPONENTS } from '@forgeax/engine-ecs';
+import { componentDefinition } from '@forgeax/engine-ecs';
+import type { FieldShapeKind, SchemaFieldType } from '@forgeax/engine-ecs/internal';
 import { applyEditorComponentMeta, editorMetaOf } from './editor-component-meta';
 import type { AnimationComponentMeta, AnimationTransportDescriptor } from './editor-component-meta';
 
@@ -159,45 +159,43 @@ const EXCLUDED_COMPONENTS = new Set([
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Lazy cache — populated on first query from engine introspection
+// World-local cache — populated on first query from the World component catalog.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-let _cache: Map<string, ComponentSchema> | null = null;
-let _cacheRegistrySignature: string | null = null;
+interface SchemaCache {
+  readonly schemas: Map<string, ComponentSchema>;
+  signature: string;
+}
+const _cacheByWorld = new WeakMap<World, SchemaCache>();
+const EMPTY_SCHEMAS = new Map<string, ComponentSchema>();
 
-function ensurePopulated(): Map<string, ComponentSchema> {
-  let registry: ReadonlyMap<string, Component>;
-  try {
-    registry = getRegisteredComponents();
-  } catch {
-    return _cache ?? new Map();
-  }
-  // Engine packages such as physics can register components after the editor
-  // panels module has first imported core. A cache keyed only by "initialized"
-  // permanently loses those producer-owned schemas, so refresh on registry
-  // membership changes while keeping the hot path stable between registrations.
+function cacheSchemaFor(key: World, cache: SchemaCache): void {
+  WeakMap.prototype.set.call(_cacheByWorld, key, cache);
+}
+
+function ensurePopulated(world: World): Map<string, ComponentSchema> {
+  // gateway.activeWorld is intentionally absent between old-realm teardown and
+  // the next game's createApp injection. Keep every schema consumer fail-soft
+  // during that cross-game gap instead of requiring each panel to duplicate it.
+  if (world == null) return EMPTY_SCHEMAS;
+  applyEditorComponentMeta(world);
+  const registry = world.components.entries();
   const signature = [...registry.keys()].join('\u0000');
-  if (_cache !== null && _cacheRegistrySignature === signature) return _cache;
-  _cache = new Map();
-  _cacheRegistrySignature = signature;
-  try {
-    applyEditorComponentMeta();
-    for (const [name, comp] of registry) {
-      if (shouldExclude(name, comp)) continue;
-      const schema = reflectComponent(comp);
-      if (schema !== null) _cache.set(name, schema);
-    }
-  } catch {
-    // Engine not loaded yet (SSR, headless, unit tests w/o engine boot) —
-    // the cache stays empty, queries return undefined.
+  const existing = _cacheByWorld.get(world);
+  if (existing !== undefined && existing.signature === signature) return existing.schemas;
+  const schemas = new Map<string, ComponentSchema>();
+  for (const [name, comp] of registry) {
+    if (shouldExclude(name, comp)) continue;
+    const schema = reflectComponent(comp);
+    if (schema !== null) schemas.set(name, schema);
   }
-  return _cache;
+  cacheSchemaFor(world, { schemas, signature });
+  return schemas;
 }
 
 /** Reset the cache (test-only). Not on the public barrel. */
-export function _resetSchemaCache(): void {
-  _cache = null;
-  _cacheRegistrySignature = null;
+export function _resetSchemaCache(world?: World): void {
+  if (world !== undefined) _cacheByWorld.delete(world);
 }
 
 function shouldExclude(name: string, comp: Component): boolean {
@@ -207,9 +205,8 @@ function shouldExclude(name: string, comp: Component): boolean {
   // engine stays agnostic to editor keys) and supersedes the legacy hard-coded
   // lists below, which remain as a fallback for components not in the config.
   if (isMetaHidden(comp)) return true;
-  if (comp.transient) return true;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if ((RELATIONSHIP_COMPONENTS as ReadonlySet<any>).has(comp)) return true;
+  if (componentDefinition(comp).policy.transient) return true;
+  if (name === 'ChildOf' || name === 'Children') return true;
   if (EXCLUDED_COMPONENTS.has(name)) return true;
   return false;
 }
@@ -227,14 +224,11 @@ function isMetaHidden(comp: Component): boolean {
  * which enumerates ALL present components rather than the filtered schema.
  * Returns `false` when the engine is not loaded or the component is unknown.
  */
-export function isComponentHidden(name: string): boolean {
-  try {
-    applyEditorComponentMeta();
-    const comp = getRegisteredComponents().get(name);
-    return comp !== undefined && isMetaHidden(comp);
-  } catch {
-    return false;
-  }
+export function isComponentHidden(name: string, world: World): boolean {
+  if (world == null) return false;
+  applyEditorComponentMeta(world);
+  const comp = world.components.resolve(name);
+  return comp !== undefined && isMetaHidden(comp);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -293,7 +287,8 @@ function extractVecArity(engineType: SchemaFieldType): number | undefined {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function reflectComponent(comp: Component): ComponentSchema | null {
-  const { name, fields, defaults } = comp;
+  const { name, fields } = comp;
+  const definition = componentDefinition(comp);
   const editorFields: FieldSchema[] = [];
 
   for (const [fieldKey, reflection] of Object.entries(fields) as [string, FieldReflection][]) {
@@ -320,7 +315,7 @@ function reflectComponent(comp: Component): ComponentSchema | null {
           ? { shape: 'array' as const }
           : {}),
       tooltip: buildTooltip(fieldKey, editorType, reflection),
-      default: deriveDefault(editorType, arity, reflection, defaults?.[fieldKey]),
+      default: deriveDefault(editorType, arity, reflection, definition.defaults?.[fieldKey]),
       ...(arity !== undefined ? { arity } : {}),
       ...deriveConstraints(editorType, fieldKey, reflection),
       ...(reflection.type === 'enum' && reflection.labels !== undefined
@@ -345,7 +340,7 @@ function reflectComponent(comp: Component): ComponentSchema | null {
   // producer-owned engine `meta.animation` and falls back to the editor overlay's
   // interim copy (same shape — migration is a pure key move).
   const overlay = editorMetaOf(comp);
-  const engineAnimation = (comp.meta as { animation?: AnimationComponentMeta } | undefined)?.animation;
+  const engineAnimation = definition.policy.meta.animation as AnimationComponentMeta | undefined;
   const animation = engineAnimation ?? overlay?.animation;
   return {
     name,
@@ -466,30 +461,30 @@ function deriveConstraints(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Public API (unchanged signatures)
+// Public API — every projection is explicitly bound to its owning World.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export function getComponentSchema(name: string): ComponentSchema | undefined {
-  return ensurePopulated().get(name);
+export function getComponentSchema(name: string, world: World): ComponentSchema | undefined {
+  return ensurePopulated(world).get(name);
 }
 
-export function fieldSchema(component: string, key: string): FieldSchema | undefined {
-  return getComponentSchema(component)?.fields.find((f) => f.key === key);
+export function fieldSchema(component: string, key: string, world: World): FieldSchema | undefined {
+  return getComponentSchema(component, world)?.fields.find((f) => f.key === key);
 }
 
 /** The playback contract an animation component declares (engine meta.animation
  *  preferred, editor overlay interim), or undefined for non-animation components. */
-export function getAnimationComponentMeta(name: string): AnimationComponentMeta | undefined {
-  return getComponentSchema(name)?.animation;
+export function getAnimationComponentMeta(name: string, world: World): AnimationComponentMeta | undefined {
+  return getComponentSchema(name, world)?.animation;
 }
 
 /** The transport field-name descriptor for a component's generic preview UI. */
-export function getTransportDescriptor(name: string): AnimationTransportDescriptor | undefined {
-  return getComponentSchema(name)?.animation?.transport;
+export function getTransportDescriptor(name: string, world: World): AnimationTransportDescriptor | undefined {
+  return getComponentSchema(name, world)?.animation?.transport;
 }
 
-export function listComponentSchemas(): ComponentSchema[] {
-  return [...ensurePopulated().values()];
+export function listComponentSchemas(world: World): ComponentSchema[] {
+  return [...ensurePopulated(world).values()];
 }
 
 export function defaultFieldValue(fs: FieldSchema): unknown {
@@ -497,8 +492,8 @@ export function defaultFieldValue(fs: FieldSchema): unknown {
   return defaultFieldValueInternal(fs.type);
 }
 
-export function defaultComponentData(name: string): Record<string, unknown> {
-  const cs = getComponentSchema(name);
+export function defaultComponentData(name: string, world: World): Record<string, unknown> {
+  const cs = getComponentSchema(name, world);
   if (!cs) return {};
   const out: Record<string, unknown> = {};
   for (const f of cs.fields) out[f.key] = defaultFieldValue(f);
@@ -509,10 +504,11 @@ export function fieldVisible(
   component: string,
   fs: FieldSchema | undefined,
   data: Record<string, unknown>,
+  world: World,
 ): boolean {
   if (!fs?.showWhen) return true;
   let cur = data[fs.showWhen.key];
-  if (cur === undefined || cur === null) cur = fieldSchema(component, fs.showWhen.key)?.options?.[0];
+  if (cur === undefined || cur === null) cur = fieldSchema(component, fs.showWhen.key, world)?.options?.[0];
   return fs.showWhen.in.includes(String(cur));
 }
 

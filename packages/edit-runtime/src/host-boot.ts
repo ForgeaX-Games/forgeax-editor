@@ -78,9 +78,34 @@ import {
   type HostSession,
   type PhysicsBackend,
 } from './viewport/host-session';
+import type { VersionControlRuntimeTransition } from './version-control/provider';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 
 export type { HostSessionContext, HostSession, PhysicsBackend };
+
+export interface HostRuntimeGenerationIdentity {
+  readonly runtimeId: string;
+  readonly runtimeGeneration: number;
+  readonly carrierId: string;
+  readonly carrierKind: 'iframe' | 'browser-page' | 'tauri-webview' | 'local';
+}
+
+/** Host-only carrier wiring; Runtime authority remains inside ViewportComponent. */
+export function createHostRuntimeGenerationAuthority(initial: HostRuntimeGenerationIdentity) {
+  let current = Object.freeze(initial);
+  return {
+    snapshot: () => current,
+    advance: (): HostRuntimeGenerationIdentity => {
+      current = Object.freeze({ ...current, runtimeGeneration: current.runtimeGeneration + 1 });
+      return current;
+    },
+    accepts: (candidate: HostRuntimeGenerationIdentity): boolean => (
+      candidate.runtimeId === current.runtimeId
+      && candidate.carrierId === current.carrierId
+      && candidate.runtimeGeneration === current.runtimeGeneration
+    ),
+  };
+}
 
 // The persistence module owns the dirty bit. Bind that read model once to the
 // public Gateway so AI and UI use the same fact without importing store state.
@@ -141,6 +166,8 @@ export interface HostGameSession {
   readonly runtimeBinding?: RuntimeAssetBinding;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
+  /** Carrier callback seam for the Runtime-owned generation handoff broker. */
+  readonly versionControlTransition?: VersionControlRuntimeTransition;
 }
 
 /**

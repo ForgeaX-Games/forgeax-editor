@@ -23,6 +23,7 @@ import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { Name } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // The stale-entity-handle error will be defined in entity-state.ts by w5.
 // For now (red-phase), we import from entity-state and the function may not
@@ -57,7 +58,7 @@ describe('w3 — stale-entity-handle error contract', () => {
   let world: World;
 
   it('creates a fresh World for handle testing', () => {
-    world = new World();
+    world = createCoreTestWorld();
     expect(world).toBeDefined();
   });
 
@@ -204,8 +205,8 @@ describe('w3 — stale-entity-handle error contract', () => {
   const PLAY_WORLD_REF = 1;
 
   it('(M3) Edit handle queried in Play is rejected with expected/actual world refs', () => {
-    const editWorld = new World();
-    const playWorld = new World();
+    const editWorld = createCoreTestWorld();
+    const playWorld = createCoreTestWorld();
     const editHandle = editWorld.spawn({ component: Name, data: { value: 'EditEntity' } });
     const playHandle = playWorld.spawn({ component: Name, data: { value: 'PlayEntity' } });
     if (!editHandle.ok || !playHandle.ok) throw new Error('spawn failed');
@@ -239,8 +240,8 @@ describe('w3 — stale-entity-handle error contract', () => {
   });
 
   it('(M3) Play handle queried after Stop is rejected, and re-querying Edit gives a live handle', () => {
-    const editWorld = new World();
-    const playWorld = new World();
+    const editWorld = createCoreTestWorld();
+    const playWorld = createCoreTestWorld();
     const editHandle = editWorld.spawn({ component: Name, data: { value: 'EditEntity' } });
     const playHandle = playWorld.spawn({ component: Name, data: { value: 'PlayEntity' } });
     if (!editHandle.ok || !playHandle.ok) throw new Error('spawn failed');

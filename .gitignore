@@ -13,6 +13,8 @@ __pycache__/
 # see .forgeax-harness/docs/specs/2026-06-17-harness-floating-clone.md). The editor never tracks it;
 # `bun run harness:sync` clones/pulls it on install.
 /.forgeax-harness/
+# Also ignore the shared-worktree symlink (Git treats it as a file, not a dir).
+/.forgeax-harness
 
 # Vite caches (one per package)
 .vite/
@@ -28,6 +30,7 @@ __pycache__/
 .playwright-mcp/
 test-results/
 playwright-report/
+.e2e-tmp/
 
 # TypeScript / IDE
 *.tsbuildinfo

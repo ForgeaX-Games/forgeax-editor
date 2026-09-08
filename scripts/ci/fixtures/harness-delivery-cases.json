@@ -75,5 +75,44 @@
       "expectedStatus": "nonpass",
       "expectedCode": "harness-feature-path-mismatch"
     }
+  ],
+  "joinCases": [
+    {"name": "valid two-repository delivery", "valid": true},
+    {
+      "name": "harness remote is missing",
+      "mutate": {"harnessDelivery.remote": {"name": "origin", "ref": "main", "reachable": false, "sha": null}},
+      "expectedStatus": "pending",
+      "expectedCode": "harness-remote-push-missing"
+    },
+    {
+      "name": "harness remote SHA does not match local commit",
+      "mutate": {"harnessDelivery.remote.sha": "cccccccccccccccccccccccccccccccccccccccc"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "harness-remote-sha-mismatch"
+    },
+    {
+      "name": "source and harness paths cannot share a repository delivery",
+      "mutate": {"sourceDelivery.changedPaths": ["scripts/ci/editor-ci-contract.mjs", ".forgeax-harness/forgeax-loop/feature/report.json"]},
+      "expectedStatus": "nonpass",
+      "expectedCode": "delivery-boundary-mixed"
+    },
+    {
+      "name": "unrelated dirty harness paths are preserved",
+      "mutate": {"harnessDelivery.dirtyPaths": ["forgeax-loop/other-feature/report.json"]},
+      "expectedStatus": "pending",
+      "expectedCode": "harness-unrelated-dirty-content"
+    },
+    {
+      "name": "unrelated untracked harness paths are preserved",
+      "mutate": {"harnessDelivery.untrackedPaths": ["forgeax-loop/other-feature/tmp.json"]},
+      "expectedStatus": "pending",
+      "expectedCode": "harness-unrelated-untracked-content"
+    },
+    {
+      "name": "local source SHA must equal landed SHA",
+      "mutate": {"sourceDelivery.commitSha": "ffffffffffffffffffffffffffffffffffffffff"},
+      "expectedStatus": "nonpass",
+      "expectedCode": "delivery-source-sha-mismatch"
+    }
   ]
 }

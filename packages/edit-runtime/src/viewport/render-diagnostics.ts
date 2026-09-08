@@ -7,11 +7,16 @@
 import type {
   RuntimeDiagnosticFact,
   RuntimeDiagnosticsProvider,
+  MaterialPublicationInspection,
 } from '@forgeax/editor-core';
 import type {
   RenderFeatureDiagnostics,
   RenderFeatureErrorDescriptor,
 } from '@forgeax/engine-render';
+import type {
+  MaterialLoadError,
+  MaterialReady,
+} from '@forgeax/engine-assets-runtime';
 
 export const INFINITE_GRID_DIAGNOSTICS_PROVIDER_ID = 'editor-infinite-grid';
 const INFINITE_GRID_FEATURE_ID = 'editor.infinite-grid';
@@ -135,4 +140,127 @@ export function validatePerspectiveFov(fov: number): InvalidPerspectiveFov | und
     expected: 'finite perspective fov in (0, π) radians',
     hint: 'Camera.fov is stored in radians; use Math.PI / 3 for 60°.',
   };
+}
+
+export interface MaterialPublicationDiagnosticInput {
+  readonly materialGuid: string;
+  readonly specializationKey?: string;
+  readonly publicationGeneration?: number;
+  readonly error: {
+    readonly code: string;
+    readonly expected?: unknown;
+    readonly actual?: unknown;
+    readonly hint: string;
+    readonly retryable: boolean;
+    readonly recoveryActions: readonly string[];
+  };
+}
+
+export const ENGINE_MATERIAL_PUBLICATION_DIAGNOSTICS_PROVIDER_ID = 'engine-material-publication';
+
+export interface MaterialPublicationBindingSource {
+  readonly getMaterialReadiness: (
+    guid: string,
+  ) => MaterialReady | MaterialLoadError | undefined;
+  readonly materialReadiness: ReadonlyMap<string, MaterialReady | MaterialLoadError>;
+}
+
+export interface MaterialPublicationTransport {
+  readonly url: string;
+  readonly host: 'editor' | 'standalone' | 'play';
+}
+
+export interface MaterialPublicationBinding {
+  readonly readMaterialInspection: (guid: string) => MaterialPublicationInspection | undefined;
+  readonly diagnosticsProvider: RuntimeDiagnosticsProvider;
+}
+
+function inspectMaterialReadiness(
+  readiness: MaterialReady | MaterialLoadError,
+  transport: MaterialPublicationTransport,
+): MaterialPublicationInspection {
+  if (readiness.status === 'Ready') {
+    const digest = readiness.record.receipt.inputDigest;
+    return {
+      ok: true,
+      materialGuid: readiness.materialGuid,
+      publicationGeneration: readiness.publicationGeneration,
+      specializationKey: readiness.specializationKey,
+      sourceClosure: readiness.sourceClosure.map((module) => ({ module, digest })),
+      artifactDigest: readiness.artifactDigest,
+      parameterContract: readiness.parameterContract as unknown as Readonly<Record<string, unknown>>,
+      transport,
+    };
+  }
+  const { detail, ...error } = readiness.error;
+  return {
+    ok: false,
+    code: error.code,
+    materialGuid: detail.guid,
+    ...(detail.specializationKey === undefined ? {} : { specializationKey: detail.specializationKey }),
+    ...(detail.publicationGeneration === undefined
+      ? {}
+      : { publicationGeneration: detail.publicationGeneration }),
+    ...(error.expected === undefined ? {} : { expected: error.expected }),
+    ...(detail.actual === undefined ? {} : { actual: detail.actual }),
+    hint: error.hint,
+    retryable: error.retryable,
+    recoveryActions: error.recoveryActions,
+  };
+}
+
+export function createMaterialPublicationBinding(
+  source: MaterialPublicationBindingSource,
+  transport: MaterialPublicationTransport,
+): MaterialPublicationBinding {
+  return {
+    readMaterialInspection: (guid) => {
+      const readiness = source.getMaterialReadiness(guid);
+      return readiness === undefined ? undefined : inspectMaterialReadiness(readiness, transport);
+    },
+    diagnosticsProvider: {
+      id: ENGINE_MATERIAL_PUBLICATION_DIAGNOSTICS_PROVIDER_ID,
+      snapshot: () => Object.freeze(
+        [...source.materialReadiness.values()]
+          .filter((readiness): readiness is MaterialLoadError => readiness.status === 'Error')
+          .map((readiness) => projectMaterialPublicationDiagnostic({
+            materialGuid: readiness.error.detail.guid,
+            specializationKey: readiness.error.detail.specializationKey,
+            publicationGeneration: readiness.error.detail.publicationGeneration,
+            error: readiness.error,
+          })),
+      ),
+    },
+  };
+}
+
+/** Project one Engine-owned material failure into the existing diagnostics provider. */
+export function projectMaterialPublicationDiagnostic(
+  input: MaterialPublicationDiagnosticInput,
+): RuntimeDiagnosticFact {
+  const dedupeKey = [
+    input.materialGuid,
+    input.specializationKey ?? '',
+    input.publicationGeneration ?? '',
+  ].join(':');
+  return Object.freeze({
+    id: 'material-publication-failure',
+    dedupeKey,
+    severity: 'error' as const,
+    code: input.error.code,
+    title: 'Material publication failed',
+    message: input.error.hint,
+    assetGuid: input.materialGuid,
+    ...(input.specializationKey === undefined ? {} : { target: input.specializationKey }),
+    ...(input.publicationGeneration === undefined ? {} : { generation: input.publicationGeneration }),
+    ...(input.error.expected === undefined ? {} : { expected: input.error.expected }),
+    ...(input.error.actual === undefined ? {} : { actual: input.error.actual }),
+    retryable: input.error.retryable,
+    recoveryActions: Object.freeze([...input.error.recoveryActions]),
+    detail: Object.freeze({
+      materialGuid: input.materialGuid,
+      specializationKey: input.specializationKey ?? null,
+      publicationGeneration: input.publicationGeneration ?? null,
+    }),
+  });
 }

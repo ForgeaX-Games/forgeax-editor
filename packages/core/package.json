@@ -66,7 +66,7 @@
   "dependencies": {
     "@forgeax/editor-product": "workspace:*",
     "zod": "^3.25.0",
-    "react": "^19.0.0",
+    "react": "19.2.6",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
@@ -90,6 +90,7 @@
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-tool-runtime": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*"
   },
   "devDependencies": {

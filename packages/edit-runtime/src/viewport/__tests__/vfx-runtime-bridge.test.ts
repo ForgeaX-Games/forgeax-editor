@@ -39,6 +39,22 @@ describe('Edit VFX runtime bridge', () => {
     expect(supportsVfxRenderFeature(undefined)).toBe(false);
   });
 
+  it('does not pre-register the optional GPU particle feature before capabilities are known', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../ViewportComponent.tsx', import.meta.url)),
+      'utf8',
+    );
+    const featureList = source.match(/const renderFeatures = \[([\s\S]*?)\] as readonly RenderFeature/)?.[1];
+    expect(featureList).toBeDefined();
+    expect(featureList).toContain('infiniteGridFeature');
+    expect(featureList).not.toContain('vfxBridge.host.feature');
+
+    const capabilityCheck = source.indexOf('supportsVfxRenderFeature(renderer.inspect().capabilities)');
+    const install = source.indexOf('renderer.installRenderFeature(vfxBridge.host.feature)');
+    expect(capabilityCheck).toBeGreaterThan(-1);
+    expect(install).toBeGreaterThan(capabilityCheck);
+  });
+
   it('keeps one host feature and one engine-owned diagnostics source across repeated mounts', async () => {
     const editWorld = new World();
     const assets = { identity: 'shared-edit-registry' };
@@ -76,7 +92,7 @@ describe('Edit VFX runtime bridge', () => {
     expect(fake.attached).toHaveLength(1);
     expect(fake.attached[0]).toEqual({ world: editWorld, assets });
 
-    const detached = bridge.detachWorld(editWorld);
+    const detached = await bridge.detachWorld(editWorld);
     expect(detached.ok).toBe(true);
     expect(fake.detached).toEqual([editWorld]);
   });
@@ -94,9 +110,9 @@ describe('Edit VFX runtime bridge', () => {
       fileURLToPath(new URL('../ViewportComponent.tsx', import.meta.url)),
       'utf8',
     );
-    const configure = source.indexOf('renderer.assets.configureRuntimeBinding');
-    const enumerate = source.indexOf('await renderer.assets.enumerateCatalog()');
-    const attach = source.indexOf('await vfxBridge.attachWorld(world, renderer.assets)');
+    const configure = source.indexOf('assets.configureRuntimeBinding');
+    const enumerate = source.indexOf('await assets.enumerateCatalog()');
+    const attach = source.indexOf('await vfxBridge.attachWorld(world, assets)');
 
     expect(configure).toBeGreaterThan(-1);
     expect(enumerate).toBeGreaterThan(configure);

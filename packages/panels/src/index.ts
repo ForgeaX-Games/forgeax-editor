@@ -21,7 +21,16 @@ export {
   registerMeshPreview,
   getMeshPreview,
 } from './mesh-preview-slot';
+export {
+  registerTexturePreview,
+  getTexturePreview,
+} from './texture-preview-slot';
 export { registerVfxPreview, getVfxPreview } from './vfx-preview-slot';
+export {
+  resetVfxEmitterMask,
+  subscribeVfxEmitterMask,
+  resolveEnabledVfxEmitters,
+} from './vfx-emitter-mask';
 
 // ── Panel components ──
 export { AssetsPanel } from './Assets';
@@ -31,6 +40,7 @@ export {
   createHierarchyPanelContributionsExtension,
   registerHierarchyScopedCommands,
 } from './HierarchyContributions';
+export { createAssetEditorsPanelContributionsExtension } from './asset-editors-contributions';
 export { createHierarchyStructureSelector } from './hierarchy-state';
 export type { HierarchyRuntimeProjection } from './hierarchy-state';
 export type {
@@ -48,7 +58,6 @@ export type { AssetPickerProps } from './AssetPicker';
 export { LauncherPanel } from './Launcher';
 export { SettingsPanel } from './Settings';
 export {
-  AssetOverviewPanel,
   AssetPropertiesPanel,
   MeshPreviewPanel,
   MeshSlotsPanel,
@@ -88,6 +97,15 @@ export {
   projectSaveRun,
   subscribeOperationProjection,
 } from './operations/run-view-model';
+export { OperationsPage } from './operations/OperationsPage';
+export {
+  assertOperationsPageReadOnly,
+  getOperationsObserverSource,
+  installOperationsObserverSource,
+  projectOperationsPage,
+  subscribeOperationsObserver,
+} from './operations/operations-projection';
+export type { OperationsObserverSource, OperationsPageProjection, OperationsPageRun } from './operations/operations-projection';
 export type {
   OperationCenterAction,
   OperationAssetContext,

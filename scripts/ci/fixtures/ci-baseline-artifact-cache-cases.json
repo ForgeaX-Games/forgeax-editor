@@ -1,0 +1,89 @@
+{
+  "cases": [
+    {
+      "name": "archive and expanded observations",
+      "expectedArtifact": {
+        "status": "observed",
+        "identity": {"id": 88, "digest": "sha-artifact"},
+        "archiveBytes": 1200,
+        "expandedInputBytes": 4000,
+        "expandedOutputBytes": 5000
+      },
+      "expectedCache": {"status": "hit", "key": "engine-cache-v3"},
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "artifacts": [{
+          "id": 88,
+          "name": "editor-build",
+          "digest": "sha-artifact",
+          "size_in_bytes": 1200,
+          "expanded_input_bytes": 4000,
+          "expanded_output_bytes": 5000
+        }],
+        "cache": {"status": "hit", "key": "engine-cache-v3"}
+      }
+    },
+    {
+      "name": "artifact digest missing",
+      "expectedArtifactStatus": "unknown",
+      "expectedCacheStatus": "miss",
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "artifacts": [{"id": 88, "name": "editor-build", "size_in_bytes": 1200}],
+        "cache": {"status": "miss"}
+      }
+    },
+    {
+      "name": "artifact identity missing",
+      "expectedArtifactStatus": "unknown",
+      "expectedCacheStatus": "unknown",
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "artifacts": [{"name": "editor-build", "digest": "sha-artifact", "size_in_bytes": 1200}],
+        "cache": null
+      }
+    },
+    {
+      "name": "expanded bytes unavailable",
+      "expectedArtifactStatus": "observed",
+      "expectedCacheStatus": "unknown",
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "artifacts": [{"id": 88, "name": "editor-build", "digest": "sha-artifact", "size_in_bytes": 1200}],
+        "cache": {"status": "unknown"}
+      }
+    }
+  ]
+}

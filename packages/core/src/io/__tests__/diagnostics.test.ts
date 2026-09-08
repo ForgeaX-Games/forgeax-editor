@@ -210,6 +210,36 @@ describe('R0-07C diagnostics read model', () => {
     expect(gateway.diagnostics.query({ sources: ['runtime'] }).items).toEqual([]);
   });
 
+  it('preserves material owner fields and deduplicates by publication identity', () => {
+    const gateway = new EditGateway(createEditSession());
+    gateway.registerRuntimeDiagnosticsProvider({
+      id: 'engine-material',
+      snapshot: () => [{
+        id: 'material-publication-failure',
+        dedupeKey: 'material-guid:spec-key:7',
+        severity: 'error',
+        code: 'asset-artifact-integrity-mismatch',
+        title: 'Material publication failed',
+        message: 'The artifact could not be used.',
+        assetGuid: 'material-guid',
+        expected: 'sha256:expected',
+        actual: 'sha256:actual',
+        retryable: true,
+        recoveryActions: ['material.republish'],
+        detail: { specializationKey: 'spec-key', publicationGeneration: 7 },
+      }],
+    });
+
+    const item = gateway.diagnostics.query({ sources: ['runtime'] }).items[0];
+    expect(item).toMatchObject({
+      code: 'asset-artifact-integrity-mismatch',
+      dedupeKey: 'material-guid:spec-key:7',
+      expected: 'sha256:expected',
+      actual: 'sha256:actual',
+      recoveryActions: ['material.republish'],
+    });
+  });
+
   it('advances the composite revision when a non-max source changes', () => {
     let runtimeRevision = 1;
     const model = createDiagnosticsReadModel({

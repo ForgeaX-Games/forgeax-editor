@@ -190,6 +190,7 @@ export function deriveFileView(params: {
         diskPath: n.path || filePath,
         family,
         assets: [],
+        isAssetPackage: false,
         kindLabel: fileKindLabel(family),
         isFavorite: false,
       };
@@ -212,7 +213,7 @@ function fileFamilyOf(name: string): CBFileFamily {
   if (['.md', '.txt'].includes(ext)) return 'doc';
   if (['.scene', '.level'].includes(ext)) return 'scene';
   if (['.meta', '.import'].includes(ext)) return 'meta';
-  if (['.png', '.jpg', '.jpeg', '.webp', '.hdr', '.ktx2'].includes(ext)) return 'image';
+  if (['.png', '.jpg', '.jpeg', '.webp', '.tga', '.hdr', '.ktx2'].includes(ext)) return 'image';
   if (['.mp3', '.wav', '.ogg'].includes(ext)) return 'audio';
   if (['.glb', '.gltf', '.fbx', '.obj'].includes(ext)) return 'model';
   if (['.ttf', '.otf', '.woff', '.woff2'].includes(ext)) return 'font';

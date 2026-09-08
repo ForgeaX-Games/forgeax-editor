@@ -15,6 +15,7 @@ import {
   createCapabilityManifest,
   type CapabilityManifest,
 } from '../contracts/manifest';
+import { createRendererOwnerAdmissionRegistration } from '../contracts/renderer-owner-admission';
 
 const DEFAULT_HOSTS: readonly CapabilityHost[] = ['bun', 'edit', 'play'];
 
@@ -60,6 +61,9 @@ function publicDescriptor(
     version: registration.version,
     subject: registration.subject,
     verb: registration.verb,
+    ...(registration.capabilityGeneration === undefined ? {} : { capabilityGeneration: registration.capabilityGeneration }),
+    ...(registration.stage === undefined ? {} : { stage: registration.stage }),
+    ...(registration.owner === undefined ? {} : { owner: registration.owner }),
     inputSchema: registration.inputSchema,
     outputSchema: registration.outputSchema,
     availability: hostAvailability(registration, host),
@@ -75,6 +79,8 @@ function publicDescriptor(
     ...(registration.cancellation === undefined ? {} : { cancellation: registration.cancellation }),
     ...(registration.retry === undefined ? {} : { retry: registration.retry }),
     recoveryActions: Object.freeze([...registration.recoveryActions]),
+    ...(registration.recoveryAction === undefined ? {} : { recoveryAction: registration.recoveryAction }),
+    ...(registration.diagnosticId === undefined ? {} : { diagnosticId: registration.diagnosticId }),
   });
 }
 
@@ -114,6 +120,10 @@ export class CapabilityRegistrationError extends Error {
     this.name = 'CapabilityRegistrationError';
     this.code = code;
   }
+}
+
+export function registerRendererOwnerAdmissionCapability(registry: CapabilityRegistry): void {
+  registry.register(createRendererOwnerAdmissionRegistration());
 }
 
 export class CapabilityRegistry {

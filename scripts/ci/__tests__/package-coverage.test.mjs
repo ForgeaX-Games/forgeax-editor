@@ -5,11 +5,23 @@ import { test } from 'node:test';
 import {
   comparePackageCoverage,
   comparePackageCoverageBatch,
+  packageTestEnvironment,
   packageCoverageProducerArgs,
   parsePackageCoverageText,
 } from '../package-coverage.mjs';
 
 const fixturePath = resolve('scripts/ci/fixtures/package-coverage-cases.json');
+
+function lcovRecord(source, { linesFound, linesHit, functionsFound, functionsHit }) {
+  return [
+    `SF:${source}`,
+    `LF:${linesFound}`,
+    `LH:${linesHit}`,
+    `FNF:${functionsFound}`,
+    `FNH:${functionsHit}`,
+    'end_of_record',
+  ].join('\n');
+}
 
 test('package coverage compares lines and functions independently', () => {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
@@ -72,35 +84,71 @@ test('package coverage producer preserves an explicit package timeout', () => {
   assert.equal(result.args[0], '--timeout=9000');
 });
 
-test('package coverage excludes gitlink records while preserving Editor-owned sibling coverage', () => {
+test('package coverage producer forces test mode without dropping caller environment', () => {
+  const callerEnvironment = { NODE_ENV: 'production', PATH: '/usr/bin', CI: '1' };
+  assert.deepEqual(packageTestEnvironment(callerEnvironment), {
+    NODE_ENV: 'test',
+    PATH: '/usr/bin',
+    CI: '1',
+  });
+  assert.deepEqual(callerEnvironment, { NODE_ENV: 'production', PATH: '/usr/bin', CI: '1' });
+});
+
+test('package coverage attributes each producer to its owning package boundary', () => {
   const lcov = [
-    'SF:src/owned.ts',
-    'LF:4',
-    'LH:2',
-    'FNF:2',
-    'FNH:1',
-    'end_of_record',
-    'SF:../core/src/editor-owned.ts',
-    'LF:4',
-    'LH:4',
-    'FNF:2',
-    'FNH:2',
-    'end_of_record',
-    'SF:../engine/dist/dependency.mjs',
-    'LF:100',
-    'LH:0',
-    'FNF:50',
-    'FNH:0',
-    'end_of_record',
+    lcovRecord('src/core-owned.ts', { linesFound: 4, linesHit: 2, functionsFound: 2, functionsHit: 1 }),
+    lcovRecord('../product/src/reference-creation.ts', { linesFound: 100, linesHit: 100, functionsFound: 50, functionsHit: 50 }),
+    lcovRecord('../engine/dist/dependency.mjs', { linesFound: 100, linesHit: 100, functionsFound: 50, functionsHit: 50 }),
+  ].join('\n');
+
+  const coreCoverage = parsePackageCoverageText(
+    lcov,
+    '/repo/packages/core',
+    ['/repo/packages/engine'],
+  );
+  assert.deepEqual(coreCoverage, {
+    ok: true,
+    lines: 50,
+    functions: 50,
+  });
+
+  const legacyPreservedSiblingCoverage = { ok: true, lines: 98.08, functions: 98.08 };
+  assert.notDeepEqual(coreCoverage, legacyPreservedSiblingCoverage);
+
+  const productLcov = [
+    lcovRecord('src/product-owned.ts', { linesFound: 4, linesHit: 2, functionsFound: 2, functionsHit: 1 }),
+    lcovRecord('../core/src/manifest.ts', { linesFound: 100, linesHit: 100, functionsFound: 50, functionsHit: 50 }),
+    lcovRecord('../engine/dist/dependency.mjs', { linesFound: 100, linesHit: 100, functionsFound: 50, functionsHit: 50 }),
   ].join('\n');
 
   assert.deepEqual(parsePackageCoverageText(
-    lcov,
-    '/repo/packages/content-browser',
+    productLcov,
+    '/repo/packages/product',
     ['/repo/packages/engine'],
   ), {
     ok: true,
-    lines: 75,
-    functions: 75,
+    lines: 50,
+    functions: 50,
+  });
+});
+
+test('package coverage fails closed when owner-local LCOV records are empty', () => {
+  const siblingOnlyLcov = [
+    lcovRecord('../product/src/reference-creation.ts', { linesFound: 100, linesHit: 100, functionsFound: 50, functionsHit: 50 }),
+    lcovRecord('../engine/dist/dependency.mjs', { linesFound: 100, linesHit: 100, functionsFound: 50, functionsHit: 50 }),
+  ].join('\n');
+
+  assert.deepEqual(parsePackageCoverageText(
+    siblingOnlyLcov,
+    '/repo/packages/core',
+    ['/repo/packages/engine'],
+  ), {
+    ok: false,
+    error: {
+      code: 'coverage-dimension-missing',
+      expected: 'non-empty LCOV lines and functions dimensions',
+      observed: { linesFound: 0, linesHit: 0, functionsFound: 0, functionsHit: 0 },
+      hint: 'Do not replace a missing package dimension with an aggregate result.',
+    },
   });
 });

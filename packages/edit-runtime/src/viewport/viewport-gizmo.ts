@@ -1,37 +1,38 @@
 // viewport-gizmo — the interactive selection gizmo pool (3 axis handles).
 //
-// Shape follows the mode (design §3): translate/scale → axis BARS; rotate →
-// axis RINGS (circles in each axis plane). Rings are built from a pool of
-// small cube segments (a torus mesh isn't in the handle set), reused frame-to-
-// frame so orbiting/dragging only world.set transforms — never respawns.
+// Shape follows the mode (design §3): translate/scale → axis handles; rotate →
+// axis rings. The pool owns only the frame-local hit-test geometry and solid
+// overlay vertices. Visuals are submitted by the editor's scene-after
+// RenderFeature, never as editorWorld MeshFilter/MeshRenderer entities.
 //
-// AXES / PLANES / RING_SEG / TIP_QUAT are the shared gizmo layout constants
-// (viewport-gizmo-geometry.ts, M6 extraction).
-//
-// M4 (w20): gizmo assets + entities live in the editorWorld (editorEngine) —
-// the structural half of AC-01 (gizmo can never land in the sceneWorld). The
-// gizmo READS the selected entity's world Transform from `gateway.activeWorld`
-// (sceneWorld) via the caller-supplied helpers (super moves VALUES across
-// worlds, not identity).
+// The DebugDraw methods remain as a compatibility path for callers that still
+// consume the line overlay; the editor viewport's primary Gizmo path uses the
+// filled triangle stream so its appearance stays identical to the old solids.
 
-import { Transform } from '@forgeax/engine-scene';
-import { MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-render';
-import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
-import { meshFromInterleaved } from '@forgeax/engine-geometry';
-import type { EngineFacade } from '@forgeax/editor-core';
+import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import { quat as quatMath } from '@forgeax/engine-math';
-import type { Vec3 as EngineVec3, Quat } from '@forgeax/engine-math';
+import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
 
 import type { Vec3 } from './viewport-ray';
 import { orthoBasis, rayAABB, rayPlane } from './viewport-ray';
 import {
-  AXES, PLANES, RING_SEG, TIP_QUAT, buildConeMeshData,
+  AXES, PLANES, RING_SEG,
 } from './viewport-gizmo-geometry';
+import {
+  appendOverlayBox,
+  appendOverlayCone,
+  multiplyOverlayQuaternions,
+  overlayColorFromSrgb,
+  TIP_QUAT,
+  type GizmoOverlayVertex,
+} from './gizmo-overlay-geometry';
 import type { GizmoSpace } from '@forgeax/editor-core';
 
 type Shape = 'translate' | 'scale' | 'rings';
 export type GizmoMode = 'translate' | 'rotate' | 'scale';
+
+/** The subset of DebugDraw used by the transform and parameter gizmos. */
+export type GizmoOverlayDraw = Pick<DebugDraw, 'line' | 'arrow'>;
 
 /** Where the gizmo sits and how it is oriented, resolved by the caller from
  *  the current selection (gizmo-ue-parity plan §4.1):
@@ -46,8 +47,6 @@ export interface GizmoAnchor {
 }
 
 export interface GizmoDeps {
-  /** editorWorld facade — gizmo entities/assets are minted here (AC-01). */
-  editorEngine: EngineFacade;
   /** Current gizmo anchor (null when nothing is selected, or every selected
    *  entity lacks a Transform / is gone → the gizmo hides). */
   getAnchor(): GizmoAnchor | null;
@@ -65,39 +64,32 @@ export interface GizmoDeps {
 }
 
 export interface GizmoPool {
-  /** Re-place the gizmo on the current selection (or hide it). */
+  /** Recompute the gizmo placement and hit-test geometry. */
   update(): void;
+  /** Emit the current gizmo into the post-scene DebugDraw overlay. */
+  drawOverlay(draw: GizmoOverlayDraw): void;
+  /** Return the current solid geometry for the scene-after RenderFeature. */
+  getOverlayVertices(): GizmoOverlayVertex[];
   /** Which gizmo handle (if any) the ray hits — checked BEFORE entity picking.
    *  Returns 0-2 for an axis bar/ring; 3-5 (= 3 + plane index) for a plane
    *  handle. Bars/planes: ray vs AABB. Rings: ray hits the axis plane near
    *  the ring radius. */
   hit(origin: Vec3, dir: Vec3): number | null;
   /** Current rotated axis direction for handle `i` (0=X,1=Y,2=Z). In local
-   *  space, these follow the object's rotation; in world space, they equal the
-   *  world axes. Used by the drag system for axis-constrained movement. */
+   *  space, these follow the object's rotation; in world space, they equal
+   *  the world axes. Used by the drag system for axis-constrained movement. */
   getAxis(i: number): Vec3;
   /** Current rotated plane normal for plane handle `i` (0=XY,1=YZ,2=XZ). */
   getPlaneNormal(i: number): Vec3;
-  /** Spawn a HANDLE_CUBE mesh entity — reused by the param-gizmo dot pool. */
-  spawnHandleCube(material: Handle<'MaterialAsset', 'shared'>): EntityHandle;
-  /** Tear down all gizmo entities (used on dispose + on aux-hide). */
+  /** Tear down the frame-local gizmo state. */
   dispose(): void;
 }
 
-/** Build the interactive gizmo pool. Caller owns the update trigger (subscribe
- *  to selection / gizmo-mode / world-transform changes and call update). */
 /** Rotate a Vec3 by a quaternion [x,y,z,w]. */
 function rotVec3(q: [number, number, number, number], v: Vec3): Vec3 {
   const out = new Float32Array(3) as EngineVec3;
   quatMath.transformVec3(out, q, v as unknown as EngineVec3);
   return [out[0]!, out[1]!, out[2]!];
-}
-
-/** Multiply two quaternions: out = a * b. */
-function mulQuat(a: [number, number, number, number], b: [number, number, number, number]): [number, number, number, number] {
-  const out = quatMath.create();
-  quatMath.multiply(out, a, b);
-  return [out[0]!, out[1]!, out[2]!, out[3]!];
 }
 
 /** Invert a unit quaternion. */
@@ -109,210 +101,274 @@ function invQuat(q: [number, number, number, number]): [number, number, number, 
 
 const IDENTITY_QUAT: [number, number, number, number] = [0, 0, 0, 1];
 
-/**
- * Build an editor overlay material using the engine MaterialAsset contract.
- * Queue and depth state are pass render-state fields; keeping this constructor
- * shared prevents auxiliary gizmos from silently falling back to scene depth.
- */
-export function createOverlayMaterial(
-  editorEngine: EngineFacade,
-  color: [number, number, number],
-  queue: number,
-): Handle<'MaterialAsset', 'shared'> {
-  const base = Materials.unlit([color[0], color[1], color[2], 1], { castShadow: false }) as {
-    passes?: { renderState?: Record<string, unknown> }[];
-  };
-  const mat = {
-    ...base,
-    passes: (base.passes ?? []).map((p) => ({
-      ...p,
-      renderState: {
-        ...(p.renderState ?? {}),
-        queue,
-        depthCompare: 'always',
-        depthWriteEnabled: false,
-      },
-    })),
-  };
-  return editorEngine.allocSharedRef('MaterialAsset', mat);
+function addScaled(a: Vec3, b: Vec3, scale: number): Vec3 {
+  return [
+    a[0] + b[0] * scale,
+    a[1] + b[1] * scale,
+    a[2] + b[2] * scale,
+  ];
 }
 
+/** DebugDraw's public Vec3 is a branded engine Float32Array; gizmo math uses
+ * small tuples, so convert only at the immediate-mode render boundary. */
+function toEngineVec3(value: Vec3): EngineVec3 {
+  return value as unknown as EngineVec3;
+}
+
+/** DebugDraw is appended after output-transform, so it consumes sRGB values. */
+function debugColor(color: readonly [number, number, number]): [number, number, number, number] {
+  return [color[0]!, color[1]!, color[2]!, 1];
+}
+
+/**
+ * Build the interactive gizmo pool.
+ *
+ * `update()` is called by the viewport when selection/camera/mode changes.
+ * `drawOverlay()` is called every frame by `installGizmoDebugOverlay`, because
+ * DebugDraw staging is cleared after the renderer's post-scene pass.
+ */
 export function createGizmoPool({
-  editorEngine, getAnchor, getGizmoMode, getGizmoSpace,
+  getAnchor, getGizmoMode, getGizmoSpace,
   isAuxVisible, getViewScale,
 }: GizmoDeps): GizmoPool {
-  let gizmoMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
-  let tipMats: Handle<'MaterialAsset', 'shared'>[] | null = null;
   let shape: Shape | null = null;
-  let barEnts: EntityHandle[] = [];
   let bars: { center: Vec3; half: Vec3 }[] = [];
-  let tipEnts: EntityHandle[] = [];
-  let planeEnts: EntityHandle[] = [];
   let planes: { center: Vec3; half: Vec3 }[] = [];
-  let ringEnts: EntityHandle[] = [];
   let ringCenter: Vec3 = [0, 0, 0];
   let ringRadius = 0;
+  let gizmoLength = 0;
+  let gizmoTipLength = 0;
+  let gizmoThickness = 0;
 
   let gizmoQuat: [number, number, number, number] = IDENTITY_QUAT;
   let gizmoCenter: Vec3 = [0, 0, 0];
   let rotatedAxes: Vec3[] = AXES.map(a => a.axis);
   let rotatedPlaneNormals: Vec3[] = PLANES.map(p => p.normal);
 
-  // A small cone mesh (apex at +Y, base ring at Y=0, closed) for the translate
-  // arrowheads. Unlit material ignores normals/uv, so those are dummy. Built
-  // once and reused for all three axes (oriented via per-axis quaternion).
-  let coneMesh: Handle<'MeshAsset', 'shared'> | null = null;
-  function ensureCone(): Handle<'MeshAsset', 'shared'> {
-    if (coneMesh) return coneMesh;
-    const { vertices, indices } = buildConeMeshData();
-    coneMesh = editorEngine.allocSharedRef('MeshAsset', meshFromInterleaved(vertices, indices));
-    return coneMesh;
+  function clearState(): void {
+    shape = null;
+    bars = [];
+    planes = [];
+    ringCenter = [0, 0, 0];
+    ringRadius = 0;
+    gizmoLength = 0;
+    gizmoTipLength = 0;
+    gizmoThickness = 0;
+    gizmoCenter = [0, 0, 0];
   }
 
-  function ensureMats(): Handle<'MaterialAsset', 'shared'>[] {
-    if (!gizmoMats) gizmoMats = AXES.map((a) => createOverlayMaterial(editorEngine, a.color, 4000));
-    return gizmoMats;
-  }
-
-  function ensureTipMats(): Handle<'MaterialAsset', 'shared'>[] {
-    if (!tipMats) tipMats = AXES.map((a) => createOverlayMaterial(editorEngine, a.color, 4001));
-    return tipMats;
-  }
-
-  function spawnHandleMesh(
-    mesh: Handle<'MeshAsset', 'shared'>,
-    material: Handle<'MaterialAsset', 'shared'>,
-  ): EntityHandle {
-    return editorEngine.spawn(
-      { component: Transform, data: {} },
-      { component: MeshFilter, data: { assetHandle: mesh } },
-      // engine #317: MeshRenderer.material (single) -> materials[]. Passing the
-      // legacy single field leaves the gizmo unmaterialed → default gray axes.
-      { component: MeshRenderer, data: { materials: [material] } },
-    ).unwrap();
-  }
-
-  const spawnHandleCube = (material: Handle<'MaterialAsset', 'shared'>): EntityHandle =>
-    spawnHandleMesh(HANDLE_CUBE, material);
-
-  function despawnHandles(): void {
-    for (const e of barEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    for (const e of tipEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    for (const e of planeEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    for (const e of ringEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    barEnts = []; bars = []; tipEnts = []; planeEnts = []; planes = []; ringEnts = []; shape = null;
-  }
-
-  function buildShape(want: Shape): void {
-    const mats = ensureMats();
-    if (want === 'rings') {
-      ringEnts = [];
-      for (let i = 0; i < AXES.length; i++) for (let j = 0; j < RING_SEG; j++) ringEnts.push(spawnHandleCube(mats[i]!));
-    } else {
-      barEnts = AXES.map((_, i) => spawnHandleCube(mats[i]!));
-      bars = AXES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
-      if (want === 'translate') {
-        const cone = ensureCone();
-        const tMats = ensureTipMats();
-        tipEnts = AXES.map((_, i) => spawnHandleMesh(cone, tMats[i]!));
-        planeEnts = PLANES.map((p) => spawnHandleCube(tMats[p.mat]!));
-        planes = PLANES.map(() => ({ center: [0, 0, 0] as Vec3, half: [0, 0, 0] as Vec3 }));
-      }
-    }
-    shape = want;
-  }
-
-  function positionBars(center: Vec3, len: number, thick: number): void {
-    const hasTips = tipEnts.length > 0;
-    const tipLen = len * 0.34, tipRad = thick * 2.6;
-    AXES.forEach((a, i) => {
-      const ra = rotatedAxes[i]!;
-      const hc: Vec3 = [center[0] + ra[0] * len / 2, center[1] + ra[1] * len / 2, center[2] + ra[2] * len / 2];
-      const sx = a.axis[0] ? len : thick, sy = a.axis[1] ? len : thick, sz = a.axis[2] ? len : thick;
-      editorEngine.set(barEnts[i]!, Transform, {
-        pos: [hc[0], hc[1], hc[2]],
-        scale: [sx, sy, sz],
-        quat: gizmoQuat,
-      });
-      if (hasTips) {
-        const base: Vec3 = [center[0] + ra[0] * len, center[1] + ra[1] * len, center[2] + ra[2] * len];
-        const tipQ = mulQuat(gizmoQuat, TIP_QUAT[i]!);
-        editorEngine.set(tipEnts[i]!, Transform, {
-          pos: [base[0], base[1], base[2]],
-          scale: [tipRad, tipLen, tipRad],
-          quat: [tipQ[0], tipQ[1], tipQ[2], tipQ[3]],
-        });
-        const reach = len + tipLen;
-        // AABB stored in gizmo-local space (unrotated) for hit testing
-        bars[i]!.center = [a.axis[0] * reach / 2, a.axis[1] * reach / 2, a.axis[2] * reach / 2];
-        const gx = a.axis[0] ? reach : thick, gy = a.axis[1] ? reach : thick, gz = a.axis[2] ? reach : thick;
-        bars[i]!.half = [gx / 2, gy / 2, gz / 2];
-      } else {
-        // AABB in gizmo-local space (unrotated, relative to gizmo center)
-        bars[i]!.center = [a.axis[0] * len / 2, a.axis[1] * len / 2, a.axis[2] * len / 2];
-        bars[i]!.half = [sx / 2, sy / 2, sz / 2];
-      }
+  function positionBars(len: number, thick: number): void {
+    const hasTips = shape === 'translate';
+    const tipLen = hasTips ? len * 0.34 : 0;
+    const reach = len + tipLen;
+    gizmoLength = len;
+    gizmoTipLength = tipLen;
+    gizmoThickness = thick;
+    bars = AXES.map((a) => {
+      // The hit AABB is stored in gizmo-local space (unrotated), while the
+      // visual overlay below uses the already rotated axis vectors.
+      const axisCenter = reach / 2;
+      const sx = a.axis[0] ? reach : thick;
+      const sy = a.axis[1] ? reach : thick;
+      const sz = a.axis[2] ? reach : thick;
+      return {
+        center: [a.axis[0] * axisCenter, a.axis[1] * axisCenter, a.axis[2] * axisCenter],
+        half: [sx / 2, sy / 2, sz / 2],
+      };
     });
   }
 
-  function positionPlanes(center: Vec3, len: number, thick: number): void {
-    const off = len * 0.34, quad = len * 0.22;
-    PLANES.forEach((p, i) => {
-      const rax = rotatedAxes[p.ax]!, ray = rotatedAxes[p.ay]!;
-      const hc: Vec3 = [
-        center[0] + (rax[0] + ray[0]) * off, center[1] + (rax[1] + ray[1]) * off, center[2] + (rax[2] + ray[2]) * off,
-      ];
+  function positionPlanes(len: number, thick: number): void {
+    const off = len * 0.34;
+    const quad = len * 0.22;
+    planes = PLANES.map((p) => {
+      const origAx = AXES[p.ax]!.axis;
+      const origAy = AXES[p.ay]!.axis;
       const s: Vec3 = [
-        p.normal[0] ? thick : quad, p.normal[1] ? thick : quad, p.normal[2] ? thick : quad,
+        p.normal[0] ? thick : quad,
+        p.normal[1] ? thick : quad,
+        p.normal[2] ? thick : quad,
       ];
-      editorEngine.set(planeEnts[i]!, Transform, { pos: [hc[0], hc[1], hc[2]], scale: [s[0], s[1], s[2]], quat: gizmoQuat });
-      // AABB in gizmo-local space (unrotated)
-      const origAx = AXES[p.ax]!.axis, origAy = AXES[p.ay]!.axis;
-      planes[i]!.center = [(origAx[0] + origAy[0]) * off, (origAx[1] + origAy[1]) * off, (origAx[2] + origAy[2]) * off];
-      planes[i]!.half = [s[0] / 2, s[1] / 2, s[2] / 2];
+      return {
+        center: [
+          (origAx[0] + origAy[0]) * off,
+          (origAx[1] + origAy[1]) * off,
+          (origAx[2] + origAy[2]) * off,
+        ],
+        half: [s[0] / 2, s[1] / 2, s[2] / 2],
+      };
     });
   }
 
   function positionRings(center: Vec3, len: number, thick: number): void {
-    ringCenter = center; ringRadius = len;
-    const seg = thick * 1.3;
-    for (let i = 0; i < AXES.length; i++) {
-      const ra = rotatedAxes[i]!;
-      const [u, v] = orthoBasis(ra);
-      for (let j = 0; j < RING_SEG; j++) {
-        const th = (j / RING_SEG) * Math.PI * 2;
-        const c = Math.cos(th) * len, s = Math.sin(th) * len;
-        const p: Vec3 = [center[0] + u[0] * c + v[0] * s, center[1] + u[1] * c + v[1] * s, center[2] + u[2] * c + v[2] * s];
-        editorEngine.set(ringEnts[i * RING_SEG + j]!, Transform, { pos: [p[0], p[1], p[2]], scale: [seg, seg, seg] });
-      }
-    }
+    ringCenter = center;
+    ringRadius = len;
+    gizmoLength = len;
+    gizmoTipLength = 0;
+    gizmoThickness = thick;
+    bars = [];
+    planes = [];
   }
 
   function update(): void {
-    if (!isAuxVisible()) { despawnHandles(); return; }
+    if (!isAuxVisible()) {
+      clearState();
+      return;
+    }
     const anchor = getAnchor();
-    if (!anchor) { despawnHandles(); return; }
+    if (!anchor) {
+      clearState();
+      return;
+    }
     const center = anchor.center;
 
-    // Compute gizmo orientation based on coordinate space setting
+    // Compute gizmo orientation based on coordinate space setting.
     const space = getGizmoSpace();
-    if (space === 'local') {
-      gizmoQuat = anchor.quat ?? IDENTITY_QUAT;
-    } else {
-      gizmoQuat = IDENTITY_QUAT;
-    }
+    gizmoQuat = space === 'local' ? (anchor.quat ?? IDENTITY_QUAT) : IDENTITY_QUAT;
     rotatedAxes = AXES.map(a => rotVec3(gizmoQuat, a.axis));
     rotatedPlaneNormals = PLANES.map(p => rotVec3(gizmoQuat, p.normal));
     gizmoCenter = center;
 
     const scale = getViewScale(center);
-    const len = scale * 0.13, thick = scale * 0.007;
+    const len = scale * 0.13;
+    const thick = scale * 0.007;
     const gm = getGizmoMode();
     const want: Shape = gm === 'rotate' ? 'rings' : gm === 'scale' ? 'scale' : 'translate';
-    if (shape !== want) { despawnHandles(); buildShape(want); }
-    if (want === 'rings') { positionRings(center, len, thick); return; }
-    positionBars(center, len, thick);
-    if (want === 'translate') positionPlanes(center, len, thick);
+    shape = want;
+    if (want === 'rings') {
+      positionRings(center, len, thick);
+      return;
+    }
+    positionBars(len, thick);
+    if (want === 'translate') positionPlanes(len, thick);
+    else planes = [];
+  }
+
+  function getOverlayVertices(): GizmoOverlayVertex[] {
+    const out: GizmoOverlayVertex[] = [];
+    if (shape === null || !isAuxVisible()) return out;
+
+    if (shape === 'rings') {
+      const segmentSize = gizmoThickness * 1.3;
+      for (let i = 0; i < AXES.length; i++) {
+        const axis = rotatedAxes[i]!;
+        const [u, v] = orthoBasis(axis);
+        const color = overlayColorFromSrgb(AXES[i]!.color);
+        for (let j = 0; j < RING_SEG; j++) {
+          const theta = (j / RING_SEG) * Math.PI * 2;
+          const point: Vec3 = [
+            ringCenter[0] + u[0] * Math.cos(theta) * ringRadius + v[0] * Math.sin(theta) * ringRadius,
+            ringCenter[1] + u[1] * Math.cos(theta) * ringRadius + v[1] * Math.sin(theta) * ringRadius,
+            ringCenter[2] + u[2] * Math.cos(theta) * ringRadius + v[2] * Math.sin(theta) * ringRadius,
+          ];
+          appendOverlayBox(out, point, [segmentSize, segmentSize, segmentSize], IDENTITY_QUAT, color);
+        }
+      }
+      return out;
+    }
+
+    for (let i = 0; i < AXES.length; i++) {
+      const axis = AXES[i]!;
+      const rotatedAxis = rotatedAxes[i]!;
+      const barCenter = addScaled(gizmoCenter, rotatedAxis, gizmoLength / 2);
+      const barScale: Vec3 = [
+        axis.axis[0] ? gizmoLength : gizmoThickness,
+        axis.axis[1] ? gizmoLength : gizmoThickness,
+        axis.axis[2] ? gizmoLength : gizmoThickness,
+      ];
+      appendOverlayBox(out, barCenter, barScale, gizmoQuat, overlayColorFromSrgb(axis.color));
+
+      if (shape !== 'translate') continue;
+      const base = addScaled(gizmoCenter, rotatedAxis, gizmoLength);
+      const tipRotation = multiplyOverlayQuaternions(gizmoQuat, TIP_QUAT[i]!);
+      appendOverlayCone(
+        out,
+        base,
+        [gizmoThickness * 2.6, gizmoTipLength, gizmoThickness * 2.6],
+        tipRotation,
+        overlayColorFromSrgb(axis.color),
+      );
+    }
+
+    if (shape !== 'translate') return out;
+
+    const off = gizmoLength * 0.34;
+    for (const plane of PLANES) {
+      const center = addScaled(
+        addScaled(gizmoCenter, rotatedAxes[plane.ax]!, off),
+        rotatedAxes[plane.ay]!,
+        off,
+      );
+      const scale: Vec3 = [
+        plane.normal[0] ? gizmoThickness : gizmoLength * 0.22,
+        plane.normal[1] ? gizmoThickness : gizmoLength * 0.22,
+        plane.normal[2] ? gizmoThickness : gizmoLength * 0.22,
+      ];
+      appendOverlayBox(out, center, scale, gizmoQuat, overlayColorFromSrgb(AXES[plane.mat]!.color));
+    }
+    return out;
+  }
+
+  function drawOverlay(draw: GizmoOverlayDraw): void {
+    if (shape === null || !isAuxVisible()) return;
+
+    if (shape === 'rings') {
+      for (let i = 0; i < AXES.length; i++) {
+        const axis = rotatedAxes[i]!;
+        const [u, v] = orthoBasis(axis);
+        const color = debugColor(AXES[i]!.color);
+        let previous: Vec3 | null = null;
+        for (let j = 0; j <= RING_SEG; j++) {
+          const theta = (j / RING_SEG) * Math.PI * 2;
+          const point: Vec3 = [
+            ringCenter[0] + u[0] * Math.cos(theta) * ringRadius + v[0] * Math.sin(theta) * ringRadius,
+            ringCenter[1] + u[1] * Math.cos(theta) * ringRadius + v[1] * Math.sin(theta) * ringRadius,
+            ringCenter[2] + u[2] * Math.cos(theta) * ringRadius + v[2] * Math.sin(theta) * ringRadius,
+          ];
+          if (previous !== null) draw.line(toEngineVec3(previous), toEngineVec3(point), color);
+          previous = point;
+        }
+      }
+      return;
+    }
+
+    const axisReach = gizmoLength + gizmoTipLength;
+    for (let i = 0; i < AXES.length; i++) {
+      const axis = rotatedAxes[i]!;
+      const end = addScaled(gizmoCenter, axis, axisReach);
+      const color = debugColor(AXES[i]!.color);
+      if (shape === 'translate') {
+        draw.arrow(toEngineVec3(gizmoCenter), toEngineVec3(end), color, gizmoTipLength);
+      } else {
+        draw.line(toEngineVec3(gizmoCenter), toEngineVec3(end), color);
+      }
+    }
+
+    if (shape !== 'translate') return;
+
+    // Plane handles remain interactive AABBs, but their visual representation
+    // is now a wire square in the post-scene line overlay. This preserves the
+    // XY/YZ/XZ affordance without reintroducing editorWorld MeshRenderers.
+    const off = gizmoLength * 0.34;
+    const halfQuad = gizmoLength * 0.22 / 2;
+    for (const plane of PLANES) {
+      const axis = rotatedAxes[plane.ax]!;
+      const other = rotatedAxes[plane.ay]!;
+      const color = debugColor(AXES[plane.mat]!.color);
+      const corners: Vec3[] = [
+        addScaled(addScaled(gizmoCenter, axis, off - halfQuad), other, off - halfQuad),
+        addScaled(addScaled(gizmoCenter, axis, off + halfQuad), other, off - halfQuad),
+        addScaled(addScaled(gizmoCenter, axis, off + halfQuad), other, off + halfQuad),
+        addScaled(addScaled(gizmoCenter, axis, off - halfQuad), other, off + halfQuad),
+      ];
+      for (let i = 0; i < corners.length; i++) {
+        draw.line(
+          toEngineVec3(corners[i]!),
+          toEngineVec3(corners[(i + 1) % corners.length]!),
+          color,
+        );
+      }
+    }
   }
 
   function hit(origin: Vec3, dir: Vec3): number | null {
@@ -324,32 +380,60 @@ export function createGizmoPool({
     const localO: Vec3 = [localOrigin[0] + gizmoCenter[0], localOrigin[1] + gizmoCenter[1], localOrigin[2] + gizmoCenter[2]];
     const localDir = rotVec3(invQ, dir);
 
-    let best: number | null = null, bestT = Infinity;
+    let best: number | null = null;
+    let bestT = Infinity;
     if (shape === 'rings') {
       const band = Math.max(ringRadius * 0.18, 1e-4);
       for (let i = 0; i < AXES.length; i++) {
         const hitP = rayPlane(origin, dir, ringCenter, rotatedAxes[i]!);
         if (!hitP) continue;
-        const r = Math.hypot(hitP[0] - ringCenter[0], hitP[1] - ringCenter[1], hitP[2] - ringCenter[2]);
-        if (Math.abs(r - ringRadius) > band) continue;
-        const td = Math.hypot(hitP[0] - origin[0], hitP[1] - origin[1], hitP[2] - origin[2]);
-        if (td < bestT) { bestT = td; best = i; }
+        const radius = Math.hypot(
+          hitP[0] - ringCenter[0],
+          hitP[1] - ringCenter[1],
+          hitP[2] - ringCenter[2],
+        );
+        if (Math.abs(radius - ringRadius) > band) continue;
+        const td = Math.hypot(
+          hitP[0] - origin[0],
+          hitP[1] - origin[1],
+          hitP[2] - origin[2],
+        );
+        if (td < bestT) {
+          bestT = td;
+          best = i;
+        }
       }
       return best;
     }
-    // Bars and planes are stored in gizmo-local space (relative to gizmoCenter).
-    // Test using the locally-transformed ray against the axis-aligned AABBs.
+
+    // Bars and planes are stored in gizmo-local space (relative to
+    // gizmoCenter). Test using the locally-transformed ray against the
+    // axis-aligned AABBs.
     for (let i = 0; i < planes.length; i++) {
-      const h = planes[i]!;
-      const wc: Vec3 = [gizmoCenter[0] + h.center[0], gizmoCenter[1] + h.center[1], gizmoCenter[2] + h.center[2]];
-      const t = rayAABB(localO, localDir, wc, h.half);
-      if (t !== null && t < bestT) { bestT = t; best = 3 + i; }
+      const handle = planes[i]!;
+      const worldCenter: Vec3 = [
+        gizmoCenter[0] + handle.center[0],
+        gizmoCenter[1] + handle.center[1],
+        gizmoCenter[2] + handle.center[2],
+      ];
+      const t = rayAABB(localO, localDir, worldCenter, handle.half);
+      if (t !== null && t < bestT) {
+        bestT = t;
+        best = 3 + i;
+      }
     }
     for (let i = 0; i < bars.length; i++) {
-      const h = bars[i]!;
-      const wc: Vec3 = [gizmoCenter[0] + h.center[0], gizmoCenter[1] + h.center[1], gizmoCenter[2] + h.center[2]];
-      const t = rayAABB(localO, localDir, wc, h.half);
-      if (t !== null && t < bestT) { bestT = t; best = i; }
+      const handle = bars[i]!;
+      const worldCenter: Vec3 = [
+        gizmoCenter[0] + handle.center[0],
+        gizmoCenter[1] + handle.center[1],
+        gizmoCenter[2] + handle.center[2],
+      ];
+      const t = rayAABB(localO, localDir, worldCenter, handle.half);
+      if (t !== null && t < bestT) {
+        bestT = t;
+        best = i;
+      }
     }
     return best;
   }
@@ -357,5 +441,13 @@ export function createGizmoPool({
   const getAxis = (i: number): Vec3 => rotatedAxes[i] ?? AXES[i]!.axis;
   const getPlaneNormal = (i: number): Vec3 => rotatedPlaneNormals[i] ?? PLANES[i]!.normal;
 
-  return { update, hit, getAxis, getPlaneNormal, spawnHandleCube, dispose: despawnHandles };
+  return {
+    update,
+    drawOverlay,
+    getOverlayVertices,
+    hit,
+    getAxis,
+    getPlaneNormal,
+    dispose: clearState,
+  };
 }

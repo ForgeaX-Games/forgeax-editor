@@ -30,6 +30,7 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import { stripDisabledMarker } from '../store/store';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Minimal mock ShaderRegistry for AssetRegistry constructor ──────────────
 
@@ -85,7 +86,7 @@ const TestRefHolder = defineComponent('TestRefHolder', {
 describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
   // (a) Success branch: spawn entities, collect, serialize, validate
   it('(a) success: rootsToSceneAsset ok → serializeSceneAssetToPack produces valid pack', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const registry = makeRegistry();
 
     // Spawn a small forest (root + 2 children).
@@ -117,7 +118,7 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     expect(names).not.toContain('Orphan');
 
     // Serialize to pack.
-    const packResult = serializeSceneAssetToPack(sceneAsset);
+    const packResult = serializeSceneAssetToPack(sceneAsset, world.components.entries());
     expect(packResult.ok).toBe(true);
     if (!packResult.ok) return;
 
@@ -151,7 +152,8 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
 
   // (b) Failure branch: entity ref outside closure produces structured error
   it('(b) error: entity ref out of closure → err with .code and .hint (AC-23)', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
+    world.components.register(TestRefHolder).unwrap();
     const registry = makeRegistry();
 
     // Create target entity (outside closure).
@@ -193,7 +195,7 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
   // (c) Visibility is authored scene data: a hidden entity survives collection
   // and keeps its explicit state for the Edit → pack → Play round-trip.
   it('(c) hidden Visibility intent survives round-trip (AC-04/AC-05)', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const registry = makeRegistry();
 
     // Two roots: one visible, one explicitly hidden.
@@ -218,7 +220,7 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     expect(hiddenEntity?.components.Visibility).toEqual({ state: VisibilityStateValue.hidden });
 
     // The explicit Visibility state is part of the authored pack contract.
-    const packR = serializeSceneAssetToPack(stripped as never);
+    const packR = serializeSceneAssetToPack(stripped as never, world.components.entries());
     expect(packR.ok).toBe(true);
     if (!packR.ok) return;
     const packJson = JSON.stringify(packR.value);
@@ -228,7 +230,7 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
   // (c2) The engine `Disabled` marker is derived/runtime state and must never
   // reach a scene pack, while authored Visibility remains.
   it('(c2) Disabled engine marker is stripped while Visibility remains', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const registry = makeRegistry();
 
     const hidden = spawnRoot(world, 'Hidden');

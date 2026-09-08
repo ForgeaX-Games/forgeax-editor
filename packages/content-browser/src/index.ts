@@ -44,3 +44,13 @@ export {
 } from './delete-guard-bus';
 export * from './hooks';
 export * from './types';
+export {
+  projectScriptablePackBrowserTree,
+  type ScriptablePackBrowserOutput,
+  type ScriptablePackBrowserTree,
+} from './source-authoring/scriptable-pack-projection';
+export {
+  isCanonicalScriptablePackRevision,
+  readCanonicalScriptablePackRevision,
+} from './scriptable-pack-mutation';
+export type { ScriptablePackRevisionResult } from './scriptable-pack-mutation';

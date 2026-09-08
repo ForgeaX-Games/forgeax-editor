@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "id": "forgeax.editor.edit",
+  "version": "1.1.0",
+  "kind": "editor",
+  "displayName": { "en": "ForgeaX Editor" },
+  "entry": { "backend": "./dist/editor-runtime.js" },
+  "runtime": { "contract": "editor-runtime/v1", "kind": "world-backed", "owner": "editor-edit-runtime" },
+  "contributes": { "contributions": ["editor.edit"], "capabilities": ["engine.preview.create", "editor.iframe.handshake", "editor.viewport.mount", "editor.world.runtime", "editor.gameplay.carrier"] },
+  "permissions": ["project:read", "project:write"]
+}

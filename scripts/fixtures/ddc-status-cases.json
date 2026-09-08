@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "forgeax-ddc-cli-fixtures/v1",
+  "project": {
+    "scopeId": "editor/main",
+    "generation": 7,
+    "currentKey": "current-key",
+    "lastKnownGoodKey": "lkg-key",
+    "lease": "lease-editor-a"
+  },
+  "legacy": [
+    {
+      "name": "verified-build-object",
+      "relativePath": "node_modules/.cache/forgeax-ddc/objects/verified-build-object",
+      "classification": "migratable",
+      "owner": "engine-ddc",
+      "reason": "receipt and integrity prove a pure build object"
+    },
+    {
+      "name": "unknown-runtime-state",
+      "relativePath": "node_modules/.cache/forgeax-ddc/runtime/unknown-runtime-state",
+      "classification": "unavailable",
+      "owner": "unknown",
+      "reason": "legacy runtime state has no provable game owner"
+    }
+  ]
+}

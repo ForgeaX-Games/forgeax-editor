@@ -10,7 +10,7 @@ describe('ViewportRuntimeFrame URL', () => {
       runtimeGeneration: 9,
       carrierId: 'dock-a',
       carrierKind: 'iframe',
-    }, 'https://shell.test', 'https://runtime.test/workbench'));
+    }, 'https://shell.test', 'https://runtime.test/editor'));
 
     expect(url.origin).toBe('https://runtime.test');
     expect(url.pathname).toBe('/editor/');

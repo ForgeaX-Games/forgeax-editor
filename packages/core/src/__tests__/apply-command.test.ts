@@ -5,16 +5,16 @@
 // correct engine component state. GREEN after m1-impl-9cases rewrites
 // applyCommand's 9 cases to operate on session.world directly.
 //
-// Each test case uses a real World (new World()), injects it into an EditSession
-// via makeEditSession, dispatches the command, and asserts world state via
-// world.get(e, C).
+// Each test case uses a real World with an explicit per-World component catalog,
+// injects it into an EditSession, dispatches the command, and asserts world
+// state via world.get(e, C).
 //
 // Entity IDs: applyCommand's spawnEntity sets `(cmd as any)._id = engineHandle` on the
 // command object itself (side effect). Tests capture the command reference to
 // read the engine-assigned handle after dispatch.
 //
-// Engine components (Name, Transform, ChildOf, MeshFilter) are globally
-// registered by defineComponent at engine-runtime import time.
+// Engine components (Name, Transform, ChildOf, MeshFilter) are registered on
+// each test World by createCoreTestWorld; no process-global catalog is used.
 //
 // Anchors:
 //   plan-tasks.json m1-test-command-red: applyCommand 9 case world assertions
@@ -30,6 +30,7 @@ import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type { AnimationClip } from '@forgeax/engine-types';
+import { createCoreTestWorld } from './fixtures/world';
 import type { EntityHandle } from '../scene/scene-types';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
@@ -48,7 +49,7 @@ import type { EditorOp, EditSession } from '../types';
  *  (read via entHandle), not doc.entities. */
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld([MeshFilter]);
   return session;
 }
 
@@ -394,7 +395,7 @@ function createSessionWithClip(): { session: EditSession; clipGuid: string } {
   const cat = registry.catalog(g.value, makeAnimationClip());
   if (!cat.ok) throw new Error(`clip catalog failed: ${JSON.stringify(cat.error)}`);
   const session = createEditSession();
-  session.world = new World() as unknown as EditSession['world'];
+  session.world = createCoreTestWorld([MeshFilter]) as unknown as EditSession['world'];
   session.registry = registry as unknown as EditSession['registry'];
   return { session, clipGuid: CLIP_GUID };
 }

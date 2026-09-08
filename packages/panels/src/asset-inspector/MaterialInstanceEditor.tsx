@@ -28,7 +28,7 @@ import {
 } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ForgeaxIcon, prompt as promptDialog } from '@forgeax/editor-ui';
-import { AssetPicker } from '../AssetPicker';
+import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from '../AssetPicker';
 import { OverrideFieldRow } from './OverrideFieldRow';
 
 type GroupId = 'surface' | 'general' | 'lightmass' | 'propertyOverrides';
@@ -47,13 +47,26 @@ function enabledOverridesOnly(
   return out;
 }
 
+// Save Sibling / Save Child are contributed as panel-header actions. Their
+// bodies (saveAsRelated) close over the live staging, active asset, and the
+// i18n `t()` hook, so we expose them through a module-level handler ref the
+// commands call — the same "latest closure" bridge Hierarchy uses.
+export interface MiCommandActions {
+  readonly saveSibling: () => void;
+  readonly saveChild: () => void;
+}
+let miCommandActions: MiCommandActions | null = null;
+export function getMiCommandActions(): MiCommandActions | null {
+  return miCommandActions;
+}
+
 export function MaterialInstanceEditor(): ReactElement {
   const { t } = useTranslation();
   const asset = useActiveEditorAsset();
   const [version, setVersion] = useState(0);
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<GroupId>>(new Set(['propertyOverrides']));
-  const [picker, setPicker] = useState<'parent' | 'phys' | null>(null);
+  const [picker, setPicker] = useState<{ kind: 'parent' | 'phys'; anchor: AssetPickerAnchor } | null>(null);
   const [localMetallic, setLocalMetallic] = useState<number | null>(null);
   const [localRoughness, setLocalRoughness] = useState<number | null>(null);
 
@@ -185,6 +198,14 @@ export function MaterialInstanceEditor(): ReactElement {
       },
     }, 'human');
   }, [asset, livePayload, packPath, guid, t]);
+
+  useEffect(() => {
+    miCommandActions = {
+      saveSibling: () => { void saveAsRelated('sibling'); },
+      saveChild: () => { void saveAsRelated('child'); },
+    };
+    return () => { miCommandActions = null; };
+  });
 
   const toggleGroup = (id: GroupId) => {
     setCollapsed((prev) => {
@@ -327,14 +348,6 @@ export function MaterialInstanceEditor(): ReactElement {
                 <span className="hexval">{roughness.toFixed(3)}</span>
               </OverrideFieldRow>
             )}
-            <div className="f-row mi-save-related" data-testid="mi-save-related">
-              <button type="button" data-testid="mi-save-sibling" onClick={() => void saveAsRelated('sibling')}>
-                {t('editor.materialInstance.saveSibling')}
-              </button>
-              <button type="button" data-testid="mi-save-child" onClick={() => void saveAsRelated('child')}>
-                {t('editor.materialInstance.saveChild')}
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -351,7 +364,14 @@ export function MaterialInstanceEditor(): ReactElement {
                 <span className="f-name">{t('editor.materialInstance.parent')}</span>
                 <span className="f-val asset-f">
                   <input className="an" readOnly value={livePayload.parent} title={livePayload.parent} />
-                  <button type="button" onClick={() => setPicker('parent')} title="Browse parent">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      const rect = anchorFromElement(event.currentTarget);
+                      if (rect) setPicker({ kind: 'parent', anchor: rect });
+                    }}
+                    title="Browse parent"
+                  >
                     <ForgeaxIcon name="folder" size={12} />
                   </button>
                 </span>
@@ -396,6 +416,8 @@ export function MaterialInstanceEditor(): ReactElement {
                   <span className="f-name">{t(`editor.materialInstance.${key}`)}</span>
                   <span className="f-val">
                     <input
+                      className="box-i"
+                      style={{ width: 72 }}
                       type="number"
                       step={0.1}
                       min={0}
@@ -444,9 +466,10 @@ export function MaterialInstanceEditor(): ReactElement {
         </div>
       )}
 
-      {picker === 'parent' && (
+      {picker?.kind === 'parent' && (
         <AssetPicker
           assetType="MaterialAsset"
+          anchor={picker.anchor}
           currentGuid={livePayload.parent}
           onPick={(nextGuid) => {
             patchParent(nextGuid);

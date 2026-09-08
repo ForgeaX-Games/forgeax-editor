@@ -2,8 +2,113 @@
 
 > ForgeaX 编辑模式权威 Runtime：在一个可替换 carrier realm 中启动 Gateway、Edit/Play World、AssetRegistry、GPU canvas、相机与引擎拥有的 VFX Runtime。carrier 可以是 iframe、browser page 或 Tauri WebView；外层 panel 只消费 projection 并派发 Runtime operation。
 
+## Project authoring ToolClient transport
+
+Authoring UI intent follows one typed route:
+
+```mermaid
+flowchart LR
+  UI["Editor page projection"] --> T["typed ToolClient transport"]
+  T --> H["standalone Node host"]
+  H --> E["Project-installed contribution"]
+  E --> F["Project files + terminal artifact"]
+```
+
+The UI may call `list`, `describe`, and `run`, but it does not execute a
+material/mesh/VFX update locally. `Save` sends one snapshot plus
+`expectedRevision`; the host returns a terminal result or a structured
+`authoring-revision-conflict` with draft evidence. After success, Runtime
+refreshes its read projection from Project files.
+
+> [!IMPORTANT]
+> The Engine Tool Runtime Project Entry is the cold-discovery authority. A
+> missing operation is `authoring-operation-unavailable`; it is never replaced
+> by a page-local registry, Editor closure, or hidden executor.
+
+## Material publication projection
+
+The Runtime exposes one GUID-addressed read query:
+`{ kind: 'material.inspection', guid }`. It returns the cooked
+`MaterialPublicationInspection` through the existing viewport projection; it
+does not create a material registry, schema cache, or Gateway operation.
+Consumers show readiness and publication identity first, then expand source
+closure, parameter contract, refs, receipt, and owner diagnostics on demand.
+
+Transport URL and carrier identity are provenance only. They must never be
+used to compare publications or to infer a different material identity.
+Inspector and console callers branch on the structured error code and recovery
+fields rather than parsing messages or importing `@forgeax/editor-core` from
+the Play runtime.
+
+## Visible carrier provider offer
+
+The Node host may expose an authenticated ephemeral carrier through
+`createToolCarrierHost`. The browser Runtime receives only a POD offer and a
+generation-fenced `ToolCarrierProvider`; it never receives the Editor World,
+Renderer, Canvas, Project writer, plugin manifest, or a second ToolClient.
+
+Without an explicit `FORGEAX_CARRIER_ENDPOINT` and
+`FORGEAX_CARRIER_BEARER_TOKEN`, the standalone host returns the structured
+`carrier-unavailable` result. That is an intentional unavailable state, not a
+hidden local fallback. After `start`, provider exit is terminal for the AI run;
+the host can offer a fresh carrier only for a serialized retry. Human Resource
+Editor and Play sessions retain separate World/Renderer/Canvas, draft, undo,
+and cancellation identities.
+
+## Version-control evidence index
+
+The Runtime is the sole carrier authority for the generation-fenced snapshot and
+switch handoff. Git process and repository facts remain in platform-io; panels only
+read projections and dispatch through the Gateway.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Ready
+  Ready --> Transition: switch accepted
+  Transition --> ColdReady: checkout + successor boot
+  ColdReady --> Ready: lease swap + terminal
+  Transition --> Recovery: state uncertain
+  Recovery --> Ready: external reconcile
+```
+
+| Evidence | Test | Invariant |
+|:--|:--|:--|
+| AC-02/13/16 | `src/version-control/__tests__/switch-preflight.test.ts`, `switch-failure.test.ts` | Play, staging, dirty, drift, busy, root mismatch, and recovery block without destructive bypass |
+| AC-15/20 | `src/version-control/__tests__/dual-host-switch.test.ts`, `generation-handoff.test.ts` | Standalone and Studio share barrier ordering; old projection is stale only after successor is cold-ready |
+| AC-18 | `src/version-control/__tests__/snapshot-scale.test.ts` and `recovery.ts` | `unavailable`, `running`, `recovery-required`, and `ready` stay distinguishable across generation changes |
+
+The switch receipt path is `preflight -> checkout -> old-runtime barrier -> teardown
+-> successor cold-ready -> lease swap -> terminal`. The 1k snapshot fixture checks
+that graph nodes, ancestry edges, repository identity, and generation survive three
+projection rounds without a second World or parallel operation catalog.
+
 > [!IMPORTANT]
 > Runtime 服务（zustand store、实体操作、右键菜单、dock 桥接、面板 manifest）由 `@forgeax/editor-core` 持有。如需使用 `bus`、`dispatch`、`useSelection` 等，应从 `@forgeax/editor-core` 导入。
+
+## 版本控制最短成功路径
+
+版本控制 provider 只消费当前 Host contract；Git process、repository identity、HEAD、status
+与 tag DAG 仍由 `@forgeax/platform-io` 拥有。Runtime 通过同一个 Gateway catalog 给 Human
+和 AI 暴露四个 session operation：
+
+```ts
+const descriptors = gateway.listOps();
+const snapshot = await queryViewportRuntimeProjection({ kind: 'version-control.snapshot' });
+const requestId = 'switch-release-one';
+const accepted = gateway.dispatch({
+  kind: 'switchGameVersion',
+  tag: 'release/one',
+  expectedCommit: snapshot.value.head,
+  requestId,
+}, 'ai');
+const terminal = await gateway.waitOperationRun(requestId);
+```
+
+只有 `succeeded` 才是成功；`accepted` 和 `running` 必须继续等待。`snapshot`、`OperationRun`
+和 `CommandError` 都带 generation/request correlation，旧 generation 会被清空并标记 stale。
+失败恢复只读取结构化 `code`、`stage`、`expected`、`actual` 与 `recoveryActions`，不解析
+message 或 Git stderr。切换前先等待 save `OperationRun` terminal，再由同一 `GatewayWriteBarrier`
+协调 save、scan、Play 和 version-control mutation。
 
 ## 导入示例
 
@@ -111,7 +216,7 @@ Runtime identity, generation and one-shot challenge. That reverse port carries o
 generic, replaceable executor lease keyed by `kind + assetGuid + generation`; it
 does not carry a second capability catalog or raw World/controller reference.
 
-The VFX workbench binds seven transient operations while its lease is live:
+The VFX authoring page binds seven transient operations while its lease is live:
 `vfx.preview.play`, `pause`, `reset`, `seek`, `setEmitterMask`, `frameBounds` and
 `setBoundsVisible`. Human toolbar
 handlers and AI callers both use `dispatchViewportRuntimeOperation`. The Runtime
@@ -169,7 +274,7 @@ messages.
 |:--|:--|:--|
 | `useDocVersion` 返回不更新 | store listener 未注册到 bus | 确认调用了 `onSelectionChange` / `onGizmoModeChange` 等注册函数；这些函数均来自 `@forgeax/editor-core` |
 | `Cannot find module 'bus' from '@forgeax/editor-edit-runtime'` | Runtime 服务由 editor-core 持有 | 改为从 `@forgeax/editor-core` 导入 `bus` |
-| VFX readiness 显示不可用 | host 没有绑定当前 World，或 renderer assets 尚未就绪 | 检查 `createApp(features)`、Edit `attachWorld` 和 Play `attachWorld` 的诊断结果；不要在 UI 侧创建第二个 host |
+| VFX readiness 显示不可用 | active RHI 没有 `compute` / `indirectDrawing`，host 没有绑定当前 World，或 renderer assets 尚未就绪 | Edit 启动后先读取 renderer capabilities；只有能力满足时才调用 `installRenderFeature`，随后检查 Edit `attachWorld` 和 Play `attachWorld` 的诊断结果；不要把可选 VFX feature 预注册进 `createApp(features)`，也不要在 UI 侧创建第二个 host |
 | Stop 后出现 stale/cross-world handle | 代码保存了旧的 Play handle | 重新查询 `gateway.activeWorld` / selection；不要尝试把数字 handle 转换成另一个 World 的实体 |
 | 剪贴板操作报错 `undefined` | `copySelected` 依赖 DOM `navigator.clipboard` | 确保在安全上下文（HTTPS 或 localhost）中运行 |
 

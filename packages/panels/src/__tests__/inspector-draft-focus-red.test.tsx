@@ -2,18 +2,17 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'bun:test';
 
-const panel = readFileSync(resolve(import.meta.dir, '..', 'Inspector.tsx'), 'utf8');
-const draft = readFileSync(resolve(import.meta.dir, '..', 'useNumberDraft.ts'), 'utf8');
+const panel = readFileSync(resolve(import.meta.dir, '..', 'Inspector.tsx'), 'utf8').replace(/\r\n/g, '\n');
+const draft = readFileSync(resolve(import.meta.dir, '..', 'useNumberDraft.ts'), 'utf8').replace(/\r\n/g, '\n');
 
 describe('Inspector draft focus and live pulse contracts', () => {
   it('keeps focused and scrubbed values ahead of live selector updates', () => {
     expect(panel).toContain('const shown = drag ? drag.v : liveValue;');
     expect(panel).toContain('const num = useNumberDraft(shown, fs, onCommit, generation);');
     expect(panel).toContain('data-scrubbing={isScrubbing}');
-    expect(draft).toContain('value: draft !== null ? draft : String(display),');
-    expect(draft).toContain('const changed = useRef(false);');
-    expect(draft).toContain('if (!changed.current)');
-    expect(draft).toContain('onFocus: () => { changed.current = false; setDraft(String(display)); },');
+    expect(panel).toContain('if (document.activeElement === e.currentTarget) return;');
+    expect(draft).toContain('formatInspectorNumber(display, fs)');
+    expect(draft).toContain('setDraft(formatInspectorNumber(display, fs));');
   });
 
   it('keys draft identity by selection and world generation', () => {

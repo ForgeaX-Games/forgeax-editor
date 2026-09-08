@@ -2,6 +2,14 @@
 
 > forgeax editor 核心逻辑层：EditSession 单一真相源（scene-as-asset）、EditorBus 命令总线、undo/redo、组件 schema 注册表、跨窗同步、动画、材质图、资源、预设。
 
+## 材质 publication inspection 与参数契约
+
+`MaterialPublicationInspection` 是 cooked MaterialAsset publication 的唯一只读形态。按 authored `materialGuid` 查询；跨宿主比较 `publicationGeneration`、`specializationKey`、`sourceClosure`、`artifactDigest` 和 `parameterContract`。`transport` 只记录 projection 的读取位置，是 provenance，不参与 publication tuple 相等判断。
+
+`resolveMaterialParamSchema` 首先读取 `parameterContract.parameters`。保留的内建 schema 只用于离线 fallback；已删除的游戏 manifest 及其 `materialShaders[].paramSchema` 不再是 Editor authority。Inspector 值和 diagnostics 都是只读 projection，继续使用既有 Gateway/provider seam。
+
+失败 projection 使用稳定 kebab-case code：`shader-module-not-found`、`material-reflection-binding-mismatch`、`material-specialization-not-cooked`、`asset-artifact-missing`、`asset-artifact-integrity-mismatch` 和 `material-cook-record-invalid`。调用方按 `code`、identity 字段、`expected`/`actual`、`hint`、`retryable` 与 `recoveryActions` 分支，不解析 `message`。
+
 ## 视口网格偏好
 
 Edit 主视口网格属于 editor chrome，不是 scene-pack 数据、document undo 条目或 Play World 组件。View、Settings 和 AI caller 都使用现有 Gateway session operation：

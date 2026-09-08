@@ -35,7 +35,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
-import type { BootstrapContext, GameProjectionRegistrar } from '@forgeax/engine-app';
+import type { GameProjectionRegistrar } from '@forgeax/engine-app';
+import type { BootstrapContext } from '@forgeax/editor-game-plugins';
 import { Name } from '@forgeax/engine-scene';
 import {
   addOnEnter,
@@ -261,6 +262,41 @@ function buildRealAssembleLifecycle() {
 }
 
 describe('w6 — headless full-chain play->stop->play (level-load, R-N1)', () => {
+  it('rejects a non-fresh assembly before entering Play', async () => {
+    const editorApp = makeFakeEditorApp();
+    const gateway = makeFakeGateway();
+    const editWorld = new World();
+    const lifecycle = createRunLifecycle({
+      editorApp: editorApp as never,
+      gateway: gateway as never,
+      editWorld,
+      assemble: async () => ({
+        ok: true as const,
+        value: {
+          playApp: {
+            start: () => ({ ok: true }),
+            stop: () => ({ ok: true }),
+            pause: () => ({ ok: true }),
+            resume: () => ({ ok: true }),
+          },
+          playWorld: editWorld,
+          disposeWorld: () => {},
+          detach: () => {},
+        },
+      }),
+    });
+
+    await lifecycle.playSimulation();
+
+    expect(gateway.events).toContainEqual({
+      kind: 'failPlayAttempt',
+      error: { code: 'play-world-not-fresh', hint: expect.any(String) },
+    });
+    expect(gateway.events.some((event) => event.kind === 'enterPlay')).toBe(false);
+    expect(lifecycle.currentPlayWorld()).toBeNull();
+    expect(editorApp.calls).toEqual(['pause', 'resume']);
+  });
+
   it('(R-N1) engine frame loop calls renderer.draw(playWorld) with the fresh play world', async () => {
     const fakeRaf = installFakeRaf();
     try {
@@ -436,9 +472,26 @@ describe('▶ Play game-owned action/read projection', () => {
       expect(gateway.listGameActions()).toEqual([]);
       await lifecycle.playSimulation();
       expect(gateway.listGameActions().map((item) => item.id)).toEqual(['sample.level.transition']);
-      expect(gateway.listGameReads().map((item) => item.id)).toEqual(['frameStats', 'rendererStats', 'sample.level.status']);
+      expect(gateway.listGameReads().map((item) => item.id)).toEqual([
+        'frameStats',
+        'rendererStats',
+        'sample.level.status',
+        'world',
+      ]);
       await expect(gateway.readGameState('rendererStats'))
         .resolves.toEqual({ ok: true, value: { frustumStats: { culled: 0, total: 0 } } });
+      await expect(gateway.readGameState('world')).resolves.toMatchObject({
+        ok: true,
+        value: {
+          entityCount: expect.any(Number),
+          archetypeCount: expect.any(Number),
+          archetypes: expect.any(Array),
+          activeComponents: expect.any(Array),
+          systemCount: expect.any(Number),
+          systems: expect.any(Array),
+          resourceKeys: expect.any(Array),
+        },
+      });
       await expect(gateway.invokeGameAction('sample.level.transition', { target: 'b' }))
         .resolves.toEqual({ ok: true, value: undefined });
       await expect(gateway.readGameState('sample.level.status'))
@@ -650,38 +703,36 @@ describe('▶ Play defaultScene instantiate routes through AssetRegistry (Shared
 // `resources: [ANIMATION_ASSET_RESOLVER_KEY]` UNCONDITIONALLY. When the engine
 // canvas form inserted the resolver but the assemble form / plugin did not, the
 // first play tick aborted with AppError[app-system-update-failed] "Required
-// resource 'AnimationAssetResolver' not found" — and this suite's fake renderer
-// onError no-op SWALLOWED it (115 pass, 0 fail, error only in console noise),
-// the same blindspot that hid the SharedRefReleasedError above. This test taps
-// the play WORLD's error handler (where ParamValidation routes the missing
-// resource before the frame loop wraps it) and asserts a clean tick.
+// resource 'AnimationAssetResolver' not found". The current Engine owns error
+// routing at the App/renderer boundary; World no longer exposes a public
+// setErrorHandler hook. This test therefore drives the real frame loop and
+// asserts that the renderer error channel remains quiet.
 describe('▶ Play first tick has no missing-resource fault (AnimationAssetResolver regression)', () => {
-  it('captures the play world error handler and steps a frame with zero errors', async () => {
+  it('observes the App error channel and steps a frame with zero errors', async () => {
     const fakeRaf = installFakeRaf();
     try {
       const fr = makeFakeRenderer();
       const editorApp = makeFakeEditorApp();
       const gateway = makeFakeGateway();
       const boot = makeFakeBootstrap();
+      const appErrors: unknown[] = [];
 
-      // A play world whose error handler is observable: the missing-resource
-      // ParamValidation ('invalid') routes here BEFORE the frame loop wraps it
-      // into app-system-update-failed (which the fake renderer.onError swallows).
-      const worldErrors: unknown[] = [];
-      const makeObservedWorld = () => {
-        const w = new World() as unknown as { setErrorHandler(h: (e: unknown) => void): void };
-        w.setErrorHandler((e) => worldErrors.push(e));
-        return w;
-      };
-
-      const assemble = async () =>
-        assemblePlayWorld({
+      const assemble = async () => {
+        const result = await assemblePlayWorld({
           renderer: fr.renderer as never,
           loadDefaultScene: async () => makeSceneAsset(),
           resolveBootstrap: async () => boot.entry as never,
           attachInput: () => undefined,
-          newWorld: () => makeObservedWorld() as never,
+          newWorld: () => new World() as never,
         });
+        if (result.ok) {
+          const app = result.value.playApp as unknown as {
+            onError?: (listener: (error: unknown) => void) => () => void;
+          };
+          app.onError?.((error) => appErrors.push(error));
+        }
+        return result;
+      };
 
       const lifecycle = createRunLifecycle({
         editorApp: editorApp as never,
@@ -693,11 +744,11 @@ describe('▶ Play first tick has no missing-resource fault (AnimationAssetResol
       expect(lifecycle.currentPlayWorld()).not.toBeNull();
 
       // Drive frames — advanceAnimationPlayer runs each world.update(). If the
-      // resolver resource were missing this pushes an Error (RED before the
-      // engine animationPlugin self-owns the resolver).
+      // resolver resource were missing the App/renderer error channel would
+      // receive a structured failure.
       fakeRaf.step();
       fakeRaf.step();
-      expect(worldErrors).toEqual([]);
+      expect(appErrors).toEqual([]);
 
       lifecycle.stopSimulation();
     } finally {

@@ -25,6 +25,13 @@ import { entExists, entName, worldEntityHandles } from '../store/entity-state';
 import { VisibilityStateValue } from '../visibility';
 import type { EntityHandle } from '../scene/scene-types';
 import type { EditSession, EditorOp } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
+
+function createTestSession(): EditSession {
+  const session = createEditSession();
+  session.world = createCoreTestWorld();
+  return session;
+}
 
 /** Spawn via applyCommand and return the real engine handle the applier wrote
  *  back onto cmd._id (handle IS identity — no legacy id). */
@@ -39,7 +46,7 @@ function spawn(s: EditSession, name: string, parent?: EntityHandle): EntityHandl
 
 describe('EditSession — fresh session shape', () => {
   it('starts empty with no entities and a live world', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     expect(worldEntityHandles(s.world).length).toBe(0);
     expect(s.world).toBeDefined();
   });
@@ -47,7 +54,7 @@ describe('EditSession — fresh session shape', () => {
 
 describe('EditSession — spawnEntity (handle identity)', () => {
   it('spawns entities that exist and carry their name, keyed by handle', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     const a = spawn(s, 'A');
     const b = spawn(s, 'B');
     const c = spawn(s, 'C');
@@ -61,7 +68,7 @@ describe('EditSession — spawnEntity (handle identity)', () => {
 
 describe('EditSession — spawnEntity INVALID_PARENT (no id consumed)', () => {
   it('fails with INVALID_PARENT when parent does not exist; no entity created', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     spawn(s, 'root');
     expect(worldEntityHandles(s.world).length).toBe(1);
     const r = applyCommand(s, { kind: 'spawnEntity', name: 'orphan', parent: 999 });
@@ -74,7 +81,7 @@ describe('EditSession — spawnEntity INVALID_PARENT (no id consumed)', () => {
 
 describe('EditSession — destroyEntity', () => {
   it('removes the entity; inverse re-spawns an entity with the same name', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     spawn(s, 'A');
     const b = spawn(s, 'B');
     spawn(s, 'C');
@@ -95,7 +102,7 @@ describe('EditSession — destroyEntity', () => {
   });
 
   it('NO_SUCH_ENTITY for a non-existent target', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     const r = applyCommand(s, { kind: 'destroyEntity', entity: 42 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('NO_SUCH_ENTITY');
@@ -104,7 +111,7 @@ describe('EditSession — destroyEntity', () => {
 
 describe('EditSession — modifyComponent paths (setComponent / add / remove)', () => {
   it('setComponent merges patch and inverse restores only touched keys', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     const e = spawn(s, 'lit');
     const r = applyCommand(s, { kind: 'setComponent', entity: e, component: 'Transform', patch: { pos: [5, 0, 0] } });
     expect(r.ok).toBe(true);
@@ -118,7 +125,7 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
   });
 
   it('addComponent then removeComponent are mutual inverses', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     const e = spawn(s, 'e');
     const add = applyCommand(s, { kind: 'addComponent', entity: e, component: 'Visibility', value: { state: VisibilityStateValue.hidden } });
     expect(add.ok).toBe(true);
@@ -129,7 +136,7 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
   });
 
   it('addComponent on an existing component → COMPONENT_EXISTS', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     const e = spawn(s, 'e');
     applyCommand(s, { kind: 'addComponent', entity: e, component: 'Visibility', value: { state: VisibilityStateValue.hidden } });
     const r = applyCommand(s, { kind: 'addComponent', entity: e, component: 'Visibility', value: { state: VisibilityStateValue.hidden } });
@@ -140,7 +147,7 @@ describe('EditSession — modifyComponent paths (setComponent / add / remove)', 
 
 describe('EditSession — childrenOf / isSelfOrDescendant (world-derived hierarchy)', () => {
   function tree(): { s: EditSession; root: EntityHandle; a: EntityHandle; b: EntityHandle; a1: EntityHandle } {
-    const s = createEditSession();
+    const s = createTestSession();
     const root = spawn(s, 'root');
     const a = spawn(s, 'a', root);
     const b = spawn(s, 'b', root);
@@ -165,7 +172,7 @@ describe('EditSession — childrenOf / isSelfOrDescendant (world-derived hierarc
 
 describe('EditSession — transaction rollback', () => {
   it('rolls back already-applied sub-commands when a later one fails', () => {
-    const s = createEditSession();
+    const s = createTestSession();
     const root = spawn(s, 'root');
     const r = applyCommand(s, {
       kind: 'transaction',

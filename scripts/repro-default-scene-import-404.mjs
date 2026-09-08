@@ -85,6 +85,15 @@ async function waitForHost(getLog) {
 async function waitForRuntimeEvalChannel(page) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
+    // Single-realm (in-process) mode: eval channel lives on the main page.
+    try {
+      const mainReady = await page.evaluate(() => (
+        typeof globalThis.__forgeaxEval?.eval === 'function'
+      ));
+      if (mainReady) return page.mainFrame();
+    } catch { /* page may still be loading */ }
+
+    // Legacy iframe mode: eval channel lives in the /editor/ iframe.
     const frame = page.frames().find((candidate) => {
       try {
         return new URL(candidate.url()).pathname.startsWith('/editor/');
@@ -98,9 +107,7 @@ async function waitForRuntimeEvalChannel(page) {
           typeof globalThis.__forgeaxEval?.eval === 'function'
         ));
         if (ready) return frame;
-      } catch {
-        // The Runtime frame may be navigating during cold startup.
-      }
+      } catch { /* frame may be navigating during cold startup */ }
     }
     await sleep(250);
   }
@@ -155,15 +162,20 @@ async function main() {
   try {
     await waitForHost(() => log);
 
+    const browserChannel = process.env.FORGEAX_SMOKE_BROWSER_CHANNEL;
+    const headless = process.env.FORGEAX_BROWSER_HEADLESS !== '0';
     const browser = await chromium.launch({
-      headless: true,
+      headless,
+      ...(browserChannel ? { channel: browserChannel } : {}),
       args: [
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--enable-unsafe-webgpu',
-        '--enable-webgpu-developer-features',
-        '--use-gl=angle',
-        '--use-angle=swiftshader',
+        '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+        '--use-vulkan=swiftshader',
+        '--disable-vulkan-surface',
+        '--ignore-gpu-blocklist',
+        '--disable-gpu-driver-bug-workarounds',
       ],
     });
     const page = await browser.newPage();
@@ -203,7 +215,7 @@ async function main() {
     });
 
     await page.goto(`${HOST}/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.locator('.fx-dockwrap').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.locator('.fx-dockregion-DockShell').waitFor({ state: 'visible', timeout: 30_000 });
     await page.waitForFunction(async (guid) => {
       const response = await fetch('/pack-index.json');
       if (!response.ok) return false;
@@ -222,7 +234,7 @@ async function main() {
         return { ok: false, error: 'standalone eval channel unavailable' };
       }
       const result = channel.eval(`JSON.stringify((() => {
-        const meshes = query({ with: ['MeshRenderer'] });
+        const meshes = query({ with: ['MeshRenderer', 'MeshFilter'] });
         if (!meshes.ok) return { ok: false, error: meshes.error };
         const roots = query({ with: ['Name', 'Transform'] });
         if (!roots.ok) return { ok: false, error: roots.error };
@@ -232,11 +244,25 @@ async function main() {
         const foxRoot = roots.rows.find((row) => (
           typeof row.Name.value === 'string' && row.Name.value.startsWith('Fox')
         ));
-        const fox = meshes.rows.find((row) => row.MeshRenderer.materials.some((handle) => {
-          const material = gateway.resolveAsset(handle);
-          const texture = material.ok ? material.asset.values?.baseColorTexture : undefined;
+        const materialIsTextured = (material) => {
+          const texture = material?.values?.baseColorTexture;
           return texture && typeof texture === 'object' && typeof texture.texture === 'string';
-        }));
+        };
+        const fox = meshes.rows.find((row) => {
+          const rendererOverrides = row.MeshRenderer.materials;
+          const meshHandle = row.MeshFilter?.assetHandle?.raw;
+          const mesh = typeof meshHandle === 'number' ? gateway.resolveAsset(meshHandle) : undefined;
+          if (!mesh?.ok || mesh.asset.kind !== 'mesh') return false;
+          return mesh.asset.materialSlots.some((slot, slotIndex) => {
+            const override = rendererOverrides[slotIndex];
+            if (typeof override === 'number' && override !== 0) {
+              const material = gateway.resolveAsset(override);
+              if (material.ok) return materialIsTextured(material.asset);
+            }
+            return slot.defaultMaterial !== undefined
+              && materialIsTextured(gateway.lookupAsset(slot.defaultMaterial));
+          });
+        });
         return {
           ok: true,
           meshRendererCount: meshes.rows.length,

@@ -1,6 +1,7 @@
 import { assetIO } from '@forgeax/editor-core';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
-import { resolveViewportShaderManifestUrl } from './shader-manifest-url';
+import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import { prepareViewportShaderManifestUrl } from './shader-manifest-url';
 
 /**
  * Build the bundler inputs for an isolated preview world.
@@ -11,14 +12,16 @@ import { resolveViewportShaderManifestUrl } from './shader-manifest-url';
  * materials compile to no drawable pipeline while the particle simulation
  * still reports healthy. Standalone keeps the local game manifest.
  */
-export function createPreviewBundlerOptions() {
-  const binding = assetIO.getRuntimeBinding();
+export async function createPreviewBundlerOptions(
+  runtimeBinding: RuntimeAssetBinding | undefined = assetIO.getRuntimeBinding(),
+) {
+  const binding = runtimeBinding;
   const base = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
   const gameDirAbs = typeof __FORGEAX_GAME_DIR_ABS__ === 'string'
     ? __FORGEAX_GAME_DIR_ABS__
     : null;
   return {
-    shaderManifestUrl: resolveViewportShaderManifestUrl(
+    shaderManifestUrl: await prepareViewportShaderManifestUrl(
       base,
       binding !== undefined,
       gameDirAbs,

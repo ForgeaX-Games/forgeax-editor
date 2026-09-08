@@ -6,7 +6,6 @@
 // runtime, and teardown owns the returned disposer. Domain is structural because
 // every operation is registered into core's session-applier table.
 
-import { getRegisteredSystems, Update } from '@forgeax/engine-ecs';
 import type { Profiler } from '@forgeax/engine-profiler';
 import type { World } from '@forgeax/engine-ecs';
 import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type EditGateway, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
@@ -29,7 +28,21 @@ export interface ViewportSessionApplierDeps {
   readonly world: World;
   /** Late-bound because Play swaps the Gateway active World. */
   readonly activeWorld: () => World;
+  /** Cordis/plugin-owned system controls; no process-global system registry. */
+  readonly addSystem?: (world: World, name: string) => { ok: boolean; error?: unknown };
+  readonly removeSystem?: (world: World, name: string) => { ok: boolean; error?: unknown };
   readonly gateway?: EditGateway;
+}
+
+export interface CaptureProducerProvenance {
+  readonly backend: string;
+  readonly rendererIdentity: string;
+  readonly rendererGeneration: number;
+  readonly carrierGeneration: number;
+  readonly carrierId: string;
+  readonly carrierKind: string;
+  readonly runtimeId: string;
+  readonly runtimeGeneration: number;
 }
 
 const DEFAULT_CAPTURE_TIMEOUT_MS = 60_000;
@@ -51,6 +64,10 @@ function rhiCaptureFailure(error: unknown) {
     || sourceCode === 'capture-artifact-write-failed'
     || sourceCode === 'capture-timeout'
     || sourceCode === 'capture-cancelled'
+    || sourceCode === 'capture-provenance-unavailable'
+    || sourceCode === 'play-carrier-provenance-unavailable'
+    || sourceCode === 'play-carrier-capture-invalid'
+    || sourceCode === 'play-carrier-capture-stale'
     ? sourceCode
     : 'rhi-capture-failed';
   const details = {
@@ -76,6 +93,24 @@ function rhiCaptureFailure(error: unknown) {
       },
     },
   };
+}
+
+function captureWithProducerProvenance(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw { code: 'capture-provenance-unavailable', hint: 'captureFrame did not return a producer-owned artifact envelope' };
+  }
+  const artifact = value as Record<string, unknown>;
+  const provenance = artifact.provenance;
+  if (provenance === null || typeof provenance !== 'object' || Array.isArray(provenance)) {
+    throw { code: 'capture-provenance-unavailable', hint: 'captureFrame did not return producer-owned renderer and carrier provenance' };
+  }
+  const facts = provenance as Record<string, unknown>;
+  const strings = ['backend', 'rendererIdentity', 'carrierId', 'carrierKind', 'runtimeId'];
+  if (!strings.every((key) => typeof facts[key] === 'string' && (facts[key] as string).trim() !== '')
+    || !['rendererGeneration', 'carrierGeneration', 'runtimeGeneration'].every((key) => Number.isSafeInteger(facts[key]) && (facts[key] as number) > 0)) {
+    throw { code: 'capture-provenance-unavailable', hint: 'captureFrame provenance is incomplete or not producer-owned' };
+  }
+  return value;
 }
 
 function captureWithDeadline(capture: () => Promise<unknown>, timeoutMs: number): Promise<unknown> {
@@ -253,7 +288,9 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       }
       const timeoutMs = deps.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
       ctx?.operationRun?.reportProgress({ fraction: 0.05, stage: 'capturing' });
-      const completion = captureWithDeadline(() => deps.captureFrame!(frames), timeoutMs).catch(rhiCaptureFailure);
+      const completion = captureWithDeadline(() => deps.captureFrame!(frames), timeoutMs)
+        .then(captureWithProducerProvenance)
+        .catch(rhiCaptureFailure);
       return { ok: true as const, completion };
     }, 'Capture RHI Frame', {
       type: 'object',
@@ -311,9 +348,13 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
     register('addSystem', (op) => {
       const name = (op as { name?: unknown }).name;
       if (typeof name !== 'string' || name.trim() === '') return invalidArgs('name must be a non-empty system name');
-      const system = getRegisteredSystems().get(name);
-      if (!system) return invalidArgs(`unknown system: ${name}`);
-      deps.world.addSystem(Update, system).unwrap();
+      const result = deps.addSystem?.(deps.activeWorld(), name);
+      if (result === undefined) {
+        const active = deps.activeWorld().inspect().systems.some((entry) => entry.name === name);
+        if (!active) return invalidArgs(`system '${name}' is not installed by a World Plugin`);
+        return { ok: true };
+      }
+      if (!result.ok) return { ok: false as const, error: { code: 'operation-failed' as const, hint: String(result.error ?? `could not enable system '${name}'`) } };
       return { ok: true };
     }, 'Enable System', {
       type: 'object', properties: { name: { type: 'string' } }, required: ['name'],
@@ -321,7 +362,10 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
     register('removeSystem', (op) => {
       const name = (op as { name?: unknown }).name;
       if (typeof name !== 'string' || name.trim() === '') return invalidArgs('name must be a non-empty system name');
-      deps.world.removeSystem(Update, name).unwrap();
+      const result = deps.removeSystem?.(deps.activeWorld(), name);
+      if (result !== undefined && !result.ok) {
+        return { ok: false as const, error: { code: 'operation-failed' as const, hint: String(result.error ?? `could not disable system '${name}'`) } };
+      }
       return { ok: true };
     }, 'Disable System', {
       type: 'object', properties: { name: { type: 'string' } }, required: ['name'],

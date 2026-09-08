@@ -6,6 +6,7 @@ import {
   type MessagePortTransportClient,
   type ViewportRuntimeIdentity,
 } from '@forgeax/editor-product';
+import { broadcastAssetsChanged } from '@forgeax/editor-core';
 import {
   bindViewportRuntimeClient,
   openEditorAssetPage,
@@ -18,6 +19,7 @@ import {
 } from '@forgeax/editor-panels/operation-projection';
 import {
   VIEWPORT_RUNTIME_CONNECT,
+  VIEWPORT_RUNTIME_READY,
   VIEWPORT_PREVIEW_EXECUTOR_CONNECT,
   VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT,
   isViewportPreviewExecutorConnectedMessage,
@@ -26,6 +28,7 @@ import {
   isViewportRuntimeOpenAssetMessage,
   isViewportRuntimeReadyMessage,
   type ViewportRuntimeConnectMessage,
+  type ViewportRuntimeReadyMessage,
   type ViewportPreviewExecutorConnectMessage,
   type ViewportPreviewExecutorDisconnectMessage,
 } from './viewport-runtime-transport';
@@ -40,6 +43,50 @@ import {
 
 export type ViewportRuntimeFrameStatus = 'starting' | 'connecting' | 'ready' | 'faulted';
 
+export interface ViewportGenerationLeaseSnapshot {
+  readonly generation: number;
+  readonly state: 'barrier' | 'ready';
+  readonly projectionLease: string | null;
+  readonly actionLease: string | null;
+}
+
+export function createViewportGenerationLease(initialGeneration: number) {
+  if (!Number.isSafeInteger(initialGeneration) || initialGeneration < 1) throw new Error('generation must be positive');
+  let state: ViewportGenerationLeaseSnapshot = {
+    generation: initialGeneration,
+    state: 'barrier',
+    projectionLease: null,
+    actionLease: null,
+  };
+  return {
+    snapshot: (): ViewportGenerationLeaseSnapshot => state,
+    markColdReady: (next: { readonly projectionLease: string; readonly actionLease: string }): void => {
+      if (next.projectionLease.length === 0 || next.actionLease.length === 0) throw new Error('leases must be non-empty');
+      state = {
+        generation: state.generation + 1,
+        state: 'ready',
+        projectionLease: next.projectionLease,
+        actionLease: next.actionLease,
+      };
+    },
+    acceptAction: (actionLease: string):
+      | { readonly ok: true; readonly generation: number }
+      | { readonly ok: false; readonly error: { readonly code: string; readonly expected: string | null; readonly actual: string } } => {
+      if (state.state !== 'ready' || state.actionLease !== actionLease) {
+        return {
+          ok: false,
+          error: {
+            code: state.state === 'ready' ? 'version-control-stale-action-lease' : 'version-control-generation-barrier',
+            expected: state.actionLease,
+            actual: actionLease,
+          },
+        };
+      }
+      return { ok: true, generation: state.generation };
+    },
+  };
+}
+
 export interface ViewportRuntimeFrameProps {
   readonly src: string;
   readonly runtime: ViewportRuntimeIdentity;
@@ -48,6 +95,8 @@ export interface ViewportRuntimeFrameProps {
   readonly onClient?: (client: MessagePortTransportClient | null) => void;
   readonly onCapabilitiesChanged?: () => void;
   readonly onStatusChange?: (status: ViewportRuntimeFrameStatus) => void;
+  /** Rebind a cold successor in the existing carrier instead of creating a second GPU realm. */
+  readonly reuseCarrierOnGenerationChange?: boolean;
 }
 
 export function buildViewportRuntimeUrl(
@@ -80,6 +129,7 @@ export function ViewportRuntimeFrame({
   onClient,
   onCapabilitiesChanged,
   onStatusChange,
+  reuseCarrierOnGenerationChange = false,
 }: ViewportRuntimeFrameProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const clientRef = useRef<MessagePortTransportClient | null>(null);
@@ -97,6 +147,8 @@ export function ViewportRuntimeFrame({
     [src, runtime.runtimeId, runtime.runtimeGeneration, runtime.carrierId, runtime.carrierKind, hostOrigin],
   );
   const runtimeOrigin = useMemo(() => new URL(runtimeUrl).origin, [runtimeUrl]);
+  const carrierSrcRef = useRef(runtimeUrl);
+  const frameSrc = reuseCarrierOnGenerationChange ? carrierSrcRef.current : runtimeUrl;
 
   useEffect(() => onStatusChange?.(status), [onStatusChange, status]);
 
@@ -170,7 +222,10 @@ export function ViewportRuntimeFrame({
       if (isViewportRuntimeProjectionInvalidatedMessage(event.data)) {
         if (sameRuntime(runtime, event.data.runtime)) {
           if (event.data.projection === 'operations') refreshOperationProjectionRef.current?.();
-          else onCapabilitiesChanged?.();
+          else if (event.data.projection === 'capabilities') onCapabilitiesChanged?.();
+          else if (event.data.guid !== undefined) {
+            broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'changed', guid: event.data.guid });
+          }
         }
         return;
       }
@@ -268,18 +323,27 @@ export function ViewportRuntimeFrame({
     };
 
     window.addEventListener('message', onMessage);
+    if (reuseCarrierOnGenerationChange) {
+      // The successor Runtime is already booted inside this carrier. Ask its
+      // connection host to publish a fresh READY envelope so this effect can
+      // authenticate a new MessagePort without reloading another WebGPU realm.
+      frameRef.current?.contentWindow?.postMessage({
+        type: VIEWPORT_RUNTIME_READY,
+        runtime,
+      } satisfies ViewportRuntimeReadyMessage, runtimeOrigin);
+    }
     const unsubscribePreviewExecutor = subscribeShellPreviewExecutorLease(syncPreviewExecutor);
     return () => {
       window.removeEventListener('message', onMessage);
       unsubscribePreviewExecutor();
       disconnect();
     };
-  }, [onCapabilitiesChanged, onClient, runtime, runtimeOrigin]);
+  }, [onCapabilitiesChanged, onClient, reuseCarrierOnGenerationChange, runtime, runtimeOrigin]);
 
   return (
     <iframe
       ref={frameRef}
-      src={runtimeUrl}
+      src={frameSrc}
       title={title}
       className={className}
       data-viewport-runtime-status={status}

@@ -26,21 +26,24 @@ import { fileURLToPath } from 'node:url';
 import { readdirSync, readFileSync, realpathSync, createReadStream, statSync, unlinkSync, existsSync } from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
-import { pluginPack, type ForgeaXPackPlugin } from '@forgeax/engine-vite-plugin-pack';
+import {
+  pluginPack,
+  type ForgeaXPackPlugin,
+  type PluginDdcOptions,
+} from '@forgeax/engine-vite-plugin-pack';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 // Vite's config bundle externalizes package subpaths, leaving Node to load core's
 // source-only TypeScript export. Reach the same core helper relatively so Vite
 // folds it into the config bundle before Node evaluates that bundle.
 import {
-  expandPackRootsExcludingShaderSources,
   resolveGameAssetRoots,
   resolveGameCatalogRoots,
-} from '../../packages/core/src/asset-roots';
+} from '../../packages/core/src/asset-roots.ts';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
-import { targetProfileImporter } from '../../packages/engine/templates/game-default/assets/plugins/target-profile-importer';
+import { targetProfileImporter } from '../../packages/engine/templates/game-default/assets/plugins/target-profile-importer.ts';
 import {
   createParticleCodeNativeCooker,
   type ParticleCodeModuleSet,
@@ -59,28 +62,115 @@ export const ENGINE_EXECUTION_ISOLATION_HEADERS = Object.freeze({
 // identical SSOT list regardless of which Vite root loaded this preset.
 const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const EDIT_RUNTIME_DIR = resolve(EDITOR_ROOT, 'packages/edit-runtime');
+const HOST_DDC_ROOT = resolve(EDITOR_ROOT, '.forgeax', 'ddc');
+
+/** The project publication root is owned by the canonical game directory. */
+export function resolveEngineProjectDdcRoot(gameDirAbs: string): string {
+  return resolve(gameDirAbs, '.forgeax', 'ddc', 'v2');
+}
+
+/**
+ * Resolve the DDC roots for an Engine Vite carrier. The build cache is a
+ * disposable host accelerator; project publication belongs to the game. A
+ * Play carrier without an initial game uses the host root until its first
+ * explicit bind, which then switches the project root to that game.
+ */
+export function resolveEngineDdcOptions(gameDirAbs: string | null): PluginDdcOptions {
+  // Standalone hosts may inject a process-scoped publication root. Keeping
+  // this seam in the shared preset is important because the in-process chrome
+  // host does not pass an explicit `ddc` object like Edit/Play do.
+  const configuredBuildCacheRoot = process.env.FORGEAX_DDC_BUILD_CACHE_ROOT;
+  const configuredProjectDdcRoot = process.env.FORGEAX_DDC_PROJECT_ROOT;
+  return {
+    buildCacheRoot: configuredBuildCacheRoot
+      ?? resolve(HOST_DDC_ROOT, 'build-cache'),
+    projectDdcRoot: configuredProjectDdcRoot
+      ?? (gameDirAbs === null
+        ? resolve(HOST_DDC_ROOT, 'v2')
+        : resolveEngineProjectDdcRoot(gameDirAbs)),
+  };
+}
 
 // ── @forgeax packages to exclude from pre-bundle (SSOT-derived, no hand list) ──
-// SSOT = edit-runtime's node_modules/@forgeax (engine-* + editor-*), i.e. exactly
-// the @forgeax packages vite resolves natively. Excluding precisely that set:
+// SSOT = the first materialized @forgeax package scope: edit-runtime's local
+// graph for isolated installs, or Editor's root graph for Windows hoisted
+// installs. This is exactly the package family Vite resolves natively.
+// Excluding precisely that set:
 //   - Avoids the OOM: under preserveSymlinks:true a pre-bundle crawls the nested
 //     workspace symlink graph (packages/*/node_modules/@forgeax/* -> ../../../*)
 //     where one file via combinatorially-many symlink paths becomes a distinct
 //     module -> esbuild blows up; also keeps the editor singletons (editor-shared
 //     EditGateway / active sceneId) a single instance.
-//   - Stays resolvable: all are present here. We must NOT over-exclude with the
-//     full engine/packages tree — transitive-only packages absent from
+//   - Stays resolvable: all are present in the selected scope. We must NOT
+//     over-exclude with the full engine/packages tree — transitive-only packages absent from
 //     node_modules (engine-plugin / engine-debug-draw, imported by engine-app /
 //     engine-runtime) must stay pre-bundlable or native import analysis throws
 //     "Failed to resolve import". Hand-listing was the original drift bug.
-function forgeaxWorkspacePackages(): string[] {
+// A packaged host ships one flattened engine resource tree and has no Editor
+// source layout at all, so its only materialized scope is the staged engine
+// root the host declares through FORGEAX_ENGINE_RESOURCE_ROOT.
+function packagedEngineWorkspaceScopes(): string[] {
+  const packagedEngineRoot = process.env.FORGEAX_ENGINE_RESOURCE_ROOT;
+  return packagedEngineRoot ? [resolve(packagedEngineRoot, 'node_modules/@forgeax')] : [];
+}
+
+export function discoverForgeaxWorkspacePackages(
+  packageScopes: readonly string[] = [
+    ...packagedEngineWorkspaceScopes(),
+    resolve(EDIT_RUNTIME_DIR, 'node_modules/@forgeax'),
+    resolve(EDITOR_ROOT, 'node_modules/@forgeax'),
+  ],
+): string[] {
   const out = new Set<string>(['@forgeax/scene']);
-  try {
-    for (const name of readdirSync(resolve(EDIT_RUNTIME_DIR, 'node_modules/@forgeax'))) {
-      out.add(`@forgeax/${name}`);
-    }
-  } catch { /* node_modules not materialised yet — fall through */ }
+  let discovered = false;
+  for (const packageScope of packageScopes) {
+    try {
+      const names = readdirSync(packageScope);
+      if (!names.includes('engine-app') || !names.includes('engine-render')) continue;
+      for (const name of names) out.add(`@forgeax/${name}`);
+      discovered = true;
+      break;
+    } catch { /* try the next supported install layout */ }
+  }
+  if (!discovered) {
+    throw new Error(
+      'Engine Vite cannot discover the @forgeax workspace graph; run the workspace dependency setup before starting.',
+    );
+  }
   return [...out];
+}
+
+/**
+ * Keep Vite's dedupe anchor inside the consuming host's dependency graph.
+ *
+ * A worktree is normally nested below the primary checkout (for example
+ * `.worktrees/<name>`). Vite resolves a deduped package from `config.root` and
+ * then walks parent `node_modules` directories. If the host does not declare a
+ * transitive engine package directly, that walk can escape the worktree and
+ * land on the primary checkout's package — exactly the wrong producer when
+ * the two Engine pins expose different runtime exports. Packages that are not
+ * direct at the host root must therefore resolve from their importing engine
+ * package's nested graph instead of being globally deduped.
+ */
+function forgeaxHostDedupePackages(
+  workspacePackages: readonly string[],
+  packageRoots: readonly string[] | undefined,
+): string[] {
+  if (packageRoots === undefined || packageRoots.length === 0) return [...workspacePackages];
+  const hostPackageDirs = packageRoots.flatMap((root) => {
+    const abs = resolve(root);
+    return [
+      resolve(abs, '@forgeax'),
+      resolve(abs, 'node_modules/@forgeax'),
+      resolve(abs, 'packages/@forgeax'),
+    ];
+  });
+  return workspacePackages.filter((specifier) => {
+    const packageName = specifier.slice('@forgeax/'.length);
+    return hostPackageDirs.some((scopeDir) =>
+      existsSync(join(scopeDir, packageName, 'package.json')),
+    );
+  });
 }
 
 // ── game-source bare-import resolution (▶ Play, --game self-host) ─────────────
@@ -346,37 +436,6 @@ export function isEditorBuildOnlyPackPath(path: string): boolean {
   }
 }
 
-/**
- * Discover game-authored shader contracts from the same declared asset roots
- * that feed Pack. The `.shader.pack.json` suffix is the existing material
- * compiler convention: the package owns one MaterialAsset contract and points
- * at its sibling WGSL source. Keeping discovery at the shared host preset means
- * Edit, Play, and standalone builds cannot drift onto different shader sets.
- */
-export function discoverGameMaterialPackages(gameDirAbs: string): string[] {
-  const roots = resolveGameAssetRoots(gameDirAbs, { sharedBase: SHARED_BASE });
-  const packages = new Set<string>();
-  const walk = (current: string): void => {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
-      const path = join(current, entry.name);
-      if (entry.isDirectory()) {
-        walk(path);
-      } else if (entry.isFile() && entry.name.endsWith('.shader.pack.json')) {
-        packages.add(path);
-      }
-    }
-  };
-  for (const root of roots) walk(root.abs);
-  return [...packages].sort();
-}
-
 // ── orphan .meta.json auto-cleanup (editor-level policy) ────────────────────
 // The engine scanner (scan() step 5) is correctly fail-fast on orphan
 // .meta.json files. But at the editor level we prefer graceful recovery:
@@ -384,27 +443,6 @@ export function discoverGameMaterialPackages(gameDirAbs: string): string[] {
 // entire asset root. This runs synchronously before pluginPack registration
 // so there is no race with the async buildCatalog scan.
 const ORPHAN_CLEAN_BLACKLIST = new Set(['node_modules', '.git', 'dist', '.forgeax-asset-cache']);
-
-// ── shader-source pack-boundary policy (editor-level) ───────────────────────
-// SSOT implementation lives in @forgeax/editor-core/asset-roots
-// (expandPackRootsExcludingShaderSources) — shared with play-runtime's vite
-// config. A root containing build-only shader sidecars (`importer: 'shader'`,
-// e.g. the canonical template's assets/shaders/*.wgsl.meta.json) degrades the
-// engine catalog to EMPTY (fail-closed), so such roots are expanded to an
-// explicit file boundary here. Warn fail-loud when the expansion triggers:
-// new assets under an expanded root then need a server restart to be
-// discovered (dev-watcher trade-off, tracked as an engine feedback).
-function expandShaderTaintedRoots(roots: readonly string[]): string[] {
-  const expansion = expandPackRootsExcludingShaderSources(roots);
-  if (expansion.excludedShaderSidecars.length > 0) {
-    console.warn(
-      `[forgeax-editor] pack roots contain ${expansion.excludedShaderSidecars.length} build-only shader sidecar(s); ` +
-        'expanding to an explicit file boundary (engine catalog fails closed on shader sources). ' +
-        'New assets under an expanded root need a server restart to be discovered.',
-    );
-  }
-  return expansion.roots;
-}
 
 export function discoverParticleCodeModules(
   rootsOrProvider: readonly string[] | (() => readonly string[]),
@@ -458,6 +496,59 @@ export function discoverParticleCodeModules(
       return Reflect.get(target, property, receiver) as unknown;
     },
   });
+}
+
+/**
+ * Discover authored material packages whose sourceKey points at a WGSL module.
+ * Runtime-only material packs intentionally omit sourceKey and stay owned by
+ * pluginPack instead of entering the build-time shader compiler.
+ */
+export function discoverGameMaterialPackages(
+  rootsOrProvider: readonly string[] | (() => readonly string[]),
+): string[] {
+  const roots = typeof rootsOrProvider === 'function'
+    ? rootsOrProvider()
+    : rootsOrProvider;
+  const packages = new Set<string>();
+  const visit = (path: string): void => {
+    let stat: ReturnType<typeof statSync>;
+    try {
+      stat = statSync(path);
+    } catch {
+      return;
+    }
+    if (stat.isDirectory()) {
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        if (entry.isDirectory() && ORPHAN_CLEAN_BLACKLIST.has(entry.name)) continue;
+        if (entry.isDirectory() || entry.isFile()) visit(join(path, entry.name));
+      }
+      return;
+    }
+    if (!path.endsWith('.pack.json')) return;
+    try {
+      const pack = JSON.parse(readFileSync(path, 'utf8')) as {
+        kind?: unknown;
+        assets?: unknown;
+      };
+      if (pack.kind !== 'internal-text-package' || !Array.isArray(pack.assets)) return;
+      if (pack.assets.length !== 1) return;
+      const asset = pack.assets[0] as {
+        kind?: unknown;
+        sourceKey?: unknown;
+      };
+      if (
+        asset.kind === 'material'
+        && typeof asset.sourceKey === 'string'
+        && asset.sourceKey.endsWith('.wgsl')
+      ) {
+        packages.add(path);
+      }
+    } catch {
+      // pluginPack owns malformed runtime packs and reports their diagnostics.
+    }
+  };
+  for (const root of roots) visit(root);
+  return [...packages].sort();
 }
 
 function cleanOrphanMetas(roots: readonly string[]): void {
@@ -658,8 +749,10 @@ export interface EngineVitePresetOptions {
    * still serves /shaders/manifest.json for the empty scene.
    */
   gameDirAbs: string | null;
- /** Optional fixed binding for a standalone single-game dev host. */
- runtimeBinding?: RuntimeAssetBinding;
+  /** Host-selected DDC roots; fixed game hosts derive them from gameDirAbs. */
+  ddc?: PluginDdcOptions;
+  /** Optional fixed binding for a standalone single-game dev host. */
+  runtimeBinding?: RuntimeAssetBinding;
  /**
   * Optional Pack roots supplied by the active-game adapter. When omitted, a
   * fixed `gameDirAbs` gets the standard single-game roots. The producer owns
@@ -677,8 +770,6 @@ export interface EngineVitePresetOptions {
     readonly cleanOrphanMetas?: boolean;
    readonly runtimeBinding?: RuntimeAssetBinding;
   };
-  /** Resolve authored shader packages for the currently active game. */
-  materialPackagesProvider?: () => readonly string[];
   /** Importer classification for game source modules. */
   gameSource?: Omit<GameSourceResolutionOptions, 'gameDirAbs'>;
 }
@@ -694,16 +785,28 @@ export interface EngineVitePreset {
   catalogRoots: CatalogAssetRoot[];
 }
 
-// These dependencies enter through excluded native-ESM engine packages. Vite's
-// initial HTML crawl cannot discover them reliably, so every host consuming the
-// shared preset must seed the optimizer from the owning package. The parent >
-// dependency form is important: it resolves each Noble subpath from the
-// package that imports it instead of flattening the Bun isolated-linker graph.
-const ENGINE_OPTIMIZE_DEPS_INCLUDE = [
-  '@forgeax/engine-animation > @noble/hashes/blake3.js',
-  '@forgeax/engine-pack > @noble/hashes/sha2.js',
-  '@forgeax/engine-pack > @noble/hashes/utils.js',
-] as const;
+// Noble is imported by excluded native-ESM engine packages. Do not force these
+// subpaths into Vite's optimizer: the `parent > dependency` syntax resolves
+// from the optimizer root, not the Bun isolated workspace link that owns the
+// dependency, and causes the standalone host to exit with code 9. Native ESM
+// resolution is valid for these browser-safe modules and avoids that startup
+// failure.
+const RAPIER_COMPAT_PACKAGE = resolve(
+  EDITOR_ROOT,
+  'packages/engine/packages/physics-rapier3d/node_modules/@dimforge/rapier3d-compat',
+);
+const ENGINE_OPTIMIZE_DEPS_INCLUDE: readonly string[] = existsSync(
+  join(RAPIER_COMPAT_PACKAGE, 'package.json'),
+) ? [RAPIER_COMPAT_PACKAGE] : [];
+
+// Rapier is imported dynamically by Play after the initial Vite dependency
+// crawl. Keep both browser-native ESM entrypoints out of the optimizer so a
+// late physics import cannot mutate the dependency graph/hash and leave an
+// already-loaded engine chunk as an "Outdated Optimize Dep" 504.
+const ENGINE_OPTIMIZE_DEPS_EXCLUDE: readonly string[] = [
+  '@dimforge/rapier2d-compat',
+  '@dimforge/rapier3d-compat',
+];
 
 /** Shared opt-in gate for the RHI capture middleware across every host. */
 export function engineRhiDebugPlugins(
@@ -733,13 +836,16 @@ export function engineRhiDebugPlugins(
  */
 export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePreset {
   const { base, gameDirAbs, preserveSymlinks = true } = opts;
-  const wsPkgs = forgeaxWorkspacePackages();
+  const ddc = opts.ddc ?? resolveEngineDdcOptions(gameDirAbs);
+  const wsPkgs = discoverForgeaxWorkspacePackages();
+  const dedupePkgs = forgeaxHostDedupePackages(wsPkgs, opts.gameSource?.packageRoots);
   const nonRootBase = base !== '/' && base !== '';
   const selfHostPack = opts.pack !== undefined || gameDirAbs !== null;
   const catalogRoots = gameDirAbs
     ? resolveGameCatalogRoots(gameDirAbs, { sharedBase: SHARED_BASE })
     : [];
   const packRoots = opts.pack?.roots ?? (gameDirAbs ? gamePackRoots(gameDirAbs) : []);
+  const packRootsProvider = opts.pack?.rootsProvider ?? (() => packRoots);
   const packRefresh = opts.pack?.refresh ?? (() => {});
   const cleanPackMetas = opts.pack?.cleanOrphanMetas ?? gameDirAbs !== null;
 
@@ -755,10 +861,10 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
   let pack: ForgeaXPackPlugin | null = null;
   if (selfHostPack) {
     if (cleanPackMetas) cleanOrphanMetas(packRoots);
-   // Shader-source boundary (SSOT: editor-core/asset-roots), applied centrally
-   // so single-game, standalone, and host-supplied multi-game roots all get it;
-   // idempotent on already-expanded file roots.
-   const expandedPackRoots = expandShaderTaintedRoots(packRoots);
+   // Keep directory roots intact so newly-created packs remain visible to the
+   // dev watcher. The pack scanner receives `ignorePath` below and excludes
+   // build-only shader sidecars without sacrificing live file discovery.
+   const expandedPackRoots = packRoots;
     // Decode percent-encoded non-ASCII URLs before pluginPack's middleware runs,
     // so its urlToAbs Map (keyed by Unicode filenames) can match Chinese/CJK paths.
     // Without this, `req.url` arrives percent-encoded while the map key is decoded.
@@ -777,24 +883,28 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       ],
       cookers: [
         createParticleCodeNativeCooker(
-          discoverParticleCodeModules(opts.pack?.rootsProvider ?? (() => packRoots)),
+          discoverParticleCodeModules(packRootsProvider),
         ),
       ],
       // Edit/Standalone and Play both refresh through their host-specific
       // bridges. The default is intentionally no-op so a shared preset cannot
       // accidentally full-reload a live editor viewport.
       refresh: packRefresh,
-     ...(opts.runtimeBinding === undefined && opts.pack?.runtimeBinding === undefined
-       ? {}
-       : { runtimeBinding: opts.runtimeBinding ?? opts.pack?.runtimeBinding }),
+      // The Engine owns the standard Scene/Material/Mesh producers and the
+      // fixed-generation dependency scheduler. Every Editor Vite carrier opts
+      // into that one composition so dev and build cannot drift.
+      scriptablePack: {},
+      ddc,
+      ...(opts.runtimeBinding === undefined && opts.pack?.runtimeBinding === undefined
+        ? {}
+        : { runtimeBinding: opts.runtimeBinding ?? opts.pack?.runtimeBinding }),
     });
     plugins.push(pack as unknown as PluginOption);
   }
   plugins.push(
     silenceShaderEmitInServe(
       forgeaxShader({
-        materialPackages: gameDirAbs === null ? [] : discoverGameMaterialPackages(gameDirAbs),
-        materialPackagesProvider: opts.materialPackagesProvider,
+        materialPackagesProvider: () => discoverGameMaterialPackages(packRootsProvider),
       }) as unknown as Record<string, unknown>,
     ),
   );
@@ -824,7 +934,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       // vite pre-bundling — served as native ESM. SSOT-derived so it can't drift
       // the way the old hand list did; also keeps the editor singletons
       // (EditGateway / active sceneId in editor-shared) a single shared instance.
-      exclude: wsPkgs,
+      exclude: [...wsPkgs, ...ENGINE_OPTIMIZE_DEPS_EXCLUDE],
       // With the entire @forgeax family excluded, waiting for Vite's static
       // crawl only creates a startup wedge after a host-triggered restart.
       // This is shared by Play and Edit so they cannot drift on the same
@@ -836,7 +946,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       // react/react-dom dedupe (single React instance); the @forgeax family
       // dedupes off the same SSOT-derived list so every engine / editor package
       // resolves to one realpath even when reached via a nested symlink path.
-      dedupe: ['react', 'react-dom', ...wsPkgs],
+      dedupe: ['react', 'react-dom', ...dedupePkgs],
       preserveSymlinks,
     },
     // esnext: the entry uses top-level await (initSceneList / boot); vite's

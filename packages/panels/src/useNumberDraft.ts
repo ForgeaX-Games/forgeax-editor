@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { clampToField, type FieldSchema } from '@forgeax/editor-core';
+import { formatInspectorNumber } from './format-inspector-number';
 
 // Permissive intermediate typing states — "", "-", ".", "12.", "-0.5" — that a
 // user passes through on the way to a finished number. Full validity (NaN
@@ -64,8 +65,8 @@ export function useNumberDraft(display: number, fs: FieldSchema | undefined, onC
   }
 
   return {
-    value: draft !== null ? draft : String(display),
-    onFocus: () => { changed.current = false; setDraft(String(display)); },
+    value: draft !== null ? draft : formatInspectorNumber(display, fs),
+    onFocus: () => { changed.current = false; setDraft(formatInspectorNumber(display, fs)); },
     onChange: (e) => {
       if (DRAFT_RE.test(e.target.value)) {
         changed.current = true;

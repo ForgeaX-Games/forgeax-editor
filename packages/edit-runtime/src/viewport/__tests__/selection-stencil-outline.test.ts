@@ -103,6 +103,32 @@ describe('createSelectionStencilOutlinePool', () => {
     pool.dispose();
   });
 
+  it('clears drag-time ghosts without discarding reusable materials', () => {
+    const { world, entity } = sceneWithMesh();
+    const fake = fakeEditorFacade();
+    const pool = createSelectionStencilOutlinePool({
+      sceneWorld: () => world,
+      editorEngine: fake.facade,
+      getSelectionList: () => new Set<EntityHandle>([entity]),
+      getRenderableHandles: () => [entity],
+      isAuxVisible: () => true,
+      isEditMode: () => true,
+    });
+
+    pool.update();
+    expect(fake.spawned).toHaveLength(2);
+    expect(fake.allocations).toHaveLength(3);
+
+    pool.clear();
+    expect(fake.spawned).toHaveLength(0);
+    expect(fake.despawned).toHaveLength(2);
+
+    pool.update();
+    expect(fake.spawned).toHaveLength(2);
+    expect(fake.allocations).toHaveLength(3);
+    pool.dispose();
+  });
+
   it('copies the material slot for every submesh', () => {
     const { world, entity } = sceneWithMesh(2);
     const fake = fakeEditorFacade();
@@ -235,9 +261,13 @@ describe('createSelectionStencilOutlinePool', () => {
       expect(q[3]).toBeCloseTo(Math.SQRT1_2, 5);
       expect(call.data.pos as number[]).toEqual([1, 2, 3]);
     }
-    const shell = withQuat.find((call) => (call.data.scale as number[])[0]! > 1.01);
+    const writer = withQuat.find((call) => (call.data.scale as number[])[0]! <= 1.001);
+    const shell = withQuat.find((call) => (call.data.scale as number[])[0]! > 1.001);
+    expect(writer).toBeDefined();
     expect(shell).toBeDefined();
-    expect((shell!.data.scale as number[])[0]).toBeCloseTo(1.05, 5);
+    expect((writer!.data.scale as number[])[0]).toBeCloseTo(1, 5);
+    // Additive world-space expansion keeps outline thickness independent of scale.
+    expect((shell!.data.scale as number[])[0]).toBeCloseTo(1.10, 5);
     pool.dispose();
   });
 });

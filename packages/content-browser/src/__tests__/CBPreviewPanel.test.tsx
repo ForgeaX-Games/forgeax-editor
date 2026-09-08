@@ -13,18 +13,28 @@ const folder: CBFolder = {
 };
 const image: CBFile = {
   type: 'file', path: 'assets/logo.png', diskPath: '/projects/demo/assets/logo.png',
-  name: 'logo.png', family: 'image', assets: [], kindLabel: 'Image', isFavorite: false,
+  name: 'logo.png', family: 'image', assets: [], isAssetPackage: false, kindLabel: 'Image', isFavorite: false,
 };
 const sourceFile: CBFile = {
   type: 'file', path: 'assets/model.glb', diskPath: '/projects/demo/assets/model.glb',
   name: 'model.glb', family: 'model', assets: [{
     type: 'asset', guid: '11111111-1111-4111-8111-111111111111', kind: 'mesh', name: 'model.glb',
     payload: {}, packPath: 'assets/model.pack.json', packIndex: 0, refs: [],
-}], kindLabel: 'Model', isFavorite: false,
+}], isAssetPackage: true, kindLabel: 'Asset Package', isFavorite: false,
+};
+const packFile: CBFile = {
+  type: 'file', path: 'assets/materials.pack.json', diskPath: '/projects/demo/assets/materials.pack.json',
+  name: 'materials.pack.json', family: 'pack', assets: [{
+    type: 'asset', guid: '33333333-3333-4333-8333-333333333333', kind: 'material', name: 'Metal',
+    payload: {}, packPath: 'assets/materials.pack.json', packIndex: 0, refs: [],
+  }, {
+    type: 'asset', guid: '44444444-4444-4444-8444-444444444444', kind: 'material', name: 'Wood',
+    payload: {}, packPath: 'assets/materials.pack.json', packIndex: 1, refs: [],
+  }], isAssetPackage: true, kindLabel: 'Asset Pack', isFavorite: false,
 };
 const textFile: CBFile = {
   type: 'file', path: 'assets/readme.md', diskPath: '/projects/demo/assets/readme.md',
-  name: 'readme.md', family: 'doc', assets: [], kindLabel: 'Document', isFavorite: false,
+  name: 'readme.md', family: 'doc', assets: [], isAssetPackage: false, kindLabel: 'Document', isFavorite: false,
 };
 const asset: CBAsset = {
   type: 'asset', guid: '22222222-2222-4222-8222-222222222222', kind: 'material', name: 'Metal',
@@ -79,6 +89,16 @@ describe('Content Browser preview panel', () => {
     renderPreview(sourceFile);
     expect(container.textContent).toContain('model.glb');
     expect(container.querySelector('.cb-preview-asset-row')).not.toBeNull();
+    expect(container.querySelector('.cb-preview-mode-bar')).toBeNull();
+
+    renderPreview(packFile);
+    expect(container.querySelector('.cb-preview-mode-bar')).not.toBeNull();
+    expect(container.textContent).toContain('Assets');
+    act(() => {
+      container.querySelector<HTMLButtonElement>('.cb-preview-mode-btn:last-child')?.click();
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(container.textContent).toContain('preview text');
 
     renderPreview(textFile);
     await act(async () => { await Promise.resolve(); });

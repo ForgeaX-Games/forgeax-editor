@@ -37,6 +37,9 @@ export interface CBAsset extends CBItem {
   sourcePath?: string;
   /** Producer-issued output identity; never inferred from a path or index. */
   sourceKey?: string;
+  /** Producer-owned membership axis (`imported-output` vs `internal-asset`).
+   *  Drives resource-group folding by DATA, never by file extension/family. */
+  subject?: import('@forgeax/engine-types').CatalogSubject;
   /** Effective imported output revision. */
   revision?: string;
   /** Meta CAS revision; distinct from the effective Catalog payload revision. */
@@ -104,6 +107,11 @@ export interface CBFile extends CBItem {
   family: CBFileFamily;
   /** Assets declared by this file when the registry can map them back. */
   assets: CBAsset[];
+  /** True when this is an external asset package (a source file — glb/fbx/etc —
+   *  that imported catalog assets). These get the resource-group affordance
+   *  (badge expand → lane). Internal `.pack.json` / scene manifests are NOT
+   *  packages: they are plain, non-expandable files. */
+  isAssetPackage: boolean;
   /** Short display text in the prototype's family badge position. */
   kindLabel: string;
   isFavorite: boolean;
@@ -131,6 +139,19 @@ export interface CBFilter {
   label: string;
   /** PascalCase lucide-react icon name (resolved by the panel menu renderer). */
   icon?: string;
+  active: boolean;
+}
+
+/** Asset-kind filter chip (mesh/material/texture/…). A second filter axis below
+ *  the file-family chips; selecting any switches the grid to an asset-centric
+ *  flat view of the matching catalog assets. */
+export interface CBKindFilter {
+  /** Stable id, `kind:${kind}`. */
+  id: string;
+  kind: string;
+  label: string;
+  /** ContentBrowserIcon name for the kind. */
+  icon: string;
   active: boolean;
 }
 

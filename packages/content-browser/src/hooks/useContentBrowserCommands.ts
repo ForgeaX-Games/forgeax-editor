@@ -32,6 +32,7 @@ export interface CBCommandsDeps {
   createFolderInCurrentPath: () => void;
   createAssetInCurrentPath: (spec: CreatableAssetSpec) => void;
   handleImport: () => void;
+  handleImportFolder: () => void;
   clearKindFilters: () => void;
   setFavoritesOnly: Dispatch<SetStateAction<boolean>>;
   setThumbnailSize: Dispatch<SetStateAction<number>>;
@@ -126,7 +127,7 @@ export function registerContentBrowserScopedCommands(
 export function useContentBrowserCommands(deps: CBCommandsDeps): void {
   const {
     host, t, loading, viewMode, filter, sort, nav, favoritesOnly, thumbnailSize,
-    reload, createFolderInCurrentPath, createAssetInCurrentPath, handleImport,
+    reload, createFolderInCurrentPath, createAssetInCurrentPath, handleImport, handleImportFolder,
     clearKindFilters, setFavoritesOnly, setThumbnailSize,
     getFocusedSourceTreeItem, getFocusedGridItem, renameItem, deleteItem, selectAllGridItems,
   } = deps;
@@ -208,6 +209,11 @@ export function useContentBrowserCommands(deps: CBCommandsDeps): void {
         id: 'contentBrowser.import',
         title: t('editor.contentBrowser.actions.import'),
         execute: () => { handleImport(); return { status: 'completed' as const }; },
+      }),
+      host.commands.register({
+        id: 'contentBrowser.importFolder',
+        title: t('editor.contentBrowser.actions.importFolder'),
+        execute: () => { handleImportFolder(); return { status: 'completed' as const }; },
       }),
       host.commands.register({
         id: 'contentBrowser.saveAll',

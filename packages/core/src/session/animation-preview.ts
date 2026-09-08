@@ -17,12 +17,22 @@
 // meta.animation long-term SSOT; editor overlay interim), never a hardcoded
 // field list here.
 
-import { resolveComponent } from '@forgeax/engine-ecs';
 import type { SessionApplierCtx } from '../io/appliers';
-import { getComponentSchema } from '../scene/schema';
 
 /** The engine write face a session applier receives (facade proxy). */
 export type AnimationPreviewEngine = NonNullable<SessionApplierCtx['engine']>;
+
+function runtimeFieldsOf(engine: AnimationPreviewEngine, component: string): readonly string[] | undefined {
+  const definition = engine.componentDefinition(component) as {
+    policy?: { meta?: Record<string, unknown> };
+  } | undefined;
+  const meta = definition?.policy?.meta;
+  const animation = (meta?.animation ?? (meta?.editor as { animation?: unknown } | undefined)?.animation) as
+    { runtimeFields?: unknown } | undefined;
+  return Array.isArray(animation?.runtimeFields)
+    ? animation.runtimeFields.filter((field): field is string => typeof field === 'string')
+    : undefined;
+}
 
 interface PreviewSnapshot {
   readonly component: string;
@@ -50,9 +60,9 @@ export function snapshotAnimationPreview(
   component = 'AnimationPlayer',
 ): boolean {
   if (_snapshots.has(entity)) return false;
-  const runtimeFields = getComponentSchema(component)?.animation?.runtimeFields;
+  const runtimeFields = runtimeFieldsOf(engine, component);
   if (runtimeFields === undefined || runtimeFields.length === 0) return false;
-  const token = resolveComponent(component);
+  const token = engine.resolveComponent(component);
   if (token === undefined) return false;
   const cur = engine.get(entity, token) as { ok: boolean; value?: Record<string, unknown> };
   if (!cur.ok || cur.value === undefined) return false;
@@ -71,7 +81,7 @@ export function restoreAnimationPreview(engine: AnimationPreviewEngine, entity: 
   const snap = _snapshots.get(entity);
   if (snap === undefined) return false;
   _snapshots.delete(entity);
-  const token = resolveComponent(snap.component);
+  const token = engine.resolveComponent(snap.component);
   if (token === undefined) return false;
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(snap.data)) data[key] = copyFieldValue(value);

@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { authoringCapabilityForAssetKind } from '@forgeax/engine-types';
 import { buildAssetContextMenu } from '../CBContextMenu';
 import type { CBAsset, CBSelection } from '../types';
-import type { EntityHandle } from '@forgeax/editor-core';
+import { bindViewportRuntimeClient, type EntityHandle } from '@forgeax/editor-core';
 
 function asset(kind: string, authoring = authoringCapabilityForAssetKind(kind)): CBAsset {
   return {
@@ -22,6 +22,13 @@ function addToSceneItem(target: CBAsset) {
   const selection: CBSelection = { items: [target], primary: target };
   return buildAssetContextMenu(target, selection, [target]).find((item) => item.id === 'add-to-scene');
 }
+
+let disposeRuntime: (() => void) | undefined;
+
+afterEach(() => {
+  disposeRuntime?.();
+  disposeRuntime = undefined;
+});
 
 describe('Content Browser placement capability projection', () => {
   it('disables Add to Scene when the producer refuses placement', () => {
@@ -45,11 +52,61 @@ describe('Content Browser placement capability projection', () => {
     expect(addToSceneItem(target)?.disabled).toBe(true);
   });
 
-  it('captures the entity before asset selection clears the entity domain', () => {
+  it('assign uses the captured entity when provided', () => {
     const target = asset('mesh');
     const selection: CBSelection = { items: [target], primary: target };
     const assign = buildAssetContextMenu(target, selection, [target], undefined, 42 as EntityHandle)
       .find((item) => item.id === 'assign');
     expect(assign).toBeDefined();
+  });
+
+  it('routes Add to Scene through the active Runtime operation', async () => {
+    const requests: { method: string; params: unknown }[] = [];
+    disposeRuntime = bindViewportRuntimeClient(
+      {
+        version: 'viewport-runtime/v1',
+        runtimeId: 'placement-test',
+        runtimeGeneration: 1,
+        carrierId: 'placement-test-carrier',
+        carrierKind: 'iframe',
+      } as never,
+      {
+        request: async (request: { method: string; params: unknown; id: string; correlationId: string }) => {
+          requests.push({ method: request.method, params: request.params });
+          return {
+            jsonrpc: '2.0',
+            version: 'editor-transport/v1',
+            id: request.id,
+            correlationId: request.correlationId,
+            result: request.method === 'run.wait'
+              ? { status: 'succeeded' }
+              : { status: 'running' },
+          };
+        },
+        dispose() {},
+      } as never,
+    );
+
+    const target = asset('scene');
+    const item = addToSceneItem(target);
+    expect(item).toBeDefined();
+    item!.action();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(requests[0]).toMatchObject({
+      method: 'run.dispatch',
+      params: {
+        operationId: 'editor.addSceneAssetToScene',
+        input: {
+          sceneGuid: target.guid,
+          name: target.name,
+          requestId: expect.any(String),
+        },
+      },
+    });
+    expect(requests[1]).toMatchObject({
+      method: 'run.wait',
+      params: { requestId: expect.any(String) },
+    });
   });
 });

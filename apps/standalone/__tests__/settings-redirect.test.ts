@@ -4,6 +4,7 @@
 // for the dockable ep:settings panel — and ONLY for the settings overlay.
 
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   installSettingsPanelRedirect,
   SETTINGS_PANEL_ID,
@@ -40,6 +41,16 @@ function makeBus(): PanelOpenBusLike & { opened: string[]; closed: string[] } {
 }
 
 describe('standalone settings-redirect', () => {
+  it('reads dock visibility from the public App Shell contract', () => {
+    const source = readFileSync(new URL('../main.tsx', import.meta.url), 'utf8');
+    const packageJson = JSON.parse(
+      readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    expect(source).toContain("import { isDockPanelVisible } from '@forgeax/app-shell/dock';");
+    expect(source).not.toContain("@forgeax/interface/components/DockShell/DockRegion");
+    expect(packageJson.dependencies?.['@forgeax/app-shell']).toBe('0.65.1');
+  });
+
   it('redirects openOverlay("settings") to the ep:settings dock panel', () => {
     const store = makeStore();
     const bus = makeBus();

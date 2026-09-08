@@ -130,3 +130,36 @@ export function checkPathNotJailbreak(path: unknown): PathJailbreakCheck {
   }
   return { ok: true };
 }
+
+/** Validate a canonical game-relative import destination before host resolution. */
+export function validateImportDestinationPath(raw: unknown): BasenameValidation {
+  const checked = checkPathNotJailbreak(raw);
+  if (!checked.ok) return checked;
+  const path = raw as string;
+  if (path.startsWith('/') || path.startsWith('//') || /^[A-Za-z]:\//.test(path)) {
+    return { ok: false, hint: 'import destination must be a game-relative path' };
+  }
+  const segments = path.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.')) {
+    return { ok: false, hint: 'import destination must use canonical "/"-separated segments' };
+  }
+  return { ok: true, name: path };
+}
+
+/** Validate semantic FBX source-relative paths; leading ../ is legitimate here. */
+export function validateImportSourceRelativePath(raw: unknown): BasenameValidation {
+  const checked = checkPathNotJailbreak(raw);
+  if (!checked.ok) return checked;
+  const path = raw as string;
+  if (path.startsWith('/') || path.startsWith('//') || /^[A-Za-z]:\//.test(path)) {
+    return { ok: false, hint: 'FBX dependency relativePath must not be absolute' };
+  }
+  const segments = path.split('/');
+  if (segments.some((segment) => segment === '')) {
+    return { ok: false, hint: 'FBX dependency relativePath must use canonical "/"-separated segments' };
+  }
+  if (segments.every((segment) => segment === '.')) {
+    return { ok: false, hint: 'FBX dependency relativePath must name a file' };
+  }
+  return { ok: true, name: path };
+}

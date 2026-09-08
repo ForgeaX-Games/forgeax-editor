@@ -21,6 +21,9 @@ export interface ProjectedGatewayAction {
   readonly schema?: Record<string, unknown>;
   readonly capability: 'delete' | 'write' | 'other';
   readonly surface: 'both';
+  readonly confirmation?: OpDescriptor['confirmation'];
+  readonly operationRun?: OpDescriptor['operationRun'];
+  readonly recoveryActions?: readonly string[];
   readonly run: (args: Record<string, unknown>) =>
     | { status: 'completed' | 'rejected'; reason?: string }
     | Promise<{ status: 'completed' | 'rejected'; reason?: string }>;
@@ -50,6 +53,9 @@ export function projectGatewayActions(source: GatewayActionSource): readonly Pro
     title: descriptor.title ?? descriptor.id,
     description: `Dispatch editor operation ${descriptor.id}.`,
     ...(descriptor.argsSchema ? { schema: descriptor.argsSchema as unknown as Record<string, unknown> } : {}),
+    ...(descriptor.confirmation === undefined ? {} : { confirmation: descriptor.confirmation }),
+    ...(descriptor.operationRun === undefined ? {} : { operationRun: descriptor.operationRun }),
+    ...(descriptor.recoveryActions === undefined ? {} : { recoveryActions: descriptor.recoveryActions }),
     capability: capabilityFor(descriptor),
     surface: 'both',
     run: (args: Record<string, unknown>) => {

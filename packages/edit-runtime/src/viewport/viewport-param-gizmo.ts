@@ -1,30 +1,31 @@
 // viewport-param-gizmo — parameter gizmos (design §3).
 //
-// Visualizes a selected Camera's frustum as a dotted world-space wireframe
-// (non-interactive). Built from a reused cube-
-// dot pool; rebuilt cheaply via placeDots (only spawns when the dot count
-// changes), so orbiting just re-sets transforms.
+// Visualizes a selected Camera's frustum as frame-local editor chrome. The
+// cached dots are available both to the compatibility DebugDraw path and to
+// the editor's filled scene-after RenderFeature.
 //
-// M4 (w20): param-gizmo assets + entities live in the editorWorld
-// (editorEngine). Component reads still go through gateway.activeWorld
-// (sceneWorld) via the caller-supplied getSelectionComponents helper.
+// No editorWorld entity is created for this visual aid. Component reads still
+// go through gateway.activeWorld (sceneWorld) via the caller-supplied helpers.
 
-import { Transform } from '@forgeax/engine-scene';
-import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
-import type { EngineFacade } from '@forgeax/editor-core';
+import type { EntityHandle } from '@forgeax/engine-ecs';
+import type { Vec3 as EngineVec3 } from '@forgeax/engine-math';
 
 import type { Vec3 } from './viewport-ray';
 import { num } from './viewport-ray';
-import { cameraGizmoPoints } from './viewport-gizmo-geometry';
-import { createOverlayMaterial } from './viewport-gizmo';
+import { cameraGizmoPoints, cameraGizmoSegments } from './viewport-gizmo-geometry';
+import type { GizmoOverlayVertex } from './gizmo-overlay-geometry';
+import { appendOverlayBox, overlayColorFromSrgb } from './gizmo-overlay-geometry';
+import type { GizmoOverlayDraw } from './viewport-gizmo';
 import type { EditorTransform } from './viewport-entity-read';
 
+const PARAM_GIZMO_COLOR_SRGB: [number, number, number, number] = [1.0, 0.82, 0.25, 1];
+const PARAM_GIZMO_COLOR_LINEAR = overlayColorFromSrgb([1.0, 0.82, 0.25]);
+
+function toEngineVec3(value: Vec3): EngineVec3 {
+  return value as unknown as EngineVec3;
+}
+
 export interface ParamGizmoDeps {
-  /** editorWorld facade — param-gizmo entities/assets are minted here. */
-  editorEngine: EngineFacade;
-  /** Spawn a HANDLE_CUBE mesh entity — shared with the interactive gizmo pool
-   *  (both are dot-clouds of the same primitive; keep one materialisation). */
-  spawnHandleCube(material: Handle<'MaterialAsset', 'shared'>): EntityHandle;
   /** Selected entity handle (null when nothing is selected). */
   getSelection(): EntityHandle | null;
   /** Component-name → POD map for the selected entity (empty when no sel or
@@ -35,65 +36,86 @@ export interface ParamGizmoDeps {
   getSelectionWorldTransform(): EditorTransform | undefined;
   /** Aux-entity visibility gate (w23, D-5). */
   isAuxVisible(): boolean;
-  /** View scale in world units at a given point (dot size ∝ view scale, so
-   *  dots keep a constant on-screen size in both projections and while flying). */
+  /** View scale in world units at a given point (frustum size ∝ view scale). */
   getViewScale(anchor: Vec3): number;
-  /** Current camera aspect (needed by cameraGizmoPoints for frustum shape). */
+  /** Current camera aspect (needed by cameraGizmoSegments for frustum shape). */
   getAspect(): number;
 }
 
 export interface ParamGizmo {
   update(): void;
+  /** Emit the cached frustum into the post-scene DebugDraw overlay. */
+  drawOverlay(draw: GizmoOverlayDraw): void;
+  /** Return the cached solid dot geometry for the scene-after RenderFeature. */
+  getOverlayVertices(): GizmoOverlayVertex[];
   dispose(): void;
 }
 
 /** Build the parameter-gizmo pool (camera frustum). */
 export function createParamGizmo({
-  editorEngine, spawnHandleCube, getSelection, getSelectionComponents,
+  getSelection, getSelectionComponents,
   getSelectionWorldTransform, isAuxVisible, getViewScale, getAspect,
 }: ParamGizmoDeps): ParamGizmo {
-  let paramEnts: EntityHandle[] = [];
-  let paramMat: Handle<'MaterialAsset', 'shared'> | null = null;
+  let segments: Array<readonly [Vec3, Vec3]> = [];
+  let points: Vec3[] = [];
+  let dotSize = 0;
 
-  function ensureParamMat(): Handle<'MaterialAsset', 'shared'> {
-    if (!paramMat) paramMat = createOverlayMaterial(editorEngine, [1.0, 0.82, 0.25], 4002);
-    return paramMat;
-  }
-
-  function despawnParam(): void {
-    for (const e of paramEnts) { try { editorEngine.despawn(e); } catch { /* gone */ } }
-    paramEnts = [];
-  }
-
-  function placeDots(points: Vec3[], size: number): void {
-    if (points.length === 0) { despawnParam(); return; }
-    const mat = ensureParamMat();
-    while (paramEnts.length < points.length) paramEnts.push(spawnHandleCube(mat));
-    while (paramEnts.length > points.length) {
-      const e = paramEnts.pop()!; try { editorEngine.despawn(e); } catch { /* gone */ }
-    }
-    points.forEach((p, i) => editorEngine.set(paramEnts[i]!, Transform, {
-      pos: [p[0], p[1], p[2]], scale: [size, size, size],
-    }));
+  function clear(): void {
+    segments = [];
+    points = [];
+    dotSize = 0;
   }
 
   function update(): void {
-    if (!isAuxVisible()) { despawnParam(); return; }
+    if (!isAuxVisible()) {
+      clear();
+      return;
+    }
     const sel = getSelection();
     // M7-a (AC-15): the selected entity's components come from the world (SSOT),
     // not the deleted doc.entities mirror. Empty map → entity gone → hide dots.
     const comps = sel !== null ? getSelectionComponents() : undefined;
-    if (!comps || Object.keys(comps).length === 0) { despawnParam(); return; }
+    if (!comps || Object.keys(comps).length === 0) {
+      clear();
+      return;
+    }
     const t = getSelectionWorldTransform();
     const center: Vec3 = [num(t?.x, 0), num(t?.y, 0), num(t?.z, 0)];
     const cam = comps.Camera as Record<string, unknown> | undefined;
-    // The wireframe POINT SETS are pure geometry (viewport-gizmo-geometry.ts);
-    // the engine dot-pool placement (placeDots) is the only side-effecting edge.
+    if (!cam) {
+      clear();
+      return;
+    }
+
+    // Camera.fov is engine-native radians. Only Transform Euler overlays use
+    // degrees; cameraGizmoSegments preserves the camera's native units.
     const scale = getViewScale(center);
-    const pts: Vec3[] = [];
-    if (cam) pts.push(...cameraGizmoPoints(cam, center, t, scale, getAspect()));
-    placeDots(pts, Math.max(0.05, scale * 0.006));
+    points = cameraGizmoPoints(cam, center, t, scale, getAspect());
+    segments = cameraGizmoSegments(cam, center, t, scale, getAspect());
+    dotSize = Math.max(0.05, scale * 0.006);
   }
 
-  return { update, dispose: despawnParam };
+  function drawOverlay(draw: GizmoOverlayDraw): void {
+    if (!isAuxVisible()) return;
+    for (const [from, to] of segments) {
+      draw.line(toEngineVec3(from), toEngineVec3(to), PARAM_GIZMO_COLOR_SRGB);
+    }
+  }
+
+  function getOverlayVertices(): GizmoOverlayVertex[] {
+    if (!isAuxVisible() || points.length === 0) return [];
+    const out: GizmoOverlayVertex[] = [];
+    for (const point of points) {
+      appendOverlayBox(
+        out,
+        point,
+        [dotSize, dotSize, dotSize],
+        [0, 0, 0, 1],
+        PARAM_GIZMO_COLOR_LINEAR,
+      );
+    }
+    return out;
+  }
+
+  return { update, drawOverlay, getOverlayVertices, dispose: clear };
 }

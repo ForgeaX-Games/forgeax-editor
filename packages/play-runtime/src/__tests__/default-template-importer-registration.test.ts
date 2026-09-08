@@ -18,4 +18,11 @@ describe('Play catalog producer registration', () => {
     expect(source).not.toContain('FORGEAX_PREVIEW_GAMES_DIR');
     expect(source).not.toContain('FORGEAX_PREVIEW_GAME_SLUGS');
   });
+
+  test('injects an explicit build cache for the dynamic DDC bind seam', () => {
+    expect(source).toContain('resolveDdcBuildCacheRoot');
+    expect(source).toContain('PLAY_RUNTIME_DDC_BUILD_CACHE_ROOT');
+    expect(source).toContain('PLAY_RUNTIME_DDC_PROJECT_ROOT');
+    expect(source).toContain('ddc: PLAY_RUNTIME_DDC_OPTIONS');
+  });
 });

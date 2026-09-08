@@ -11,7 +11,9 @@ import { describe, it, expect, beforeEach } from 'bun:test';
 import { Transform } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
+import { createEditSession } from '../session/document';
 import type { EditorOp } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // M3 (I1): the spawn applier writes cmd._id back as the real engine handle.
 function seedEntity(bus: EditGateway): EntityHandle {
@@ -28,7 +30,11 @@ const move = (entity: EntityHandle, x: number): EditorOp =>
 
 describe('EditGateway.transientMode (w27, AC-11)', () => {
   let bus: EditGateway;
-  beforeEach(() => { bus = new EditGateway(); });
+  beforeEach(() => {
+    const session = createEditSession();
+    session.world = createCoreTestWorld();
+    bus = new EditGateway(session);
+  });
 
   it('defaults to false (normal committing mode)', () => {
     expect(bus.transientMode).toBe(false);

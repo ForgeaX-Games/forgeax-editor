@@ -59,5 +59,44 @@
       "operation": "schema-drift",
       "expectedCode": "portfolio-schema-version"
     }
+  ],
+  "baselineCases": [
+    {
+      "name": "baseline evidence is required",
+      "operation": "remove-baseline",
+      "expectedCode": "baseline-evidence-missing"
+    },
+    {
+      "name": "baseline schema is pinned",
+      "operation": "change-schema",
+      "expectedCode": "baseline-evidence-schema-version"
+    },
+    {
+      "name": "baseline top index keeps all discovery fields",
+      "operation": "drop-field",
+      "expectedCode": "baseline-evidence-fields-invalid"
+    }
+  ],
+  "portabilityCases": [
+    {
+      "name": "portability check is discoverable",
+      "operation": "remove-portability-check",
+      "expectedCode": "portability-check-missing"
+    },
+    {
+      "name": "portability keeps three platforms",
+      "operation": "remove-platform",
+      "expectedCode": "portability-platforms-invalid"
+    },
+    {
+      "name": "portability keeps scheduled entry",
+      "operation": "remove-scheduled-entry",
+      "expectedCode": "portability-entries-invalid"
+    },
+    {
+      "name": "portability stays non-required",
+      "operation": "promote-required",
+      "expectedCode": "portability-required-invalid"
+    }
   ]
 }

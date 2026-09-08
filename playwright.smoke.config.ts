@@ -10,11 +10,30 @@
 
 import { defineConfig } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const createGameMode = process.env.FORGEAX_SMOKE_CREATE_GAME === '1';
+// The browser runner and game backend remain on the pinned Bun contract. On
+// Linux heavy CI, Vite itself runs under the provisioned Node 22 instead:
+// Bun's Node worker compatibility currently tears down Comlink's font-importer
+// worker during the game-default catalog scan. Keeping this opt-in preserves
+// the normal local Bun path while making the CI renderer exercise the same
+// product with the runtime that owns the Vite/worker boundary.
+const useNodeViteRuntime = process.env.FORGEAX_SMOKE_VITE_RUNTIME === 'node';
+const nodeExecutable = process.env.FORGEAX_SMOKE_NODE_BIN ?? 'node';
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+const viteBin = resolve(root, 'node_modules/vite/bin/vite.js');
+function viteCommand(configPath: string, args = ''): string {
+  if (!useNodeViteRuntime) return `bun x vite${args}`;
+  return `${nodeExecutable} ${shellQuote(viteBin)} --config ${shellQuote(configPath)}${args}`;
+}
+
 const requestedGame = process.env.FORGEAX_SMOKE_GAME ?? (createGameMode ? 'game-default' : 'sample');
 const gameSources: Record<string, string> = {
   'game-default': resolve(root, 'packages/engine/templates/game-default'),
@@ -53,8 +72,43 @@ if (createGameMode && inheritedCreateGameDir === undefined) {
   mkdirSync(gameDir, { recursive: true });
   mkdirSync(join(gameDir, 'assets'), { recursive: true });
   cpSync(resolve(sourceDir, 'package.json'), join(gameDir, 'package.json'));
-} else if (!createGameMode) {
-  cpSync(sourceDir, gameDir, { recursive: true });
+}
+if (!createGameMode) {
+  cpSync(sourceDir, gameDir, {
+    recursive: true,
+    // Never copy a stale per-game install from a contributor checkout; it can
+    // hide the workspace packages required by the ScriptablePack worker.
+    //
+    // `.forgeax` is skipped for a different reason: it is gitignored DDC build
+    // cache whose `v2/staging/<hash>-<uuid>/` entries are transient — the pack
+    // producer creates and removes them while the copy walks. cpSync stats each
+    // entry it enumerated, so an entry deleted mid-walk aborts the whole copy
+    // with `ENOENT … lstat …/v2/staging/…/refs.json`, and the spec then fails at
+    // config time (0ms) with no product signal. The fixture must start from a
+    // clean cache anyway — DDC is derived state, rebuilt on first use.
+    filter: (source) => {
+      const name = basename(source);
+      return name !== 'node_modules' && name !== '.forgeax';
+    },
+  });
+}
+// Both prepared and newly-created fixtures are materialized workspace
+// projects. ScriptablePack sources resolve their declared package
+// dependencies from the project's nearest node_modules; the isolated worker
+// follows that nearest link literally and cannot consume Vite aliases. A
+// create-game run starts with an empty slot, so the link must already exist
+// before File -> New Game copies the template into it. Keep the source and
+// Vite graphs isolated without copying a stale contributor install.
+const fixtureNodeModules = join(gameDir, 'node_modules');
+if (!existsSync(fixtureNodeModules)) {
+  symlinkSync(
+    resolve(root, 'packages/play-runtime/node_modules'),
+    fixtureNodeModules,
+    // Keep this as a directory symlink on every platform. A Windows junction
+    // to Play Runtime's node_modules makes its relative package links resolve
+    // against the temporary fixture and appear missing to the worker.
+    'dir',
+  );
 }
 
 process.env.FORGEAX_SMOKE_GAME_DIR = gameDir;
@@ -98,6 +152,9 @@ const hostEnv = {
   FORGEAX_GAMES_URL_PREFIX: 'host-games',
   FORGEAX_HMR_CLIENT_PORT: hostPort,
   FORGEAX_BRIDGE: '0',
+  // TEMPORARY: force iframe carrier for smoke tests until single-realm mode
+  // handles GPU device-lost gracefully during page reloads.
+  FORGEAX_STANDALONE_FORCE_IFRAME: '1',
 };
 
 export default defineConfig({
@@ -116,7 +173,9 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'bun run dev',
+      command: useNodeViteRuntime
+        ? viteCommand(resolve(root, 'vite.config.ts'))
+        : 'bun run dev',
       cwd: root,
       env: hostEnv,
       url: `http://127.0.0.1:${hostPort}`,
@@ -126,7 +185,9 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: 'bun run dev:edit-runtime',
+      command: useNodeViteRuntime
+        ? viteCommand(resolve(root, 'packages/edit-runtime/vite.config.ts'))
+        : 'bun run dev:edit-runtime',
       cwd: root,
       env: {
         ...process.env as Record<string, string>,
@@ -147,7 +208,10 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: `bun x vite --port ${enginePort} --strictPort`,
+      command: viteCommand(
+        resolve(root, 'packages/play-runtime/vite.config.ts'),
+        ` --port ${enginePort} --strictPort`,
+      ),
       cwd: resolve(root, 'packages/play-runtime'),
       env: {
         ...process.env,

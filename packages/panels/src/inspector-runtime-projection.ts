@@ -1,4 +1,8 @@
-import type { EntityHandle } from '@forgeax/editor-core';
+import type {
+  EditorWorldProjection,
+  EntityHandle,
+  ViewportRuntimeClientSnapshot,
+} from '@forgeax/editor-core';
 
 export interface InspectorRuntimeEntityProjection {
   readonly id: EntityHandle;
@@ -18,4 +22,20 @@ export interface InspectorRuntimeProjection {
   readonly entities: readonly InspectorRuntimeEntityProjection[];
   /** Compatibility convenience for consumers that only need the primary. */
   readonly entity?: InspectorRuntimeEntityProjection;
+  /** Projected editor world chrome entities (e.g. orbit camera). */
+  readonly editorWorld?: EditorWorldProjection;
+}
+
+/**
+ * A local carrier is the in-process Studio path: its Gateway owns the live
+ * world, so the schema-driven local Inspector remains authoritative. Every
+ * other ready carrier is a disposable shell projection and must use Runtime
+ * data, even when the shell exposes its bootstrap world through the Gateway.
+ */
+export function isRemoteInspectorCarrier(
+  connection: Pick<ViewportRuntimeClientSnapshot, 'status' | 'runtime'>,
+): boolean {
+  return connection.status === 'ready'
+    && connection.runtime !== null
+    && connection.runtime.carrierKind !== 'local';
 }

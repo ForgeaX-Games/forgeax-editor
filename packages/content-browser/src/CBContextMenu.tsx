@@ -2,11 +2,12 @@ import { type CBAsset, type CBFolder, type CBSelection } from './types';
 // M3 (AC-03): asset assignment goes through the one gateway door via bindAssetRef
 // (resolves GUID → shared<T> handle) instead of setComponent with deprecated names.
 import {
-  requestAddAssetsToChat, requestAddAssetToScene, type AssetChatRef,
+  requestAddAssetsToChat, type AssetChatRef,
   dispatchActiveEditorOperation, gateway, getSelection,
 } from '@forgeax/editor-core';
 import type { EntityHandle } from '@forgeax/editor-core';
 import { t as tr } from '@forgeax/editor-core/i18n';
+import { dispatchAssetPlacement } from './asset-placement-dispatch';
 // Rename is not built here: it is a single inline-edit flow owned by
 // ContentBrowser (beginRename → commitRename), injected into the menu via the
 // host's commonItemMenu. Delete likewise always routes through the host's
@@ -135,13 +136,9 @@ export function buildAssetContextMenu(
         operation: asset.authoring?.placement.operation ?? 'legacy-fallback',
       })}`);
       console.info('[CB:import] Add to Scene', { kind: ref.kind, guid: ref.guid, name: ref.name, path: ref.path });
-      requestAddAssetToScene(ref);
+      void dispatchAssetPlacement(asset, allAssets);
     }},
     { id: 'assign', label: tr('editor.contentBrowser.contextMenu.assignToSelected'), action: () => {
-      // Opening an asset context menu publishes the asset selection, which is
-      // intentionally an exclusive selection domain and clears the entity
-      // selection. Capture the entity before that happens so this menu action
-      // still means "assign to the entity I had selected when I opened it".
       const sel = selectedEntity !== undefined ? selectedEntity : getSelection();
       // With an entity selected AND an assignable kind → delegate to assignAssetToEntity
       // (uses bindAssetRef for material/mesh, createMaterial+bindAssetRef for texture/image).

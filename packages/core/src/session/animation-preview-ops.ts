@@ -15,10 +15,8 @@
 // session op) and resolves the bound clip's duration through ctx.resolveAsset
 // (bound to the dispatching gateway's active world — no singleton import).
 
-import { resolveComponent } from '@forgeax/engine-ecs';
 import { registerApplier } from '../io/appliers';
 import type { SessionApplier, SessionApplierCtx } from '../io/appliers';
-import { getComponentSchema } from '../scene/schema';
 import type { CommandError, EditorOp } from '../types';
 import { snapshotAnimationPreview } from './animation-preview';
 
@@ -68,11 +66,18 @@ function applySetAnimationPreview(op: EditorOp, ctx?: SessionApplierCtx): Applie
     return fail('WORLD_UNAVAILABLE', 'setAnimationPreview needs the session applier engine-write context');
   }
 
-  const transport = getComponentSchema(COMPONENT)?.animation?.transport;
+  const definition = ctx.engine.componentDefinition(COMPONENT) as {
+    policy?: { meta?: Record<string, unknown> };
+  } | undefined;
+  const meta = definition?.policy?.meta;
+  const animation = (meta?.animation ?? (meta?.editor as { animation?: unknown } | undefined)?.animation) as
+    { transport?: unknown } | undefined;
+  const transport = animation?.transport as
+    { clips: string; times: string; weights: string; speeds: string; paused: string; clipIndex: number } | undefined;
   if (transport === undefined) {
     return fail('UNKNOWN_COMPONENT', `${COMPONENT} declares no playback transport (meta.animation missing — editor overlay or engine meta)`);
   }
-  const token = resolveComponent(COMPONENT);
+  const token = ctx.engine.resolveComponent(COMPONENT);
   if (token === undefined) {
     return fail('UNKNOWN_COMPONENT', `${COMPONENT} is not registered in the engine`);
   }

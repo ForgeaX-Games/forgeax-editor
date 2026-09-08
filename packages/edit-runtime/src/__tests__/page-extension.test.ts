@@ -11,24 +11,31 @@ import { broadcastAssetsChanged } from '../../../core/src/store/assets-changed';
 import { createEditorPageExtension } from '../page-extension';
 
 describe('Editor Page contribution', () => {
-  it('registers Level and dedicated asset workbenches in the shared Page model', () => {
+  it('registers Level and dedicated asset authoring pages in the shared Page model', () => {
     const extension = createEditorPageExtension(() => null);
+    expect(extension.provides).toContain('operations-observer');
     const pages = extension.contributes?.pages ?? [];
 
     expect(pages.map((page) => [page.id, page.cardinality])).toEqual([
       ['@forgeax/editor#page/level', 'singleton'],
       ['@forgeax/editor#page/asset', 'resource'],
       ['@forgeax/editor#page/mesh', 'resource'],
+      ['@forgeax/editor#page/texture', 'resource'],
       ['@forgeax/editor#page/material', 'resource'],
       ['@forgeax/editor#page/material-instance', 'resource'],
       ['@forgeax/editor#page/input-map', 'resource'],
       ['@forgeax/editor#page/vfx', 'resource'],
+      ['@forgeax/editor#page/operations', 'singleton'],
     ]);
     const level = pages.find((page) => page.id.endsWith('/level'));
     expect(level?.panels.map((panel) => panel.id)).toContain('ep:capabilities');
     const meshPanels = pages.find((page) => page.id.endsWith('/mesh'))?.panels.map((panel) => panel.id) ?? [];
     expect(meshPanels).toContain('ep:mesh-preview');
     expect(meshPanels).toContain('ep:mesh-slots');
+    const texturePanels = pages.find((page) => page.id.endsWith('/texture'))?.panels.map((panel) => panel.id) ?? [];
+    expect(texturePanels).toContain('ep:texture-preview');
+    expect(texturePanels).toContain('ep:asset-properties');
+    expect(texturePanels).not.toContain('ep:mesh-preview');
     expect(pages.find((page) => page.id.endsWith('/material'))?.panels.map((panel) => panel.id))
       .not.toContain('ep:mesh-slots');
     // The Material page owns its 3D preview panel (UE-style material editor);
@@ -57,7 +64,7 @@ describe('Editor Page contribution', () => {
     // page's closed panel domain lacks the id, so the button looked dead.
     const extension = createEditorPageExtension(() => null);
     const pages = extension.contributes?.pages ?? [];
-    for (const suffix of ['/level', '/asset', '/mesh', '/material', '/material-instance', '/input-map', '/vfx']) {
+    for (const suffix of ['/level', '/asset', '/mesh', '/texture', '/material', '/material-instance', '/input-map', '/vfx']) {
       const page = pages.find((candidate) => candidate.id.endsWith(suffix));
       expect(page?.panels.map((panel) => panel.id), suffix).toContain('ep:settings');
     }
@@ -72,6 +79,10 @@ describe('Editor Page contribution', () => {
 
     expect(editors.find((editor) => editor.selector.kinds?.includes('mesh'))?.pageTypeId)
       .toBe('@forgeax/editor#page/mesh');
+    expect(editors.find((editor) => editor.selector.kinds?.includes('texture'))?.pageTypeId)
+      .toBe('@forgeax/editor#page/texture');
+    expect(editors.find((editor) => editor.selector.kinds?.includes('image'))?.pageTypeId)
+      .toBe('@forgeax/editor#page/texture');
     expect(editors.find((editor) => editor.selector.kinds?.includes('material'))?.pageTypeId)
       .toBe('@forgeax/editor#page/material');
     expect(editors.find((editor) => editor.selector.kinds?.includes('material-instance'))?.pageTypeId)

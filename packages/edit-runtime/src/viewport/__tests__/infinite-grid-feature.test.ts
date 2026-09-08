@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '@forgeax/engine-render/internal';
-import { createRenderFeatureTarget } from '@forgeax/engine-render';
+import { createSceneDataCatalog, type RenderFeaturePlanContext } from '@forgeax/engine-render';
 import { deriveInfiniteGridVisibility } from '../ViewportComponent';
 import {
   classifyGridPlane,
@@ -32,19 +31,34 @@ const renderCaps = {
 } as const;
 
 const renderTargets = [
-  createRenderFeatureTarget({
-    kind: 'scene-color',
-    resource: 'scene-color',
-    format: 'rgba8unorm',
-    sampleCount: 1,
-  }),
-  createRenderFeatureTarget({
-    kind: 'scene-depth',
-    resource: 'scene-depth',
-    format: 'depth24plus',
-    sampleCount: 1,
-  }),
+    {
+      name: 'color',
+      kind: 'color',
+      format: 'rgba8unorm',
+      sampleCount: 1,
+    },
+    {
+      name: 'depth',
+      kind: 'depth',
+      format: 'depth24plus',
+      sampleCount: 1,
+    },
 ] as const;
+
+function renderContext(generation: number): RenderFeaturePlanContext {
+  return {
+    caps: renderCaps,
+    frame: { frameNumber: generation },
+    generation,
+    targets: renderTargets,
+    sceneData: createSceneDataCatalog({
+      featureIdentity: 'editor.infinite-grid',
+      generation,
+      planIdentity: `editor.infinite-grid:${generation}`,
+      rgba16floatRenderable: renderCaps.rgba16floatRenderable,
+    }),
+  };
+}
 
 describe('analytic infinite grid math contract', () => {
   test('intersects the selected plane and preserves camera-relative phase', () => {
@@ -115,86 +129,74 @@ describe('analytic infinite grid math contract', () => {
   });
 });
 
-describe('public no-vertex RenderFeature contribution contract', () => {
-  test('contributes one fullscreen triangle into prepared scene targets', () => {
+describe('public no-vertex RenderFeature plan contract', () => {
+  test('binds the grid shader through the canonical view group', () => {
+    const feature = createInfiniteGridFeature();
+    const extracted = feature.extract({ worlds: [], owner: 0, frameNumber: 1 });
+    if (!extracted.ok) throw extracted.error;
+    const planned = feature.plan(extracted.value, renderContext(1));
+    if (!planned.ok) throw planned.error;
+    expect(planned.value.resources).toContainEqual(expect.objectContaining({
+      kind: 'graphics-bindings',
+      values: { group: 0 },
+    }));
+  });
+
+  test('declares one fullscreen triangle against logical scene targets', () => {
     const feature = createInfiniteGridFeature();
     expect(feature.requiredMaterialShaders).toEqual(['editor::infinite-grid']);
-    const host = createRenderFeatureHost([feature]).unwrap();
-    const result = runRenderFeatureFrame(host, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 1,
-      generation: 7,
-      caps: renderCaps,
-      targets: renderTargets,
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.contributions).toHaveLength(1);
-    expect(result.contributions[0]?.passes).toHaveLength(1);
-    expect(result.contributions[0]?.passes[0]?.name).toBe('editor.infinite-grid::editor.infinite-grid');
-    expect(result.contributions[0]?.passes[0]?.graphics?.draws).toHaveLength(1);
-    expect(result.contributions[0]?.passes[0]?.graphics?.draws[0]).toMatchObject({
-      kind: 'draw',
+    const extracted = feature.extract({ worlds: [], owner: 0, frameNumber: 1 });
+    if (!extracted.ok) throw extracted.error;
+    const result = feature.plan(extracted.value, renderContext(7));
+    if (!result.ok) throw result.error;
+    expect(result.value.passes).toHaveLength(1);
+    expect(result.value.passes[0]).toMatchObject({
+      kind: 'raster',
+      name: 'editor.infinite-grid',
+      colorAttachments: [{ target: 'color', loadOp: 'load', storeOp: 'store' }],
+      depthStencilAttachment: { target: 'depth', depthLoadOp: 'load', depthStoreOp: 'store' },
+      draws: [{
       vertexLayout: 'none',
       vertexData: [],
-      command: { vertexCount: 3, instanceCount: 1 },
-    });
-    expect(host.diagnostics()[0]).toMatchObject({
-      identity: 'editor.infinite-grid',
-      status: 'active',
-      latestError: undefined,
+        draw: { kind: 'draw', vertexCount: 3, instanceCount: 1 },
+      }],
     });
   });
 
-  test('fails closed across hidden, missing-target, and new-generation frames', () => {
+  test('emits zero work while hidden and replans when visible again', () => {
     let visible = true;
-    const host = createRenderFeatureHost([
-      createInfiniteGridFeature({ isVisible: () => visible }),
-    ]).unwrap();
-
-    const first = runRenderFeatureFrame(host, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 1,
-      generation: 1,
-      caps: renderCaps,
-      targets: renderTargets,
-    });
-    expect(first.errors).toEqual([]);
-    expect(first.contributions).toHaveLength(1);
-
-    const missingTarget = runRenderFeatureFrame(host, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 2,
-      generation: 2,
-      caps: renderCaps,
-      targets: [renderTargets[0]],
-    });
-    expect(missingTarget.contributions).toEqual([]);
-    expect(missingTarget.errors[0]).toMatchObject({
-      code: 'render-feature-preparation-failed',
-      detail: { resourceName: 'scene-depth', recovery: 'next-frame' },
-    });
+    const feature = createInfiniteGridFeature({ isVisible: () => visible });
+    const context = renderContext(1);
+    const first = feature.extract({ worlds: [], owner: 0, frameNumber: 1 });
+    if (!first.ok) throw first.error;
+    const visiblePlan = feature.plan(first.value, context);
+    if (!visiblePlan.ok) throw visiblePlan.error;
+    expect(visiblePlan.value.passes).toHaveLength(1);
 
     visible = false;
-    const hidden = runRenderFeatureFrame(host, {
-      worlds: [],
-      owner: 0,
-      frameNumber: 3,
-      generation: 3,
-      caps: renderCaps,
-      targets: renderTargets,
-    });
-    expect(hidden.errors).toEqual([]);
-    expect(hidden.contributions).toEqual([]);
+    const hidden = feature.extract({ worlds: [], owner: 0, frameNumber: 2 });
+    if (!hidden.ok) throw hidden.error;
+    const hiddenPlan = feature.plan(hidden.value, renderContext(2));
+    if (!hiddenPlan.ok) throw hiddenPlan.error;
+    expect(hiddenPlan.value).toEqual({ resources: [], passes: [] });
   });
 });
 
 describe('infinite grid chrome projection', () => {
   test('keeps the preference intact while deriving visibility from Edit phase and scene display', () => {
     expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'scene', playPhase: 'edit' })).toBe(true);
+    expect(deriveInfiniteGridVisibility({
+      gridVisible: true,
+      display: 'scene',
+      playPhase: 'edit',
+      sceneHasRenderableContent: false,
+    })).toBe(false);
+    expect(deriveInfiniteGridVisibility({
+      gridVisible: true,
+      display: 'scene',
+      playPhase: 'edit',
+      sceneHasRenderableContent: true,
+    })).toBe(true);
     expect(deriveInfiniteGridVisibility({ gridVisible: false, display: 'scene', playPhase: 'edit' })).toBe(false);
     expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'game', playPhase: 'edit' })).toBe(false);
     expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'scene', playPhase: 'starting' })).toBe(false);

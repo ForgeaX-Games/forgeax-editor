@@ -1,6 +1,6 @@
 // add-component-menu.tsx — "+ Add Component" menu for the Inspector (M5 w26).
 //
-// Lists all registered components from engine's registry, grouped by
+// Lists all components from the active World's catalog, grouped by
 // mountable (not yet on the selected entity) vs already-mounted (repeat).
 // Clicking a mountable item dispatches an addComponent command through
 // the shared gateway (which reaches the main viewport via BroadcastChannel
@@ -8,11 +8,10 @@
 //
 // Anchors:
 //   requirements AC-12: Inspector Add Component menu with mountable/unmountable grouping
-//   research Finding 5: getRegisteredComponents ready (component.ts:598)
+//   research Finding 5: World-local component catalog
 //   charter F1: all component options visible in one place
 
 import { useState, type ReactNode } from 'react';
-import { getRegisteredComponents } from '@forgeax/engine-ecs';
 import { defaultComponentData } from '@forgeax/editor-core';
 // M3 (AC-03): addComponent goes through the one gateway door — gateway.dispatch —
 // replacing the origin-less `dispatch` wrapper.
@@ -31,7 +30,7 @@ export function AddComponentMenu({ mountedComponents }: AddComponentMenuProps): 
   const sel = useSelection();
 
   const allRegistered: string[] = [];
-  for (const [name] of getRegisteredComponents()) {
+  for (const [name] of gateway.activeWorld.components.entries()) {
     allRegistered.push(name);
   }
 
@@ -50,7 +49,7 @@ export function AddComponentMenu({ mountedComponents }: AddComponentMenuProps): 
       kind: 'addComponent',
       entity: sel,
       component: comp,
-      value: defaultComponentData(comp),
+      value: defaultComponentData(comp, gateway.activeWorld),
     });
     setOpen(false);
   };

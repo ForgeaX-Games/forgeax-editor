@@ -19,12 +19,27 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import '@forgeax/engine-render';
-import { Transform, Name } from '@forgeax/engine-scene';
+import { SceneInstance } from '@forgeax/engine-render';
+import { ChildOf, Transform, Name, worldGetSceneInstanceState, worldInstantiateScene, worldDespawnScene } from '@forgeax/engine-scene';
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
 interface Vec3 { x: number; y: number; z: number }
+
+/**
+ * Scene materialisation resolves serialized component names through the
+ * owning World's catalog. Keep this test fixture explicit: production
+ * plugins own registration at the Edit/Play composition boundary, while a
+ * headless test World must admit the tokens it exercises itself.
+ */
+function createSnapshotTestWorld(): World {
+  const world = new World();
+  for (const component of [SceneInstance, ChildOf, Transform, Name]) {
+    const registration = world.components.register(component);
+    if (!registration.ok) throw registration.error;
+  }
+  return world;
+}
 
 /**
  * Build a simple SceneAsset and instantiate it into the world.
@@ -42,7 +57,7 @@ function makeScene(world: World, entities: Array<{ name: string; pos: Vec3 }>): 
     })),
   };
   const handle = world.allocSharedRef('SceneAsset', asset);
-  const r = world.instantiateScene(handle);
+  const r = worldInstantiateScene(world, handle);
   if (!r.ok) throw new Error('instantiateScene failed');
   return r.value.root;
 }
@@ -51,7 +66,7 @@ function makeScene(world: World, entities: Array<{ name: string; pos: Vec3 }>): 
  * Collect all member entity names from a scene instance root.
  */
 function collectMemberNames(world: World, root: EntityHandle): string[] {
-  const stateRes = world.getSceneInstanceState(root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return [];
   const names: string[] = [];
   for (const ent of stateRes.value.entityToLocalId.keys()) {
@@ -65,7 +80,7 @@ function collectMemberNames(world: World, root: EntityHandle): string[] {
  * Find a member entity by Name value.
  */
 function findMemberByName(world: World, root: EntityHandle, targetName: string): EntityHandle | null {
-  const stateRes = world.getSceneInstanceState(root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return null;
   for (const ent of stateRes.value.entityToLocalId.keys()) {
     const n = world.get(ent, Name);
@@ -78,13 +93,13 @@ function findMemberByName(world: World, root: EntityHandle, targetName: string):
 
 describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
   it('(a) getSceneInstanceState captures scene entities + membership before Play', () => {
-    const world = new World();
+    const world = createSnapshotTestWorld();
     const root = makeScene(world, [
       { name: 'Player', pos: { x: 0, y: 1, z: 0 } },
       { name: 'Enemy', pos: { x: 5, y: 1, z: 3 } },
     ]);
 
-    const stateRes = world.getSceneInstanceState(root);
+    const stateRes = worldGetSceneInstanceState(world, root);
     expect(stateRes.ok).toBe(true);
     if (!stateRes.ok) return;
 
@@ -99,13 +114,13 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
   });
 
   it('(b) Play edits (world.spawn/world.set) are visible in world, not in stored snapshot', () => {
-    const world = new World();
+    const world = createSnapshotTestWorld();
     const root = makeScene(world, [
       { name: 'Box', pos: { x: 0, y: 0, z: 0 } },
     ]);
 
     // Capture snapshot BEFORE play mutations.
-    const snapRes = world.getSceneInstanceState(root);
+    const snapRes = worldGetSceneInstanceState(world, root);
     expect(snapRes.ok).toBe(true);
     if (!snapRes.ok) return;
     const prePlayMemberCount = snapRes.value.entityToLocalId.size;
@@ -131,7 +146,7 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
     if (!spawnRes.ok) return; // narrow Result so spawnRes.value (EntityHandle) resolves
 
     // Snapshot is NOT mutated — it's a capture, not a live reference.
-    const snapRes2 = world.getSceneInstanceState(root);
+    const snapRes2 = worldGetSceneInstanceState(world, root);
     expect(snapRes2.ok).toBe(true);
     if (!snapRes2.ok) return;
     expect(snapRes2.value.entityToLocalId.size).toBe(prePlayMemberCount);
@@ -142,14 +157,14 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
   });
 
   it('(c) ■ despawnScene + rebuild from captured source restores pre▶ state', () => {
-    const world = new World();
+    const world = createSnapshotTestWorld();
     const root = makeScene(world, [
       { name: 'A', pos: { x: 1, y: 0, z: 0 } },
       { name: 'B', pos: { x: 2, y: 0, z: 0 } },
     ]);
 
     // Capture pre▶ snapshot.
-    const snap = world.getSceneInstanceState(root);
+    const snap = worldGetSceneInstanceState(world, root);
     expect(snap.ok).toBe(true);
     if (!snap.ok) return;
     const preNames = collectMemberNames(world, root);
@@ -170,12 +185,12 @@ describe('M4 Play snapshot: getSceneInstanceState + despawnScene (RED)', () => {
     });
 
     // ■ Stop: despawn the scene instance entirely.
-    const despawnR = world.despawnScene(root);
+    const despawnR = worldDespawnScene(world, root);
     expect(despawnR.ok).toBe(true);
 
     // Re-instantiate from the same SceneAsset source handle.
     const srcHandle = snap.value.source;
-    const r2 = world.instantiateScene(srcHandle);
+    const r2 = worldInstantiateScene(world, srcHandle);
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
 

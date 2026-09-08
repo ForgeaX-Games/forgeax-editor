@@ -61,6 +61,25 @@ describe('parseShaderParamSchemaIndex', () => {
 });
 
 describe('resolveMaterialParamSchema', () => {
+  it('uses the cooked parameter contract before any legacy manifest index', () => {
+    const staleManifest = parseShaderParamSchemaIndex({
+      materialShaders: [{
+        identifier: 'game::pulse',
+        paramSchema: '[{"name":"legacyOnly","type":"f32","default":0}]',
+      }],
+    });
+    const { descriptors } = resolveMaterialParamSchema({
+      passes: [{ program: { module: 'game::pulse' } }],
+      parameterContract: {
+        parameters: [{ name: 'pulseAmount', type: 'f32', default: 0.5 }],
+        values: { pulseAmount: 0.75 },
+      },
+    }, staleManifest);
+
+    expect(descriptors.map((entry) => entry.name)).toEqual(['pulseAmount']);
+    expect(descriptors).not.toContainEqual(expect.objectContaining({ name: 'legacyOnly' }));
+  });
+
   it('resolves the standard PBR schema from the manifest by pass module', () => {
     const index = parseShaderParamSchemaIndex({
       materialShaders: [{ identifier: 'forgeax::default-standard-pbr', paramSchema: JSON.stringify(DEFAULT_STANDARD_PBR_PARAM_SCHEMA) }],
@@ -172,13 +191,15 @@ describe('deriveMaterialParamRows', () => {
   });
 
   it('infers rows for values-only keys not covered by the schema', () => {
+    const valuesOnlyTexture = 'valuesOnlyTexture';
+    expect(descriptors.some((descriptor) => descriptor.name === valuesOnlyTexture)).toBe(false);
     const inferred = deriveMaterialParamRows({
       descriptors,
       declaredNames,
-      ownValues: { emissiveTexture: 'guid-em', customFlag: true, tiling: [2, 2], note: 'x' },
+      ownValues: { [valuesOnlyTexture]: 'guid-em', customFlag: true, tiling: [2, 2], note: 'x' },
       resolvedValues: {
         baseColor: [1, 1, 1, 1],
-        emissiveTexture: 'guid-em',
+        [valuesOnlyTexture]: 'guid-em',
         customFlag: true,
         tiling: [2, 2],
         note: 'x',
@@ -187,7 +208,7 @@ describe('deriveMaterialParamRows', () => {
       colorSpace: 'srgb',
     });
     const extra = new Map(inferred.filter((r) => r.source === 'value').map((r) => [r.name, r]));
-    expect(extra.get('emissiveTexture')).toMatchObject({ kind: 'texture', textureGuid: 'guid-em' });
+    expect(extra.get(valuesOnlyTexture)).toMatchObject({ kind: 'texture', textureGuid: 'guid-em' });
     expect(extra.get('customFlag')?.kind).toBe('bool');
     expect(extra.get('tiling')).toMatchObject({ kind: 'vector', components: 2 });
     expect(extra.get('note')?.kind).toBe('readonly');

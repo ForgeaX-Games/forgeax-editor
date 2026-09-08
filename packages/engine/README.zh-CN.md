@@ -8,14 +8,30 @@
 
 # forgeax-engine
 
+> [!IMPORTANT]
+> 含有 `.forgeax-public-distribution` 的源码树是 SDK 内置的公开源码面。
+> 它可独立完成 Engine 包开发：不要执行 `git submodule update`，不要添加
+> 私有资产仓库，使用 `pnpm install` 后运行 `pnpm build:engine`。SDK 已将
+> WASM 构建结果放入对应包的 `pkg/` 目录。
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.base.json)
 [![WebGPU](https://img.shields.io/badge/WebGPU-native-005A9C?logo=webgpu&logoColor=white)](./packages/rhi)
 [![Rust](https://img.shields.io/badge/Rust-wgpu_29_+_naga_29-000000?logo=rust&logoColor=white)](./packages/wgpu-wasm)
 [![ESM](https://img.shields.io/badge/module-ESM_only-f7df1e?logo=javascript&logoColor=black)](./AGENTS.md)
-[![Packages](https://img.shields.io/badge/packages-37-6E56CF)](./packages)
 
 > **AI-first TypeScript 游戏引擎，目标超越 Three.js。**
+
+### Material owner contract
+
+一个 `MaterialAsset` subject 依次经过 types、Pack cook/publication、
+shader-compiler reflection，以及 runtime/render 的只读 projection。
+契约只接受 runtime bool/value、真实 module-slot composition 和 closed
+compiler context；material macro 与 feature define 会被拒绝。分层 identity
+包括 `materialContractDigest`、`sourceClosureDigest`、`layoutIdentity`、
+`programIdentity`、`cookIdentity` 和 `materialPublicationIdentity`。恢复时
+比较 `current` 与 `generation`，修复首个 producer divergence，以同一 GUID
+cold-cook，再核验 receipt、artifact 与真实 WASM provenance。
 
 引擎的第一用户不是人类开发者——是 **AI agent**。每一处 API 都是可机读契约：schema 类型化、返回 `Result`、自描述。AI-friendly 与 human-friendly 冲突时，**AI 胜出**。详见 [AI 用户宪章](.claude/skills/forgeax-closed-loop/agents/ai-user-charter.md)。
 
@@ -165,11 +181,32 @@ record → replay → inspect，第一用户是 AI subagent（经 `WS:5732` JSON
 - **Inspect** 离线查：每个 draw 的 bindings、draw-call 参数、render-target PNG 回读——定位黑屏 / 错贴图 / 错 binding 症状。
 </details>
 
+<details>
+<summary><b>🤖 AI authoring CLI — 发现、组合、取证</b></summary>
+
+DevKit 项目通过顶层 `forgeax` CLI 暴露一条可机读操作路径：
+`list -> describe -> run -> terminal`。同一个
+根命令把同一个 `ToolContribution` 路由到完整 private executor 或已准入的环回 service，
+不会生出第二套 operation registry 或并列产品入口。
+
+```bash
+forgeax list --json
+forgeax describe project.build --json
+forgeax run project.build --input request.json --json
+forgeax exec program.mjs --json
+```
+
+项目文件与 `forge.json` 仍是 author truth。Hidden preview 依然执行真实 WebGPU，并返回 RHI tape、
+PNG 与 CPU profile 引用。使用时先读
+唯一的 [`forgeax-engine-cli`](skills/forgeax-engine-cli/SKILL.md)；包级契约见
+[`tool-runtime`](packages/tool-runtime/README.md) 与 [`devkit`](packages/devkit/README.md)。
+</details>
+
 ---
 
 ## 📦 包家族
 
-37 个包，统一前缀 `@forgeax/engine-`，AI 用户经 IDE 自动补全发现。
+聚焦职责的公共包共享前缀 `@forgeax/engine-`，AI 用户经 IDE 自动补全发现。
 
 | 簇 | 包 | 角色 |
 |:--|:--|:--|
@@ -177,11 +214,11 @@ record → replay → inspect，第一用户是 AI subagent（经 `WS:5732` JSON
 | **渲染** | `runtime` · `render-graph` · `shader` · `shader-compiler` · `naga` | Renderer、SRP、RenderGraph、WGSL 组合 + 反射 |
 | **核心** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` · `animation` | Archetype World、游戏循环、数学、`Result` SSOT、状态机 |
 | **仿真** | `physics` · `physics-rapier2d` · `physics-rapier3d` · `audio` · `audio-webaudio` | Rapier 2D/3D、Web Audio |
-| **资产** | `pack` · `import` · `gltf` · `fbx` · `image` · `font` · `engine-project` | GUID sidecar 管线、导入器、`forge.json` manifest |
-| **工具** | `rhi-debug` · `debug-draw` · `remote` · `console` · `vite-plugin-*` | 帧调试器、活体 inspector、Vite 集成 |
+| **资产** | `pack` · `import` · `gltf` · `fbx` · `image` · `font` · `project`（`packages/project/` ↔ `@forgeax/engine-project`） | GUID sidecar 管线、导入器、`forge.json` manifest |
+| **工具** | `tool-runtime` · `devkit` · `rhi-debug` · `debug-draw` · `remote` · `vite-plugin-*` | AI authoring operation、帧调试器、活体 inspector、Vite 集成 |
 
 > [!NOTE]
-> 公共包统一前缀 `@forgeax/engine-`；裸 `@forgeax/engine-runtime` 是 placeholder——安装 **`@forgeax/engine-runtime`**。每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
+> 用户只需安装 **`@forgeax/engine`**，并通过 `@forgeax/engine/<pkg>` 子路径使用聚焦能力。仓库内部仍以 `@forgeax/engine-*` 作为实际所有者和发布单元；每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
 > `animation` 对普通 `Transform` 实体与骨骼关节使用同一种动画目标模型。
 
 ## 布局
@@ -193,7 +230,7 @@ record → replay → inspect，第一用户是 AI subagent（经 `WS:5732` JSON
 | [`.forgeax-harness/knowledge-base/wiki/`](.forgeax-harness/knowledge-base/wiki/) | 设计基线（RHI / shader 策略、vs-threejs 路线 SSOT） |
 | [`.claude/skills/`](.claude/skills/) | AI 协作 skill 集（charter + 闭环工作流） |
 | [`.forgeax-harness/`](.forgeax-harness/) | 闭环工件（每个 feat/bug 的 plan / research / verify） |
-| `forgeax-engine-assets/` | git submodule——二进制证据（private，工件旁挂仓） |
+| `forgeax-engine-assets/` | 仅贡献者 checkout：二进制证据 git submodule（公开 SDK 源码中不存在） |
 
 包级契约、错误 union、RHI 形态约束、度量登记、smoke gate、演进规则统一落在 [AGENTS.md](./AGENTS.md)。README 刻意保持精简。
 

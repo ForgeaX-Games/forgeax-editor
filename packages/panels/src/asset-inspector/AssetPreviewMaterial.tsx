@@ -1,26 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import {
   deriveMaterialParamRows,
-  ensureAssetCataloged,
   ensureMaterialChainCataloged,
-  ensureShaderParamSchemaIndex,
   gateway,
+  getMaterialStaging,
   hexToMaterialColor,
+  isMaterialStagingDirty,
   materialCatalogLookup,
   materialColorToHex,
-  panelBridge,
+  openMaterialStaging,
+  patchMaterialStagingParam,
+  resetMaterialStagingParam,
   resolveMaterialParamSchema,
   resolveOverrides,
   setMaterialPreviewParam,
+  subscribeMaterialStaging,
   useActiveEditorAsset,
   type MaterialParamRow,
-  type ShaderParamSchemaIndex,
 } from '@forgeax/editor-core';
-import { AssetPicker } from '../AssetPicker';
+import { ForgeaxIcon } from '@forgeax/editor-ui';
+import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from '../AssetPicker';
 import { PropertyRow } from './PropertyRow';
 import { useNumberDraft } from '../useNumberDraft';
 import { materialRenderStateFacts } from './material-render-state-facts';
+import {
+  getMaterialCategoryCollapsed,
+  registerMaterialCategoryIds,
+  subscribeMaterialCategoryState,
+  toggleMaterialCategory,
+} from './material-category-state';
+import { useMaterialFilter, useMaterialToolbarRegistration } from './material-toolbar';
 import type { PreviewProps } from './index';
+import { inspectorFieldLabel } from '../inspector-field-label';
+import { AssetRefControl } from '../AssetRefControl';
 
 interface PassDesc {
   name?: string;
@@ -30,13 +42,6 @@ interface PassDesc {
 /** Accepted drag-drop kinds for texture assignment. */
 const DROPPABLE_TEXTURE_KINDS: ReadonlySet<string> = new Set(['texture', 'image']);
 
-/** camelCase schema name → human label ("baseColor" → "Base Color"). The raw
- *  name stays on the tooltip so shader-side naming remains discoverable. */
-function paramLabel(name: string): string {
-  const spaced = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
-}
-
 // ── TextureSlot: per-field drop zone + browse + display ─────────────────────
 
 interface TextureSlotProps {
@@ -45,73 +50,28 @@ interface TextureSlotProps {
   canEdit: boolean;
   onAssign: (textureGuid: string) => void;
   onClear: () => void;
-  onBrowse: () => void;
+  onBrowse: (anchor: AssetPickerAnchor) => void;
 }
 
 function TextureSlot({ label, guid, canEdit, onAssign, onClear, onBrowse }: TextureSlotProps) {
-  const [dropHot, setDropHot] = useState(false);
-
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDropHot(true);
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setDropHot(false);
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDropHot(false);
-    const json = e.dataTransfer.getData('application/x-forgeax-asset');
-    if (!json) return;
-    try {
-      const ref = JSON.parse(json) as { guid?: string; kind?: string; name?: string; packPath?: string };
-      if (!ref.guid || !DROPPABLE_TEXTURE_KINDS.has(ref.kind ?? '')) return;
-      onAssign(ref.guid);
-    } catch { /* malformed drag payload — ignore */ }
-  }, [onAssign]);
-
-  const shortGuid = guid && guid.length > 18 ? `${guid.slice(0, 18)}…` : guid;
-
   return (
-    <div
-      className={`mat-tex-slot${dropHot ? ' drop-hot' : ''}`}
-      data-testid={`mat-${label}`}
-      onDragEnter={canEdit ? handleDragEnter : undefined}
-      onDragLeave={canEdit ? handleDragLeave : undefined}
-      onDragOver={canEdit ? handleDragOver : undefined}
-      onDrop={canEdit ? handleDrop : undefined}
-    >
-      <div className="mat-tex-slot-header">
-        <span className="mat-tex-slot-label">{label}</span>
-      </div>
-      {guid ? (
-        <div className="mat-tex-slot-bound">
-          <span className="mat-tex-slot-icon">🖼</span>
-          <span className="mat-tex-slot-guid" title={`Texture GUID: ${guid}`}>{shortGuid}</span>
-          {canEdit && (
-            <button
-              className="mat-clear-btn"
-              title="Clear texture"
-              onClick={onClear}
-            >
-              ✕
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mat-tex-empty">Drop or browse TextureAsset</div>
-      )}
-      {canEdit && (
-        <button className="mat-browse-btn" onClick={onBrowse} title={`Browse ${label}`}>
-          📁 Browse
-        </button>
-      )}
+    <div className="f-row" data-testid={`mat-${label}`}>
+      <span className="f-name" title={label}>{inspectorFieldLabel(label)}</span>
+      <span className="f-val">
+        <AssetRefControl
+          assetType="TextureAsset"
+          guid={guid}
+          testId={`mat-${label}`}
+          readOnly={!canEdit}
+          onBrowse={onBrowse}
+          onBind={(nextGuid) => {
+            const entry = gateway.assetCatalog().find((row) => row.guid === nextGuid);
+            if (!entry || !DROPPABLE_TEXTURE_KINDS.has(entry.kind)) return;
+            onAssign(nextGuid);
+          }}
+          onClear={onClear}
+        />
+      </span>
     </div>
   );
 }
@@ -126,36 +86,50 @@ interface EditorProps {
 }
 
 /** Single numeric cell with draft semantics (commit on blur/Enter, Escape
- *  aborts, arrows step) shared by scalar and vector editors. */
-function NumberCell({ value, canEdit, onCommit, testId }: {
+ *  aborts, arrows step) shared by scalar and vector editors. Renders the same
+ *  `.numfield` widget as the entity Inspector: a centred `.box-i` input with a
+ *  hover/focus stepper, plus an optional axis class for the vec colour underline. */
+function NumberCell({ value, canEdit, onCommit, testId, axisClass, wrapClass }: {
   value: number;
   canEdit: boolean;
   onCommit: (n: number) => void;
   testId?: string;
+  axisClass?: string;
+  wrapClass?: string;
 }) {
   const draft = useNumberDraft(value, undefined, onCommit);
+  const step = (dir: 1 | -1) => onCommit(Math.round((value + dir * 0.1) * 1e4) / 1e4);
   return (
-    <input
-      type="text"
-      inputMode="decimal"
-      style={{ width: 56 }}
-      disabled={!canEdit}
-      data-testid={testId}
-      value={draft.value}
-      onFocus={draft.onFocus}
-      onChange={draft.onChange}
-      onBlur={draft.onBlur}
-      onKeyDown={draft.onKeyDown}
-    />
+    <span className={`numfield${wrapClass ? ` ${wrapClass}` : ''}`}>
+      <input
+        type="text"
+        inputMode="decimal"
+        className={`box-i${axisClass ? ` ${axisClass}` : ''}`}
+        disabled={!canEdit}
+        data-testid={testId}
+        value={draft.value}
+        onFocus={draft.onFocus}
+        onChange={draft.onChange}
+        onBlur={draft.onBlur}
+        onKeyDown={draft.onKeyDown}
+      />
+      {canEdit && (
+        <span className="nspin" aria-hidden>
+          <button type="button" tabIndex={-1} className="nsp up" onPointerDown={(e) => { e.preventDefault(); step(1); }}>
+            <ForgeaxIcon name="chevronUp" size={9} />
+          </button>
+          <button type="button" tabIndex={-1} className="nsp dn" onPointerDown={(e) => { e.preventDefault(); step(-1); }}>
+            <ForgeaxIcon name="chevronDown" size={9} />
+          </button>
+        </span>
+      )}
+    </span>
   );
 }
 
 function ScalarEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
   const display = typeof row.value === 'number' ? row.value : 0;
   const [drag, setDrag] = useState<number | null>(null);
-  // Optimistic post-commit value: the pack write + assetsChanged round-trip is
-  // async, so without this the slider would snap back to the stale value until
-  // the write lands. Cleared as soon as the resolved value refreshes.
   const [pending, setPending] = useState<number | null>(null);
   useEffect(() => { setPending(null); }, [display]);
   const shown = drag ?? pending ?? display;
@@ -192,6 +166,7 @@ function ScalarEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
         canEdit={canEdit}
         onCommit={(n) => { setDrag(null); setPending(n); onCommit(n); }}
         testId={`mat-${row.name}-number`}
+        wrapClass="num"
       />
     </span>
   );
@@ -202,10 +177,6 @@ function ColorEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
     : Array.isArray(row.defaultValue) ? row.defaultValue as number[]
     : [1, 1, 1, 1];
   const hex = materialColorToHex(arr, row.colorSpace);
-  // The native color input fires `input` per picker tick; route those through
-  // the transient preview channel and commit once on blur so a color drag is
-  // ONE ledger entry instead of dozens. `pendingHex` keeps the swatch on the
-  // committed color until the async pack write round-trips into row.value.
   const picked = useRef<string | null>(null);
   const [pendingHex, setPendingHex] = useState<string | null>(null);
   useEffect(() => { setPendingHex(null); }, [hex]);
@@ -221,6 +192,7 @@ function ColorEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
     <span className="f-val">
       <input
         type="color"
+        className="swatch"
         value={shown}
         onChange={(e) => {
           picked.current = e.target.value;
@@ -233,119 +205,153 @@ function ColorEditor({ row, canEdit, onCommit, onPreview }: EditorProps) {
         }}
         disabled={!canEdit}
         data-testid={`mat-${row.name}-input`}
-        style={{ width: 32, height: 22, border: 'none', padding: 0, cursor: canEdit ? 'pointer' : 'default' }}
+        style={canEdit ? undefined : { cursor: 'default' }}
       />
-      <span className="hexval" style={{ marginLeft: 6, fontSize: '0.82em', fontFamily: 'monospace' }}>
-        {shown}
-      </span>
+      <span className="hexval">{shown}</span>
     </span>
   );
 }
 
 function VectorEditor({ row, canEdit, onCommit }: EditorProps) {
-  const arr = Array.isArray(row.value) ? row.value as number[]
-    : Array.isArray(row.defaultValue) ? row.defaultValue as number[]
-    : new Array<number>(row.components).fill(0);
+  const count = row.components;
+  const current = (Array.isArray(row.value) ? row.value as number[] : [0, 0, 0, 0]).slice(0, count);
+
+  const updateComponent = (index: number, next: number) => {
+    const nextArr = [...current];
+    while (nextArr.length < count) nextArr.push(0);
+    nextArr[index] = next;
+    onCommit(nextArr);
+  };
+
+  const axes = ['x', 'y', 'z', 'w'];
+
   return (
-    <span className="f-val" style={{ display: 'inline-flex', gap: 4 }}>
-      {Array.from({ length: row.components }, (_, i) => (
-        <NumberCell
-          key={i}
-          value={typeof arr[i] === 'number' ? arr[i]! : 0}
-          canEdit={canEdit}
-          onCommit={(n) => {
-            const next = Array.from({ length: row.components }, (_, j) => (typeof arr[j] === 'number' ? arr[j]! : 0));
-            next[i] = n;
-            onCommit(next);
-          }}
-          testId={`mat-${row.name}-${i}`}
-        />
-      ))}
+    <span className="f-val">
+      <span className="vec">
+        {Array.from({ length: count }, (_, i) => (
+          <span className="vcell" key={i}>
+            <NumberCell
+              value={current[i] ?? 0}
+              canEdit={canEdit}
+              onCommit={(n) => updateComponent(i, n)}
+              testId={`mat-${row.name}-${axes[i]}`}
+              axisClass={axes[i]}
+            />
+          </span>
+        ))}
+      </span>
     </span>
   );
 }
 
 function BoolEditor({ row, canEdit, onCommit }: EditorProps) {
+  const checked = Boolean(row.value ?? row.defaultValue ?? false);
   return (
     <span className="f-val">
       <input
         type="checkbox"
-        checked={row.value === true}
+        checked={checked}
         disabled={!canEdit}
+        data-testid={`mat-${row.name}-check`}
         onChange={(e) => onCommit(e.target.checked)}
-        data-testid={`mat-${row.name}-checkbox`}
       />
     </span>
   );
 }
 
-// ── Live payload (unchanged contract: catalog envelope is the SSOT) ─────────
+// ── Categories & Grouping ───────────────────────────────────────────────────
 
-/** Re-read the asset's payload from the catalog after a pack write (Task 5).
- *  The stored `SelectedAsset.payload` is a snapshot from selection time; without
- *  this, editing params (clear/assign texture) won't reflect until the user
- *  clicks away and back. Listening to `assetsChanged` covers the same signal
- *  broadcastAssetsChanged fires after the async writePackEntry lands. */
-function useLivePayload(propsPayload: Record<string, unknown>, guid: string | undefined): { payload: Record<string, unknown>; refs: readonly string[] } {
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    if (!guid) return;
-    const off = panelBridge.on('assetsChanged', () => setVersion(v => v + 1));
-    return off;
-  }, [guid]);
-
-  // Catalog-miss self-heal: lookupAsset below is catalog-only (no fetch), so a
-  // material never loadByGuid'd this session (created before a page reload, or
-  // not referenced by the loaded scene) has NO envelope — and updateMaterialParams'
-  // synchronous _preFillMaterialOp reads exactly that map, so a texture drop on
-  // such a material failed. Load it once on open; the version bump re-reads the
-  // live payload afterwards (the envelope is the SSOT, replacing the snapshot).
-  // Re-runs on version bumps too: applyUpdateMaterialParams invalidates the
-  // envelope after each write, so the post-edit state re-loads from disk here.
-  useEffect(() => {
-    if (!guid || gateway.lookupAsset(guid) !== undefined) return;
-    let cancelled = false;
-    void ensureAssetCataloged(gateway.doc.registry, guid).then((loaded) => {
-      if (loaded && !cancelled) setVersion(v => v + 1);
-    });
-    return () => { cancelled = true; };
-  }, [guid, version]);
-
-  return useMemo(() => {
-    void version; // react to version bumps
-    if (!guid) return { payload: propsPayload, refs: [] };
-    // lookupAsset returns the LIVE payload (envelope.payload) directly — the
-    // post-load SSOT whose texture fields are resolved GUID strings. Refs come
-    // from the catalog row (pack-index), which exists even without an envelope.
-    const live = gateway.lookupAsset(guid) as Record<string, unknown> | undefined;
-    const catalog = gateway.assetCatalog();
-    const entry = catalog.find((e: { guid: string; refs?: readonly string[] }) => e.guid === guid);
-    return { payload: live ?? propsPayload, refs: entry?.refs ?? [] };
-  }, [guid, propsPayload, version]);
+interface CategoryDef {
+  id: string;
+  title: string;
+  /** Left-border accent dimension, mirrors the entity Inspector's
+   *  dim-type (brand) / dim-all (teal) / dim-cap (amber) colour blocks. */
+  dim: 'type' | 'all' | 'cap';
+  match: (name: string) => boolean;
 }
+
+const CATEGORY_DEFS: CategoryDef[] = [
+  {
+    id: 'baseColor',
+    title: 'Base Color',
+    dim: 'type',
+    match: (n) => /(baseColor|albedo|diffuse|color(?!space))/i.test(n),
+  },
+  {
+    id: 'metallicRoughness',
+    title: 'Metallic & Roughness',
+    dim: 'cap',
+    match: (n) => !/(channel)/i.test(n) && /(metallic|roughness|specular|glossiness)/i.test(n),
+  },
+  {
+    id: 'normal',
+    title: 'Normal & Bump',
+    dim: 'all',
+    match: (n) => /(normal|bump|height|displacement)/i.test(n),
+  },
+  {
+    id: 'occlusion',
+    title: 'Ambient Occlusion',
+    dim: 'type',
+    match: (n) => !/(channel)/i.test(n) && /(occlusion|\bao\b|ambientOcclusion)/i.test(n),
+  },
+  {
+    id: 'emissive',
+    title: 'Emissive & Glow',
+    dim: 'cap',
+    match: (n) => /(emissive|glow)/i.test(n),
+  },
+  {
+    id: 'uv',
+    title: 'UV & Tiling',
+    dim: 'all',
+    match: (n) => /(uv|tile|tiling|offset|repeat|st\b)/i.test(n),
+  },
+  {
+    id: 'advanced',
+    title: 'Advanced',
+    dim: 'type',
+    match: () => true,
+  },
+];
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewProps) {
+export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewProps): ReactElement {
   const asset = useActiveEditorAsset();
-  const { payload, refs } = useLivePayload(propsPayload, asset?.guid);
-  const [schemaIndex, setSchemaIndex] = useState<ShaderParamSchemaIndex | undefined>(undefined);
+  const [version, setVersion] = useState(0);
   const [chainVersion, setChainVersion] = useState(0);
-  const [pickerTarget, setPickerTarget] = useState<string | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<{ name: string; anchor: AssetPickerAnchor } | null>(null);
+  // Collapse state is shared UI chrome hoisted to a module store so the
+  // panel-header Expand All / Collapse All commands can drive it (see
+  // material-category-state).
+  const collapsed = useSyncExternalStore(
+    subscribeMaterialCategoryState,
+    getMaterialCategoryCollapsed,
+    getMaterialCategoryCollapsed,
+  );
+  // Parameter search now lives in the panel-header action row (a self-registered
+  // `control`); its text is shared through the material-toolbar module store.
+  const filterText = useMaterialFilter();
+  useMaterialToolbarRegistration();
 
-  // Shader paramSchema index from the same manifest the renderer boots with —
-  // the engine SSOT for "which parameters this material's shader exposes".
+  // Subscribe to staging changes
   useEffect(() => {
-    let cancelled = false;
-    void ensureShaderParamSchemaIndex().then((index) => {
-      if (!cancelled) setSchemaIndex(index);
-    });
-    return () => { cancelled = true; };
+    return subscribeMaterialStaging(() => setVersion((v) => v + 1));
   }, []);
 
-  // Parent-chain warm: resolveOverrides reads registry.assetCatalog
-  // synchronously, and only loadByGuid fills it — an uncatalogued parent would
-  // silently drop inherited values from every row.
+  // Initialize staging buffer
+  useEffect(() => {
+    if (!asset || asset.kind !== 'material') return;
+    openMaterialStaging({
+      guid: asset.guid,
+      packPath: asset.packPath,
+      name: asset.name,
+      payload: asset.payload ?? propsPayload,
+    });
+  }, [asset?.guid, asset?.packPath, asset?.name, propsPayload]);
+
+  // Parent-chain warm
   useEffect(() => {
     if (!asset?.guid) return;
     let cancelled = false;
@@ -355,23 +361,46 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
     return () => { cancelled = true; };
   }, [asset?.guid]);
 
-  const passes = Array.isArray(payload.passes) ? (payload.passes as PassDesc[]) : [];
-  const parent = payload.parent as string | undefined;
-  const colorSpace = payload.colorSpace === 'linear' ? 'linear' : 'srgb';
-  const ownValues = (payload.values ?? {}) as Record<string, unknown>;
+  const stagingEntry = asset?.guid ? getMaterialStaging(asset.guid) : undefined;
+  const rawPayload = (stagingEntry?.staging ?? propsPayload) as Record<string, unknown>;
+  const materialReadiness = asset?.guid
+    ? gateway.doc.registry?.getMaterialReadiness(asset.guid)
+    : undefined;
+  const inspectionPayload = materialReadiness?.status === 'Ready'
+    ? { ...rawPayload, parameterContract: materialReadiness.parameterContract }
+    : rawPayload;
+  const parameterContract = inspectionPayload.parameterContract;
+  const cookedValues = parameterContract !== null
+    && typeof parameterContract === 'object'
+    && !Array.isArray(parameterContract)
+    ? (parameterContract as { values?: unknown }).values
+    : undefined;
+  const ownValues = (stagingEntry?.staging.values
+    ?? (cookedValues as Record<string, unknown> | undefined)
+    ?? (propsPayload.values as Record<string, unknown>)
+    ?? {}) as Record<string, unknown>;
+  const passes = Array.isArray(rawPayload.passes) ? (rawPayload.passes as PassDesc[]) : [];
+  const parent = rawPayload.parent as string | undefined;
+  const colorSpace = rawPayload.colorSpace === 'linear' ? 'linear' : 'srgb';
+  const isDirty = asset?.guid ? isMaterialStagingDirty(asset.guid) : false;
 
-  // Display inherited (parent-chain merged) values, not just the material's
-  // own — this is what the renderer resolves at draw time.
+  const catalogEntry = useMemo(() => {
+    if (!asset?.guid) return undefined;
+    return gateway.assetCatalog().find((e) => e.guid === asset.guid);
+  }, [asset?.guid, version]);
+  const refs = catalogEntry?.refs ?? [];
+
   const resolvedValues = useMemo(() => {
     void chainVersion;
+    void version;
     if (!asset?.guid) return ownValues;
     const resolved = resolveOverrides(asset.guid, materialCatalogLookup(gateway.doc.registry));
-    return Object.keys(resolved).length > 0 ? resolved : ownValues;
-  }, [asset?.guid, ownValues, chainVersion]);
+    return Object.keys(resolved).length > 0 ? { ...resolved, ...ownValues } : ownValues;
+  }, [asset?.guid, ownValues, chainVersion, version]);
 
   const { descriptors, declaredNames } = useMemo(
-    () => resolveMaterialParamSchema(payload, schemaIndex),
-    [payload, schemaIndex],
+    () => resolveMaterialParamSchema(inspectionPayload, undefined),
+    [inspectionPayload],
   );
 
   const rows = useMemo(() => deriveMaterialParamRows({
@@ -383,167 +412,219 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
     colorSpace,
   }), [descriptors, declaredNames, ownValues, resolvedValues, refs, colorSpace]);
 
-  const paramRows = rows.filter((row) => row.kind !== 'texture');
-  const textureRows = rows.filter((row) => row.kind === 'texture');
-
   const canEdit = !!asset?.packPath && !!asset?.guid;
-  const surface = materialRenderStateFacts(payload);
+  const surface = materialRenderStateFacts(rawPayload);
 
-  /** Dispatch an updateMaterialParams op AFTER guaranteeing the material's
-   *  payload envelope is cataloged — _preFillMaterialOp reads
-   *  registry.assetCatalog synchronously, so dispatching against a never-loaded
-   *  material fails with '_oldPatch missing' (the drag-no-response 400). The
-   *  mount-time ensure effect above usually wins this race; awaiting here makes
-   *  the drop path correct even when it didn't (loadByGuid dedups via inFlight). */
-  const dispatchMaterialOp = useCallback((op: {
-    paramPatch: Record<string, unknown>;
-    textureGuids?: Record<string, string | null>;
-  }) => {
-    if (!asset) return;
-    void (async () => {
-      const cataloged = await ensureAssetCataloged(gateway.doc.registry, asset.guid);
-      const result = gateway.dispatch({
-        kind: 'updateMaterialParams',
-        packPath: asset.packPath,
-        guid: asset.guid,
-        ...op,
-      }, 'human');
-      if (!result.ok) {
-        console.info('[mat-tex-drop]', 'dispatch rejected', {
-          guid: asset.guid, packPath: asset.packPath, cataloged,
-          error: (result as { error?: unknown }).error,
-        });
-      }
-    })();
-  }, [asset]);
-
-  const dispatchParam = useCallback((paramPatch: Record<string, unknown>) => {
-    dispatchMaterialOp({ paramPatch });
-  }, [dispatchMaterialOp]);
-
-  /** Commit one parameter through the ledger. The transient drag overlay is
-   *  NOT cleared here — the preview viewport drops it when the post-write
-   *  `assetsChanged` re-resolve lands, so the preview never flickers back to
-   *  the pre-commit value in between. */
+  // Staging commit helper
   const commitParam = useCallback((name: string, value: unknown) => {
-    dispatchParam({ [name]: value });
-  }, [dispatchParam]);
+    if (!asset?.guid) return;
+    patchMaterialStagingParam(asset.guid, { [name]: value });
+    setMaterialPreviewParam(asset.guid, name, value);
+  }, [asset?.guid]);
 
   const previewParam = useCallback((name: string, value: unknown) => {
     if (asset?.guid) setMaterialPreviewParam(asset.guid, name, value);
   }, [asset?.guid]);
 
-  /** Revert one parameter to the inherited/default value by deleting the
-   *  material's own key (updateMaterialParams deletes on undefined). */
-  const resetParam = useCallback((name: string) => {
-    dispatchParam({ [name]: undefined });
-  }, [dispatchParam]);
+  const resetParam = useCallback((name: string, defaultValue?: unknown) => {
+    if (!asset?.guid) return;
+    resetMaterialStagingParam(asset.guid, name, defaultValue);
+    setMaterialPreviewParam(asset.guid, name, undefined);
+  }, [asset?.guid]);
 
   const handleAssignTexture = useCallback((key: string, textureGuid: string) => {
-    if (!asset) return;
-    dispatchMaterialOp({ paramPatch: {}, textureGuids: { [key]: textureGuid } });
-  }, [asset, dispatchMaterialOp]);
+    if (!asset?.guid) return;
+    patchMaterialStagingParam(asset.guid, {}, { [key]: textureGuid });
+    setMaterialPreviewParam(asset.guid, key, textureGuid);
+  }, [asset?.guid]);
 
   const handleClearTexture = useCallback((key: string) => {
-    dispatchMaterialOp({ paramPatch: { [key]: undefined }, textureGuids: { [key]: null } });
-  }, [dispatchMaterialOp]);
+    if (!asset?.guid) return;
+    patchMaterialStagingParam(asset.guid, { [key]: undefined }, { [key]: null });
+    setMaterialPreviewParam(asset.guid, key, undefined);
+  }, [asset?.guid]);
+
+  // Filter and group rows
+  const filteredRows = useMemo(() => {
+    if (!filterText.trim()) return rows;
+    const q = filterText.toLowerCase();
+    return rows.filter((r) => r.name.toLowerCase().includes(q) || inspectorFieldLabel(r.name).toLowerCase().includes(q));
+  }, [rows, filterText]);
+
+  const groupedCategories = useMemo(() => {
+    const map = new Map<string, { def: CategoryDef; paramRows: MaterialParamRow[]; textureRows: MaterialParamRow[] }>();
+    for (const def of CATEGORY_DEFS) {
+      map.set(def.id, { def, paramRows: [], textureRows: [] });
+    }
+
+    for (const row of filteredRows) {
+      let matchedDef = CATEGORY_DEFS.find((d) => d.id !== 'advanced' && d.match(row.name));
+      if (!matchedDef) matchedDef = CATEGORY_DEFS.find((d) => d.id === 'advanced')!;
+      const group = map.get(matchedDef.id)!;
+      if (row.kind === 'texture') {
+        group.textureRows.push(row);
+      } else {
+        group.paramRows.push(row);
+      }
+    }
+
+    return Array.from(map.values()).filter((g) => g.paramRows.length > 0 || g.textureRows.length > 0);
+  }, [filteredRows]);
+
+  // Publish the full collapse universe (fixed Render State + dynamic parameter
+  // categories + Passes) so the panel-header Collapse All command can fold every
+  // card. Expand/Collapse All themselves are now panelActions commands.
+  useEffect(() => {
+    registerMaterialCategoryIds(['surface', ...groupedCategories.map(({ def }) => def.id), 'passes']);
+  }, [groupedCategories]);
 
   return (
-    <div data-testid="preview-material" className="mat-editor">
-      <div className="compname">Material</div>
-
-      <div className="mat-tex-section" data-testid="mat-render-state">
-        <div className="mat-tex-section-title">Render State</div>
-        <PropertyRow label="Two Sided" value={surface.twoSided ? 'Yes' : 'No'} />
-        <PropertyRow label="Cull Mode" value={surface.cullMode} />
-        <PropertyRow label="Blend" value={surface.blendLabel} />
+    <div data-testid="preview-material" className="fx-inspector" data-dirty={isDirty ? '1' : undefined}>
+      {/* Surface Render State */}
+      <div className={`cat dim-all${collapsed.has('surface') ? ' collapsed' : ''}`} data-testid="mat-render-state">
+        <div className="cat-head" onClick={() => toggleMaterialCategory('surface')}>
+          <span className="car"><ForgeaxIcon name={collapsed.has('surface') ? 'chevronRight' : 'chevronDown'} size={12} /></span>
+          <span className="ct">Render State</span>
+        </div>
+        {!collapsed.has('surface') && (
+          <div className="cat-fields">
+            <PropertyRow label="Two Sided" value={surface.twoSided ? 'Yes' : 'No'} />
+            <PropertyRow label="Cull Mode" value={surface.cullMode} />
+            <PropertyRow label="Blend" value={surface.blendLabel} />
+          </div>
+        )}
       </div>
 
-      {/* Schema-driven parameter rows (shader paramSchema + declared +
-          values-only), displayed with parent-chain resolved values. */}
-      <div className="mat-tex-section">
-        <div className="mat-tex-section-title">Parameters</div>
-        {paramRows.length === 0 && (
-          <div className="field muted">No parameters on this material.</div>
-        )}
-        {paramRows.map((row) => (
-          <div className="f-row" data-testid={`mat-${row.name}`} data-overridden={row.overridden ? '1' : undefined} key={row.name}>
-            <span
-              className="f-name"
-              title={row.kind === 'color'
-                ? `${row.name} — stored as ${row.colorSpace === 'srgb' ? 'sRGB; converted to linear once at render extraction' : 'explicit linear RGB; the browser color picker is displayed in sRGB'}`
-                : row.name}
-            >
-              {paramLabel(row.name)}
-            </span>
-            {row.kind === 'color' && (
-              <ColorEditor row={row} canEdit={canEdit}
-                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
-            )}
-            {row.kind === 'scalar' && (
-              <ScalarEditor row={row} canEdit={canEdit}
-                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
-            )}
-            {row.kind === 'vector' && (
-              <VectorEditor row={row} canEdit={canEdit}
-                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
-            )}
-            {row.kind === 'bool' && (
-              <BoolEditor row={row} canEdit={canEdit}
-                onCommit={(v) => commitParam(row.name, v)} onPreview={(v) => previewParam(row.name, v)} />
-            )}
-            {row.kind === 'readonly' && (
-              <span className="f-val"><span className="hexval">{String(row.value ?? '—')}</span></span>
-            )}
-            {canEdit && row.overridden && (
-              <button
-                className="mat-clear-btn"
-                title="Reset to inherited/default"
-                data-testid={`mat-${row.name}-reset`}
-                onClick={() => resetParam(row.name)}
-              >
-                ↺
-              </button>
+      {/* Dynamic Categorized Parameters */}
+      {groupedCategories.map(({ def, paramRows, textureRows }) => {
+        const isCatCollapsed = collapsed.has(def.id);
+        const overriddenCount = [...paramRows, ...textureRows].filter((r) => r.overridden).length;
+
+        return (
+          <div key={def.id} className={`cat dim-${def.dim}${isCatCollapsed ? ' collapsed' : ''}`} data-testid={`mat-category-${def.id}`}>
+            <div className="cat-head" onClick={() => toggleMaterialCategory(def.id)}>
+              <span className="car"><ForgeaxIcon name={isCatCollapsed ? 'chevronRight' : 'chevronDown'} size={12} /></span>
+              <span className="ct">{def.title}</span>
+              {overriddenCount > 0 && (
+                <span className="cat-override-badge" title={`${overriddenCount} properties overridden`}>
+                  {overriddenCount}
+                </span>
+              )}
+            </div>
+
+            {!isCatCollapsed && (
+              <div className="cat-fields">
+                {/* Scalar / Color / Vector / Bool rows */}
+                {paramRows.map((row) => (
+                  <div
+                    className="f-row"
+                    data-testid={`mat-${row.name}`}
+                    data-overridden={row.overridden ? '1' : undefined}
+                    key={row.name}
+                  >
+                    <span
+                      className="f-name"
+                      title={row.kind === 'color'
+                        ? `${row.name} — stored as ${row.colorSpace === 'srgb' ? 'sRGB; converted to linear once at render extraction' : 'explicit linear RGB'}`
+                        : row.name}
+                    >
+                      {inspectorFieldLabel(row.name)}
+                    </span>
+                    {row.kind === 'color' && (
+                      <ColorEditor
+                        row={row}
+                        canEdit={canEdit}
+                        onCommit={(v) => commitParam(row.name, v)}
+                        onPreview={(v) => previewParam(row.name, v)}
+                      />
+                    )}
+                    {row.kind === 'scalar' && (
+                      <ScalarEditor
+                        row={row}
+                        canEdit={canEdit}
+                        onCommit={(v) => commitParam(row.name, v)}
+                        onPreview={(v) => previewParam(row.name, v)}
+                      />
+                    )}
+                    {row.kind === 'vector' && (
+                      <VectorEditor
+                        row={row}
+                        canEdit={canEdit}
+                        onCommit={(v) => commitParam(row.name, v)}
+                        onPreview={(v) => previewParam(row.name, v)}
+                      />
+                    )}
+                    {row.kind === 'bool' && (
+                      <BoolEditor
+                        row={row}
+                        canEdit={canEdit}
+                        onCommit={(v) => commitParam(row.name, v)}
+                        onPreview={(v) => previewParam(row.name, v)}
+                      />
+                    )}
+                    {row.kind === 'readonly' && (
+                      <span className="f-val"><span className="hexval">{String(row.value ?? '—')}</span></span>
+                    )}
+                    {canEdit && (
+                      <button
+                        type="button"
+                        className={`reset${row.overridden ? '' : ' hidden'}`}
+                        title="Reset to default/inherited"
+                        data-testid={`mat-${row.name}-reset`}
+                        disabled={!row.overridden}
+                        tabIndex={row.overridden ? undefined : -1}
+                        aria-hidden={row.overridden ? undefined : true}
+                        onClick={() => resetParam(row.name, row.defaultValue)}
+                      >
+                        <ForgeaxIcon name="reset" size={12} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {/* Texture Slots */}
+                {textureRows.map((row) => (
+                  <TextureSlot
+                    key={row.name}
+                    label={row.name}
+                    guid={row.textureGuid}
+                    canEdit={canEdit}
+                    onAssign={(textureGuid) => handleAssignTexture(row.name, textureGuid)}
+                    onClear={() => handleClearTexture(row.name)}
+                    onBrowse={(anchor) => setPickerTarget({ name: row.name, anchor })}
+                  />
+                ))}
+              </div>
             )}
           </div>
-        ))}
-      </div>
+        );
+      })}
 
-      {/* Texture slots: every texture the shader schema declares (plus
-          values-only texture keys), not a hard-coded subset. */}
-      <div className="mat-tex-section">
-        <div className="mat-tex-section-title">Textures</div>
-        {textureRows.length === 0 && (
-          <div className="field muted">This material's shader declares no texture slots.</div>
+      {/* Passes & Technical Details */}
+      <div className={`cat dim-cap${collapsed.has('passes') ? ' collapsed' : ''}`}>
+        <div className="cat-head" onClick={() => toggleMaterialCategory('passes')}>
+          <span className="car"><ForgeaxIcon name={collapsed.has('passes') ? 'chevronRight' : 'chevronDown'} size={12} /></span>
+          <span className="ct">Passes &amp; Technical Details</span>
+        </div>
+        {!collapsed.has('passes') && (
+          <div className="cat-fields">
+            <PropertyRow label="Pass Count" value={passes.length} />
+            {passes.map((p, i) => (
+              <PropertyRow key={i} label={`Pass ${i}`} value={`${p.name ?? '?'} → ${p.program?.module ?? '?'}`} />
+            ))}
+            {parent && <PropertyRow label="Parent" value={parent} />}
+          </div>
         )}
-        {textureRows.map((row) => (
-          <TextureSlot
-            key={row.name}
-            label={row.name}
-            guid={row.textureGuid}
-            canEdit={canEdit}
-            onAssign={(textureGuid) => handleAssignTexture(row.name, textureGuid)}
-            onClear={() => handleClearTexture(row.name)}
-            onBrowse={() => setPickerTarget(row.name)}
-          />
-        ))}
       </div>
 
-      {/* Passes (read-only) */}
-      <PropertyRow label="Passes" value={passes.length} />
-      {passes.map((p, i) => (
-        <PropertyRow key={i} label={`  Pass ${i}`} value={`${p.name ?? '?'} → ${p.program?.module ?? '?'}`} />
-      ))}
-
-      {parent && <PropertyRow label="Parent" value={parent} />}
-
-      {/* AssetPicker modal (Browse → pick → assign) */}
+      {/* AssetPicker modal for texture assignment */}
       {pickerTarget && (
         <AssetPicker
           assetType="TextureAsset"
-          currentGuid={textureRows.find((r) => r.name === pickerTarget)?.textureGuid ?? undefined}
-          onPick={(guid) => { handleAssignTexture(pickerTarget, guid); setPickerTarget(null); }}
-          onClear={() => { handleClearTexture(pickerTarget); setPickerTarget(null); }}
+          anchor={pickerTarget.anchor}
+          currentGuid={rows.find((r) => r.name === pickerTarget.name)?.textureGuid ?? undefined}
+          onPick={(guid) => { handleAssignTexture(pickerTarget.name, guid); setPickerTarget(null); }}
+          onClear={() => { handleClearTexture(pickerTarget.name); setPickerTarget(null); }}
           onClose={() => setPickerTarget(null)}
         />
       )}

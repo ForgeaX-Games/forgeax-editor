@@ -229,7 +229,33 @@
       "animPause": "暂停预览",
       "animNoClip": "绑定 clip 到槽 0 后可预览",
       "animPhase": "预览进度",
-      "animSpeed": "预览速度"
+      "animSpeed": "预览速度",
+      "assetRef": {
+        "none": "无",
+        "missing": "资产缺失 — 浏览以修复",
+        "slot": "插槽 {{index}}",
+        "useSelection": "使用内容浏览器当前选中资产",
+        "browse": "浏览资产",
+        "revealInBrowser": "在内容浏览器中定位",
+        "more": "更多操作",
+        "clear": "清除",
+        "copyGuid": "复制 GUID",
+        "pick": "选择",
+        "addSlot": "添加插槽",
+        "removeSlot": "移除插槽",
+        "lockedSlotHint": "{{count}} 个插槽 — 与网格子网格数匹配",
+        "lockedSlotHint_plural": "{{count}} 个插槽 — 与网格子网格数匹配",
+        "mismatchHint": "已绑定 {{current}} 个材质，网格有 {{expected}} 个子网格",
+        "mismatchAction": "{{current}} / {{expected}} 子网格 — 点击修复"
+      },
+      "assetPicker": {
+        "browseSection": "浏览",
+        "searchPlaceholder": "搜索资产",
+        "nameColumn": "名称",
+        "none": "无",
+        "emptyType": "项目中没有 {{assetType}}",
+        "emptyQuery": "没有匹配 \"{{query}}\" 的结果"
+      }
     },
     "launcher": {
       "title": "启动器",
@@ -287,15 +313,19 @@
       }
     },
     "contentBrowser": {
+      "catalogAuthoringOutsideAssets": "材质和粒子效果只能创建在 assets/ 目录下。",
       "actions": {
         "create": "新建",
         "createFolder": "新建文件夹",
         "createAsset": "新建 {{label}}",
         "import": "导入",
+        "importFolder": "导入文件夹",
         "saveAll": "保存全部",
         "favorite": "收藏",
         "filterByType": "按类型筛选",
         "filterAll": "全部",
+        "fileTypeSection": "文件类型",
+        "assetTypeSection": "资产类型",
         "clearFilters": "清除全部筛选",
         "searchPlaceholder": "搜索文件 / 资产...",
         "searchAria": "搜索资产",
@@ -312,7 +342,19 @@
         "openSubfolders": "{{name}} 的子文件夹",
         "settings": "视图设置",
         "thumbnailSizeLabel": "缩略图大小",
-        "detailPanel": "详情面板"
+        "detailPanel": "详情面板",
+        "layoutLabel": "视图模式",
+        "layoutTiles": "卡片",
+        "layoutList": "列表",
+        "layoutDetails": "详细列表"
+      },
+      "details": {
+        "colName": "名称",
+        "colType": "类型",
+        "colSize": "大小",
+        "colModified": "修改时间",
+        "typeFolder": "文件夹",
+        "itemCount": "{{count}} 项"
       },
       "sourceTree": {
         "favorites": "收藏夹",
@@ -339,6 +381,7 @@
         "image": "图片",
         "audio": "音频",
         "model": "3D 模型",
+        "assetPackage": "资源包",
         "font": "字体",
         "ui": "UI 资产",
         "data": "数据",
@@ -369,6 +412,7 @@
         "play": "Play",
         "setDefaultScene": "设为默认场景",
         "setCurrentScene": "设为当前场景",
+        "editMesh": "编辑网格",
         "expandSubAssets": "展开子资产",
         "reimport": "重新导入",
         "locateSourceFile": "定位源文件",
@@ -391,6 +435,9 @@
         "cancel": "取消",
         "deleteFolderConfirm": "删除文件夹「{{name}}」及其所有内容？",
         "deleteFileConfirm": "删除文件「{{name}}」？",
+        "moveConflictTitle": "名称已存在",
+        "moveConflictNote": "「{{dir}}」中已存在以下名称，移动可能会覆盖它们：",
+        "moveConflictConfirm": "仍然移动",
         "sceneSwitch": {
           "title": "场景有未保存的改动",
           "body": "切换到「{{name}}」会替换当前编辑中的场景。请选择如何处理未保存的改动。",
@@ -436,6 +483,8 @@
         "emptyFolder": "空文件夹",
         "noTextPreview": "此文件类型暂无文本预览",
         "nothingSelected": "选择一个项目查看详情",
+        "modeAssets": "资产列表",
+        "modeSource": "源码",
         "items": "{{count}} 项",
         "assetCount": "→ {{count}} 资产",
         "uiPreview": "UI 预览",

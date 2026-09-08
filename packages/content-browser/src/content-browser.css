@@ -228,6 +228,16 @@
   background: var(--cb-selection-path-bg);
   color: var(--color-text-primary, #f2f2f2);
 }
+/* Internal move DnD hover feedback for tree rows (mirrors the grid tiles). */
+.cb-source-row.cb-drop-ok {
+  background: var(--color-success-soft, rgba(120, 220, 130, 0.16));
+  box-shadow: inset 2px 0 0 var(--color-success-line, rgba(120, 220, 130, 0.8));
+}
+.cb-source-row.cb-drop-reject {
+  background: var(--color-danger-soft, rgba(240, 110, 110, 0.14));
+  box-shadow: inset 2px 0 0 var(--color-danger-line, rgba(240, 110, 110, 0.8));
+  cursor: not-allowed;
+}
 .cb-source-chev {
   width: 14px;
   height: 14px;
@@ -677,6 +687,8 @@
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  /* Positioning context + offsetParent for the measured group backdrops. */
+  position: relative;
 }
 .cb-fe-grid {
   display: grid;
@@ -729,7 +741,227 @@
   background: var(--color-brand-soft, rgba(212, 255, 72, 0.10));
   border-color: var(--color-brand-line, rgba(212, 255, 72, 0.38));
   box-shadow: 0 0 0 1px var(--color-brand-line, rgba(212, 255, 72, 0.38));
+  /* Re-assert the card's own padding: the bare global `.sel` (edit-runtime
+     theme.css) ties `.cb-fe-card` on specificity and would otherwise inject its
+     `padding: 2px 4px`, shifting the selected tile. */
+  padding: 3px 3px 5px;
 }
+/* Internal move DnD hover feedback — the drop target lights green when it will
+   accept the drag, red (with a not-allowed hint via title) when it will reject. */
+.cb-grid-item.cb-drop-ok,
+.cb-grid-folder.cb-drop-ok {
+  border-color: var(--color-success-line, rgba(120, 220, 130, 0.7));
+  box-shadow: 0 0 0 2px var(--color-success-line, rgba(120, 220, 130, 0.55));
+  background: var(--color-success-soft, rgba(120, 220, 130, 0.12));
+}
+.cb-grid-item.cb-drop-reject,
+.cb-grid-folder.cb-drop-reject {
+  border-color: var(--color-danger-line, rgba(240, 110, 110, 0.7));
+  box-shadow: 0 0 0 2px var(--color-danger-line, rgba(240, 110, 110, 0.45));
+  cursor: not-allowed;
+}
+/* Grid blank-area drop ("move into the folder I'm browsing") — a soft inset ring
+   on the whole view rather than a per-card highlight. */
+.cb-grid-view.cb-drop-ok {
+  box-shadow: inset 0 0 0 2px var(--color-success-line, rgba(120, 220, 130, 0.5));
+}
+.cb-grid-view.cb-drop-reject {
+  box-shadow: inset 0 0 0 2px var(--color-danger-line, rgba(240, 110, 110, 0.35));
+}
+
+/* ══ Details layout (UE "Details") — sortable table ══════════════════════════ */
+/* `--cb-details-cols` is set INLINE per instance (4 tracks); this is the
+   fallback. (UE "List" is NOT this table — it's the mini-tile row form styled on
+   CBGrid below.) */
+.cb-details-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+  padding: 0 6px 8px;
+  --cb-details-cols: minmax(160px, 1fr) 160px 90px 130px;
+}
+.cb-details-header {
+  display: grid;
+  grid-template-columns: var(--cb-details-cols);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-panel, #1b1b1b);
+  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+}
+.cb-details-th {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary, #aaa);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+.cb-details-th:hover { color: var(--color-text-primary, #fff); }
+.cb-details-th.active { color: var(--color-brand-primary, #d4ff48); }
+.cb-details-sort-arrow { font-size: 9px; }
+.cb-details-body { display: flex; flex-direction: column; }
+/* Row highlight is FILL-only and the left accent is an ABSOLUTE ::before, so no
+   state (hover / selected / drop / focus) ever touches the box model — zero
+   reflow, zero padding jitter when you select a row. */
+.cb-details-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--cb-details-cols);
+  align-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+  outline: none;
+}
+.cb-details-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px 0 0 2px;
+  background: transparent;
+  pointer-events: none;
+}
+.cb-details-row:hover { background: var(--cb-card-hover-bg, rgba(255, 255, 255, 0.06)); }
+.cb-details-row:focus,
+.cb-details-row:focus-visible { outline: none; }
+/* The `sel` class is ALSO caught by a bare global `.sel` rule (edit-runtime
+   theme.css) that force-adds `padding: 2px 4px` + `border: 1px` — that leak is
+   what shifted the selected row's width vs its siblings. Neutralise it here
+   (this .cb-details-row.sel selector out-specifies the global .sel). */
+.cb-details-row.sel { background: var(--color-brand-soft, rgba(212, 255, 72, 0.12)); padding: 0; border: 0; }
+.cb-details-row.sel::before { background: var(--color-brand-primary, #d4ff48); }
+.cb-details-row.cb-drop-ok { background: var(--color-success-soft, rgba(120, 220, 130, 0.16)); }
+.cb-details-row.cb-drop-ok::before { background: var(--color-success-line, rgba(120, 220, 130, 0.8)); }
+.cb-details-row.cb-drop-reject { cursor: not-allowed; }
+.cb-details-row.cb-drop-reject::before { background: var(--color-danger-line, rgba(240, 110, 110, 0.8)); }
+.cb-details-cell {
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--color-text-primary, #e6e6e6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-details-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cb-details-icon { display: inline-flex; width: 16px; height: 16px; flex: 0 0 16px; }
+.cb-details-icon svg { width: 16px; height: 16px; color: inherit; }
+.cb-details-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-details-type,
+.cb-details-size,
+.cb-details-modified { color: var(--color-text-secondary, #999); }
+
+/* ══ List layout (UE "List") — the SAME tile card compressed into a mini row:
+   the real preview thumbnail (texture/material/folder graphic) shrunk to a small
+   square with the name inline to its right. Reuses CBGrid + all card components;
+   only the box shape changes here — one full-width column of thin rows. ════════ */
+.cb-fe-grid.cb-layout-list {
+  grid-template-columns: 1fr;
+  grid-auto-rows: auto;
+  gap: 1px;
+  padding: 4px 6px;
+}
+/* `.cb-grid-view.cb-layout-list` = two classes on the SAME grid root, so every
+   rule below out-specifies the base tile cascade (aspect-ratio / width:100% /
+   fixed icon px) that would otherwise blow the mini plate up and collapse rows. */
+.cb-grid-view.cb-layout-list .cb-grid-item {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  height: auto;
+  /* UE parity: "List" rows are a MEDIUM preview row — noticeably taller than the
+     compact "Details" table rows, so the mini thumbnail reads as a real preview. */
+  min-height: 40px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+/* Medium preview plate: a FIXED square (~2× the details icon). aspect-ratio is
+   neutralised and the height is pinned (min+max) so the 1:1 tile rule can't
+   stretch it tall and overflow rows. `overflow:hidden` clips the shrunk preview. */
+.cb-grid-view.cb-layout-list .cb-grid-thumb {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  aspect-ratio: auto;
+  flex: 0 0 32px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.cb-grid-view.cb-layout-list .cb-fe-thumb::after { display: none; }
+/* Fixed px (not %) so no intermediate 100%/46%/28px rule can win the cascade. */
+.cb-grid-view.cb-layout-list .cb-grid-thumb svg { width: 20px; height: 20px; }
+.cb-grid-view.cb-layout-list .cb-thumb-sphere { height: 26px; }
+/* Name inline: the fixed 4-line label block collapses to a single left-aligned
+   row. Type meta + favourite star are dropped in the lean list. */
+.cb-layout-list .cb-fe-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  flex-direction: row;
+  align-items: center;
+}
+.cb-layout-list .cb-fe-label .cb-fe-name,
+.cb-layout-list .cb-fe-label.has-kind .cb-fe-name,
+.cb-layout-list .cb-grid-label {
+  -webkit-line-clamp: unset;
+  display: block;
+  white-space: nowrap;
+  text-align: left;
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cb-layout-list .cb-card-meta,
+.cb-layout-list .cb-card-fav { display: none; }
+.cb-layout-list .cb-fe-card .cb-inline-rename { margin-top: 0; text-align: left; font-size: 12px; }
+/* Selection / hover = fill only (no border or ring), matching the details rows —
+   zero box-model change, so rows never jitter. */
+.cb-layout-list .cb-grid-item.sel {
+  border-color: transparent;
+  box-shadow: none;
+  background: var(--color-brand-soft, rgba(212, 255, 72, 0.12));
+  padding: 3px 8px;
+}
+
+/* Settings menu: layout switch segmented control. */
+.cb-settings-row-col { flex-direction: column; align-items: stretch; gap: 6px; }
+.cb-layout-switch { display: flex; gap: 4px; }
+.cb-layout-switch-btn {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  color: var(--color-text-secondary, #aaa);
+  cursor: pointer;
+  font-size: 11px;
+}
+.cb-layout-switch-btn:hover { color: var(--color-text-primary, #fff); background: var(--cb-card-hover-bg, rgba(255, 255, 255, 0.05)); }
+.cb-layout-switch-btn[data-checked="true"] {
+  color: var(--color-brand-primary, #d4ff48);
+  border-color: var(--color-brand-line, rgba(212, 255, 72, 0.5));
+  background: var(--color-brand-soft, rgba(212, 255, 72, 0.1));
+}
+.cb-layout-switch-btn svg { width: 16px; height: 16px; }
+.cb-layout-switch-label { font-size: 10px; line-height: 1; }
 /* Transient "locate in content browser" pulse — draws the eye to the just
    revealed card, then fades. Applied briefly by ContentBrowser's reveal handler. */
 .cb-grid-item.cb-reveal-flash {
@@ -1010,6 +1242,39 @@
   border-bottom: 1px solid var(--border-soft, var(--color-divider-subtle, rgba(255, 255, 255, 0.08)));
   flex-shrink: 0;
 }
+.cb-preview-mode-bar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft, var(--color-divider-subtle, rgba(255, 255, 255, 0.08)));
+  flex-shrink: 0;
+}
+.cb-preview-mode-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-tertiary, #8a8a8a);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background var(--motion-duration-fast, 120ms) ease,
+    color var(--motion-duration-fast, 120ms) ease,
+    border-color var(--motion-duration-fast, 120ms) ease;
+}
+.cb-preview-mode-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-interaction-hover, rgba(255, 255, 255, 0.04));
+}
+.cb-preview-mode-btn.is-active {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-strong, rgba(255, 255, 255, 0.16));
+  background: var(--color-interaction-selected-neutral, rgba(255, 255, 255, 0.06));
+}
 .cb-preview-ico {
   width: 28px;
   height: 28px;
@@ -1091,14 +1356,6 @@
   border-radius: 8px;
   background: #111;
 }
-.cb-preview-code {
-  margin: 0;
-  white-space: pre-wrap;
-  color: var(--color-text-secondary, #ccc);
-  font-family: var(--font-mono, var(--prim-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace));
-  font-size: 11px;
-  line-height: 1.55;
-}
 .cb-preview-list,
 .cb-preview-asset-list {
   display: flex;
@@ -1155,33 +1412,6 @@
   font-size: 11px;
   line-height: 1.6;
 }
-.cb-preview-font {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--color-text-secondary, #ccc);
-  word-break: break-word;
-}
-.cb-preview-font-hero {
-  font-size: 44px;
-  line-height: 1.1;
-}
-.cb-preview-font-sample {
-  font-size: 20px;
-  line-height: 1.4;
-}
-.cb-preview-font-glyphs {
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--text-dim, var(--color-text-disabled, #9a9a9a));
-}
-.cb-preview-font-name {
-  margin-top: 2px;
-  font-family: var(--font-mono, var(--prim-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace));
-  font-size: 10px;
-  color: var(--text-dim, var(--color-text-disabled, #6f6f6f));
-}
-
 /* ── File item (file-browser mode) ── */
 /* Files share the same near-black preview plate as no-preview assets, so the
  * grid is uniform. (Overrides the earlier `.cb-file-thumb` with !important to
@@ -1233,7 +1463,86 @@
 .cb-fe-card:hover .cb-pack-expand-btn,
 .cb-pack-expand-btn.open { opacity: 1; }
 .cb-pack-expand-btn:hover { background: rgba(0, 0, 0, 0.7); color: #fff; }
-.cb-pack-expanded { border-color: var(--accent-mint, #63eacf); }
+
+/* ── Resource group: collapsed group card (stacked "pile" affordance) ── */
+/* Two offset pseudo-layers peek out behind the card so a glb/pack reads as a
+ * group at a glance (decision 5). Kept passive: subtle borders on the elevated
+ * surface, no shadow/accent — the count badge carries the quantitative signal. */
+.cb-group-card::before,
+.cb-group-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--color-background-elevated, rgba(255, 255, 255, 0.04));
+  pointer-events: none;
+}
+.cb-group-card::before { transform: translate(3px, 3px); opacity: 0.7; }
+.cb-group-card::after { transform: translate(6px, 6px); opacity: 0.4; }
+.cb-file-thumb { position: relative; }
+/* Count badge doubles as the EXPAND hit target (card body only selects). Sized
+ * generously (tall pill + count + chevron) so it's an easy, obvious click. */
+.cb-group-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.62);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, transform 0.08s;
+}
+.cb-group-badge:hover { background: var(--cb-accent, #d4ff48); color: var(--color-background-base, #191919); }
+.cb-group-badge:active { transform: scale(0.94); }
+.cb-group-badge svg { width: 11px; height: 11px; transition: transform 0.15s ease; }
+.cb-group-badge-num { line-height: 1; }
+
+/* ── Resource group: inline-unpacked members (flowing, measured backdrop) ── */
+/* Expanding a group does NOT open a separate full-row band: the parent source
+ * card + its sub-assets are pushed straight into the same auto-fill grid and
+ * flow/wrap in place, exactly like an un-collapsed flat listing. The connected
+ * "paragraph" background is painted by measuring the member cards and laying one
+ * absolutely-positioned backdrop per wrapped row behind them (see CBGrid) —
+ * there is NO wrapper element that would break the grid flow, and members carry
+ * no special per-tile style (the parent cover tile looks like any other). */
+.cb-group-backdrops {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+/* A neutral white-transparent wash nudged toward the theme accent — a near-white
+ * low-opacity fill (still reads like the old white backdrop) with a faint accent
+ * bias. NO framing border; recognisability is the connected block itself. Per-row
+ * corner radius is set inline: an edge that extends to the container border is
+ * squared so consecutive rows read as one continued paragraph. Card backgrounds
+ * are untouched; this only shows through the gaps. */
+.cb-group-backdrop {
+  position: absolute;
+  background: var(--cb-group-bg, rgba(235, 248, 200, 0.09));
+}
+/* Members sit ABOVE the backdrop layer (the card is already position:relative, so
+ * a positive z-index keeps it over the z-index:0 backdrops). */
+.cb-group-member { z-index: 1; }
+/* Once unpacked, the parent card drops the collapsed "pile" pseudo-layers (it is
+ * no longer a stack, it's just the group's leftmost tile) and the badge chevron
+ * flips up to read as a collapse control. */
+.cb-pack-expanded.cb-group-card::before,
+.cb-pack-expanded.cb-group-card::after { display: none; }
+.cb-group-badge.open svg { transform: rotate(180deg); }
 
 /* ── List view ── */
 .cb-list-view {
@@ -1376,7 +1685,13 @@
   height: 100%;
   background: var(--cb-accent);
   border-radius: 2px;
-  transition: width 0.2s ease;
+  transition: width 0.2s ease, background 0.2s ease;
+}
+.cb-import-progress-fill--complete {
+  background: var(--success, #4caf82);
+}
+.cb-import-progress-fill--failed {
+  background: var(--danger, #ff7474);
 }
 .cb-import-progress-error {
   display: block;

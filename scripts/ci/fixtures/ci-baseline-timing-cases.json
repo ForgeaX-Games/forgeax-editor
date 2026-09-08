@@ -1,0 +1,104 @@
+{
+  "cases": [
+    {
+      "name": "complete timing facts",
+      "requiredContexts": [{"context": "smoke", "jobName": "smoke"}],
+      "criticalPath": {
+        "status": "observed",
+        "members": ["build", "smoke"],
+        "edges": [{"workflow": "ci.yml", "from": "build", "to": "smoke"}],
+        "timing": [
+          {"name": "build", "activeSeconds": 10},
+          {"name": "smoke", "activeSeconds": 25}
+        ],
+        "totalSeconds": 35
+      },
+      "expectedAcceptedPathTiming": {
+        "status": "observed",
+        "members": ["build", "smoke"],
+        "totalSeconds": 35
+      },
+      "expectedRequiredContextTiming": {
+        "status": "observed",
+        "members": ["smoke"],
+        "totalSeconds": 25
+      },
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "run": {"created_at": "2026-08-15T00:00:00Z", "run_started_at": "2026-08-15T00:00:10Z"},
+        "jobs": [
+          {"name": "build", "createdAt": "2026-08-15T00:00:00Z", "startedAt": "2026-08-15T00:00:05Z", "completedAt": "2026-08-15T00:00:15Z"},
+          {"name": "smoke", "createdAt": "2026-08-15T00:00:15Z", "startedAt": "2026-08-15T00:00:20Z", "completedAt": "2026-08-15T00:00:45Z"}
+        ]
+      }
+    },
+    {
+      "name": "missing wall clock observation",
+      "expectedStatus": "unknown",
+      "expectedCode": "timing-observation-missing",
+      "requiredContexts": [{"context": "smoke", "jobName": "smoke"}],
+      "criticalPath": {"status": "no-claim", "members": [], "timing": [], "totalSeconds": null},
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "run": {"created_at": "2026-08-15T00:00:00Z", "run_started_at": null},
+        "jobs": []
+      }
+    },
+    {
+      "name": "negative observation",
+      "expectedStatus": "unknown",
+      "expectedCode": "timing-observation-invalid",
+      "requiredContexts": [{"context": "smoke", "jobName": "smoke"}],
+      "criticalPath": {"status": "no-claim", "members": [], "timing": [], "totalSeconds": null},
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "run": {"created_at": "2026-08-15T00:00:10Z", "run_started_at": "2026-08-15T00:00:00Z"},
+        "jobs": []
+      }
+    },
+    {
+      "name": "invalid timestamp observation",
+      "expectedStatus": "unknown",
+      "expectedCode": "timing-observation-invalid",
+      "requiredContexts": [{"context": "smoke", "jobName": "smoke"}],
+      "criticalPath": {"status": "no-claim", "members": [], "timing": [], "totalSeconds": null},
+      "packet": {
+        "attemptProvenance": {
+          "sourceSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "runId": 42,
+          "runAttempt": 2,
+          "topologyId": "topology-1",
+          "graphDigest": "sha256:graph-1",
+          "rosterKey": "[build,smoke]",
+          "workflow": {"file": ".github/workflows/ci.yml", "name": "CI"}
+        },
+        "run": {"created_at": "invalid", "run_started_at": "also-invalid"},
+        "jobs": []
+      }
+    }
+  ]
+}

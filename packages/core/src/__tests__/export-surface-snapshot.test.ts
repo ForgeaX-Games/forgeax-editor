@@ -272,7 +272,11 @@ describe('AC-01 export-surface snapshot', () => {
     // useSessionDirtyAssets / SessionDirtyAsset type → 74 + 8 = 82. Runtime
     // isolation then publishes openEditorAssetPage as the one shell-owned effect
     // consumed by the authenticated carrier bridge → 83.
-    expect(entries.length).toBe(83);
+    // asset-editor-inspector-ui then publishes subscribeActiveEditorAsset — the
+    // imperative active-asset subscription the panelActions contributions module
+    // (a non-React AppExtension.activate) rides to keep asset-editor context keys
+    // in sync; its React sibling useActiveEditorAsset was already published → 84.
+    expect(entries.length).toBe(84);
 
     // Every entry must be non-empty.
     for (const e of entries) {

@@ -8,9 +8,12 @@ test('Gateway joins static contracts with live applier availability', () => {
   const gateway = new EditGateway(createEditSession());
   const before = gateway.operationCapabilitySnapshot();
   for (const descriptor of before.ops) {
-    expect(descriptor.availability.available).toBe(domainOf(descriptor.id) === descriptor.domain);
+    const expectedAvailable = descriptor.capabilityStatus === 'blocked'
+      ? false
+      : domainOf(descriptor.id) === descriptor.domain;
+    expect(descriptor.availability.available).toBe(expectedAvailable);
     if (!descriptor.availability.available) {
-      expect(descriptor.availability.code).toBe('applier-unavailable');
+      expect(['applier-unavailable', 'capability-blocked']).toContain(descriptor.availability.code);
     }
   }
   expect(Object.isFrozen(before)).toBe(true);
@@ -33,6 +36,46 @@ test('Gateway joins static contracts with live applier availability', () => {
   expect(gateway.listOps().find((entry) => entry.id === dynamicId)).toBeUndefined();
   unsubscribe();
   expect(observed).toHaveLength(2);
+});
+
+test('g0 publishes createAsset as a serialized capability-blocked projection', () => {
+  const gateway = new EditGateway(createEditSession());
+  const snapshot = gateway.operationCapabilitySnapshot();
+  const descriptor = snapshot.ops.find((entry) => entry.id === 'createAsset');
+
+  expect(snapshot.capabilityGeneration).toBe('g0');
+  expect(descriptor).toMatchObject({
+    source: 'registered',
+    domain: 'document',
+    capabilityGeneration: 'g0',
+    capabilityStatus: 'blocked',
+    stage: 'preflight',
+    owner: '@forgeax/editor-core OperationRun/applier contract owner',
+    recoveryAction: 'owner.repair',
+    diagnosticId: 'q5-create-asset-terminal-run',
+    availability: {
+      available: false,
+      code: 'capability-blocked',
+      capabilityGeneration: 'g0',
+      stage: 'preflight',
+      owner: '@forgeax/editor-core OperationRun/applier contract owner',
+      recoveryAction: 'owner.repair',
+      diagnosticId: 'q5-create-asset-terminal-run',
+    },
+  });
+  expect(descriptor?.argsSchema).toMatchObject({
+    type: 'object',
+    required: ['packPath', 'guid', 'assetKind', 'name'],
+  });
+  expect(descriptor?.completion).toBeUndefined();
+  expect(descriptor?.operationRun).toBeUndefined();
+  expect(descriptor?.recoveryActions).toContain('owner.repair');
+  expect(JSON.parse(JSON.stringify(snapshot))).toMatchObject({ capabilityGeneration: 'g0' });
+
+  const listed = gateway.listOps().find((entry) => entry.id === 'createAsset');
+  expect(listed).toEqual(descriptor);
+  expect(gateway.operationCapabilitySnapshot().capabilityGeneration)
+    .toBe(snapshot.capabilityGeneration);
 });
 
 test('a described downstream completion stays running until its Gateway OperationRun is terminal', async () => {

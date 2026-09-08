@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import type { Handle } from '@forgeax/engine-ecs';
+import type { Handle } from '@forgeax/engine-types';
 import { MeshFilter } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
 

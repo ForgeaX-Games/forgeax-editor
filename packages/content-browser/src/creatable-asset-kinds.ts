@@ -11,7 +11,7 @@ import type { CreatableAssetKind } from '@forgeax/editor-core';
  *  kind 忘写 payload 时 TS 直接报错。*/
 export interface CreatableAssetSpec {
   /** engine Asset discriminant（受限于 CreatableAssetKind 子集）*/
-  readonly kind: CreatableAssetKind;
+  readonly kind: CreatableAssetKind | 'scriptable-pack';
   /** Add 菜单显示名 */
   readonly label: string;
   /** Add 菜单图标：lucide 图标名（经 ContentBrowserIcon 渲染），与
@@ -22,6 +22,7 @@ export interface CreatableAssetSpec {
 }
 
 export const CREATABLE_ASSET_KINDS: readonly CreatableAssetSpec[] = [
+  { kind: 'scriptable-pack', label: 'Scriptable Pack', icon: 'file-code-2', defaultNamePrefix: 'NewScriptablePack' },
   { kind: 'scene', label: 'Scene', icon: 'clapperboard', defaultNamePrefix: 'NewScene' },
   { kind: 'material', label: 'Material', icon: 'paintbrush', defaultNamePrefix: 'NewMaterial' },
   { kind: 'material-instance', label: 'Material Instance', icon: 'layers', defaultNamePrefix: 'MI_' },

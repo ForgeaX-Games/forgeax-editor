@@ -17,9 +17,28 @@ import { recoverWorkflow } from '../kernel/workflow-recovery';
 import type { WorkflowCoordinator } from '../kernel/workflow-coordinator';
 import type { WorkflowRecipeRegistry } from '../kernel/workflow-recipes';
 import type { WorkflowRecipe } from '../contracts/workflow';
+import type {
+  CreationRunInput,
+  CreationVisualReviewFacts,
+  ReferenceCreationEntry,
+  ReferenceCreationFailure,
+} from '../runtime/reference-creation';
+import {
+  isReferenceCreationCorrection,
+  isReferenceCreationEvidenceEvent,
+  isReferenceCreationFinalDimensions,
+  isReferenceCreationInput,
+  isReferenceCreationNativeEntitySpecs,
+  isReferenceCreationVisualReviewFacts,
+} from '../runtime/reference-creation';
 import { isTerminalRunStatus, type OperationRunAcceptResult, type OperationRunReadResult, type SaveOperationRunPort } from '../contracts/run';
 import { parseTransportMessage } from './protocol';
 import { createEventCursor, decodeEventCursor } from './service-cursor';
+import {
+  RENDERER_OWNER_ADMISSION_OPERATION,
+  validateRendererOwnerAdmissionRequest,
+  validateRendererOwnerAdmissionResult,
+} from '../contracts/renderer-owner-admission';
 
 export interface TransportSecurityPolicy {
   readonly version: typeof TRANSPORT_PROTOCOL_VERSION;
@@ -167,7 +186,19 @@ export interface TransportServiceOptions {
   readonly gameplay?: (input: unknown) => unknown | Promise<unknown>;
   readonly workflowCoordinator?: WorkflowCoordinator;
   readonly workflowRecipes?: WorkflowRecipeRegistry;
+  /** The existing product Skill entry projected through the canonical carrier. */
+  readonly referenceCreation?: ReferenceCreationEntry;
 }
+
+export type ReferenceCreationTransportRequest =
+  | { readonly action: 'discover' }
+  | { readonly action: 'preflight' | 'start'; readonly input: CreationRunInput }
+  | { readonly action: 'resume' | 'ownerRepairAndResume' | 'journal'; readonly creationRunId: string }
+  | { readonly action: 'createNativeEntities'; readonly creationRunId: string; readonly specs: Parameters<ReferenceCreationEntry['createNativeEntities']>[1] }
+  | { readonly action: 'correct'; readonly creationRunId: string; readonly correction: Parameters<ReferenceCreationEntry['correct']>[1] }
+  | { readonly action: 'recordEvidence'; readonly creationRunId: string; readonly event: Parameters<ReferenceCreationEntry['recordEvidence']>[1] }
+  | { readonly action: 'appendVisualReview'; readonly creationRunId: string; readonly facts: CreationVisualReviewFacts }
+  | { readonly action: 'finalize'; readonly creationRunId: string; readonly dimensions: Parameters<ReferenceCreationEntry['finalize']>[1] };
 
 export interface TransportDiscoveryResult {
   readonly protocolVersion: typeof TRANSPORT_PROTOCOL_VERSION;
@@ -321,6 +352,124 @@ function errorResponse(request: TransportRequest, error: CommandError, runId?: s
   return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: request.id, correlationId: request.correlationId, ...(runId === undefined ? {} : { runId }), error };
 }
 
+function referenceCreationError(
+  request: TransportRequest,
+  result: { readonly error: Partial<ReferenceCreationFailure> & { readonly code: string; readonly hint?: string; readonly [key: string]: unknown }; readonly run?: unknown },
+): TransportResponse {
+  const source = result.error;
+  const details = source.details === undefined && result.run === undefined
+    ? undefined
+    : source.details === undefined
+      ? { run: result.run }
+      : result.run === undefined
+        ? { error: source.details }
+        : { error: source.details, run: result.run };
+  return errorResponse(request, {
+    ...source,
+    code: source.code,
+    hint: source.hint ?? source.code,
+    retryable: source.retryable ?? false,
+    recoveryActions: [...(source.recoveryActions ?? [])],
+    ...(details === undefined ? {} : { details }),
+  } as unknown as CommandError);
+}
+
+function referenceCreationInputError(request: TransportRequest): TransportResponse {
+  return errorResponse(request, securityError('invalid-reference-creation-input', 'reference-creation params do not match a typed action contract.', { recoveryActions: ['transport.describe'] }));
+}
+
+async function executeRendererOwnerAdmission(
+  product: EditorProduct | undefined,
+  input: unknown,
+  auth: TransportAuthorizationRequest,
+  signal: AbortSignal,
+): Promise<{ readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: CommandError }> {
+  const requestValidation = validateRendererOwnerAdmissionRequest(input);
+  if (!requestValidation.ok) return requestValidation;
+  if (product === undefined) {
+    return {
+      ok: false,
+      error: securityError('capability-blocked', 'The renderer owner-admission capability is not connected to a public carrier.', {
+        recoveryActions: ['renderer.ownerAdmission.rediscover'],
+      }),
+    };
+  }
+  const descriptor = product.describeCapability(RENDERER_OWNER_ADMISSION_OPERATION);
+  if (descriptor?.permission !== undefined && auth.permission !== descriptor.permission.action) {
+    return {
+      ok: false,
+      error: securityError('permission-denied', 'The renderer owner-admission capability requires execute permission.', {
+        authorization: { requiredPermission: descriptor.permission.action, actorId: auth.actor.id },
+        recoveryActions: descriptor.recoveryActions,
+      }),
+    };
+  }
+  const executed = await product.capabilityRegistry.execute(RENDERER_OWNER_ADMISSION_OPERATION, requestValidation.value, { host: 'bun', signal });
+  if (!executed.ok) return executed;
+  const resultValidation = validateRendererOwnerAdmissionResult(executed.result);
+  if (!resultValidation.ok) return resultValidation;
+  return { ok: true, result: resultValidation.value };
+}
+
+async function referenceCreationRoute(
+  request: TransportRequest,
+  entry: ReferenceCreationEntry | undefined,
+  security: TransportSecurityPolicy,
+): Promise<TransportResponse> {
+  if (entry === undefined) return errorResponse(request, securityError('executor-unavailable', 'No reference-creation Skill entry is connected.', { recoveryActions: ['discover'] }));
+  const params = record(request.params);
+  const authorized = authorizeTransportRequest(requestAuth(request, params), security);
+  if (!authorized.ok) return errorResponse(request, authorized.error);
+  const action = params.action;
+  if (params.action === 'discover') {
+    return terminalResponse(request, {
+      id: 'forgeax-reference-creation',
+      publicRoute: 'reference-creation',
+      skill: entry.skill(),
+      zeroWritePreflight: { mutates: false },
+    });
+  }
+  const creationRunId = typeof params.creationRunId === 'string' && params.creationRunId.trim() !== '' ? params.creationRunId : undefined;
+  const input = params.input;
+  let result: unknown;
+  if ((action === 'preflight' || action === 'start') && isReferenceCreationInput(input)) {
+    result = action === 'preflight' ? entry.preflight(input as CreationRunInput) : await entry.start(input as CreationRunInput);
+  } else if ((action === 'resume' || action === 'ownerRepairAndResume') && creationRunId !== undefined) {
+    result = action === 'resume' ? entry.resume(creationRunId) : await entry.ownerRepairAndResume(creationRunId);
+  } else if (action === 'createNativeEntities' && creationRunId !== undefined && isReferenceCreationNativeEntitySpecs(params.specs)) {
+    result = await entry.createNativeEntities(creationRunId, params.specs as Parameters<ReferenceCreationEntry['createNativeEntities']>[1]);
+  } else if (action === 'correct' && creationRunId !== undefined && isReferenceCreationCorrection(params.correction)) {
+    result = await entry.correct(creationRunId, params.correction as Parameters<ReferenceCreationEntry['correct']>[1]);
+  } else if (action === 'recordEvidence' && creationRunId !== undefined && isReferenceCreationEvidenceEvent(params.event)) {
+    result = await entry.recordEvidence(creationRunId, params.event as Parameters<ReferenceCreationEntry['recordEvidence']>[1]);
+  } else if (action === 'appendVisualReview' && creationRunId !== undefined && isReferenceCreationVisualReviewFacts(params.facts)) {
+    result = entry.appendVisualReview(creationRunId, params.facts as CreationVisualReviewFacts);
+  } else if (action === 'finalize' && creationRunId !== undefined && isReferenceCreationFinalDimensions(params.dimensions)) {
+    result = entry.finalize(creationRunId, params.dimensions as Parameters<ReferenceCreationEntry['finalize']>[1]);
+  } else if (action === 'journal' && creationRunId !== undefined) {
+    if (entry.runtime.journalError !== undefined) {
+      return referenceCreationError(request, {
+        error: entry.runtime.journalError as unknown as {
+          readonly code: string;
+          readonly hint: string;
+          readonly recoveryActions: readonly string[];
+          readonly [key: string]: unknown;
+        },
+      });
+    }
+    return terminalResponse(request, { creationRunId, records: entry.journal(creationRunId) });
+  } else {
+    return referenceCreationInputError(request);
+  }
+  if (result !== null && typeof result === 'object' && (result as { ok?: unknown }).ok === false) {
+    return referenceCreationError(request, result as { readonly error: { readonly code: string; readonly hint: string; readonly recoveryActions: readonly string[]; readonly [key: string]: unknown }; readonly run?: unknown });
+  }
+  if (result !== null && typeof result === 'object' && (result as { ok?: unknown }).ok === true && action === 'preflight') {
+    return terminalResponse(request, (result as { readonly value: unknown }).value);
+  }
+  return terminalResponse(request, result);
+}
+
 export function createTransportService(options: TransportServiceOptions = {}): TransportService {
   const journal = options.journal ?? new RunJournal({ scope: 'default' });
   const security = options.security ?? createTransportSecurityPolicy({ version: TRANSPORT_PROTOCOL_VERSION, scopes: ['default'], permissions: {} });
@@ -371,7 +520,7 @@ export function createTransportService(options: TransportServiceOptions = {}): T
         'discover', 'transport.describe', 'query', ...(options.evaluate === undefined ? [] : ['script.execute']), ...(options.gameplay === undefined ? [] : ['gameplay']), ...(options.assetImportSource === undefined ? [] : ['asset.importSource']), 'asset.snapshot', 'asset.observe', 'asset.reconcile', 'asset.preflight', 'asset.mutate', 'asset.restore', 'run.dispatch', 'run.get', 'run.wait',
         'run.list', 'run.listEvents', 'run.retry', 'run.cancel', 'run.reconcile',
         'workflow.start', 'workflow.get', 'workflow.recover', 'workflow.retry', 'workflow.listRecipes',
-        'save', 'reopen',
+        'save', 'reopen', ...(options.referenceCreation === undefined ? [] : ['reference-creation']),
       ]),
       workflowRecipes: Object.freeze((options.workflowRecipes?.list() ?? []).map((recipe) => ({ id: recipe.id, version: recipe.version }))),
     };
@@ -385,7 +534,11 @@ export function createTransportService(options: TransportServiceOptions = {}): T
   ): Promise<{ readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: CommandError }> {
     try {
       let value: unknown;
-      if (operationId === 'script.execute' && options.evaluate !== undefined) {
+      if (operationId === RENDERER_OWNER_ADMISSION_OPERATION) {
+        const executed = await executeRendererOwnerAdmission(options.product, input, auth, signal);
+        if (!executed.ok) return executed;
+        value = executed.result;
+      } else if (operationId === 'script.execute' && options.evaluate !== undefined) {
         value = await options.evaluate(String(record(input).code ?? ''), auth, signal);
       } else if (options.dispatch !== undefined) value = await options.dispatch(operationId, input, auth, signal);
       else if (operationId === 'asset.mutate' && options.assetLifecycle !== undefined) value = await options.assetLifecycle.run(input as AssetMutationRequest);
@@ -603,6 +756,7 @@ export function createTransportService(options: TransportServiceOptions = {}): T
         }));
       }
       if (request.method === 'discover' || request.method === 'transport.describe') return terminalResponse(request, discovery());
+      if (request.method === 'reference-creation') return referenceCreationRoute(request, options.referenceCreation, security);
       if (request.method === 'asset.importSource') {
         if (options.assetImportSource === undefined) {
           return errorResponse(request, securityError('not-supported', 'No Editor source-import bridge is connected.', { recoveryActions: ['editor.discover'] }));

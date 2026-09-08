@@ -2,18 +2,88 @@
 // disk files). Recursive row rendering extracted from ContentBrowser.tsx so
 // the component file focuses on state + wiring.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
 import { useTranslation, type TFunction } from '@forgeax/editor-core/i18n';
 import { dispatchActiveEditorOperation } from '@forgeax/editor-core';
 import { ContentBrowserIcon } from './content-browser-icons';
 import { CBInlineRename } from './CBInlineRename';
 import {
+  dropRejectFallback,
+  useDragSource,
+  useFolderDropZone,
+  type CBDragPayload,
+  type CBDropTarget,
+} from './dnd';
+import {
   isPathInSelectionChain,
   viewItemKey,
   type SourceTreeNode,
 } from './content-browser-format';
 import type { CBFolder, CBViewItem } from './types';
+
+const NOOP_MOVE = (_p: CBDragPayload, _t: CBDropTarget) => {};
+
+/** A single draggable/droppable project-tree folder row. Extracted from
+ *  renderRows so it can hold the DnD hooks (a plain render fn cannot). Handles
+ *  both tree↔tree folder moves and grid→tree drops via the shared drop zone. */
+function CBSourceRow({
+  folder,
+  depth,
+  expandable,
+  open,
+  inSelectionPath,
+  selected,
+  chev,
+  icon,
+  onClick,
+  onDoubleClick,
+  onContextMenu,
+  onFocusItem,
+  getDragPayload,
+  onMoveDrop,
+}: {
+  folder: CBFolder;
+  depth: number;
+  expandable: boolean;
+  open: boolean;
+  inSelectionPath: boolean;
+  selected: boolean;
+  chev: ReactNode;
+  icon: ReactNode;
+  onClick: () => void;
+  onDoubleClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onFocusItem: (item: CBViewItem) => void;
+  getDragPayload?: (item: CBFolder) => CBDragPayload | null;
+  onMoveDrop?: (payload: CBDragPayload, target: CBDropTarget) => void;
+}): ReactNode {
+  const buildPayload = useCallback(() => getDragPayload?.(folder) ?? null, [getDragPayload, folder]);
+  const dragSource = useDragSource(buildPayload);
+  const dropTarget = useMemo<CBDropTarget>(() => ({ kind: 'tree-folder', path: folder.path }), [folder.path]);
+  const { isOver, verdict, dropProps } = useFolderDropZone(dropTarget, onMoveDrop ?? NOOP_MOVE);
+  const dropClass = isOver && verdict ? (verdict.ok ? ' cb-drop-ok' : ' cb-drop-reject') : '';
+  const rejectTitle = isOver && verdict && !verdict.ok ? dropRejectFallback(verdict.reason) : undefined;
+  return (
+    <button
+      type="button"
+      className={`no-motion-lift cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}${dropClass}`}
+      style={{ paddingLeft: `${16 + depth * 14}px` }}
+      title={rejectTitle ?? folder.path}
+      tabIndex={selected ? 0 : -1}
+      onFocus={() => onFocusItem(folder)}
+      {...dragSource}
+      {...dropProps}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+    >
+      {chev}
+      {icon}
+      <span className="cb-source-name">{folder.name}</span>
+    </button>
+  );
+}
 
 interface Nav {
   currentPath: string;
@@ -72,6 +142,10 @@ export interface CBSourceTreeProps {
   renameValidate: (value: string) => string | null;
   onRenameCommit: (item: CBViewItem, value: string) => void;
   onRenameCancel: () => void;
+  /** Internal move DnD: build a drag payload for a tree folder subject. */
+  getDragPayload?: (item: CBFolder) => CBDragPayload | null;
+  /** Internal move DnD: execute a validated move dropped onto a tree folder. */
+  onMoveDrop?: (payload: CBDragPayload, target: CBDropTarget) => void;
 }
 
 function renderRows(
@@ -92,9 +166,11 @@ function renderRows(
     renameValidate: CBSourceTreeProps['renameValidate'];
     onRenameCommit: CBSourceTreeProps['onRenameCommit'];
     onRenameCancel: CBSourceTreeProps['onRenameCancel'];
+    getDragPayload?: CBSourceTreeProps['getDragPayload'];
+    onMoveDrop?: CBSourceTreeProps['onMoveDrop'];
   },
 ): ReactNode {
-  const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, onFocusItem, nav, openFolderContextMenu, renamingKey, renameValidate, onRenameCommit, onRenameCancel } = ctx;
+  const { t, collapsedSourceFolders, setCollapsedSourceFolders, setFavoritesOnly, selectedPath, setSelectedItem, setPreviewItem, onFocusItem, nav, openFolderContextMenu, renamingKey, renameValidate, onRenameCommit, onRenameCancel, getDragPayload, onMoveDrop } = ctx;
   // The source tree lists DIRECTORIES only — files live in the right-hand grid.
   // Folders are expanded by default; the store records only the ones a
   // double-click has explicitly COLLAPSED (`=== true`). A folder is expandable
@@ -166,21 +242,22 @@ function renderRows(
             />
           </div>
         ) : (
-          <button
-            type="button"
-            className={`no-motion-lift cb-source-row${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}`}
-            style={{ paddingLeft: `${16 + depth * 14}px` }}
-            title={node.path}
-            tabIndex={selected ? 0 : -1}
-            onFocus={() => onFocusItem(folder)}
+          <CBSourceRow
+            folder={folder}
+            depth={depth}
+            expandable={expandable}
+            open={open}
+            inSelectionPath={inSelectionPath}
+            selected={selected}
+            chev={chev}
+            icon={icon}
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
             onContextMenu={handleRowContextMenu}
-          >
-            {chev}
-            {icon}
-            <span className="cb-source-name">{node.name}</span>
-          </button>
+            onFocusItem={onFocusItem}
+            getDragPayload={getDragPayload}
+            onMoveDrop={onMoveDrop}
+          />
         )}
         {expandable && open && renderRows(node.children, depth + 1, ctx)}
       </div>
@@ -204,6 +281,8 @@ export function CBSourceTree({
   renameValidate,
   onRenameCommit,
   onRenameCancel,
+  getDragPayload,
+  onMoveDrop,
 }: CBSourceTreeProps): ReactNode {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -336,6 +415,8 @@ export function CBSourceTree({
                 renameValidate,
                 onRenameCommit,
                 onRenameCancel,
+                getDragPayload,
+                onMoveDrop,
               })}
             </div>
           )}

@@ -17,6 +17,10 @@
       "types": "./src/delete-guard-entry.ts",
       "import": "./src/delete-guard-entry.ts"
     },
+    "./scriptable-pack-mutation": {
+      "types": "./src/scriptable-pack-mutation.ts",
+      "import": "./src/scriptable-pack-mutation.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
@@ -39,6 +43,7 @@
   },
   "dependencies": {
     "@forgeax/editor-core": "workspace:*",
+    "@forgeax/editor-file-preview": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
     "@forgeax/interface": "workspace:*",
@@ -46,8 +51,8 @@
     "@tanstack/react-virtual": "^3.14.3",
     "@tanstack/virtual-core": "^3.17.1",
     "lucide-react": "^0.460.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.10.2",

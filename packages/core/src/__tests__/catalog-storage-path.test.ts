@@ -13,6 +13,13 @@ describe('catalogStoragePath', () => {
     })).toBe('.forgeax/games/demo/assets/ui.pack.json');
   });
 
+  it('keeps ScriptablePack sources as the writable container', () => {
+    expect(catalogStoragePath({
+      packageUrl: '/__forgeax-ddc/effect-orb-domain.pack.json',
+      sourcePath: 'assets/authoring/abilities/catalog/effect-orb-domain.pack.ts',
+    })).toBe('assets/authoring/abilities/catalog/effect-orb-domain.pack.ts');
+  });
+
   it('derives imported source sidecars and rejects runtime-only DDC rows', () => {
     expect(catalogStoragePath({
       packageUrl: '/__forgeax-ddc/mesh.pack.json',

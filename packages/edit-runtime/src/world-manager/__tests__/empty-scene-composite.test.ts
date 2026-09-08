@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import { scenePlugin as transformPlugin, Transform } from '@forgeax/engine-scene';
+import { registerPropagateTransforms, scenePlugin, Transform } from '@forgeax/engine-scene';
 import { Camera, perspective } from '@forgeax/engine-render';
 import { WorldManager } from '../index';
 
@@ -99,7 +99,7 @@ describe('w17 — E3 empty scene composite render does not crash', () => {
     try {
       // sceneWorld: empty (no geometry, no skybox/skylight) — the E3 case.
       const sceneWorld = new World();
-      transformPlugin().build(sceneWorld);
+      registerPropagateTransforms(sceneWorld);
 
       const wm = new WorldManager(() => sceneWorld);
       // editorWorld carries a camera (no gizmo) so the composite has a valid
@@ -116,7 +116,7 @@ describe('w17 — E3 empty scene composite render does not crash', () => {
       const editorApp = await createApp({
         renderer: makeFakeRenderer(drawCalls, attachedWorlds) as never,
         world: wm.editorWorld as never,
-        plugins: [transformPlugin()],
+        plugins: [scenePlugin()],
         drawSource: wm.createDrawSource(),
       } as never);
       if (!editorApp.ok) throw new Error('editorApp assemble failed');

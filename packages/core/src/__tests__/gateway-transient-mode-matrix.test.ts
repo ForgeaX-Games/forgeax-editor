@@ -39,10 +39,11 @@ import type { EditorOp, EditSession } from '../types';
 import { getSelection } from '../store/selection';
 import { getHoverEntity } from '../store/hover';
 import { createEditSession } from '../session/document';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createSession(): EditSession {
   const s = createEditSession();
-  s.world = new World();
+  s.world = createCoreTestWorld();
   return s;
 }
 

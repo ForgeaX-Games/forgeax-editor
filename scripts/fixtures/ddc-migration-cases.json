@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "forgeax-ddc-migration-fixtures/v1",
+  "protected": {
+    "relativePath": ".forgeax/ddc/v2/entries/current-key",
+    "reason": "current and last-known-good reachability protects this target"
+  },
+  "actions": [
+    {
+      "kind": "inspect",
+      "executable": true,
+      "reason": "read the status envelope before choosing a destructive action"
+    },
+    {
+      "kind": "cold-rebuild",
+      "executable": true,
+      "reason": "rebuild from author source when legacy owner or integrity is unavailable"
+    },
+    {
+      "kind": "prune",
+      "executable": true,
+      "reason": "delete only an exact target after the second safety check"
+    }
+  ],
+  "reverify": {
+    "dryRunDeletes": 0,
+    "protectedTargetsDeleted": 0,
+    "unknownOwnerTargetsDeleted": 0,
+    "requiredAfterStatus": true
+  }
+}

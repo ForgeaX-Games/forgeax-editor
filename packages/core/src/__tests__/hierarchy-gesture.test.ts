@@ -8,10 +8,11 @@ import type { EditSession, EditorOp } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
 import { entName, worldEntityHandles } from '../store/entity-state';
 import '../store/store';
+import { createCoreTestWorld } from './fixtures/world';
 
 function session(): EditSession {
   const value = createEditSession();
-  value.world = new World();
+  value.world = createCoreTestWorld();
   return value;
 }
 

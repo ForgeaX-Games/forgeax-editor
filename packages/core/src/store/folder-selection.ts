@@ -18,13 +18,10 @@
 
 import { useSyncExternalStore } from 'react';
 import { registerApplier } from '../io/appliers';
-// Single-active-selection-domain: selecting a path clears any entity selection so
-// Delete / blank-click resolve to one target. Direct clear (guarded on non-empty)
-// goes through the shared selection-domain seam.
-import {
-  clearSelectionDomains,
-  registerSelectionDomainClear,
-} from './selection-domain-clears';
+// Orthogonal selection domains: path selection does not clear entity/asset
+// selection (Delete routes by focused keybinding scope). Lifecycle clears still
+// go through selection-domain-clears.
+import { registerSelectionDomainClear } from './selection-domain-clears';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -105,10 +102,8 @@ registerApplier('session', 'setFolderSelection', (op) => {
   if (sameItems(selectedItems, next)) {
     return { ok: true };
   }
-  // Only a forward (non-empty) path selection is the active domain — clear the
-  // entity selection FIRST, then emit paths LAST so lastSelectionDomain = 'folder'.
-  // An empty set (deselect) must NOT clear the entity selection.
-  if (next.length > 0) clearSelectionDomains('entity');
+  // Forward (non-empty) path selection advances lastSelectionDomain to 'folder'.
+  // Empty set (deselect) is a dedup-guarded no-op and never advances the domain.
   selectedItems = next;
   emit();
   return { ok: true };
@@ -117,8 +112,7 @@ registerApplier('session', 'setFolderSelection', (op) => {
 /**
  * Directly clear the path selection — lifecycle/coordination seam. Not an edit op,
  * not dispatched, not recorded in ledger/undo, and does NOT advance
- * lastSelectionDomain. Used by the single-active-domain clears (selecting an
- * entity) and by blank-area deselect handlers.
+ * lastSelectionDomain. Used by blank-area deselect handlers and play/stop lifecycle.
  */
 export function clearFolderSelection(): void {
   if (selectedItems.length !== 0) {

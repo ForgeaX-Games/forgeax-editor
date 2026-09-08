@@ -18,7 +18,7 @@
             "schedule": { "rate": 0, "bursts": [{ "time": 0.06, "count": 1 }], "loopDuration": 2.4 },
             "bounds": { "kind": "sphere", "center": [0, 0.3, 0], "radius": 2.2 },
             "program": { "module": "arc-nova-flow-field.vfx.wgsl" },
-            "renderers": [{ "kind": "billboard", "material": "427e8932-3ea3-49ad-a8ce-8c9561e53062", "blend": "additive" }]
+            "renderers": [{ "kind": "mesh", "material": "427e8932-3ea3-49ad-a8ce-8c9561e53062", "mesh": "9a7e15c1-5d02-4d64-9001-1a2b3c4d5e01", "submesh": 0 }]
           },
           {
             "id": "charge-hex-seal",

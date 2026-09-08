@@ -402,3 +402,82 @@ export function captureGameplayViewport(
   );
   return capture;
 }
+
+export type GameplayCaptureInspection = {
+  readonly width: number;
+  readonly height: number;
+  readonly sampledPixels: number;
+  readonly nonBlackPixels: number;
+  readonly nonBlackRatio: number;
+  readonly centerNonBlackRatio: number;
+  readonly centerWarmRatio: number;
+  readonly centerCoolRatio: number;
+};
+
+/**
+ * Inspect a PNG produced by the live capture path. This creates an analysis
+ * canvas only; it never renders, replaces, or supplies a runtime surface.
+ */
+export async function inspectGameplayCapture(dataUrl: string): Promise<GameplayCaptureInspection> {
+  if (!dataUrl.startsWith('data:image/png;base64,')) {
+    throw captureError('gameplay capture inspection requires a PNG data URL');
+  }
+  const doc = globalThis.document;
+  if (!doc) throw captureError('gameplay capture inspection requires a document');
+  const image = doc.createElement('img');
+  image.src = dataUrl;
+  if (typeof image.decode === 'function') await image.decode();
+  else await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(captureError('gameplay capture PNG could not be decoded'));
+  });
+
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (width < 1 || height < 1) throw captureError('gameplay capture PNG has no pixels');
+  const canvas = doc.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw captureError('gameplay capture inspection requires a 2D canvas context');
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, width, height).data;
+  const stride = Math.max(1, Math.ceil(Math.sqrt((width * height) / 300_000)));
+  const centerLeft = Math.floor(width * 0.25);
+  const centerRight = Math.ceil(width * 0.75);
+  const centerTop = Math.floor(height * 0.25);
+  const centerBottom = Math.ceil(height * 0.75);
+  let sampledPixels = 0;
+  let nonBlackPixels = 0;
+  let centerPixels = 0;
+  let centerNonBlackPixels = 0;
+  let centerWarmPixels = 0;
+  let centerCoolPixels = 0;
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      const offset = (y * width + x) * 4;
+      const red = pixels[offset] ?? 0;
+      const green = pixels[offset + 1] ?? 0;
+      const blue = pixels[offset + 2] ?? 0;
+      const alpha = pixels[offset + 3] ?? 0;
+      const visible = alpha > 0 && Math.max(red, green, blue) > 18;
+      sampledPixels += 1;
+      if (visible) nonBlackPixels += 1;
+      if (x < centerLeft || x >= centerRight || y < centerTop || y >= centerBottom) continue;
+      centerPixels += 1;
+      if (visible) centerNonBlackPixels += 1;
+      if (red > 70 && red > green * 1.35 && red > blue * 1.35) centerWarmPixels += 1;
+      if (blue > 70 && blue > red * 1.2 && blue > green * 1.05) centerCoolPixels += 1;
+    }
+  }
+  return {
+    width,
+    height,
+    sampledPixels,
+    nonBlackPixels,
+    nonBlackRatio: nonBlackPixels / Math.max(1, sampledPixels),
+    centerNonBlackRatio: centerNonBlackPixels / Math.max(1, centerPixels),
+    centerWarmRatio: centerWarmPixels / Math.max(1, centerPixels),
+    centerCoolRatio: centerCoolPixels / Math.max(1, centerPixels),
+  };
+}

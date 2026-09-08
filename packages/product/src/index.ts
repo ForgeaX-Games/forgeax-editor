@@ -11,6 +11,7 @@ import type { ProductContractManifest } from './contracts/manifest';
 import {
   CapabilityRegistry,
   type CapabilityDiscoveryOptions,
+  registerRendererOwnerAdmissionCapability,
 } from './kernel/capability-registry';
 import type { CapabilityDescriptor } from './contracts/capability';
 import type { CapabilityManifest } from './contracts/manifest';
@@ -19,8 +20,16 @@ export {
   PRODUCT_CONTRACT_MANIFEST,
   PRODUCT_CONTRACT_MANIFEST_VERSION,
   PRODUCT_CONTRACT_VERSION,
+  REFERENCE_CREATION_LIFECYCLE,
+  REFERENCE_CREATION_REQUIRED_INPUTS,
+  REFERENCE_CREATION_SHORTEST_ROUTE,
+  REFERENCE_CREATION_SKILL_MANIFEST,
 } from './contracts/manifest';
-export type { ProductContractManifest } from './contracts/manifest';
+export type {
+  ProductContractManifest,
+  ProductSkillManifest,
+  ReferenceCreationLifecycleRoute,
+} from './contracts/manifest';
 export {
   VIEWPORT_CARRIER_KINDS,
   VIEWPORT_RUNTIME_CONTRACT_VERSION,
@@ -50,6 +59,26 @@ export type {
   CapabilityRegistration,
   CapabilitySchema,
 } from './contracts/capability';
+export {
+  RENDERER_OWNER_ADMISSION_IDENTITY_FIELDS,
+  RENDERER_OWNER_ADMISSION_MODES,
+  RENDERER_OWNER_ADMISSION_OPERATION,
+  RENDERER_OWNER_ADMISSION_OWNER,
+  RENDERER_OWNER_ADMISSION_RECOVERY,
+  RENDERER_OWNER_ADMISSION_SCHEMA,
+  createRendererOwnerAdmissionRegistration,
+  validateRendererOwnerAdmissionRequest,
+  validateRendererOwnerAdmissionResult,
+} from './contracts/renderer-owner-admission';
+export type {
+  RendererOwnerAdmissionFailure,
+  RendererOwnerAdmissionIdentity,
+  RendererOwnerAdmissionMode,
+  RendererOwnerAdmissionObservation,
+  RendererOwnerAdmissionRequest,
+  RendererOwnerAdmissionResult,
+  RendererOwnerAdmissionValidation,
+} from './contracts/renderer-owner-admission';
 export {
   createEntityObjectRef,
   createErrorCause,
@@ -118,6 +147,7 @@ export {
   CapabilityRegistry,
   CapabilityRegistrationError,
   compareHostCapabilities,
+  registerRendererOwnerAdmissionCapability,
 } from './kernel/capability-registry';
 export type { CapabilityDiscoveryOptions, HostParityReport } from './kernel/capability-registry';
 export {
@@ -125,6 +155,39 @@ export {
   PRODUCT_CAPABILITY_MANIFEST_VERSION,
 } from './contracts/manifest';
 export type { CapabilityManifest } from './contracts/manifest';
+export {
+  createReferenceCreationRuntime,
+  createReferenceCreationEntry,
+  createReferenceCreationSkill,
+  ReferenceCreationRuntime,
+} from './runtime/reference-creation';
+export type {
+  GatewayAssetEntry,
+  GatewayCreationCommand,
+  GatewayCreationDispatchResult,
+  GatewayCreationError,
+  GatewayCreationPort,
+  GatewayOperationDescriptor,
+  GatewayOperationRun,
+  GatewayCreationRunResult,
+  CreationRunInput,
+  CreationVisualReviewFacts,
+  ReferenceCreationAction,
+  ReferenceCreationActionDescriptor,
+  ReferenceCreationFailure,
+  ReferenceCreationFinalReport,
+  ReferenceCreationInput,
+  ReferenceCreationNativeEntitySpec,
+  ReferenceCreationParameterShape,
+  ReferenceCreationReview,
+  ReferenceCreationResult,
+  ReferenceCreationRuntimeOptions,
+  ReferenceCreationEntry,
+  ReferenceCreationEntryOptions,
+  ReferenceCreationJournalStore,
+  ReferenceCreationSkillDescriptor,
+  ReferenceCreationTerminalResult,
+} from './runtime/reference-creation';
 export { CommitCollar } from './kernel/commit-collar';
 export type { UndoRedoRequest } from './kernel/commit-collar';
 export type {
@@ -280,6 +343,7 @@ export {
   parseTransportMessage,
 } from './transport/protocol';
 export type { TransportRequest, TransportResponse } from './transport/protocol';
+export type { ReferenceCreationTransportRequest } from './transport/service';
 export type { TransportActor } from './contracts/transport';
 export {
   authorizeTransportRequest,
@@ -451,14 +515,19 @@ export function blockingAvailability(
 
 /** Create the shared discovery facade around one capability registry. */
 export function createEditorProduct(
-  options: ProductAvailability | CreateEditorProductOptions = blockingAvailability(),
+  options?: ProductAvailability | CreateEditorProductOptions,
 ): EditorProduct {
-  const availability = 'available' in options
-    ? options
-    : options.availability ?? blockingAvailability();
-  const capabilityRegistry = 'available' in options
+  const availability = options === undefined
+    ? blockingAvailability()
+    : 'available' in options
+      ? options
+      : options.availability ?? blockingAvailability();
+  const capabilityRegistry = options !== undefined && 'available' in options
     ? new CapabilityRegistry()
-    : options.capabilityRegistry ?? new CapabilityRegistry();
+    : options?.capabilityRegistry ?? new CapabilityRegistry();
+  if (options === undefined || (!('available' in options) && options.capabilityRegistry === undefined)) {
+    registerRendererOwnerAdmissionCapability(capabilityRegistry);
+  }
   const product: EditorProduct = {
     contractVersion: PRODUCT_CONTRACT_VERSION,
     manifest: PRODUCT_CONTRACT_MANIFEST,

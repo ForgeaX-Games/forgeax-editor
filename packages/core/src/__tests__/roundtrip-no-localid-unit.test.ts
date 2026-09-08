@@ -29,7 +29,7 @@ import {
   rootsToSceneAsset,
   serializeSceneAssetToPack,
 } from '@forgeax/engine-runtime';
-import { Name, Transform } from '@forgeax/engine-scene';
+import { Name, Transform, worldGetSceneInstanceState, worldInstantiateScene } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { SceneEntity, LocalEntityId } from '@forgeax/engine-types';
 import type { ShaderRegistryDevice } from '@forgeax/engine-shader';
@@ -37,6 +37,7 @@ import { ShaderRegistry } from '@forgeax/engine-shader';
 import type { EntityHandle } from '../scene/scene-types';
 import { createEditSession } from '../session/document';
 import { entName, entComponent, worldEntityHandles } from '../store/entity-state';
+import { createCoreTestWorld } from './fixtures/world';
 
 function makeMockShaderRegistry(): ShaderRegistry {
   const mockDevice: ShaderRegistryDevice = {
@@ -68,7 +69,7 @@ function buildSceneAsset(entities: Array<{ name: string; pos: { x: number; y: nu
   };
 }
 function collectNames(world: World, root: EntityHandle): string[] {
-  const stateRes = world.getSceneInstanceState(root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return [];
   const names: string[] = [];
   for (const ent of stateRes.value.entityToLocalId.keys()) {
@@ -81,13 +82,13 @@ function collectNames(world: World, root: EntityHandle): string[] {
 describe('w27 — AC-03 round-trip no-localId (unit)', () => {
   it('(a) save → reload preserves entity content (names + positions)', () => {
     const registry = makeRegistry();
-    const worldA = new World();
+    const worldA = createCoreTestWorld();
     const asset = buildSceneAsset([
       { name: 'Ground', pos: { x: 0, y: 0, z: 0 } },
       { name: 'Box', pos: { x: 1, y: 2, z: 3 } },
     ]);
     const handleA = worldA.allocSharedRef('SceneAsset', asset);
-    const rA = worldA.instantiateScene(handleA);
+    const rA = worldInstantiateScene(worldA, handleA);
     expect(rA.ok).toBe(true);
     if (!rA.ok) return;
 
@@ -98,9 +99,9 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
     if (!savedAsset.ok) return;
 
     // Reload into a fresh world.
-    const worldB = new World();
+    const worldB = createCoreTestWorld();
     const handleB = worldB.allocSharedRef('SceneAsset', savedAsset.value);
-    const rB = worldB.instantiateScene(handleB);
+    const rB = worldInstantiateScene(worldB, handleB);
     expect(rB.ok).toBe(true);
     if (!rB.ok) return;
 
@@ -110,10 +111,10 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
   it('(b) the editor session holds no localId / internal identity state after reload', () => {
     // A fresh EditSession bound to a reloaded world exposes ONLY {world, registry}
     // — no symbol-keyed internal id bag (I1: handle IS identity).
-    const worldB = new World();
+    const worldB = createCoreTestWorld();
     const asset = buildSceneAsset([{ name: 'Solo', pos: { x: 4, y: 5, z: 6 } }]);
     const handleB = worldB.allocSharedRef('SceneAsset', asset);
-    const rB = worldB.instantiateScene(handleB);
+    const rB = worldInstantiateScene(worldB, handleB);
     expect(rB.ok).toBe(true);
 
     const session = createEditSession();
@@ -138,10 +139,10 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
 
   it('(c) localId appears only in the on-disk scene asset, not in editor runtime', () => {
     const registry = makeRegistry();
-    const worldA = new World();
+    const worldA = createCoreTestWorld();
     const asset = buildSceneAsset([{ name: 'Node', pos: { x: 0, y: 0, z: 0 } }]);
     const handleA = worldA.allocSharedRef('SceneAsset', asset);
-    const rA = worldA.instantiateScene(handleA);
+    const rA = worldInstantiateScene(worldA, handleA);
     expect(rA.ok).toBe(true);
     if (!rA.ok) return;
 
@@ -152,7 +153,7 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
     if (!savedAsset.ok) return;
 
     // The on-disk serialization carries localId (engine's serialization boundary).
-    const pack = serializeSceneAssetToPack(savedAsset.value, sceneGuid);
+    const pack = serializeSceneAssetToPack(savedAsset.value, worldA.components.entries(), sceneGuid);
     expect(pack.ok).toBe(true);
     if (!pack.ok) return;
     expect(savedAsset.value.entities.every((e) => e.localId !== undefined)).toBe(true);

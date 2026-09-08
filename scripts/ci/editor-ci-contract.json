@@ -65,7 +65,7 @@
     {
       "checkId": "r0-engine-dogfood-diagnostics",
       "owner": "editor-ci",
-      "command": "pnpm -C packages/engine exec vitest run --project=@forgeax/engine-animation packages/animation/src/__tests__/animation-diagnostic.unit.test.ts --project=@forgeax/engine-vite-plugin-rhi-debug packages/vite-plugin-rhi-debug/src/__tests__/trigger.test.ts",
+      "command": "bun run --cwd packages/engine vitest run --project=@forgeax/engine-animation packages/animation/src/__tests__/animation-diagnostic.unit.test.ts --project=@forgeax/engine-vite-plugin-rhi-debug packages/vite-plugin-rhi-debug/src/__tests__/trigger.test.ts",
       "executionHome": {
         "local-fast": true,
         "local-full": true,
@@ -95,7 +95,7 @@
     {
       "checkId": "smoke-play",
       "owner": "editor-ci",
-      "command": "bun run test:e2e -- apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts",
+      "command": "bun scripts/ddc-packaging-parity.mjs --game games/sample --json && bun run test:e2e -- apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts apps/standalone/e2e/__tests__/ddc-lifecycle.spec.ts",
       "runnerPool": "heavy",
       "permissions": {"contents": "read"},
       "executionHome": {
@@ -105,6 +105,22 @@
         "main": true,
         "nightly/scheduled": true,
         "post-merge": true
+      },
+      "failureClasses": ["admission", "environment", "source", "external-transport"]
+    },
+    {
+      "checkId": "editor-portability",
+      "owner": "editor-ci",
+      "command": "bun scripts/ci/editor-portability.mjs --platform <matrix.platform> --report \"$RUNNER_TEMP/editor-portability-report.json\"",
+      "runnerPool": "heavy",
+      "permissions": {"contents": "read"},
+      "executionHome": {
+        "local-fast": false,
+        "local-full": false,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
       },
       "failureClasses": ["admission", "environment", "source", "external-transport"]
     }
@@ -123,6 +139,22 @@
     {"context": "submodule-pin", "checkId": "submodule-pin"},
     {"context": "smoke-play", "checkId": "smoke-play"}
   ],
+  "portability": {
+    "checkId": "editor-portability",
+    "owner": "editor-ci",
+    "required": false,
+    "platforms": ["linux", "windows", "macos"],
+    "stages": ["checkout", "install", "setup", "wasm", "zero-binary", "type-static", "capability-probe", "smoke"],
+    "entries": {
+      "scheduled": {"event": "schedule", "profile": "nightly/scheduled"},
+      "manual": {"event": "workflow_dispatch", "profile": "nightly/scheduled"},
+      "main-push": {"event": "push", "branch": "main", "profile": "main"}
+    },
+    "artifact": {
+      "name": "editor-portability-aggregate",
+      "path": "editor-portability-aggregate.json"
+    }
+  },
   "packageQuality": {
     "ownershipClasses": [
       "Editor-owned",
@@ -146,6 +178,83 @@
     "requiresTransientEvidence": true,
     "maxAutomaticRetries": 1,
     "sloClaim": null
+  },
+  "baselineEvidence": {
+    "schemaVersion": "forgeax-ci-baseline/v2",
+    "owner": "editor-ci",
+    "factsOwner": "scripts/ci/ci-baseline.mjs",
+    "collector": "scripts/ci/collect-ci-baseline.mjs",
+    "topIndex": {
+      "layers": ["summary", "schema", "facts", "claims", "no-claims", "raw-packet"],
+      "fields": ["attemptProvenance", "criticalPath", "requiredContexts", "costFacts", "readiness", "budgetClaim", "noClaim", "integrationIndex"],
+    "rawPacket": "raw packet reference",
+    "integrationIndex": {
+      "browser": {
+        "command": "bun run ci:browser-release -- project-topology",
+        "inputs": [
+          "--admission",
+          "--measurements",
+          "--output",
+          "--baseline-evidence",
+          "--shared-fact-reference"
+        ],
+        "sharedFactReference": {
+          "schema": "baselineEvidence.sharedFactReference",
+          "fields": [
+            "sourceSha",
+            "runId",
+            "runAttempt",
+            "topologyId",
+            "graphDigest",
+            "rosterKey",
+            "workflow"
+          ]
+        },
+        "claimBoundary": [
+          "admission",
+          "parentCheck",
+          "population",
+          "claim"
+        ]
+      },
+      "portability": {
+        "status": "disabled",
+        "required": false,
+        "reason": "editor-portability execution is disabled",
+        "artifact": {
+          "name": "editor-portability-aggregate",
+          "path": "editor-portability-aggregate.json"
+        },
+        "noClaim": {
+          "code": "portability-disabled",
+          "expected": "optional portability projection",
+          "observed": "skipped"
+        }
+      }
+    }
+  },
+    "schema": {
+      "attemptProvenance": ["sourceSha", "runId", "runAttempt", "topologyId", "graphDigest", "rosterKey", "workflow"],
+      "facts": ["criticalPath", "requiredContexts", "costFacts", "readiness"],
+      "claims": ["budgetClaim"],
+      "noClaims": ["noClaim"]
+    },
+    "sharedFactReference": {
+      "source": "baseline attempt facts",
+      "fields": ["sourceSha", "runId", "runAttempt", "topologyId", "graphDigest", "rosterKey", "workflow"],
+      "factReferences": [
+        {"field": "criticalPath", "source": "ci-baseline", "digest": "sha256:<canonical-fact-block>"},
+        {"field": "costFacts", "source": "ci-baseline", "digest": "sha256:<canonical-fact-block>"},
+        {"field": "readiness", "source": "ci-baseline", "digest": "sha256:<canonical-fact-block>"}
+      ],
+      "artifactIdentity": "costFacts.artifact.identity"
+    },
+    "budget": {
+      "minimumSuccessfulExactStableRoster": 20,
+      "claimOwner": "ci-baseline",
+      "successCondition": "completed run and every admitted job concluded success"
+    },
+    "errorFields": ["code", "expected", "observed", "hint", "affectedProvenance"]
   },
   "delivery": {
     "verifier": {

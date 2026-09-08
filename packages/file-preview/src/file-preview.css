@@ -1,0 +1,121 @@
+/* @forgeax/editor-file-preview — self-contained styles for the FilePreview host
+ * and its builtin renderers. Namespaced under `fx-fp` so the package does not
+ * depend on any host stylesheet. Colors go through the shared design tokens
+ * (with inline fallbacks) so re-theming stays token-only. */
+
+.fx-fp {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Code ─────────────────────────────────────────────────────────────────── */
+.fx-fp-code {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 6px;
+}
+.fx-fp-code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fx-fp-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-background-elevated, rgba(255, 255, 255, 0.06));
+  color: var(--color-text-tertiary, #8a8a8a);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.fx-fp-hint {
+  color: var(--text-dim, var(--color-text-disabled, #6f6f6f));
+  font-size: 9.5px;
+}
+.fx-fp-code-plain,
+.fx-fp-code-shiki pre.shiki {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.fx-fp-code-plain {
+  color: var(--color-text-secondary, #ccc);
+}
+/* shiki injects a theme background on the <pre>; blend it into the panel so the
+ * preview reads as part of the detail pane, not a floating card. */
+.fx-fp-code-shiki pre.shiki {
+  background: transparent !important;
+}
+/* The shell's global `code { background; padding; border-radius }` pill would
+ * otherwise paint a per-line bar behind shiki's inline <code> (an inline box
+ * spanning many lines renders its background once per line). Neutralize it so
+ * only shiki's own token colors show. */
+.fx-fp-code-shiki pre.shiki code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* ── Media ────────────────────────────────────────────────────────────────── */
+.fx-fp-media {
+  display: flex;
+  justify-content: center;
+}
+.fx-fp-media img,
+.fx-fp-media video {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  margin: 0 auto;
+  object-fit: contain;
+}
+.fx-fp-media audio {
+  width: 100%;
+}
+
+/* ── Note / fallback ──────────────────────────────────────────────────────── */
+.fx-fp-note {
+  padding: 8px 10px;
+  border: 1px solid var(--color-divider-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-mute, var(--color-text-tertiary, #8a8a8a));
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* ── Font ─────────────────────────────────────────────────────────────────── */
+.fx-fp-font {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--color-text-secondary, #ccc);
+  word-break: break-word;
+}
+.fx-fp-font-hero {
+  font-size: 44px;
+  line-height: 1.1;
+}
+.fx-fp-font-sample {
+  font-size: 20px;
+  line-height: 1.4;
+}
+.fx-fp-font-glyphs {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-dim, var(--color-text-disabled, #9a9a9a));
+}
+.fx-fp-font-name {
+  margin-top: 2px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10px;
+  color: var(--text-dim, var(--color-text-disabled, #6f6f6f));
+}

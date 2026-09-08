@@ -13,3 +13,9 @@ Play host's VAG protocol boundary. Standalone Play owns a Vite-generated module
 manifest in its separate browser realm; both discovery paths call the same
 `@forgeax/engine-app` loader and therefore share the engine-owned component and
 system registration policy without sharing a host adapter.
+
+The shared `editorComponentVocabularyPlugin()` is the small Edit/Play
+composition profile for serialized structural components (`Entity`, `Disabled`,
+and `ParticleEffectPlayer`). Hosts install it before scene materialization;
+optional feature plugins such as `skinningPlugin()` remain explicit at the host
+boundary.

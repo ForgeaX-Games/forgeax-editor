@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { RenderFeatureDiagnostics } from '@forgeax/engine-render';
+import type { MaterialLoadError, MaterialReady } from '@forgeax/engine-assets-runtime';
 
 import {
+  createMaterialPublicationBinding,
   createInfiniteGridDiagnosticsProvider,
+  projectMaterialPublicationDiagnostic,
   validatePerspectiveFov,
 } from '../render-diagnostics';
 
@@ -85,6 +88,86 @@ describe('infinite grid diagnostics projection', () => {
           },
         },
       },
+    });
+  });
+});
+
+describe('material publication diagnostics projection', () => {
+  it('projects owner fields without parsing the error message', () => {
+    expect(projectMaterialPublicationDiagnostic({
+      materialGuid: 'material-guid',
+      specializationKey: 'spec-key',
+      publicationGeneration: 7,
+      error: {
+        code: 'asset-artifact-integrity-mismatch',
+        expected: 'sha256:expected',
+        actual: 'sha256:actual',
+        hint: 'Republish the material.',
+        retryable: true,
+        recoveryActions: ['material.republish'],
+      },
+    })).toMatchObject({
+      code: 'asset-artifact-integrity-mismatch',
+      assetGuid: 'material-guid',
+      expected: 'sha256:expected',
+      actual: 'sha256:actual',
+      retryable: true,
+      recoveryActions: ['material.republish'],
+    });
+  });
+
+  it('binds inspection and diagnostics to the production MaterialReady map', () => {
+    const ready = {
+      status: 'Ready',
+      guid: 'material-guid',
+      materialGuid: 'material-guid',
+      publicationGeneration: 7,
+      specializationKey: 'spec-key',
+      sourceClosure: ['materials/example.pack.json', 'materials/example.wgsl'],
+      artifactDigest: 'sha256:artifact',
+      parameterContract: { parameters: [{ name: 'baseColor', type: 'color' }], values: {} },
+      record: { receipt: { inputDigest: 'sha256:source' } },
+      artifact: {},
+    } as unknown as MaterialReady;
+    const error = {
+      status: 'Error',
+      error: {
+        code: 'asset-artifact-integrity-mismatch',
+        expected: 'sha256:expected',
+        actual: 'sha256:actual',
+        hint: 'Republish the material.',
+        retryable: true,
+        recoveryActions: ['material.republish'],
+        detail: { guid: 'broken-guid', specializationKey: 'spec-key', publicationGeneration: 8 },
+      },
+    } as unknown as MaterialLoadError;
+    const readiness = new Map<string, MaterialReady | MaterialLoadError>([
+      ['material-guid', ready],
+      ['broken-guid', error],
+    ]);
+    const binding = createMaterialPublicationBinding(
+      {
+        getMaterialReadiness: (guid) => readiness.get(guid),
+        materialReadiness: readiness,
+      },
+      { url: 'http://localhost:15290/', host: 'editor' },
+    );
+
+    expect(binding.readMaterialInspection('material-guid')).toMatchObject({
+      ok: true,
+      materialGuid: 'material-guid',
+      publicationGeneration: 7,
+      sourceClosure: [
+        { module: 'materials/example.pack.json', digest: 'sha256:source' },
+        { module: 'materials/example.wgsl', digest: 'sha256:source' },
+      ],
+      transport: { url: 'http://localhost:15290/', host: 'editor' },
+    });
+    expect(binding.diagnosticsProvider.snapshot()[0]).toMatchObject({
+      code: 'asset-artifact-integrity-mismatch',
+      assetGuid: 'broken-guid',
+      generation: 8,
+      recoveryActions: ['material.republish'],
     });
   });
 });

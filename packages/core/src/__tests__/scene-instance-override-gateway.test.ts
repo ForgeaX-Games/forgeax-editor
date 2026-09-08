@@ -3,13 +3,14 @@
 
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
-import { Name, Transform } from '@forgeax/engine-scene';
+import { Name, Transform, worldGetSceneInstanceState, worldInstantiateScene, worldDespawnScene } from '@forgeax/engine-scene';
 import { SceneInstance } from '@forgeax/engine-render';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 
 void SceneInstance;
 void AnimationPlayer;
@@ -29,12 +30,22 @@ function makeSceneAsset(): SceneAsset {
   return { kind: 'scene', entities: [entity] };
 }
 
+function makeUnnamedSceneAsset(): SceneAsset {
+  return {
+    kind: 'scene',
+    entities: [{
+      localId: 0 as SceneEntity['localId'],
+      components: { Transform: { pos: [0, 0, 0], scale: [1, 1, 1] } },
+    }],
+  };
+}
+
 function setup(): { gateway: EditGateway; world: World; root: EntityHandle; member: EntityHandle } {
-  const world = new World();
+  const world = createCoreTestWorld();
   const assetHandle = world.allocSharedRef('SceneAsset', makeSceneAsset());
-  const instantiated = world.instantiateScene(assetHandle);
+  const instantiated = worldInstantiateScene(world, assetHandle);
   if (!instantiated.ok) throw new Error(`scene instantiate failed: ${String(instantiated.error)}`);
-  const state = world.getSceneInstanceState(instantiated.value.root);
+  const state = worldGetSceneInstanceState(world, instantiated.value.root);
   if (!state.ok) throw new Error(`scene state read failed: ${String(state.error)}`);
   const member = state.value.entityToLocalId.keys().next().value;
   if (member === undefined) throw new Error('scene instance has no member');
@@ -118,6 +129,28 @@ describe('SceneInstance Gateway public contract', () => {
     if (rejected.ok) return;
     expect(rejected.error.code).toBe('SET_FAILED');
     expect(gateway.auditLog()).toEqual([]);
+  });
+
+  it('rejects document operations for unnamed derived members', () => {
+    const world = createCoreTestWorld();
+    const source = world.allocSharedRef('SceneAsset', makeUnnamedSceneAsset());
+    const instantiated = worldInstantiateScene(world, source);
+    if (!instantiated.ok) throw new Error(`scene instantiate failed: ${String(instantiated.error)}`);
+    const state = worldGetSceneInstanceState(world, instantiated.value.root);
+    if (!state.ok) throw new Error(`scene state read failed: ${String(state.error)}`);
+    const member = state.value.entityToLocalId.keys().next().value;
+    if (member === undefined) throw new Error('scene instance has no member');
+    const session = createEditSession();
+    session.world = world;
+    const gateway = new EditGateway(session);
+
+    const rejected = gateway.dispatch({ kind: 'destroyEntity', entity: member }, 'ai');
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: 'mount-member-operation-unsupported' },
+    });
+    expect(world.hasComponent(member, Transform)).toBe(true);
   });
 
   it('projects a grouped setComponent write as one complete AnimationPlayer override group', () => {

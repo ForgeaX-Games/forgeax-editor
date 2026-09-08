@@ -34,10 +34,13 @@
 
 import { type ChildProcess, execFileSync, spawnSync } from 'node:child_process';
 import {
+  type Dirent,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -48,6 +51,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   die,
+  has,
   installCleanup,
   killByPorts,
   ok,
@@ -59,6 +63,10 @@ import {
 import {
   DEFAULT_PNPM_NETWORK_CONCURRENCY,
   engineInstallEnv,
+  isHarnessSyncFailure,
+  isSimpleGitHooksEnoent,
+  resolveSetupEnvironment,
+  type SetupEnvironmentSnapshot,
   runSupervisedCommand,
 } from './lib/setup-process.ts';
 import {
@@ -75,6 +83,8 @@ import {
   EDITOR_CI_REPORT_SCHEMA_VERSION,
   validateEditorCiReport,
 } from './ci/editor-ci-report.mjs';
+// @ts-ignore The baseline owner is intentionally source-first JavaScript.
+import { validateBaselineEvidence } from './ci/ci-baseline.mjs';
 import { resolveBunExecutable } from './ci/bun-runtime.mjs';
 import {
   WORKTREE_CONFIG_FILE,
@@ -83,9 +93,24 @@ import {
   type PortMap,
 } from './lib/worktree-ports.ts';
 import { createWorktree } from './worktree.ts';
+import {
+  ENGINE_CRITICAL_PACKAGES,
+  ENGINE_DECLARATION_ARTIFACTS,
+  hasTrustedEngineDeclarations,
+} from './lib/engine-declarations.ts';
+import { runDdcCli } from './ddc.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
+const BASELINE_CONTRACT_INDEX = JSON.parse(
+  readFileSync(join(ROOT, 'scripts', 'ci', 'editor-ci-contract.json'), 'utf8'),
+).baselineEvidence as {
+  schemaVersion: string;
+  topIndex: {fields: readonly string[]; layers: readonly string[]};
+};
+const BASELINE_EVIDENCE_SCHEMA_VERSION = BASELINE_CONTRACT_INDEX.schemaVersion;
+const BASELINE_TOP_INDEX_FIELDS = BASELINE_CONTRACT_INDEX.topIndex.fields;
+const BASELINE_TOP_INDEX_LAYERS = BASELINE_CONTRACT_INDEX.topIndex.layers;
 const ENGINE_DIR = join(ROOT, 'packages', 'engine');
 // Gitignored freshness marker shared with forgeax-studio. Engine packages export
 // built `dist/`, so a submodule pointer bump after setup otherwise leaves Vite
@@ -93,6 +118,12 @@ const ENGINE_DIR = join(ROOT, 'packages', 'engine');
 const ENGINE_DIST_SHA_FILE = join(ENGINE_DIR, '.dist-sha');
 const WASM_DIR = join(ENGINE_DIR, 'packages', 'wgpu-wasm');
 const WASM_FILE = join(WASM_DIR, 'pkg', 'wgpu_wasm_bg.wasm');
+// `pkg/` is gitignored and survives setup/clean, so presence alone cannot prove
+// that the generated binary matches the currently pinned Rust sources. Keep the
+// source content key beside the generated bundle; it is written only after a
+// successful setup-owned build and is ignored with the rest of `pkg/`.
+const WASM_CONTENT_KEY_SCRIPT = join(WASM_DIR, 'scripts', 'content-key.mjs');
+const WASM_CONTENT_KEY_FILE = join(WASM_DIR, 'pkg', '.forgeax-wgpu-wasm-content-key');
 // fbx wasm: ufbx compiled by emcc; pkg/ is gitignored (zero-binary invariant)
 // like wgpu, so it must be built here. Both emcc outputs (.mjs glue + .wasm)
 // are needed — editor-core's fbx-cook lazily imports the .mjs, which fetches the
@@ -153,7 +184,52 @@ const GATEWAY_RELAY_SCRIPT = 'skills/forgeax-editor-gateway/scripts/gateway-brid
 
 const IS_WIN = process.platform === 'win32';
 
-type ShOptions = { cwd?: string; env?: NodeJS.ProcessEnv; failureMessage?: string };
+export type SetupInstallFailure = {
+  phase: string;
+  code: string;
+  expected: string;
+  observed: unknown;
+  hint: string;
+};
+
+type SetupFailureContext = Pick<SetupInstallFailure, 'phase' | 'code' | 'expected' | 'hint'>;
+type ShOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  failureMessage?: string;
+  failure?: SetupFailureContext;
+};
+
+export function projectSetupCommandFailure(
+  command: string,
+  args: readonly string[],
+  status: number,
+  context: SetupFailureContext,
+): SetupInstallFailure {
+  return {
+    ...context,
+    observed: {command, args, status},
+  };
+}
+
+class SetupExecutionError extends Error {
+  constructor(readonly failure: SetupInstallFailure) {
+    super(failure.hint);
+    this.name = 'SetupExecutionError';
+  }
+}
+
+let setupExecutionActive = false;
+
+function setupFailure(
+  phase: string,
+  code: string,
+  expected: string,
+  observed: unknown,
+  hint: string,
+): SetupExecutionError {
+  return new SetupExecutionError({phase, code, expected, observed, hint});
+}
 
 /** Run a command synchronously with inherited stdio; die on non-zero exit. */
 function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
@@ -164,7 +240,22 @@ function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
     cwd: opts.cwd ?? ROOT,
     env,
   });
-  if (r.status !== 0) die(opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`);
+  if (r.status !== 0) {
+    if (setupExecutionActive) {
+      throw new SetupExecutionError(projectSetupCommandFailure(
+        cmd,
+        args,
+        r.status ?? 1,
+        opts.failure ?? {
+          phase: 'setup-command',
+          code: 'setup-command-failed',
+          expected: 'setup command exits with status 0',
+          hint: opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`,
+        },
+      ));
+    }
+    die(opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`);
+  }
 }
 
 /** Run a command synchronously with inherited stdio; return false on failure. */
@@ -179,22 +270,319 @@ function trySh(cmd: string, args: string[], opts: ShOptions = {}): boolean {
   return r.status === 0;
 }
 
-/** Resolve the exact Engine source revision that the current checkout pins. */
-function engineHead(): string {
+export type CapturedCommandResult = {status: number; output: string};
+
+function runCaptured(cmd: string, args: string[], opts: ShOptions = {}): CapturedCommandResult {
+  const env = opts.env ?? process.env;
+  const result = spawnSync(resolveBunExecutable(cmd, env), args, {
+    cwd: opts.cwd ?? ROOT,
+    env,
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+    shell: IS_WIN,
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
+  const stdout = `${result.stdout ?? ''}`;
+  const stderr = `${result.stderr ?? ''}`;
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  const spawnError = result.error instanceof Error ? `\n${result.error.message}` : '';
+  return {status: result.status ?? 1, output: `${stdout}\n${stderr}${spawnError}`};
+}
+
+export type SetupCommandRunner = (
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+) => CapturedCommandResult;
+
+export type SetupInstallTrace = {
+  setupEnv: SetupEnvironmentSnapshot;
+  engineEnv?: NodeJS.ProcessEnv;
+  editorInstallSkipped: boolean;
+  fallbacks: string[];
+  terminalStatus: 'success' | 'failure';
+  failure?: SetupInstallFailure;
+};
+
+function dependencyFailure(
+  phase: string,
+  code: string,
+  result: CapturedCommandResult,
+  hint: string,
+): SetupInstallFailure {
+  return {
+    phase,
+    code,
+    expected: 'setup dependency command exits with status 0',
+    observed: {status: result.status, output: result.output},
+    hint,
+  };
+}
+
+/** Run Bun and Engine dependency installs from one immutable setup snapshot. */
+export function runSetupDependencyInstalls(options: {
+  env: NodeJS.ProcessEnv;
+  run: SetupCommandRunner;
+  beforeEngineInstall?: () => void;
+} & ({skipEditorInstall?: false} | {skipEditorInstall: true})): SetupInstallTrace {
+  const setupEnv = resolveSetupEnvironment(options.env);
+  const fallbacks: string[] = [];
+  let installEnv = setupEnv.env;
+  const editorInstallSkipped = options.skipEditorInstall === true || options.env.FORGEAX_SKIP_EDITOR_BUN_INSTALL === '1';
+
+  if (!editorInstallSkipped) {
+    const first = options.run('bun', ['install'], {...installEnv});
+    if (first.status !== 0) {
+      if (isSimpleGitHooksEnoent(first.output)) {
+        fallbacks.push('simple-git-hooks-enoent-retry');
+        const retry = options.run('bun', ['install'], {...installEnv});
+        if (retry.status !== 0) {
+          return {
+            setupEnv,
+            editorInstallSkipped,
+            fallbacks,
+            terminalStatus: 'failure',
+            failure: dependencyFailure(
+              'editor-bun-install',
+              'bun-install-failed',
+              retry,
+              'Check network access and rerun bun fx setup.',
+            ),
+          };
+        }
+      } else if (isHarnessSyncFailure(first.output)) {
+        fallbacks.push('harness-divergence');
+        installEnv = {...installEnv, FORGEAX_SKIP_HARNESS_SYNC: '1'};
+        const retry = options.run('bun', ['install'], {...installEnv});
+        if (retry.status !== 0) {
+          return {
+            setupEnv,
+            editorInstallSkipped,
+            fallbacks,
+            terminalStatus: 'failure',
+            failure: dependencyFailure(
+              'editor-bun-install-fallback',
+              'bun-install-fallback-failed',
+              retry,
+              'Reconcile the Harness checkout or rerun with FORGEAX_SKIP_HARNESS_SYNC=1.',
+            ),
+          };
+        }
+      } else {
+        return {
+          setupEnv,
+          editorInstallSkipped,
+          fallbacks,
+          terminalStatus: 'failure',
+          failure: dependencyFailure(
+            'editor-bun-install',
+            'bun-install-failed',
+            first,
+            'Check network access and rerun bun fx setup.',
+          ),
+        };
+      }
+    }
+  }
+
+  options.beforeEngineInstall?.();
+  const engineEnv = engineInstallEnv(installEnv);
+  const engine = options.run('pnpm', ['install'], {...engineEnv});
+  if (engine.status !== 0) {
+    return {
+      setupEnv,
+      engineEnv,
+      editorInstallSkipped,
+      fallbacks,
+      terminalStatus: 'failure',
+      failure: dependencyFailure(
+        'engine-pnpm-install',
+        'pnpm-install-failed',
+        engine,
+        'Check Engine dependency access and rerun bun fx setup.',
+      ),
+    };
+  }
+
+  return {
+    setupEnv,
+    engineEnv,
+    editorInstallSkipped,
+    fallbacks,
+    terminalStatus: 'success',
+  };
+}
+
+export type SetupHarnessMode = 'sparse' | 'full' | 'skip' | 'fallback-skip' | 'unknown';
+
+export type SetupEnvelope = {
+  // Keep this list aligned with the stdout fx-setup/v1 contract tests.
+  schemaVersion: 'fx-setup/v1';
+  terminalStatus: 'success' | 'failure';
+  phase: string;
+  code: string;
+  expected: string;
+  observed: unknown;
+  hint: string;
+  effectiveSparseValue: string;
+  valueSource: 'default' | 'explicit';
+  requestedEditorHarnessMode: SetupHarnessMode;
+  requestedEngineHarnessMode: SetupHarnessMode;
+  actualEditorHarnessMode: SetupHarnessMode;
+  actualEngineHarnessMode: SetupHarnessMode;
+  fallbacks: string[];
+  artifactsVerified: boolean;
+};
+
+export type SetupEnvelopeInput = Omit<SetupEnvelope, 'schemaVersion'>;
+
+/** Build the single machine-readable terminal result for `bun fx setup`. */
+export function createSetupEnvelope(input: SetupEnvelopeInput): SetupEnvelope {
+  return {
+    schemaVersion: 'fx-setup/v1',
+    terminalStatus: input.terminalStatus,
+    phase: input.phase,
+    code: input.code,
+    expected: input.expected,
+    observed: input.observed,
+    hint: input.hint,
+    effectiveSparseValue: input.effectiveSparseValue,
+    valueSource: input.valueSource,
+    requestedEditorHarnessMode: input.requestedEditorHarnessMode,
+    requestedEngineHarnessMode: input.requestedEngineHarnessMode,
+    actualEditorHarnessMode: input.actualEditorHarnessMode,
+    actualEngineHarnessMode: input.actualEngineHarnessMode,
+    fallbacks: input.fallbacks,
+    artifactsVerified: input.artifactsVerified,
+  };
+}
+
+export function formatSetupEnvelope(envelope: SetupEnvelope): string {
+  return JSON.stringify(envelope);
+}
+
+function printSetupEnvelope(envelope: SetupEnvelope): void {
+  console.log(formatSetupEnvelope(envelope));
+}
+
+function requestedHarnessMode(
+  env: NodeJS.ProcessEnv,
+  fallback: boolean,
+): SetupHarnessMode {
+  if (fallback) return 'fallback-skip';
+  if (env.FORGEAX_SKIP_HARNESS_SYNC === '1') return 'skip';
+  return env.FORGEAX_HARNESS_SPARSE_DOCS === '0' ? 'full' : 'sparse';
+}
+
+/**
+ * Read the materialized Harness shape without treating a request as a fact.
+ * A missing/inaccessible clone is deliberately unknown: setup can continue
+ * after an offline best-effort sync, but the terminal envelope must not claim
+ * that a sparse/full checkout exists when it does not.
+ */
+function actualHarnessMode(dir: string): SetupHarnessMode {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: ENGINE_DIR,
+    const isWorktree = execFileSync('git', ['-C', dir, 'rev-parse', '--is-inside-work-tree'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
+    if (isWorktree !== 'true') return 'unknown';
+    const sparseResult = spawnSync('git', ['-C', dir, 'config', '--get', 'core.sparseCheckout'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    // Git exits 1 for a missing optional config key; that is the normal full
+    // checkout shape, not a probe failure.
+    if (sparseResult.error || (sparseResult.status !== 0 && sparseResult.status !== 1)) {
+      return 'unknown';
+    }
+    const sparse = sparseResult.stdout.trim();
+    if (sparse !== 'true') return 'full';
+    const patterns = execFileSync('git', ['-C', dir, 'sparse-checkout', 'list'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().split(/\r?\n/).filter(Boolean);
+    return patterns.length === 1 && patterns[0] === 'docs' ? 'sparse' : 'unknown';
   } catch {
-    die('could not resolve the engine submodule revision. Run: bun fx setup');
+    return 'unknown';
   }
+}
+
+function setupEnvelopeFromTrace(
+  trace: SetupInstallTrace,
+  input: Pick<SetupEnvelopeInput, 'terminalStatus' | 'phase' | 'code' | 'expected' | 'observed' | 'hint' | 'artifactsVerified'>,
+): SetupEnvelope {
+  const editorEnv = trace.setupEnv.env;
+  const engineEnv = trace.engineEnv ?? editorEnv;
+  const fallback = trace.fallbacks.includes('harness-divergence');
+  return createSetupEnvelope({
+    ...input,
+    effectiveSparseValue: trace.setupEnv.effectiveSparseValue,
+    valueSource: trace.setupEnv.valueSource,
+    requestedEditorHarnessMode: requestedHarnessMode(editorEnv, fallback),
+    requestedEngineHarnessMode: requestedHarnessMode(engineEnv, fallback),
+    actualEditorHarnessMode: actualHarnessMode(join(ROOT, '.forgeax-harness')),
+    actualEngineHarnessMode: actualHarnessMode(join(ENGINE_DIR, '.forgeax-harness')),
+    fallbacks: [...trace.fallbacks],
+  });
+}
+
+/** Resolve the exact Engine source revision that the current checkout pins. */
+function engineHead(): string {
+  const head = gitOut(['-C', ENGINE_DIR, 'rev-parse', 'HEAD']);
+  if (!head) die('could not resolve the engine submodule revision. Run: bun fx setup');
+  return head;
 }
 
 /** Record that every Engine dist artifact was built for the current gitlink. */
 function writeEngineDistSha(): void {
   writeFileSync(ENGINE_DIST_SHA_FILE, `${engineHead()}\n`);
+}
+
+/**
+ * Use the Engine root compiler for every recursive declaration pass.
+ *
+ * Engine's workspace packages intentionally carry a few older TypeScript
+ * ranges for their package-local tooling, while the Engine root owns the
+ * declaration graph compiler.  Resolving `tsc` through `pnpm -r exec` lets a
+ * consumer package select one of those older binaries; that breaks as soon as
+ * a newer package tsconfig uses an option introduced by the root compiler
+ * (for example `ignoreDeprecations: "6.0"`).  Keep setup and CI on the same
+ * producer-owned compiler by invoking its absolute binary explicitly.
+ */
+function engineTypeScriptBin(): string {
+  return join(ENGINE_DIR, 'node_modules', 'typescript', 'bin', 'tsc');
+}
+
+/** Generated Engine output is reusable only when its source provenance is trustworthy. */
+function engineDeclarationsAreTrusted(): boolean {
+  const current = gitOut(['-C', ENGINE_DIR, 'rev-parse', 'HEAD']);
+  if (!current) return false;
+
+  let sourceStatus: string;
+  try {
+    sourceStatus = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: ENGINE_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return false;
+  }
+  if (sourceStatus) return false;
+
+  const builtFor = existsSync(ENGINE_DIST_SHA_FILE)
+    ? readFileSync(ENGINE_DIST_SHA_FILE, 'utf8').trim()
+    : '';
+  if (builtFor !== current) return false;
+
+  return hasTrustedEngineDeclarations({
+    engineDir: ENGINE_DIR,
+    currentHead: current,
+    builtFor,
+    sourceStatus,
+  });
 }
 
 /** Refuse to start/CI against dist emitted for a different Engine revision. */
@@ -450,19 +838,96 @@ function managedPorts(bridgePort: number, bridgeEnabled: boolean): number[] {
 }
 
 // ── setup (install) ─────────────────────────────────────────────────────────
-function ensureWasm(): void {
-  if (existsSync(WASM_FILE)) {
-    ok('wasm present (skip build): packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm');
-    return;
+function readWasmContentKeyMarker(): string {
+  try {
+    return readFileSync(WASM_CONTENT_KEY_FILE, 'utf8').trim();
+  } catch {
+    return '';
   }
-  step('wasm missing — building from Rust (wgpu-wasm build:wasm, ~1-2 min) ...');
-  requireCmd('rustc', 'wasm build needs Rust. install: https://rustup.rs');
-  requireCmd('wasm-pack', 'wasm build needs wasm-pack. install: cargo install wasm-pack');
+}
+
+/** Resolve the wgpu-wasm source key through the Engine package's SSOT helper. */
+function currentWasmContentKey(): string {
+  try {
+    const output = execFileSync(process.execPath, [WASM_CONTENT_KEY_SCRIPT], {
+      cwd: WASM_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const key = output.trim().split(/\r?\n/, 1)[0] ?? '';
+    if (!/^[0-9a-f]{64}$/.test(key)) {
+      throw new Error(`content-key script returned an invalid SHA-256: ${key || '<empty>'}`);
+    }
+    return key;
+  } catch (error) {
+    throw setupFailure(
+      'wgpu-wasm',
+      'wgpu-wasm-content-key-failed',
+      'wgpu-wasm content key resolves from the current source inputs',
+      {
+        path: WASM_CONTENT_KEY_SCRIPT,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Ensure the wgpu-wasm source checkout is complete, then rerun bun fx setup.',
+    );
+  }
+}
+
+function ensureWasm(): void {
+  const marker = readWasmContentKeyMarker();
+  if (existsSync(WASM_FILE) && marker) {
+    const currentKey = currentWasmContentKey();
+    if (marker === currentKey) {
+      ok(`wasm present (skip build): packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm (${currentKey.slice(0, 12)})`);
+      return;
+    }
+    step(
+      `wasm stale (source ${currentKey.slice(0, 12)}, artifact ${marker.slice(0, 12)}) — rebuilding from Rust ...`,
+    );
+  } else if (existsSync(WASM_FILE)) {
+    step('wasm provenance missing — rebuilding from Rust (wgpu-wasm build:wasm, ~1-2 min) ...');
+  } else {
+    step('wasm missing — building from Rust (wgpu-wasm build:wasm, ~1-2 min) ...');
+  }
+
+  // Do not leave a stale marker behind if the build fails. A failed build must
+  // make the next setup attempt rebuild instead of trusting an old provenance.
+  rmSync(WASM_CONTENT_KEY_FILE, {force: true});
+  if (!has('rustc')) {
+    throw setupFailure('wgpu-wasm', 'rust-toolchain-missing', 'rustc is available', {}, 'Install Rust from https://rustup.rs.');
+  }
+  if (!has('wasm-pack')) {
+    throw setupFailure(
+      'wgpu-wasm',
+      'wasm-pack-missing',
+      'wasm-pack is available',
+      {},
+      'Install wasm-pack with cargo install wasm-pack.',
+    );
+  }
   // The wgpu-wasm Rust→wasm build stays bash (toolchain wrapper); invoke via its
   // package script so we never hard-code the script path.
-  sh('pnpm', ['-F', '@forgeax/engine-wgpu-wasm', 'build:wasm'], { cwd: ENGINE_DIR });
-  if (!existsSync(WASM_FILE)) die(`wasm build ran but ${WASM_FILE} is still absent.`);
-  ok('wasm built');
+  sh('pnpm', ['-F', '@forgeax/engine-wgpu-wasm', 'build:wasm'], {
+    cwd: ENGINE_DIR,
+    failure: {
+      phase: 'wgpu-wasm-build',
+      code: 'wgpu-wasm-build-failed',
+      expected: 'wgpu wasm build exits with status 0',
+      hint: 'Install Rust and wasm-pack, then rerun bun fx setup.',
+    },
+  });
+  if (!existsSync(WASM_FILE)) {
+    throw setupFailure(
+      'wgpu-wasm',
+      'wgpu-wasm-missing',
+      'wgpu wasm output exists after the build',
+      {path: WASM_FILE},
+      'Rerun bun fx setup and inspect the wgpu-wasm build output.',
+    );
+  }
+  const builtKey = currentWasmContentKey();
+  writeFileSync(WASM_CONTENT_KEY_FILE, `${builtKey}\n`);
+  ok(`wasm built (${builtKey.slice(0, 12)})`);
 }
 
 function ensureFbxWasm(): void {
@@ -487,12 +952,34 @@ function ensureFbxWasm(): void {
   warn('  · `Cannot connect to <drive>: resolve failed` — GNU tar (Git for Windows) sits ahead of');
   warn('    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first');
   warn('falling back to local Emscripten build.');
-  requireCmd('emcc', 'the local fbx wasm build needs Emscripten. install: brew install emscripten (or activate emsdk)');
+  if (!has('emcc')) {
+    throw setupFailure(
+      'fbx-wasm-build',
+      'emcc-missing',
+      'Emscripten emcc is available',
+      {},
+      'Install Emscripten with brew install emscripten or activate emsdk.',
+    );
+  }
   // build:wasm = fetch-ufbx (idempotent, downloads ufbx.c) + emcc. Invoke via
   // the package script so the emcc flag set stays owned by @forgeax/engine-fbx.
-  sh('pnpm', ['-F', '@forgeax/engine-fbx', 'build:wasm'], { cwd: ENGINE_DIR });
+  sh('pnpm', ['-F', '@forgeax/engine-fbx', 'build:wasm'], {
+    cwd: ENGINE_DIR,
+    failure: {
+      phase: 'fbx-wasm-build',
+      code: 'fbx-wasm-build-failed',
+      expected: 'fbx wasm build exits with status 0',
+      hint: 'Install Emscripten emcc, then rerun bun fx setup.',
+    },
+  });
   if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
-    die(`fbx wasm build ran but ${FBX_WASM_MJS} / ${FBX_WASM_FILE} still absent.`);
+    throw setupFailure(
+      'fbx-wasm-build',
+      'fbx-wasm-missing',
+      'FBX wasm outputs exist after the build',
+      {paths: [FBX_WASM_MJS, FBX_WASM_FILE]},
+      'Rerun bun fx setup and inspect the FBX wasm build output.',
+    );
   }
   ok('fbx wasm built');
 }
@@ -523,13 +1010,35 @@ function ensureCodecWasm(): void {
   warn('  · `Cannot connect to <drive>: resolve failed` — GNU tar (Git for Windows) sits ahead of');
   warn('    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first');
   warn('falling back to local Emscripten build.');
-  requireCmd('emcc', 'the local codec wasm build needs Emscripten. install: brew install emscripten (or activate emsdk)');
+  if (!has('emcc')) {
+    throw setupFailure(
+      'codec-wasm-build',
+      'emcc-missing',
+      'Emscripten emcc is available',
+      {},
+      'Install Emscripten with brew install emscripten or activate emsdk.',
+    );
+  }
   // build:wasm = fetch-basis (idempotent, downloads pinned basis_universal
   // source) + emcc -O3 compile. Invoke via the package script so the emcc flag
   // set stays owned by @forgeax/engine-codec. NOTE: multi-minute compile.
-  sh('pnpm', ['-F', '@forgeax/engine-codec', 'build:wasm'], { cwd: ENGINE_DIR });
+  sh('pnpm', ['-F', '@forgeax/engine-codec', 'build:wasm'], {
+    cwd: ENGINE_DIR,
+    failure: {
+      phase: 'codec-wasm-build',
+      code: 'codec-wasm-build-failed',
+      expected: 'codec wasm build exits with status 0',
+      hint: 'Install Emscripten emcc and rerun bun fx setup.',
+    },
+  });
   if (!codecWasmPresent()) {
-    die(`codec wasm build ran but ${CODEC_WASM_MJS} / ${CODEC_WASM_FILE} / ${CODEC_ENCODER_WASM_FILE} still absent.`);
+    throw setupFailure(
+      'codec-wasm-build',
+      'codec-wasm-missing',
+      'codec wasm outputs exist after the build',
+      {paths: [CODEC_WASM_MJS, CODEC_WASM_FILE, CODEC_ENCODER_WASM_FILE]},
+      'Rerun bun fx setup and inspect the codec wasm build output.',
+    );
   }
   ok('codec wasm built');
 }
@@ -543,118 +1052,303 @@ function ensureCodecWasm(): void {
  * handoff, not an install warning: Bun owns the editor graph and pnpm owns the
  * nested engine graph.
  */
-function resetEngineNodeModulesIfBunLinked(): void {
-  const nodeModules = join(ENGINE_DIR, 'node_modules');
-  const vitest = join(nodeModules, 'vitest');
-  const bunStore = join(ROOT, 'node_modules', '.bun');
+export type EngineNodeModulesResetOptions = {
+  editorRoot?: string;
+  engineDir?: string;
+};
 
-  if (!existsSync(vitest)) return;
-
+function hasFilesystemEntry(path: string): boolean {
   try {
-    if (!realpathSync(vitest).startsWith(`${bunStore}${sep}`)) return;
+    lstatSync(path);
+    return true;
   } catch {
-    // A broken generated link is equally safe to replace with pnpm's graph.
+    return false;
   }
-
-  rmSync(nodeModules, { force: true, recursive: true });
 }
 
-async function install(): Promise<void> {
-  requireCmd('git', 'install git first.');
-  requireCmd('bun', 'install bun: https://bun.sh');
-  requireCmd('pnpm', 'install pnpm: https://pnpm.io (engine is a pnpm workspace)');
-
-  step('1/8 fetching submodules (engine + interface + platform-io) ...');
-  sh('git', ['submodule', 'update', '--init', '--recursive']);
-  ok('submodules ready');
-
-  step('2/8 installing editor workspace deps (bun) ...');
-  sh('bun', ['install']);
-  ok('bun deps ready');
-
-  step(
-    `3/8 installing engine deps (pnpm, network concurrency ${process.env.PNPM_CONFIG_NETWORK_CONCURRENCY ?? DEFAULT_PNPM_NETWORK_CONCURRENCY}) ...`,
-  );
-  resetEngineNodeModulesIfBunLinked();
-  let installResult;
+function readDirectory(path: string): Dirent[] | undefined {
   try {
-    installResult = await runSupervisedCommand('pnpm', ['install'], {
-      cwd: ENGINE_DIR,
-      env: engineInstallEnv(process.env),
-      stdio: 'inherit',
-    });
-  } catch (error) {
-    die(`could not start pnpm install: ${error instanceof Error ? error.message : String(error)}`);
+    return readdirSync(path, { withFileTypes: true });
+  } catch {
+    return undefined;
   }
-  if (installResult.interrupted) {
-    die('pnpm install interrupted; its child process tree was cleaned up.');
-  }
-  if (installResult.status !== 0) {
-    die(`command failed: pnpm install (exit ${installResult.status})`);
-  }
-  ok('engine deps ready');
+}
 
-  // wasm MUST precede the engine dist build: the engine `app` package's tsup
-  // build inlines wgpu-wasm/dist/index.mjs, which `import`s ../pkg/wgpu_wasm.js.
-  // If pkg/ is absent (fresh clone — wasm is gitignored, built on demand),
-  // esbuild fails to resolve it and the whole `pnpm -r build` aborts.
-  // ENFORCED by scripts/lint-wasm-before-dist.mjs (bun run lint) — do not move
-  // ensureWasm() below the `pnpm -r ... build` step or CI's typecheck job fails.
-  step('4/8 ensuring wgpu wasm binary ...');
-  ensureWasm();
+function engineNodeModulesPaths(engineDir: string): string[] {
+  const candidates = new Set<string>([join(engineDir, 'node_modules')]);
+  const packagesDir = join(engineDir, 'packages');
+  const packageEntries = readDirectory(packagesDir) ?? [];
 
-  step('5/8 ensuring fbx wasm binary ...');
-  ensureFbxWasm();
+  for (const packageEntry of packageEntries) {
+    if (!packageEntry.isDirectory()) continue;
+    const packageDir = join(packagesDir, packageEntry.name);
+    candidates.add(join(packageDir, 'node_modules'));
 
-  step('6/8 ensuring codec wasm binaries ...');
-  ensureCodecWasm();
-
-  step('7/8 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
-  // Only the library packages emit the dist/ the editor imports. apps/hello/*
-  // are example apps that need extra fixtures and are NOT needed here.
-  sh('pnpm', ['-r', '--filter', './packages/*', 'build'], { cwd: ENGINE_DIR });
-  ok('engine dist built');
-  // Some package declarations share their dist/ directory with tsup's JS
-  // output.  A repeated setup must clear only the prior TypeScript emit before
-  // rebuilding declarations, otherwise tsc treats those .d.ts files as inputs
-  // and fails with TS5055 (cannot overwrite input file).
-  sh('pnpm', ['exec', 'tsc', '-b', '--clean'], { cwd: ENGINE_DIR });
-  sh('pnpm', ['exec', 'tsc', '-b'], { cwd: ENGINE_DIR });
-  ok('engine declarations built');
-
-  step('8/8 rebuilding engine declaration graph ...');
-  sh('pnpm', ['tsc', '-b', '--clean'], { cwd: ENGINE_DIR });
-  sh('pnpm', ['tsc', '-b'], { cwd: ENGINE_DIR });
-  ok('engine declarations built');
-
-  step('verifying critical artifacts ...');
-  let missing = false;
-  for (const pkg of ['vite-plugin-shader', 'app', 'runtime', 'ecs', 'types', 'shader', 'gltf', 'npc']) {
-    for (const artifact of ['index.mjs', 'index.d.ts', 'index.d.ts.map']) {
-      if (!existsSync(join(ENGINE_DIR, 'packages', pkg, 'dist', artifact))) {
-        warn(`missing engine dist: packages/${pkg}/dist/${artifact}`);
-        missing = true;
+    if (!packageEntry.name.startsWith('@')) continue;
+    for (const scopedPackage of readDirectory(packageDir) ?? []) {
+      if (scopedPackage.isDirectory()) {
+        candidates.add(join(packageDir, scopedPackage.name, 'node_modules'));
       }
     }
   }
-  if (!existsSync(WASM_FILE)) {
-    warn(`missing wasm: ${WASM_FILE}`);
-    missing = true;
-  }
-  if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
-    warn('missing fbx wasm: packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
-    missing = true;
-  }
-  if (!codecWasmPresent()) {
-    warn('missing codec wasm: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/basis_encoder.wasm');
-    missing = true;
-  }
-  if (missing) die("install incomplete — see warnings above. Re-run 'bun fx setup'.");
 
-  writeEngineDistSha();
-  ok(`engine dist matches ${engineHead().slice(0, 12)}`);
+  return [...candidates].filter(hasFilesystemEntry);
+}
 
-  ok('install complete — run: bun fx start');
+function pointsIntoBunStore(path: string, bunStore: string): boolean {
+  try {
+    const target = realpathSync(path);
+    return target === bunStore || target.startsWith(`${bunStore}${sep}`);
+  } catch {
+    return true;
+  }
+}
+
+function nodeModulesHasBunOrBrokenLink(nodeModules: string, bunStore: string): boolean {
+  if (pointsIntoBunStore(nodeModules, bunStore)) return true;
+
+  const entries = readDirectory(nodeModules);
+  if (!entries) return true;
+
+  for (const entry of entries) {
+    const entryPath = join(nodeModules, entry.name);
+    if (entry.isSymbolicLink() && pointsIntoBunStore(entryPath, bunStore)) return true;
+
+    // pnpm exposes scoped packages as a directory containing one more layer
+    // of package links. Inspect that layer without walking pnpm's private tree.
+    if (!entry.isDirectory() || !entry.name.startsWith('@')) continue;
+    const scopedEntries = readDirectory(entryPath);
+    if (!scopedEntries) return true;
+    for (const scopedEntry of scopedEntries) {
+      if (scopedEntry.isSymbolicLink() && pointsIntoBunStore(join(entryPath, scopedEntry.name), bunStore)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export function resetEngineNodeModulesIfBunLinked(
+  options: EngineNodeModulesResetOptions = {},
+): void {
+  const editorRoot = options.editorRoot ?? ROOT;
+  const engineDir = options.engineDir ?? ENGINE_DIR;
+  const bunStorePath = resolve(editorRoot, 'node_modules', '.bun');
+  let bunStore = bunStorePath;
+  try {
+    bunStore = realpathSync(bunStorePath);
+  } catch {
+    // A missing Bun store cannot be the target of a generated link.
+  }
+  const nodeModulesPaths = engineNodeModulesPaths(engineDir);
+
+  if (!nodeModulesPaths.some((path) => nodeModulesHasBunOrBrokenLink(path, bunStore))) return;
+
+  for (const path of nodeModulesPaths) {
+    rmSync(path, { force: true, recursive: true });
+  }
+}
+
+/** Build the Engine root TypeScript project-reference graph after the library dist pass. */
+function buildEngineDeclarations(): void {
+  if (!engineDeclarationsAreTrusted()) {
+    warn('Engine declaration provenance is untrusted; cleaning the root project-reference outputs ...');
+    sh('pnpm', ['exec', 'node', engineTypeScriptBin(), '-b', '--clean', '--pretty', 'false'], {
+      cwd: ENGINE_DIR,
+      failure: {
+        phase: 'declaration-clean',
+        code: 'declaration-clean-failed',
+        expected: 'Engine declaration clean exits with status 0',
+        hint: 'Inspect the Engine declaration graph and rerun bun fx setup.',
+      },
+    });
+  } else {
+    ok('Engine declaration provenance is trusted; using the incremental graph');
+  }
+
+  sh('pnpm', ['exec', 'node', engineTypeScriptBin(), '-b', '--pretty', 'false'], {
+    cwd: ENGINE_DIR,
+    failure: {
+      phase: 'declaration',
+      code: 'declaration-build-failed',
+      expected: 'Engine declaration build exits with status 0',
+      hint: 'Inspect the Engine declaration graph and rerun bun fx setup.',
+    },
+  });
+}
+
+async function install(): Promise<void> {
+  let trace: SetupInstallTrace = {
+    setupEnv: resolveSetupEnvironment(process.env),
+    editorInstallSkipped: false,
+    fallbacks: [],
+    terminalStatus: 'failure',
+  };
+  setupExecutionActive = true;
+  try {
+    if (!has('git')) throw setupFailure('preflight', 'git-missing', 'git is available', {}, 'Install Git and rerun bun fx setup.');
+    if (!has('bun')) throw setupFailure('preflight', 'bun-missing', 'bun is available', {}, 'Install Bun from https://bun.sh.');
+    if (!has('pnpm')) throw setupFailure('preflight', 'pnpm-missing', 'pnpm is available', {}, 'Install pnpm from https://pnpm.io.');
+
+    step('1/8 fetching submodules (engine + interface + platform-io) ...');
+    sh('git', ['submodule', 'update', '--init', '--recursive'], {
+      failure: {
+        phase: 'submodules',
+        code: 'submodules-fetch-failed',
+        expected: 'recursive submodule update exits with status 0',
+        hint: 'Check submodule remotes and access, then rerun bun fx setup.',
+      },
+    });
+    ok('submodules ready');
+
+    const skipEditorInstall = process.env.FORGEAX_SKIP_EDITOR_BUN_INSTALL === '1';
+    if (skipEditorInstall && !existsSync(join(ROOT, 'node_modules', '.bin', 'tsc'))) {
+      throw setupFailure(
+        'editor-bun-install',
+        'editor-install-missing',
+        'the frozen editor install exists when Bun installation is skipped',
+        {path: join(ROOT, 'node_modules', '.bin', 'tsc')},
+        'Run bun install first, then rerun bun fx setup.',
+      );
+    }
+
+    step('2/8 installing editor workspace deps (bun) ...');
+    const runDependencyCommand: SetupCommandRunner = (command, args, env) =>
+      runCaptured(command, [...args], {
+        cwd: command === 'pnpm' ? ENGINE_DIR : ROOT,
+        env,
+      });
+    trace = runSetupDependencyInstalls({
+      env: process.env,
+      run: runDependencyCommand,
+      skipEditorInstall,
+      beforeEngineInstall: resetEngineNodeModulesIfBunLinked,
+    });
+    if (trace.editorInstallSkipped) {
+      ok('bun deps already ready (reused frozen worktree install)');
+    } else {
+      ok('bun deps ready');
+    }
+    if (trace.fallbacks.includes('harness-divergence')) {
+      warn('[fx] harness divergence detected; dependency setup continued with Harness sync deferred.');
+    }
+    if (trace.fallbacks.includes('simple-git-hooks-enoent-retry')) {
+      warn('[fx] simple-git-hooks ENOENT detected; retried Bun installation once.');
+    }
+    if (trace.terminalStatus !== 'success' || !trace.engineEnv) {
+      throw new SetupExecutionError(
+        trace.failure ?? {
+          phase: 'dependencies',
+          code: 'dependency-setup-failed',
+          expected: 'Bun and Engine dependency installs exit with status 0',
+          observed: trace,
+          hint: 'Rerun bun fx setup after resolving the failed dependency stage.',
+        },
+      );
+    }
+
+    step(
+      `3/8 installing engine deps (pnpm, network concurrency ${trace.engineEnv.PNPM_CONFIG_NETWORK_CONCURRENCY ?? DEFAULT_PNPM_NETWORK_CONCURRENCY}) ...`,
+    );
+    ok('engine deps ready');
+
+    // wasm MUST precede the engine dist build: the engine `app` package's tsup
+    // build inlines wgpu-wasm/dist/index.mjs, which `import`s ../pkg/wgpu_wasm.js.
+    // ENFORCED by scripts/lint-wasm-before-dist.mjs; keep this order intact.
+    step('4/8 ensuring wgpu wasm binary ...');
+    ensureWasm();
+
+    step('5/8 ensuring fbx wasm binary ...');
+    ensureFbxWasm();
+
+    step('6/8 ensuring codec wasm binaries ...');
+    ensureCodecWasm();
+
+    step('7/8 building engine library dist (pnpm -r, packages/* only — skips apps) ...');
+    sh('pnpm', ['-r', '--filter', './packages/*', 'build', '--silent'], {
+      cwd: ENGINE_DIR,
+      failure: {
+        phase: 'engine-dist',
+        code: 'engine-dist-build-failed',
+        expected: 'Engine dist build exits with status 0',
+        hint: 'Inspect the Engine dist build output and rerun bun fx setup.',
+      },
+    });
+    ok('engine dist built');
+    buildEngineDeclarations();
+    ok('engine declarations built');
+
+    step('verifying critical artifacts ...');
+    const missing: string[] = [];
+    for (const pkg of ENGINE_CRITICAL_PACKAGES) {
+      for (const artifact of ['index.mjs', ...ENGINE_DECLARATION_ARTIFACTS]) {
+        const path = join(ENGINE_DIR, 'packages', pkg, 'dist', artifact);
+        if (!existsSync(path)) {
+          warn(`missing engine dist: packages/${pkg}/dist/${artifact}`);
+          missing.push(path);
+        }
+      }
+    }
+    if (!existsSync(WASM_FILE)) {
+      warn(`missing wasm: ${WASM_FILE}`);
+      missing.push(WASM_FILE);
+    }
+    if (!existsSync(FBX_WASM_MJS) || !existsSync(FBX_WASM_FILE)) {
+      warn('missing fbx wasm: packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
+      missing.push(FBX_WASM_MJS, FBX_WASM_FILE);
+    }
+    if (!codecWasmPresent()) {
+      warn('missing codec wasm: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/basis_encoder.wasm');
+      missing.push(CODEC_WASM_MJS, CODEC_WASM_FILE, CODEC_ENCODER_WASM_FILE);
+    }
+    if (missing.length > 0) {
+      throw setupFailure(
+        'critical-artifact-verify',
+        'critical-artifact-missing',
+        'all critical Engine artifacts exist',
+        {missing},
+        "Rerun bun fx setup; do not create a placeholder artifact.",
+      );
+    }
+
+    writeEngineDistSha();
+    ok(`engine dist matches ${engineHead().slice(0, 12)}`);
+    printSetupEnvelope(
+      setupEnvelopeFromTrace(trace, {
+        terminalStatus: 'success',
+        phase: 'complete',
+        code: 'setup-complete',
+        expected: 'all setup gates complete',
+        observed: {gates: ['engine-pnpm', 'wgpu-wasm', 'fbx-wasm', 'codec-wasm', 'engine-dist', 'declaration', 'critical-artifact-verify']},
+        hint: 'Setup is ready for bun fx start.',
+        artifactsVerified: true,
+      }),
+    );
+    ok('install complete — run: bun fx start');
+  } catch (error) {
+    const failure = error instanceof SetupExecutionError
+      ? error.failure
+      : {
+          phase: 'setup',
+          code: 'setup-failed',
+          expected: 'all setup gates complete',
+          observed: {error: error instanceof Error ? error.message : String(error)},
+          hint: 'Resolve the reported setup failure and rerun bun fx setup.',
+        };
+    printSetupEnvelope(setupEnvelopeFromTrace(trace, {
+      terminalStatus: 'failure',
+      phase: failure.phase,
+      code: failure.code,
+      expected: failure.expected,
+      observed: failure.observed,
+      hint: failure.hint,
+      artifactsVerified: false,
+    }));
+    die(error instanceof Error ? error.message : String(error));
+  } finally {
+    setupExecutionActive = false;
+  }
 }
 
 // ── start (run) ─────────────────────────────────────────────────────────────
@@ -683,6 +1377,12 @@ async function run(argv: string[]): Promise<void> {
     if (!existsSync(join(gameDir, 'forge.json'))) die(`--game dir has no forge.json: ${gameDir}`);
     ok(`reusing platform-io for game '${gameDir.split(/[/\\]/).pop()}' from ${gameDir}`);
   }
+  const manualLogDir = resolve(ROOT, '..', '.forgeax-debug', 'manual-runs');
+  const manualGameName = basename(gameDir || 'standalone');
+  const manualRunId = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const manualLogFile = join(manualLogDir, `${manualGameName}-${manualRunId}.log`);
+  mkdirSync(manualLogDir, { recursive: true });
+  step(`manual run log → ${manualLogFile}`);
   // --rhi-debug: opt-in the engine's RHI frame capture. Setting the env for every
   // spawned vite process makes engine-vite-preset register vite-plugin-rhi-debug
   // (which injects import.meta.env.FORGEAX_ENGINE_RHI_DEBUG=1 + the dev-server
@@ -743,6 +1443,35 @@ async function run(argv: string[]): Promise<void> {
     die('engine not built (dist/wasm missing). Run first: bun fx setup');
   }
   requireFreshEngineDist();
+  const engineRevision = engineHead();
+  const ddcHostRoot = gameDir === ''
+    ? undefined
+    : resolve(gameDir, '.forgeax', 'ddc', 'v2', 'hosts', `engine-${engineRevision}`);
+  const hostDdcRoot = ddcHostRoot === undefined
+    ? undefined
+    : resolve(ddcHostRoot, `standalone-host-${STANDALONE_PORT}`);
+  const editRuntimeDdcRoot = ddcHostRoot === undefined
+    ? undefined
+    : resolve(ddcHostRoot, `edit-runtime-${EDIT_RUNTIME_PORT}`);
+  const playRuntimeDdcRoot = ddcHostRoot === undefined
+    ? undefined
+    : resolve(ddcHostRoot, `play-runtime-${PLAY_RUNTIME_PORT}`);
+  const viteCacheRoot = process.env.FORGEAX_VITE_CACHE_ROOT
+    ?? resolve(gameDir || ROOT, '.forgeax', 'vite-cache', `engine-${engineRevision}`);
+  const baseDdcBuildCacheRoot = hostDdcRoot === undefined
+    ? undefined
+    : resolve(hostDdcRoot, 'build');
+
+  // A stale Vite/DDC graph can still report "ready" while serving material
+  // publication output from a different Engine compiler. Namespace both
+  // caches by the exact Engine pin so restarting the same game after an Engine
+  // update starts from a compatible derived graph without deleting authored
+  // state or the previous cache.
+  env.FORGEAX_VITE_CACHE_ROOT = viteCacheRoot;
+  if (hostDdcRoot !== undefined && baseDdcBuildCacheRoot !== undefined) {
+    env.FORGEAX_DDC_PROJECT_ROOT = hostDdcRoot;
+    env.FORGEAX_DDC_BUILD_CACHE_ROOT = baseDdcBuildCacheRoot;
+  }
 
   // Always start from a clean slate, but only sweep editor-owned ports. In
   // particular, never use Studio's :15295 as the editor relay default.
@@ -752,35 +1481,50 @@ async function run(argv: string[]): Promise<void> {
   if (!killed) ok('nothing to stop');
 
   // bridgeEnv already folded into `env`; edit-runtime just adds the HMR port.
-  const editRuntimeEnv: NodeJS.ProcessEnv = { ...env, FORGEAX_INTERFACE_PORT: String(STANDALONE_PORT) };
+  const editRuntimeEnv: NodeJS.ProcessEnv = {
+    ...env,
+    FORGEAX_INTERFACE_PORT: String(STANDALONE_PORT),
+    ...(editRuntimeDdcRoot === undefined
+      ? {}
+      : {
+          FORGEAX_DDC_PROJECT_ROOT: editRuntimeDdcRoot,
+          FORGEAX_DDC_BUILD_CACHE_ROOT: resolve(editRuntimeDdcRoot, 'build'),
+        }),
+  };
+  const playRuntimeEnv: NodeJS.ProcessEnv = playRuntimeDdcRoot === undefined
+    ? env
+    : {
+        ...env,
+        FORGEAX_DDC_PROJECT_ROOT: playRuntimeDdcRoot,
+        FORGEAX_DDC_BUILD_CACHE_ROOT: resolve(playRuntimeDdcRoot, 'build'),
+      };
   const editRuntimeArgs = ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', String(EDIT_RUNTIME_PORT), '--strictPort'];
 
   if (bg) {
     // Background mode: detached + unref'd so children outlive this process on
     // every platform (mirrors the old `nohup … &`). Logs go to the temp dir.
-    const logDir = tmpdir();
-    const log = (name: string): number => openSync(join(logDir, `forgeax-editor-${name}.log`), 'a');
-    step(`starting stack in background (logs → ${join(logDir, 'forgeax-editor-*.log')}) ...`);
+    const log = (): number => openSync(manualLogFile, 'a');
+    step(`starting stack in background (logs → ${manualLogFile}) ...`);
     if (gameDir)
       spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], {
         cwd: ROOT,
         env,
         detach: true,
-        logFd: log('game-backend'),
+        logFd: log(),
       });
     spawnService('bun', editRuntimeArgs, {
       cwd: ROOT,
       env: editRuntimeEnv,
       detach: true,
-      logFd: log('edit-runtime'),
+      logFd: log(),
     });
-    spawnService('bun', ['run', 'dev'], { cwd: ROOT, env, detach: true, logFd: log('host') });
+    spawnService('bun', ['run', 'dev'], { cwd: ROOT, env, detach: true, logFd: log() });
     if (rhiDebug)
       spawnService('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
         cwd: ENGINE_DIR,
         env,
         detach: true,
-        logFd: log('rhi-debug-reviewer'),
+        logFd: log(),
       });
     if (bridge)
       // Spawn with `bun`, not `node`: `ws` lives only in bun's isolated store
@@ -789,15 +1533,15 @@ async function run(argv: string[]): Promise<void> {
         cwd: ROOT,
         env: { ...env, FORGEAX_BRIDGE_PORT: bridgePort },
         detach: true,
-        logFd: log('bridge'),
+        logFd: log(),
       });
     if (play || gameDir)
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
         // FORGEAX_ENGINE_PORT (= PLAY_RUNTIME_PORT) rides in the base `env`.
-        env,
+        env: playRuntimeEnv,
         detach: true,
-        logFd: log('play'),
+        logFd: log(),
       });
     ok(`stack starting in background → http://localhost:${STANDALONE_PORT}`);
     ok('stop with: bun fx stop');
@@ -810,14 +1554,26 @@ async function run(argv: string[]): Promise<void> {
 
   if (gameDir) {
     step(`starting game-backend :${GAME_API_PORT} (platform-io reuse, R3) ...`);
-    children.push(spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], { cwd: ROOT, env }));
+    children.push(spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], {
+      cwd: ROOT,
+      env,
+      teeLogPath: manualLogFile,
+    }));
   }
 
   step(`starting edit-runtime :${EDIT_RUNTIME_PORT} (HMR→${STANDALONE_PORT}) ...`);
-  children.push(spawnService('bun', editRuntimeArgs, { cwd: ROOT, env: editRuntimeEnv }));
+  children.push(spawnService('bun', editRuntimeArgs, {
+    cwd: ROOT,
+    env: editRuntimeEnv,
+    teeLogPath: manualLogFile,
+  }));
 
   step(`starting standalone host :${STANDALONE_PORT} ...`);
-  children.push(spawnService('bun', ['run', 'dev'], { cwd: ROOT, env }));
+  children.push(spawnService('bun', ['run', 'dev'], {
+    cwd: ROOT,
+    env,
+    teeLogPath: manualLogFile,
+  }));
 
   if (rhiDebug) {
     step(`starting RHI reviewer :${RHI_REVIEWER_PORT} ...`);
@@ -825,6 +1581,7 @@ async function run(argv: string[]): Promise<void> {
       spawnService('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
         cwd: ENGINE_DIR,
         env,
+        teeLogPath: manualLogFile,
       }),
     );
   }
@@ -836,6 +1593,7 @@ async function run(argv: string[]): Promise<void> {
       spawnService('bun', [GATEWAY_RELAY_SCRIPT], {
         cwd: ROOT,
         env: { ...env, FORGEAX_BRIDGE_PORT: bridgePort },
+        teeLogPath: manualLogFile,
       }),
     );
   }
@@ -846,7 +1604,8 @@ async function run(argv: string[]): Promise<void> {
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
         // FORGEAX_ENGINE_PORT (= PLAY_RUNTIME_PORT) rides in the base `env`.
-        env,
+        env: playRuntimeEnv,
+        teeLogPath: manualLogFile,
       }),
     );
   }
@@ -1333,6 +2092,7 @@ function discoverContract(): void {
     }[];
     readonly profiles: Readonly<Record<string, readonly string[]>>;
     readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+    readonly baselineEvidence: unknown;
     readonly prerequisiteRelease: unknown;
   };
   console.log(JSON.stringify({
@@ -1340,6 +2100,7 @@ function discoverContract(): void {
     checks: contract.checks,
     profiles: contract.profiles,
     requiredContexts: contract.requiredContexts,
+    baselineEvidence: contract.baselineEvidence,
     prerequisiteRelease: contract.prerequisiteRelease,
     recovery: {
       dirtyWorktree: 'commit or stash changes before executing a local CI profile',
@@ -1347,6 +2108,122 @@ function discoverContract(): void {
       unsafeBoundary: 'stop when trusted workflow admission cannot be proven',
     },
   }, null, 2));
+}
+
+type BaselineEvidenceInput = {
+  readonly schemaVersion?: string;
+  readonly attemptProvenance?: Record<string, unknown>;
+  readonly criticalPath?: unknown;
+  readonly requiredContexts?: unknown;
+  readonly costFacts?: unknown;
+  readonly readiness?: unknown;
+  readonly budgetClaim?: unknown;
+  readonly noClaim?: unknown;
+  readonly rawPacket?: unknown;
+};
+
+function baselineCliError(
+  code: string,
+  expected: unknown,
+  observed: unknown,
+  hint: string,
+  affectedProvenance: unknown = null,
+): Record<string, unknown> {
+  return {ok: false, status: 'no-claim', error: {code, expected, observed, hint, affectedProvenance}};
+}
+
+function readBaselineEvidence(inputPath: string): Record<string, unknown> {
+  let input: BaselineEvidenceInput & {baselineInput?: BaselineEvidenceInput};
+  try {
+    input = JSON.parse(readFileSync(resolve(ROOT, inputPath), 'utf8')) as BaselineEvidenceInput & {baselineInput?: BaselineEvidenceInput};
+  } catch (error) {
+    return baselineCliError(
+      'baseline-input-unreadable',
+      'a readable baseline evidence JSON file',
+      error instanceof Error ? error.message : String(error),
+      'Provide the exact current attempt baseline JSON; do not substitute a local editor CI report or a historical fixture.',
+    );
+  }
+  const evidence = input.baselineInput ?? input;
+  try {
+    validateBaselineEvidence(evidence);
+  } catch (error) {
+    return baselineCliError(
+      error instanceof Error && 'code' in error ? String(error.code) : 'baseline-evidence-invalid',
+      error instanceof Error && 'expected' in error ? error.expected : {schemaVersion: BASELINE_EVIDENCE_SCHEMA_VERSION, attemptProvenance: 'complete'},
+      error instanceof Error && 'observed' in error ? error.observed : {schemaVersion: evidence.schemaVersion ?? null, attemptProvenance: evidence.attemptProvenance ?? null},
+      error instanceof Error && 'hint' in error ? String(error.hint) : 'Read a collector-produced attempt evidence packet with source, run, attempt, topology, roster, and workflow provenance.',
+      error instanceof Error && 'affectedProvenance' in error ? error.affectedProvenance : evidence.attemptProvenance ?? null,
+    );
+  }
+  const noClaims = Array.isArray(evidence.noClaim) ? evidence.noClaim : evidence.noClaim ? [evidence.noClaim] : [];
+  const facts = {
+    criticalPath: evidence.criticalPath ?? null,
+    requiredContexts: evidence.requiredContexts ?? null,
+    costFacts: evidence.costFacts ?? null,
+    readiness: evidence.readiness ?? null,
+  };
+  const budgetClaim = evidence.budgetClaim ?? null;
+  const summary = {
+    status: budgetClaim ? 'observed' : 'no-claim',
+    schema: evidence.schemaVersion,
+    provenance: evidence.attemptProvenance,
+    claim: budgetClaim ? 'budgetClaim' : 'no-claim',
+  };
+  const packetlessError = evidence.attemptProvenance == null
+    ? noClaims[0] ?? {
+      code: 'attempt-packet-missing',
+      expected: 'a complete current attempt packet or an explicit rejection envelope',
+      observed: 'no attempt provenance and no no-claim envelope',
+      hint: 'Collect the exact current attempt packet before using this baseline projection.',
+      affectedProvenance: null,
+    }
+    : null;
+  return {
+    ok: packetlessError === null,
+    status: summary.status,
+    ...(packetlessError ? {error: packetlessError} : {}),
+    summary,
+    schema: {
+      version: evidence.schemaVersion,
+      fields: [...BASELINE_TOP_INDEX_FIELDS],
+      layers: [...BASELINE_TOP_INDEX_LAYERS],
+      errorFields: ['code', 'expected', 'observed', 'hint', 'affectedProvenance'],
+    },
+    provenance: {attemptProvenance: structuredClone(evidence.attemptProvenance)},
+    facts,
+    claims: {budgetClaim},
+    noClaims,
+    rawPacket: evidence.rawPacket ?? {available: false, path: null},
+    attemptProvenance: structuredClone(evidence.attemptProvenance),
+    criticalPath: facts.criticalPath,
+    requiredContexts: facts.requiredContexts,
+    costFacts: facts.costFacts,
+    readiness: facts.readiness,
+    budgetClaim,
+    noClaim: noClaims,
+  };
+}
+
+function discoverBaseline(args: readonly string[]): void {
+  const inputIndex = args.indexOf('--input');
+  const inputPath = inputIndex >= 0 ? args[inputIndex + 1] : undefined;
+  const invalidFlags = args.filter((arg, index) => (
+    arg !== '--json' && arg !== '--input' && !(inputIndex >= 0 && index === inputIndex + 1)
+  ));
+  if (!args.includes('--json')) {
+    console.log(JSON.stringify(baselineCliError('baseline-json-required', '--json', 'missing', 'Request JSON output so facts, claims, no-claims, provenance, and recovery fields remain machine-readable.'), null, 2));
+    process.exitCode = 1;
+    return;
+  }
+  if (invalidFlags.length > 0 || !inputPath) {
+    console.log(JSON.stringify(baselineCliError('baseline-input-missing', '--input PATH', inputPath ?? 'missing', 'Pass the exact collector baseline evidence JSON; this front door does not invent cloud facts locally.'), null, 2));
+    process.exitCode = 1;
+    return;
+  }
+  const result = readBaselineEvidence(inputPath);
+  console.log(JSON.stringify(result, null, 2));
+  if (result.ok !== true) process.exitCode = 1;
 }
 
 function requiredCiArtifacts(): readonly string[] {
@@ -1392,9 +2269,16 @@ function ensureCiAdmission(profile: CiProfile, reportPath: string, editorCommit:
 
 function runCiCheck(check: RegressionCheck): CiCheckResult {
   const started = Date.now();
-  const result = spawnSync(check.command, [...check.args], {
+  // The producer-owned contract is a command line, not only an executable plus
+  // argv. Keep shell operators such as `&&` meaningful for chained checks while
+  // retaining one cross-platform execution boundary for every local profile.
+  const commandLine = [check.command, ...check.args].join(' ');
+  const shell = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
+  const shellArgs = process.platform === 'win32'
+    ? ['/d', '/s', '/c', commandLine]
+    : ['-c', commandLine];
+  const result = spawnSync(shell, shellArgs, {
     stdio: 'inherit',
-    shell: IS_WIN,
     cwd: ROOT,
     env: process.env,
   });
@@ -1560,6 +2444,10 @@ function runCiProfile(
 }
 
 function ci(argv: string[]): void {
+  if (argv[0] === 'baseline') {
+    discoverBaseline(argv.slice(1));
+    return;
+  }
   if (argv[0] === 'contract') {
     if (argv.slice(1).some((arg) => arg !== '--json')) {
       die("unknown contract flag; expected --json");
@@ -1596,6 +2484,11 @@ Usage:
 
 Lifecycle:
   setup | install               prepare everything (submodules, deps, engine dist + wasm)
+                                default: FORGEAX_HARNESS_SPARSE_DOCS=1 when unset
+                                explicit full: FORGEAX_HARNESS_SPARSE_DOCS=0
+                                skip Harness sync only: FORGEAX_SKIP_HARNESS_SYNC=1
+                                terminal line: fx-setup/v1 JSON with requested/actual Harness modes;
+                                existing full/sparse clones are not auto-migrated
   start | run [--play]          start the stack (:${STANDALONE_PORT} host + :${EDIT_RUNTIME_PORT} edit-runtime
                                 [+ :${PLAY_RUNTIME_PORT} play-runtime with --play/--game]); Ctrl-C stops
   start --game DIR              open a real game (DIR directly contains forge.json)
@@ -1632,11 +2525,26 @@ Repo maintenance:
                                 installed Playwright Chromium.
   ci contract --json             read and validate the producer-owned CI
                                 contract without executing a check.
+  ci baseline --json --input PATH
+                                progressively discover one attempt's facts,
+                                claims, no-claims, provenance, and raw packet.
+                                The input must be collector evidence; local
+                                editor CI reports are not cloud fact producers.
+  JSON layers: summary -> schema -> facts / claims / no-claims -> raw-packet;
+  public vocabulary: facts / claims / no-claims / provenance.
 
-  worktree <name> [--from REF]  create .worktrees/<name>, initialize recursive
-                                submodules, install dependencies, run setup,
-                                and allocate a persistent isolated port slot.
-                                --no-setup skips the engine dist/wasm build.
+  ddc status|rebuild|prune --game DIR --json
+                                inspect or recover project-local DDC state;
+                                prune is dry-run unless --execute is explicit.
+
+  worktree <name> [flags]      create .worktrees/<name> with shallow recursive
+                                submodules, shared/sparse harness, frozen Bun
+                                dependencies, setup, and a persistent port slot.
+                                --from REF       use another commit/ref
+                                --jobs N          shallow fetch jobs (1..8)
+                                --no-setup/--fast skip engine dist/wasm setup
+                                --keep-on-failure retain failed bootstrap
+                                --dry-run/-n      print the plan only
                                 Alias: wt. Run bun fx start inside the result.
 
   help | -h | --help            show this message
@@ -1671,6 +2579,9 @@ async function main(): Promise<void> {
     case 'ci':
       ci(rest);
       break;
+    case 'ddc':
+      process.exitCode = await runDdcCli(rest);
+      break;
     case 'worktree':
     case 'wt':
       try {
@@ -1691,4 +2602,4 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+if (import.meta.main) await main();

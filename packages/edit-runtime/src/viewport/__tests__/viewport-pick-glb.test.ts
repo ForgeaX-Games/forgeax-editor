@@ -20,11 +20,12 @@
 //      heuristic read local scale only and could not do this at all).
 
 import { describe, expect, it } from 'bun:test';
-import { World, type EntityHandle, type Handle } from '@forgeax/engine-ecs';
+import { World, type EntityHandle } from '@forgeax/engine-ecs';
 import { box3, mat4 } from '@forgeax/engine-math';
 import { MeshFilter, MeshRenderer, Visibility, VisibilityStateValue } from '@forgeax/engine-render';
 import { ChildOf, Name, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
+import type { Handle } from '@forgeax/engine-types';
 import { pickMeshFallback } from '../viewport-pick-fallback';
 import { aabbToWorldBox, entityBox } from '../viewport-ray';
 
@@ -43,7 +44,8 @@ function makeMesh(min: V3, max: V3): MeshAsset {
     // attribute drives the AABB (same convention as engine pick tests).
     vertices: new Float32Array(36),
     indices: new Uint16Array([0, 1, 2]),
-    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list', materialSlot: 0 }],
+    materialSlots: [{ slotName: 'Default' }],
     aabb: box3.fromPositions(box3.create(), positions),
     attributes: { position: positions },
   } as MeshAsset;

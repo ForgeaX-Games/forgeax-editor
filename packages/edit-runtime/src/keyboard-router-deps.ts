@@ -39,6 +39,7 @@ import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadran
 import { routeViewportKeydown } from './viewport/viewport';
 import type { InputTarget } from './viewport/viewport-camera';
 import { createHumanSaveRequest } from './save-operation-projection';
+import { trySaveDirtyMaterialStaging } from './page-controllers/material-page-controller';
 
 /** Minimal asset shape the router hands back for delete/dup/rename. */
 export interface RouterAsset {
@@ -77,6 +78,7 @@ export interface KeyboardRouterDepsShape {
   undo: () => void;
   redo: () => void;
   save: () => void;
+  restartPreview: () => void;
   handleViewportKeyDown: (event: KeyboardEvent) => void;
 }
 
@@ -102,6 +104,21 @@ export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
     isPlayMode: () => getViewportQuadrant().run === 'play',
     getDisplay: () => getViewportQuadrant().display,
     getInputTarget: () => getInputTarget(),
+    restartPreview: () => {
+      const retryWhenStopped = (deadline: number): void => {
+        if (gateway.playPhase === 'edit' || gateway.playPhase === 'failed') {
+          gateway.dispatch({ kind: 'play' }, 'human');
+          return;
+        }
+        if (Date.now() < deadline) window.setTimeout(() => retryWhenStopped(deadline), 50);
+      };
+      if (gateway.playPhase === 'play' || gateway.playPhase === 'starting') {
+        gateway.dispatch({ kind: 'stop' }, 'human');
+        retryWhenStopped(Date.now() + 10_000);
+        return;
+      }
+      gateway.dispatch({ kind: 'play' }, 'human');
+    },
     deleteEntities: (ids: number[]) => deleteManyCascade(ids as never),
     duplicateEntities: (ids: number[]) => ids.forEach((id) => duplicateEntity(id as never)),
     // UE-parity editor hide (.forgeax-harness/docs/2026-08-04-editor-hide-ue-parity-plan M2) —
@@ -140,6 +157,7 @@ export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
     // M4/B3: MI (and future page controllers) divert Ctrl+S away from scene save.
     save: () => {
       if (trySaveActivePage()) return;
+      if (trySaveDirtyMaterialStaging()) return;
       gateway.dispatch(createHumanSaveRequest(), 'human');
     },
     handleViewportKeyDown: routeViewportKeydown,

@@ -37,20 +37,16 @@ import {
   gateway,
   getViewportRuntimeClientSnapshot,
   getGizmoMode,
+  getGizmoPivot,
   getGizmoSpace,
   getSceneFile,
   getSceneId,
   hasPendingDiskSave,
   onGizmoModeChange,
-  onGizmoSpaceChange,
   onSceneListChange,
   queryViewportRuntimeProjection,
   subscribeViewportRuntimeClient,
   useDocVersion,
-  useGizmoPivot,
-  useGizmoSpace,
-  useSceneFile,
-  useSceneList,
   useSelection,
   useViewportPreferences,
   type VisualQualityPreset,
@@ -65,6 +61,9 @@ import { getFps, onFpsChange } from '../fps-store';
 import './viewport-panel.css';
 
 type ContextKeyValue = string | number | boolean;
+type GizmoMode = ReturnType<typeof getGizmoMode>;
+type GizmoSpace = ReturnType<typeof getGizmoSpace>;
+type GizmoPivot = ReturnType<typeof getGizmoPivot>;
 
 function setContextKeys(host: AppHost, values: Record<string, ContextKeyValue>): void {
   for (const [key, value] of Object.entries(values)) host.contextKeys.set(key, value);
@@ -79,6 +78,9 @@ interface ViewportStatusProjection {
   readonly fps: number;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  readonly gizmoMode?: GizmoMode;
+  readonly gizmoSpace?: GizmoSpace;
+  readonly gizmoPivot?: GizmoPivot;
 }
 
 const DISCONNECTED_VIEWPORT_STATUS: ViewportStatusProjection = {
@@ -86,10 +88,24 @@ const DISCONNECTED_VIEWPORT_STATUS: ViewportStatusProjection = {
   fps: 0,
   canUndo: false,
   canRedo: false,
+  gizmoMode: getGizmoMode(),
+  gizmoSpace: getGizmoSpace(),
+  gizmoPivot: getGizmoPivot(),
 };
 const viewportContextSignatures = new WeakMap<AppHost, string>();
 let projectedFps = 0;
 const projectedFpsListeners = new Set<() => void>();
+interface ProjectedGizmoState {
+  readonly mode: GizmoMode;
+  readonly space: GizmoSpace;
+  readonly pivot: GizmoPivot;
+}
+let projectedGizmoState: ProjectedGizmoState = {
+  mode: getGizmoMode(),
+  space: getGizmoSpace(),
+  pivot: getGizmoPivot(),
+};
+const projectedGizmoListeners = new Set<() => void>();
 
 function subscribeProjectedFps(listener: () => void): () => void {
   projectedFpsListeners.add(listener);
@@ -100,7 +116,49 @@ function readProjectedFps(): number {
   return projectedFps;
 }
 
+function subscribeProjectedGizmo(listener: () => void): () => void {
+  projectedGizmoListeners.add(listener);
+  return () => projectedGizmoListeners.delete(listener);
+}
+
+function readProjectedGizmo(): ProjectedGizmoState {
+  return projectedGizmoState;
+}
+
+function isGizmoMode(value: unknown): value is GizmoMode {
+  return value === 'translate' || value === 'rotate' || value === 'scale';
+}
+
+function isGizmoSpace(value: unknown): value is GizmoSpace {
+  return value === 'world' || value === 'local';
+}
+
+function isGizmoPivot(value: unknown): value is GizmoPivot {
+  return value === 'center' || value === 'lastSelected';
+}
+
+function syncProjectedGizmo(status: ViewportStatusProjection): boolean {
+  const next: ProjectedGizmoState = {
+    mode: isGizmoMode(status.gizmoMode) ? status.gizmoMode : projectedGizmoState.mode,
+    space: isGizmoSpace(status.gizmoSpace) ? status.gizmoSpace : projectedGizmoState.space,
+    pivot: isGizmoPivot(status.gizmoPivot) ? status.gizmoPivot : projectedGizmoState.pivot,
+  };
+  if (
+    next.mode === projectedGizmoState.mode
+    && next.space === projectedGizmoState.space
+    && next.pivot === projectedGizmoState.pivot
+  ) return false;
+  projectedGizmoState = next;
+  for (const listener of projectedGizmoListeners) listener();
+  return true;
+}
+
+function useProjectedGizmoState(): ProjectedGizmoState {
+  return useSyncExternalStore(subscribeProjectedGizmo, readProjectedGizmo, readProjectedGizmo);
+}
+
 function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mounted: boolean): void {
+  if (syncProjectedGizmo(status)) syncEditorContext(host);
   const q = status.quadrant;
   const signature = `${mounted}:${q.run}:${q.display}:${q.control}:${status.fps}:${status.canUndo}:${status.canRedo}`;
   if (projectedFps !== status.fps) {
@@ -150,7 +208,7 @@ async function refreshViewportContext(host: AppHost): Promise<void> {
 
 function syncEditorContext(host: AppHost): void {
   setContextKeys(host, {
-    'panel.viewport.gizmo': getGizmoMode(),
+    'panel.viewport.gizmo': projectedGizmoState.mode,
     'panel.viewport.dirty': hasPendingDiskSave(),
     'panel.viewport.fps': getFps(),
     'panel.viewport.sceneId': getSceneFile() ?? getSceneId(),
@@ -182,7 +240,7 @@ function L(zh: string, en: string): LocalizedText {
 /** Viewport-preference edits go through the one gateway door (session op) so
  *  the toolbar menu, the Settings dock panel and AI dispatch the SAME op. */
 function patchViewportPreferences(patch: ViewportPreferencesPatch): void {
-  gateway.dispatch({ kind: 'setViewportPreferences', patch }, 'human');
+  void dispatchActiveEditorOperation({ kind: 'setViewportPreferences', patch }, 'human');
 }
 
 function pickText(text: LocalizedText, locale: Locale): string {
@@ -364,17 +422,17 @@ function registerViewportCommands(host: AppHost): Array<() => void> {
     host.commands.register({
       id: 'viewport.gizmo.move',
       title: 'Viewport: Move tool',
-      execute: () => { gateway.dispatch({ kind: 'setGizmoMode', mode: 'translate' }); return commandResult(); },
+      execute: () => { void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'translate' }, 'human'); return commandResult(); },
     }),
     host.commands.register({
       id: 'viewport.gizmo.rotate',
       title: 'Viewport: Rotate tool',
-      execute: () => { gateway.dispatch({ kind: 'setGizmoMode', mode: 'rotate' }); return commandResult(); },
+      execute: () => { void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'rotate' }, 'human'); return commandResult(); },
     }),
     host.commands.register({
       id: 'viewport.gizmo.scale',
       title: 'Viewport: Scale tool',
-      execute: () => { gateway.dispatch({ kind: 'setGizmoMode', mode: 'scale' }); return commandResult(); },
+      execute: () => { void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'scale' }, 'human'); return commandResult(); },
     }),
     host.commands.register({
       id: 'viewport.undo',
@@ -705,29 +763,6 @@ function StatusReadout({
   );
 }
 
-function SceneStatusControl(): ReactNode {
-  const { t } = useTranslation();
-  const sceneId = useSceneFile() ?? getSceneId();
-  const scenes = useSceneList();
-  const scene = scenes.find((entry) => entry.id === sceneId);
-  const sceneLabel = getSceneId() === 'default'
-    ? null
-    : (scene?.name ?? scene?.id ?? t('editor.sceneBadge.mainScene'));
-
-  return (
-    <div className="fx-viewport-panel-toolbar" data-zone="left">
-      {sceneLabel && (
-        <StatusReadout
-          icon={<Box size={13} />}
-          label={sceneLabel}
-          title={t('editor.sceneBadge.title')}
-          testId="vp-scene-badge"
-        />
-      )}
-    </div>
-  );
-}
-
 function FpsStatusControl(): ReactNode {
   const fps = useSyncExternalStore(subscribeProjectedFps, readProjectedFps, () => 0);
 
@@ -757,7 +792,7 @@ function VfxReplayControl(): ReactNode {
             disabled={!enabled}
             onClick={() => {
               if (selection !== null) {
-                gateway.dispatch({ kind: 'replayParticleEffect', entity: selection }, 'human');
+                void dispatchActiveEditorOperation({ kind: 'replayParticleEffect', entity: selection }, 'human');
               }
             }}
           >
@@ -774,8 +809,7 @@ function VfxReplayControl(): ReactNode {
 function CoordinateMenuControl(): ReactNode {
   const { i18n } = useTranslation();
   const locale = i18n.language;
-  const space = useGizmoSpace();
-  const pivot = useGizmoPivot();
+  const { space, pivot } = useProjectedGizmoState();
 
   return (
     <DropdownMenu>
@@ -783,11 +817,11 @@ function CoordinateMenuControl(): ReactNode {
         {space === 'local' ? <Box size={15} /> : <Globe size={15} />}
       </ToolMenuTrigger>
       <PopPanel title={pickText(L('坐标系', 'Coordinate space'), locale)} width={180}>
-        <PopItem icon={<Globe size={14} />} label={pickText(L('世界', 'World'), locale)} active={space === 'world'} onClick={() => gateway.dispatch({ kind: 'setGizmoSpace', space: 'world' } as never)} />
-        <PopItem icon={<Box size={14} />} label={pickText(L('本地', 'Local'), locale)} active={space === 'local'} onClick={() => gateway.dispatch({ kind: 'setGizmoSpace', space: 'local' } as never)} />
+        <PopItem icon={<Globe size={14} />} label={pickText(L('世界', 'World'), locale)} active={space === 'world'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoSpace', space: 'world' }, 'human'); }} />
+        <PopItem icon={<Box size={14} />} label={pickText(L('本地', 'Local'), locale)} active={space === 'local'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoSpace', space: 'local' }, 'human'); }} />
         <PopSeparator />
-        <PopItem icon={<Crosshair size={14} />} label={pickText(L('多选中心点', 'Selection center'), locale)} active={pivot === 'center'} onClick={() => gateway.dispatch({ kind: 'setGizmoPivot', pivot: 'center' })} />
-        <PopItem icon={<MousePointer2 size={14} />} label={pickText(L('最后选中物体', 'Last selected'), locale)} active={pivot === 'lastSelected'} onClick={() => gateway.dispatch({ kind: 'setGizmoPivot', pivot: 'lastSelected' })} />
+        <PopItem icon={<Crosshair size={14} />} label={pickText(L('多选中心点', 'Selection center'), locale)} active={pivot === 'center'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoPivot', pivot: 'center' }, 'human'); }} />
+        <PopItem icon={<MousePointer2 size={14} />} label={pickText(L('最后选中物体', 'Last selected'), locale)} active={pivot === 'lastSelected'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoPivot', pivot: 'lastSelected' }, 'human'); }} />
       </PopPanel>
     </DropdownMenu>
   );
@@ -1022,7 +1056,6 @@ export function createEditorPanelContributionsExtension(): AppExtension {
       const cleanups: Array<() => void> = [
         ...registerViewportCommands(host),
         ctx.contributePanelControls([
-          { id: 'viewport.sceneStatus', render: () => <SceneStatusControl /> },
           { id: 'viewport.vfxReplay', render: () => <VfxReplayControl /> },
           { id: 'viewport.fpsStatus', render: () => <FpsStatusControl /> },
           { id: 'viewport.coordMenu', render: () => <CoordinateMenuControl /> },
@@ -1034,15 +1067,6 @@ export function createEditorPanelContributionsExtension(): AppExtension {
           { id: 'viewport.separator', render: () => <SeparatorControl /> },
         ]),
         ctx.contributePanelActions([
-          {
-            kind: 'control',
-            id: 'viewport.scene.status',
-            panelId: 'viewport',
-            control: 'viewport.sceneStatus',
-            location: 'header/left',
-            order: 10,
-            enablement: 'panel.viewport.mounted',
-          },
           {
             id: 'viewport.run.play.action',
             panelId: 'viewport',

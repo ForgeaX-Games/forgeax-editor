@@ -70,6 +70,11 @@ describe('w8 buildSpawnEntityFromDragRef mesh branch (RED before w10)', () => {
     expect(ent!.components.EditorPendingMeshMaterials).toEqual({ guids: ['mat-guid-99'] });
   });
 
+  it('(c2) mesh branch inherits MeshAsset defaults instead of carrying editor material markers', () => {
+    const ent = buildSpawnEntityFromDragRef(meshRef());
+    expect(ent!.components.EditorPendingMeshMaterials).toBeUndefined();
+  });
+
   it('(d2) texture branch: HANDLE_QUAD (flat card) + pending-texture marker carries guid and name', () => {
     const ent = buildSpawnEntityFromDragRef(textureRef());
     expect(ent).not.toBeNull();

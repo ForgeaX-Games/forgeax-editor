@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import {
   POST_MERGE_CONTRACT_VERSION,
   buildPostMergeEnvelope,
-  buildPostMergeDeliveryEnvelope,
+  buildPostMergeSourceEvidence,
+  buildPostMergeSourceEnvelope,
   validatePostMergeEnvelope,
 } from '../post-merge-monitor.mjs';
 import { LANDED_REQUIRED_CONTEXTS } from '../editor-ci-contract-envelope.mjs';
@@ -80,6 +81,58 @@ function landedDelivery(overrides = {}) {
   };
 }
 
+function sourceEvidenceFixture() {
+  const targetSha = 'a'.repeat(40);
+  const workflowRun = {
+    id: 801,
+    run_attempt: 2,
+    name: 'CI',
+    status: 'completed',
+    conclusion: 'success',
+    event: 'push',
+    head_branch: 'main',
+    head_sha: targetSha,
+    html_url: 'https://github.com/ForgeaX-Games/forgeax-editor/actions/runs/801',
+  };
+  const producer = producerRelease();
+  producer.sourceSha = targetSha;
+  const landed = landedDelivery({
+    landedSha: targetSha,
+    remoteMain: {
+      sha: 'd'.repeat(40),
+      ancestorSha: targetSha,
+      ancestor: true,
+      method: 'git-merge-base-is-ancestor',
+      source: 'remote-main',
+      repository: 'origin',
+    },
+    contexts: LANDED_REQUIRED_CONTEXTS.map((context) => ({
+      context,
+      sha: targetSha,
+      conclusion: 'success',
+      provenance: {kind: 'cloud', timingDomain: 'workflow-execution'},
+    })),
+  });
+  const jobs = LANDED_REQUIRED_CONTEXTS.map((name, index) => ({
+    id: 900 + index,
+    name,
+    run_id: workflowRun.id,
+    run_attempt: workflowRun.run_attempt,
+    head_sha: targetSha,
+    conclusion: 'success',
+  }));
+  return {
+    workflowRun,
+    jobs,
+    producer,
+    landed,
+    admission: {envelope: {terminalStatus: 'pass', requiredContexts: [...LANDED_REQUIRED_CONTEXTS]}},
+    liveRuleset: {id: 17, name: 'main-required-checks', requiredContexts: [...LANDED_REQUIRED_CONTEXTS]},
+    workflowAdmission: {ok: true},
+    monitorSha: 'e'.repeat(40),
+  };
+}
+
 test('target-SHA fixture builds a complete provenance envelope', () => {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
   const valid = fixture.cases.find((mutation) => mutation.valid);
@@ -115,9 +168,74 @@ test('monitor checkout SHA is never accepted as target provenance', () => {
   assert.equal(result.error.code, 'target-sha-mismatch');
 });
 
-test('delivery envelope joins workflow target SHA to exact landed evidence', () => {
+test('source evidence projects one workflow run without harness delivery input', () => {
+  const previous = process.env.FORGEAX_HARNESS_DELIVERY_JSON;
+  delete process.env.FORGEAX_HARNESS_DELIVERY_JSON;
+  try {
+    const input = sourceEvidenceFixture();
+    const result = buildPostMergeSourceEvidence(input);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.sourceEvidence.targetSha, input.workflowRun.head_sha);
+    assert.equal(result.sourceEvidence.workflowRun.id, input.workflowRun.id);
+    assert.equal(result.sourceEvidence.workflowRun.attempt, input.workflowRun.run_attempt);
+    assert.equal(result.sourceEvidence.remoteMain.sha, input.landed.remoteMain.sha);
+    assert.equal(result.sourceEvidence.remoteMain.ancestorSha, input.workflowRun.head_sha);
+    assert.equal(result.sourceEvidence.remoteMain.ancestor, true);
+    assert.deepEqual(result.sourceEvidence.requiredContexts.expected, LANDED_REQUIRED_CONTEXTS);
+    assert.deepEqual(result.sourceEvidence.admission.requiredContexts, LANDED_REQUIRED_CONTEXTS);
+    assert.equal(result.sourceEvidence.admission.liveRuleset.id, 17);
+    assert.equal(result.sourceEvidence.producer.sourceSha, input.workflowRun.head_sha);
+    assert.doesNotMatch(JSON.stringify(result), /harness|overall[-_ ]?delivery|terminal verdict/i);
+  } finally {
+    if (previous === undefined) delete process.env.FORGEAX_HARNESS_DELIVERY_JSON;
+    else process.env.FORGEAX_HARNESS_DELIVERY_JSON = previous;
+  }
+});
+
+test('source evidence fails closed for remote main, context, and producer drift', () => {
+  const cases = [
+    {
+      name: 'remote main ancestry missing',
+      mutate: (input) => { input.landed.remoteMain = null; },
+      code: 'landed-remote-main-evidence-missing',
+    },
+    {
+      name: 'remote main ancestry false',
+      mutate: (input) => { input.landed.remoteMain.ancestor = false; },
+      code: 'landed-remote-main-ancestry-invalid',
+    },
+    {
+      name: 'required context missing',
+      mutate: (input) => { input.landed.contexts = input.landed.contexts.slice(0, -1); },
+      code: 'landed-required-contexts-missing',
+    },
+    {
+      name: 'producer missing',
+      mutate: (input) => { delete input.producer; },
+      code: 'producer-identity-missing',
+    },
+    {
+      name: 'producer source SHA drift',
+      mutate: (input) => { input.producer.sourceSha = 'f'.repeat(40); },
+      code: 'producer-source-sha-mismatch',
+    },
+  ];
+  for (const candidate of cases) {
+    const input = sourceEvidenceFixture();
+    candidate.mutate(input);
+    const result = buildPostMergeSourceEvidence(input);
+    assert.equal(result.ok, false, candidate.name);
+    assert.equal(result.error.code, candidate.code, candidate.name);
+    assert.notEqual(result.error.expected, undefined, candidate.name);
+    assert.notEqual(result.error.observed, undefined, candidate.name);
+    assert.equal(typeof result.error.hint, 'string', candidate.name);
+    assert.doesNotMatch(JSON.stringify(result), /harness|overall[-_ ]?delivery|terminal verdict/i, candidate.name);
+  }
+});
+
+test('source envelope binds workflow target SHA to exact landed evidence', () => {
   const landed = landedDelivery();
-  const result = buildPostMergeDeliveryEnvelope({
+  const result = buildPostMergeSourceEnvelope({
     workflowRun: {
       id: 801,
       run_attempt: 2,
@@ -136,7 +254,7 @@ test('delivery envelope joins workflow target SHA to exact landed evidence', () 
   assert.equal(result.envelope.provenance.monitorSha, 'e'.repeat(40));
 });
 
-test('delivery envelope rejects target, context, and producer join drift before pass', () => {
+test('source envelope rejects target, context, and producer drift before pass', () => {
   const landed = landedDelivery();
   const cases = [
     {
@@ -173,7 +291,7 @@ test('delivery envelope rejects target, context, and producer join drift before 
       monitorSha: 'e'.repeat(40),
     };
     candidate.mutate(input);
-    const result = buildPostMergeDeliveryEnvelope(input);
+    const result = buildPostMergeSourceEnvelope(input);
     assert.equal(result.ok, false, candidate.name);
     assert.equal(result.error.code, candidate.code, candidate.name);
     assert.notEqual(result.handoff, undefined, candidate.name);

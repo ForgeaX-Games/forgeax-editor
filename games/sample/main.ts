@@ -30,7 +30,7 @@ import {
   INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputSnapshot,
 } from '@forgeax/engine-input';
-import type { BootstrapContext } from '@forgeax/engine-app';
+import type { BootstrapContext } from '@forgeax/editor-game-plugins';
 import type { SceneAsset } from '@forgeax/engine-types';
 
 // The scene's GUID (assets/scene.pack.json assets[0].guid; also forge.json

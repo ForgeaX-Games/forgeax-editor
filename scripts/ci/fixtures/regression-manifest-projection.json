@@ -5,12 +5,17 @@
       "id": "b2-self-boot",
       "name": "b2-self-boot",
       "command": "bun",
-      "args": ["scripts/selfcheck-standalone-b2.mjs"],
+      "args": [
+        "scripts/selfcheck-standalone-b2.mjs"
+      ],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["fast", "full"],
+      "profiles": [
+        "fast",
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": true,
@@ -25,12 +30,18 @@
       "id": "typecheck",
       "name": "typecheck",
       "command": "bun",
-      "args": ["run", "typecheck"],
+      "args": [
+        "run",
+        "typecheck"
+      ],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["fast", "full"],
+      "profiles": [
+        "fast",
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": true,
@@ -45,12 +56,20 @@
       "id": "r0-hierarchy-ui-editability",
       "name": "r0-hierarchy-ui-editability",
       "command": "bun",
-      "args": ["-F", "@forgeax/editor-panels", "test", "src/__tests__/hierarchy-runtime-access.test.ts"],
+      "args": [
+        "-F",
+        "@forgeax/editor-panels",
+        "test",
+        "src/__tests__/hierarchy-runtime-access.test.ts"
+      ],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["fast", "full"],
+      "profiles": [
+        "fast",
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": true,
@@ -65,12 +84,17 @@
       "id": "r0-sample-vfx-skill",
       "name": "r0-sample-vfx-skill",
       "command": "bun",
-      "args": ["scripts/lint-sample-vfx-skill.mjs"],
+      "args": [
+        "scripts/lint-sample-vfx-skill.mjs"
+      ],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["fast", "full"],
+      "profiles": [
+        "fast",
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": true,
@@ -84,11 +108,11 @@
     {
       "id": "r0-engine-dogfood-diagnostics",
       "name": "r0-engine-dogfood-diagnostics",
-      "command": "pnpm",
+      "command": "bun",
       "args": [
-        "-C",
+        "run",
+        "--cwd",
         "packages/engine",
-        "exec",
         "vitest",
         "run",
         "--project=@forgeax/engine-animation",
@@ -100,7 +124,10 @@
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["fast", "full"],
+      "profiles": [
+        "fast",
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": true,
@@ -115,12 +142,16 @@
       "id": "submodule-pin",
       "name": "submodule-pin",
       "command": "node",
-      "args": ["scripts/check-submodule-pins.mjs"],
+      "args": [
+        "scripts/check-submodule-pins.mjs"
+      ],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["full"],
+      "profiles": [
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": false,
@@ -135,12 +166,27 @@
       "id": "smoke-play",
       "name": "smoke-play",
       "command": "bun",
-      "args": ["run", "test:e2e", "--", "apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts", "apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts"],
+      "args": [
+        "scripts/ddc-packaging-parity.mjs",
+        "--game",
+        "games/sample",
+        "--json",
+        "&&",
+        "bun",
+        "run",
+        "test:e2e",
+        "--",
+        "apps/standalone/e2e/__tests__/smoke-boot-play.spec.ts",
+        "apps/standalone/e2e/__tests__/hierarchy-ui-layout.spec.ts",
+        "apps/standalone/e2e/__tests__/ddc-lifecycle.spec.ts"
+      ],
       "fixtureLayer": "R0",
       "roadmapId": "R3-07",
       "journey": "J0/J1",
       "gate": "C1-C7",
-      "profiles": ["full"],
+      "profiles": [
+        "full"
+      ],
       "owner": "editor-ci",
       "executionHome": {
         "local-fast": false,
@@ -150,16 +196,68 @@
         "nightly/scheduled": true,
         "post-merge": true
       }
+    },
+    {
+      "id": "editor-portability",
+      "name": "editor-portability",
+      "command": "bun",
+      "args": [
+        "scripts/ci/editor-portability.mjs",
+        "--platform",
+        "<matrix.platform>",
+        "--report",
+        "\"$RUNNER_TEMP/editor-portability-report.json\""
+      ],
+      "fixtureLayer": "R0",
+      "roadmapId": "R3-07",
+      "journey": "J0/J1",
+      "gate": "C1-C7",
+      "profiles": [],
+      "owner": "editor-ci",
+      "executionHome": {
+        "local-fast": false,
+        "local-full": false,
+        "PR": false,
+        "main": false,
+        "nightly/scheduled": false,
+        "post-merge": false
+      }
     }
   ],
   "profiles": {
-    "fast": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics"],
-    "full": ["b2-self-boot", "typecheck", "r0-hierarchy-ui-editability", "r0-sample-vfx-skill", "r0-engine-dogfood-diagnostics", "submodule-pin", "smoke-play"]
+    "fast": [
+      "b2-self-boot",
+      "typecheck",
+      "r0-hierarchy-ui-editability",
+      "r0-sample-vfx-skill",
+      "r0-engine-dogfood-diagnostics"
+    ],
+    "full": [
+      "b2-self-boot",
+      "typecheck",
+      "r0-hierarchy-ui-editability",
+      "r0-sample-vfx-skill",
+      "r0-engine-dogfood-diagnostics",
+      "submodule-pin",
+      "smoke-play"
+    ]
   },
   "requiredContexts": [
-    {"context": "b2-self-boot", "checkId": "b2-self-boot"},
-    {"context": "typecheck", "checkId": "typecheck"},
-    {"context": "submodule-pin", "checkId": "submodule-pin"},
-    {"context": "smoke-play", "checkId": "smoke-play"}
+    {
+      "context": "b2-self-boot",
+      "checkId": "b2-self-boot"
+    },
+    {
+      "context": "typecheck",
+      "checkId": "typecheck"
+    },
+    {
+      "context": "submodule-pin",
+      "checkId": "submodule-pin"
+    },
+    {
+      "context": "smoke-play",
+      "checkId": "smoke-play"
+    }
   ]
 }

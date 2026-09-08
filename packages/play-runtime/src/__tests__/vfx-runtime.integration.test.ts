@@ -22,7 +22,7 @@ describe('independent Play VFX runtime', () => {
         attached.push(input);
         return { ok: true as const, value: { state: 'attached' as const } };
       },
-      detachWorld(input: { world: World }) {
+      async detachWorld(input: { world: World }) {
         detached.push(input.world);
         return { ok: true as const, value: { state: 'detached' as const } };
       },
@@ -36,7 +36,7 @@ describe('independent Play VFX runtime', () => {
 
     expect((await runtime.attachWorld(world, assets as never)).ok).toBe(true);
     expect(attached).toEqual([{ world, assets }]);
-    expect(runtime.detachWorld(world).ok).toBe(true);
+    expect((await runtime.detachWorld(world)).ok).toBe(true);
     expect(detached).toEqual([world]);
   });
 

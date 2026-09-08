@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'bun:test';
+import { World } from '@forgeax/engine-ecs';
+import { AssetRegistry, createCatalogSource, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { worldGetSceneAssetForInstance } from '@forgeax/engine-scene';
+import type { AssetPublicationEnvelope, SceneAsset } from '@forgeax/engine-types';
 import { describeSceneActivation } from '../assets/scene-activation';
 import { EditGateway } from '../io/gateway';
+import { createCoreTestWorld } from './fixtures/world';
 import { importedPreviewSession } from '../io/scene-authoring-session';
+import { createEditSession } from '../session/document';
 import { ctx, loadImportedScenePreview } from '../store/scene-persistence';
 
 describe('imported scene Phase A descriptor and gateway policy', () => {
@@ -161,15 +167,46 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
 
   it('rejects unsupported mount-member edits without blocking supported operations', () => {
     const gateway = new EditGateway();
+    gateway.doc.world = createCoreTestWorld();
     const internals = gateway as unknown as {
       _isMountMember(entity: number): boolean;
-      _validateMountMemberEdit(op: object): { ok: boolean; error?: { code: string } };
+      _mountMemberPublicationIdentity(entity: number): {
+        sourcePath: string;
+        sourceKey: string;
+        outputGuid: string;
+        expectedRevision: string;
+        actualRevision: string;
+        candidateGeneration: number;
+        currentGeneration: number;
+      };
+      _validateMountMemberEdit(op: object): { ok: boolean; error?: { code: string; details?: unknown } };
     };
     internals._isMountMember = () => true;
+    internals._mountMemberPublicationIdentity = () => ({
+      sourcePath: 'assets/procedural-showcase.pack.ts',
+      sourceKey: 'scene:arena',
+      outputGuid: '11111111-1111-4111-8111-111111111111',
+      expectedRevision: 'a'.repeat(64),
+      actualRevision: 'b'.repeat(64),
+      candidateGeneration: 3,
+      currentGeneration: 4,
+    });
 
-    expect(internals._validateMountMemberEdit({
+    const rejection = internals._validateMountMemberEdit({
       kind: 'removeComponent', entity: 7, component: 'Transform',
-    })).toMatchObject({ ok: false, error: { code: 'mount-member-operation-unsupported' } });
+    });
+    expect(rejection).toMatchObject({ ok: false, error: { code: 'mount-member-operation-unsupported' } });
+    expect(rejection.error).toMatchObject({
+      details: {
+        sourcePath: 'assets/procedural-showcase.pack.ts',
+        sourceKey: 'scene:arena',
+        outputGuid: '11111111-1111-4111-8111-111111111111',
+        expectedRevision: 'a'.repeat(64),
+        actualRevision: 'b'.repeat(64),
+        candidateGeneration: 3,
+        currentGeneration: 4,
+      },
+    });
     expect(internals._validateMountMemberEdit({
       kind: 'destroyEntity', entity: 7,
     })).toMatchObject({ ok: false, error: { code: 'mount-member-operation-unsupported' } });
@@ -182,5 +219,101 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
     expect(internals._validateMountMemberEdit({
       kind: 'addComponent', entity: 7, component: 'AnimationPlayer', value: {},
     })).toEqual({ ok: true });
+  });
+
+  it('derives mount publication identity from a live SceneInstance and AssetRegistry', async () => {
+    const childGuid = '11111111-1111-4111-8111-111111111111';
+    const parentGuid = '22222222-2222-4222-8222-222222222222';
+    const publication: AssetPublicationEnvelope = {
+      schemaVersion: 'asset-publication/1',
+      sourcePath: 'assets/procedural-showcase.pack.ts',
+      sourceRevision: 'revision-current',
+      generation: 4,
+      digest: 'sha256:publication-current',
+      outputSetDigest: 'sha256:outputs-current',
+      outputs: [{ guid: childGuid, sourceKey: 'scene/arena', kind: 'scene', digest: 'sha256:scene-current', refs: [] }],
+      receipt: {
+        schemaVersion: 'asset-publication-receipt/1',
+        sourcePath: 'assets/procedural-showcase.pack.ts',
+        sourceRevision: 'revision-current',
+        inputFingerprint: 'sha256:receipt-current',
+        outputDigest: 'sha256:publication-current',
+        outputSetDigest: 'sha256:outputs-current',
+        externalEvidence: [],
+      },
+      externalEvidence: [],
+    };
+    const fence = {
+      schemaVersion: 'scene-publication-fence/1' as const,
+      sourcePath: publication.sourcePath,
+      sourceRevision: publication.sourceRevision,
+      publicationGeneration: publication.generation,
+      outputDigest: publication.digest,
+      outputSetDigest: publication.outputSetDigest,
+      receiptIdentity: publication.receipt.inputFingerprint,
+    };
+    const child: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+    };
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      mounts: [{ localId: 1 as never, source: childGuid, memberFirst: 2 as never, memberCount: 1 }],
+    };
+    const registry = new AssetRegistry({} as never);
+    expect(registry.catalog(childGuid, child).ok).toBe(true);
+    expect(registry.catalog(parentGuid, parent).ok).toBe(true);
+    registry.setCatalogSource(createCatalogSource({
+      entries: [
+        { guid: childGuid, kind: 'scene', packageUrl: 'scene.pack.json', sourcePath: publication.sourcePath, sourceKey: 'scene/arena', publication },
+        { guid: parentGuid, kind: 'scene', packageUrl: 'scene.pack.json', sourcePath: 'assets/main.pack.ts', sourceKey: 'scene/main' },
+      ],
+    }));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    const world = createCoreTestWorld();
+    const parentHandle = world.allocSharedRef('SceneAsset', parent);
+    const instantiated = registry.instantiate(parentHandle, world);
+    expect(instantiated.ok).toBe(true);
+    if (!instantiated.ok) return;
+    const sourceHandle = worldGetSceneAssetForInstance(world, instantiated.value);
+    expect(sourceHandle.ok).toBe(true);
+    if (!sourceHandle.ok) return;
+    const liveParent = resolveAssetHandle(world, sourceHandle.value);
+    expect(liveParent.ok).toBe(true);
+    if (!liveParent.ok || liveParent.value.kind !== 'scene' || liveParent.value.mounts?.[0] === undefined) return;
+    const candidateFence = {
+      ...fence,
+      sourceRevision: 'revision-candidate',
+      publicationGeneration: 3,
+      outputDigest: 'sha256:publication-candidate',
+      outputSetDigest: 'sha256:outputs-candidate',
+      receiptIdentity: 'sha256:receipt-candidate',
+    };
+    (liveParent.value.mounts[0] as { publicationFence?: unknown }).publicationFence = candidateFence;
+    const session = createEditSession();
+    session.world = world;
+    session.registry = registry;
+    const gateway = new EditGateway(session);
+    const models = gateway.sceneInstancesReadModel();
+    const childInstance = models.find((model) => model.source.guid === childGuid);
+    expect(childInstance?.members).toHaveLength(1);
+    const member = childInstance?.members[0]?.entity;
+    expect(member).toBeDefined();
+    if (member === undefined) return;
+    const identity = (gateway as unknown as {
+      _mountMemberPublicationIdentity(entity: number): Record<string, unknown> | undefined;
+    })._mountMemberPublicationIdentity(member);
+    expect(identity).toMatchObject({
+      sourcePath: publication.sourcePath,
+      sourceKey: 'scene/arena',
+      outputGuid: childGuid,
+      expectedRevision: candidateFence.sourceRevision,
+      actualRevision: publication.sourceRevision,
+      candidateGeneration: candidateFence.publicationGeneration,
+      currentGeneration: publication.generation,
+      publicationFence: candidateFence,
+    });
   });
 });

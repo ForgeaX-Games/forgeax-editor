@@ -25,6 +25,11 @@ import type {
 export type { AssetAuthoringCapability } from '@forgeax/engine-types';
 
 import { projectCatalogPathToRoots, type CatalogRootProjection } from './catalog-storage-path';
+import {
+  projectScriptablePackReadModel,
+  type ScriptablePackReadModel,
+} from './scriptable-pack-read-model';
+import type { AssetPublicationEnvelope } from '@forgeax/engine-types';
 
 export type AssetBrowserCatalogRoot = CatalogRootProjection;
 
@@ -61,6 +66,8 @@ export interface AssetBrowserRegistryEntry {
   readonly execution?: CookExecution;
   readonly lifecycle?: CatalogLifecycle;
   readonly projection?: CatalogProjection;
+  /** Complete producer publication tuple for ScriptablePack source outputs. */
+  readonly publication?: AssetPublicationEnvelope;
   readonly catalogRevision?: ResourceRevision;
 }
 
@@ -163,6 +170,8 @@ export interface AssetBrowserSnapshot {
   readonly catalogStale?: boolean;
   readonly catalogDiagnostics?: readonly CatalogDiagnostic[];
   readonly reconcileRequired?: boolean;
+  /** Canonical source/output projections grouped by one publication tuple. */
+  readonly scriptablePacks: readonly ScriptablePackReadModel[];
   readonly workspace?: AssetWorkspaceSnapshot;
 }
 
@@ -178,6 +187,46 @@ export interface CreateAssetBrowserReadModelDeps {
   registry: AssetBrowserRegistry;
   resolveGamePath: (relativePath: string) => string;
   catalogRoots: readonly AssetBrowserCatalogRoot[];
+}
+
+/**
+ * Project the publication-bearing catalog rows into the canonical ScriptablePack
+ * read model. All consumers use this adapter; no consumer may reconstruct a
+ * source/output graph from individual asset rows.
+ */
+export function projectScriptablePackCatalogRows(
+  rows: readonly (CatalogEntry | AssetBrowserRegistryEntry)[],
+  sourcePaths: readonly string[] = [],
+): readonly ScriptablePackReadModel[] {
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    sourcePath: row.sourcePath ?? row.publication?.sourcePath ?? '',
+  } as CatalogEntry));
+  const groups = new Map<string, { publication: AssetPublicationEnvelope; entries: CatalogEntry[] }>();
+  for (const row of normalizedRows) {
+    const publication = row.publication;
+    if (publication === undefined) continue;
+    const key = [publication.sourcePath, publication.sourceRevision, publication.generation, publication.digest, publication.outputSetDigest].join('|');
+    const group = groups.get(key) ?? { publication, entries: [] };
+    group.entries.push(row);
+    groups.set(key, group);
+  }
+  // Output completeness is scoped to one publication tuple, but dependency
+  // identity is resolved against the complete Catalog snapshot. Keep those
+  // two sets distinct so an external evidence GUID is not mistaken for a
+  // missing row simply because it is owned by another publication.
+  const allCatalogEntries = normalizedRows.filter((row) => row.sourcePath !== '');
+  const models = [...groups.values()]
+    .map(({ publication }) => projectScriptablePackReadModel({ publication, catalogEntries: allCatalogEntries }));
+  const publishedSources = new Set(models.map((model) => model.source.path));
+  const unpublished = sourcePaths
+    .filter((sourcePath) => sourcePath.toLowerCase().endsWith('.pack.ts') && !publishedSources.has(sourcePath))
+    .map((sourcePath) => projectScriptablePackReadModel({ sourcePath, catalogEntries: [] }));
+  return Object.freeze([...models, ...unpublished].sort((a, b) => a.source.path.localeCompare(b.source.path)));
+}
+
+function scriptablePackKey(model: ScriptablePackReadModel): string {
+  return [model.source.path, model.generation, model.digest, model.outputSetDigest].join('|');
 }
 
 /** Project the workspace SSOT into the legacy browser shape without owning it. */
@@ -211,6 +260,7 @@ export function assetWorkspaceSnapshotToBrowserSnapshot(
       path: issue.subjectId,
       message: issue.message,
     }))),
+    scriptablePacks: Object.freeze([]),
     workspace,
   });
 }
@@ -351,6 +401,22 @@ function projectCatalogEntry(
   };
 }
 
+/**
+ * Adapt the existing Catalog read rows to the canonical ScriptablePack
+ * projection. Browser, Inspector, and operation consumers call this adapter
+ * instead of rebuilding a source/output graph from individual rows.
+ */
+export function projectScriptablePackCatalog(
+  publication: AssetPublicationEnvelope,
+  catalogEntries: readonly CatalogEntry[],
+): ScriptablePackReadModel {
+  return projectScriptablePackReadModel({
+    sourcePath: publication.sourcePath,
+    publication,
+    catalogEntries,
+  });
+}
+
 function catalogDiagnosticsToBrowser(
   diagnostics: readonly CatalogDiagnostic[],
 ): AssetBrowserDiagnostic[] {
@@ -370,6 +436,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
     assets: [],
     sources: [],
     diagnostics: [],
+    scriptablePacks: [],
   };
   let nextGeneration = 0;
   let latestGeneration = 0;
@@ -482,11 +549,31 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
     catalogVersion += 1;
     const nextDiagnostics = Object.freeze([...current.diagnostics, ...catalogDiagnosticsToBrowser(delta.diagnostics ?? [])]);
     const workspaceSnapshot = projectWorkspace(assets, current.generation, nextDiagnostics);
+    const scriptablePacksByKey = new Map(current.scriptablePacks.map((model) => [scriptablePackKey(model), model]));
+    // Project against the complete live Catalog, not only this delta's output
+    // rows. A ScriptablePack's external evidence points at independent
+    // publications; restricting the input to the pack's own outputs makes
+    // every real dependency look missing during an incremental refresh.
+    const changedRows = projectScriptablePackCatalogRows([...byGuid.values()]);
+    for (const model of changedRows) {
+      for (const [key, previous] of scriptablePacksByKey) {
+        if (previous.source.path === model.source.path) scriptablePacksByKey.delete(key);
+      }
+      scriptablePacksByKey.set(scriptablePackKey(model), model);
+    }
+    const removed = new Set(delta.removed.map((guid) => guid.toLowerCase()));
+    const scriptablePacks = Object.freeze([...scriptablePacksByKey.values()]
+      .filter((model) => !model.outputs.some((output) => removed.has(output.guid.toLowerCase())))
+      .sort((a, b) => a.source.path.localeCompare(b.source.path)));
     publish(Object.freeze({
       ...current,
       assets: Object.freeze(assets),
       diagnostics: nextDiagnostics,
       workspace: workspaceSnapshot,
+      // Always publish the derived collection, including an empty array. When
+      // the last output of a source is removed, omitting this field would let
+      // the object spread above retain the previous snapshot's Pack model.
+      scriptablePacks,
       catalogVersion,
       catalogStale: false,
       catalogDiagnostics,
@@ -661,6 +748,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       ...(currentCatalog()?.stale === true ? [{ code: 'CATALOG_STALE' as const, message: 'Catalog reconciliation is required.' }] : []),
     ]);
     const workspaceResult = projectWorkspace(enrichedAssets, generation, allDiagnostics);
+    const scriptablePacks = projectScriptablePackCatalogRows(catalogRows, files.map((file) => file.path));
     const catalog = currentCatalog();
     catalogVersion = catalog?.version ?? catalogVersion;
     catalogStale = catalog?.stale ?? catalogStale;
@@ -673,6 +761,7 @@ export function createAssetBrowserReadModel(deps: CreateAssetBrowserReadModelDep
       sources: Object.freeze(sources),
       diagnostics: allDiagnostics,
       workspace: workspaceResult,
+      scriptablePacks,
       ...catalogState(),
     });
     if (generation === latestGeneration) publish(snapshot);

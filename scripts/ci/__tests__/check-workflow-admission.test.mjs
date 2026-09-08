@@ -11,12 +11,14 @@ import {
   runActionlint,
 } from '../check-workflow-admission.mjs';
 
-const workflowRoot = resolve('.github/workflows');
-const carrierPath = resolve('.github/workflows/runner-pool-contract.yml');
-const ciWorkflowPath = resolve('.github/workflows/ci.yml');
+const workflowRoot = resolve(process.env.FORGEAX_WORKFLOW_ROOT ?? '.github/workflows');
+const actionRoot = resolve(process.env.FORGEAX_ACTION_ROOT ?? '.github/actions');
+const carrierPath = join(workflowRoot, 'runner-pool-contract.yml');
+const ciWorkflowPath = join(workflowRoot, 'ci.yml');
+const smokePlayEnvironmentPath = join(actionRoot, 'smoke-play-environment/action.yml');
 const malformedFixture = resolve('scripts/ci/fixtures/malformed-actions.yml');
 const admissionFixture = resolve('scripts/ci/fixtures/workflow-admission-contract.yml');
-const measurementWorkflowPath = resolve('.github/workflows/browser-release-measurement.yml');
+const measurementWorkflowPath = join(workflowRoot, 'browser-release-measurement.yml');
 
 test('enumerates every supported workflow suffix in stable order', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-workflow-enumeration-'));
@@ -54,6 +56,7 @@ test('trusted carrier retrieves only the fork head workflow directory from its i
       text.indexOf('Validate self-hosted runner pool labels'),
   );
   assert.match(text, /check-workflow-admission\.mjs --workflows-dir pr-head\/\.github\/workflows/);
+  assert.match(text, /Stage PR-head workflow definitions for contract tests/);
   assert.match(text, /Admit live default-branch required-check policy/);
   assert.match(text, /editor-ci-contract\.mjs --live-ruleset --skip-portfolio --workflows-dir pr-head\/\.github\/workflows/);
   assert.ok(
@@ -100,11 +103,27 @@ test('generic lint provisions the pinned parser before its admission tests run',
   assert.match(text, /echo \"\$actionlint_dir\" >> \"\$GITHUB_PATH\"/);
 });
 
-test('self-hosted wasm-pack provisioning accepts only an exact host version before downloading', () => {
+test('prerequisite producer keeps an explicit Engine build contract', () => {
   const text = readFileSync(ciWorkflowPath, 'utf8');
+  if (text.includes('scripts/ci/hydrate-engine-artifact.mjs')) {
+    const start = text.indexOf('  prerequisite-release:');
+    const end = text.indexOf('\n  docs-policy:', start);
+    assert.ok(start >= 0, 'CI must declare the prerequisite producer');
+    assert.ok(end > start, 'producer block must end before docs-policy');
+    const block = text.slice(start, end);
+    assert.match(block, /Hydrate Engine core artifact for the exact submodule SHA/);
+    assert.match(block, /scripts\/ci\/hydrate-engine-artifact\.mjs/);
+    assert.match(block, /ENGINE_REPOSITORY:\s+ForgeaX-Games\/forgeax-engine/);
+    assert.match(block, /Checkout direct submodules \(Engine assets are not needed by this producer\)/);
+    assert.match(block, /submodules:\s+true/);
+    assert.doesNotMatch(block, /submodules:\s+recursive/);
+    assert.doesNotMatch(block, /Setup Rust|wasm-pack|Setup pnpm|Build wgpu-wasm|Build engine library|fetch-wasm/);
+    assert.doesNotMatch(block, /install --frozen-lockfile/);
+    return;
+  }
   const start = text.indexOf('name: Setup wasm-pack (self-hosted Linux)');
   const end = text.indexOf('name: Setup pnpm', start);
-  assert.ok(start >= 0, 'CI must provision wasm-pack for self-hosted Linux');
+  assert.ok(start >= 0, 'CI must provision wasm-pack for the pre-artifact producer');
   assert.ok(end > start, 'wasm-pack setup must precede pnpm setup');
   const block = text.slice(start, end);
   assert.match(block, /CI_TRUSTED_WASM_PACK_PATH/);
@@ -137,6 +156,31 @@ test('main push, schedule, and manual dispatch remain non-cancelling events', ()
       `${eventName} concurrency cancellation policy`,
     );
   }
+});
+
+test('submodule pin waits for every Editor validation job', () => {
+  const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
+  const pin = workflow.jobs['submodule-pin'];
+  assert.ok(pin, 'submodule-pin must be present');
+  assert.deepEqual(pin.needs, ['docs-policy', 'b2-self-boot', 'typecheck', 'smoke-play']);
+  assert.equal(pin.if, '${{ always() && !cancelled() }}');
+  for (const jobId of pin.needs) {
+    assert.ok(!workflow.jobs[jobId].needs?.includes('submodule-pin'), `${jobId} must not wait for submodule-pin`);
+  }
+});
+
+test('submodule pin rejects a PR tested against a stale main base', () => {
+  const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
+  const pin = workflow.jobs['submodule-pin'];
+  const freshnessStep = pin.steps.find((step) => step.name === 'Require PR base to be current main');
+  assert.ok(freshnessStep, 'submodule-pin must admit only a current PR base');
+  assert.equal(freshnessStep.if, "${{ github.event_name == 'pull_request' }}");
+  assert.equal(
+    freshnessStep.env.CI_PR_BASE_SHA,
+    '${{ github.event.pull_request.base.sha }}',
+  );
+  assert.match(freshnessStep.run, /git ls-remote origin refs\/heads\/main/);
+  assert.match(freshnessStep.run, /check-pr-base-freshness\.mjs/);
 });
 
 test('the admission gate uses the pinned actionlint executable, not a skipped parser path', () => {
@@ -182,12 +226,159 @@ test('cloud producer and requesting consumers use an always-run producer edge', 
   assert.match(producerBlock, /actions\/upload-artifact@v4/);
   assert.match(producerBlock, /include-hidden-files:\s*true/);
 
-  for (const jobId of ['b2-self-boot', 'typecheck', 'smoke-play']) {
+  for (const jobId of ['b2-self-boot', 'typecheck']) {
     const block = blockFor(jobId);
     assert.match(block, /needs:/, `${jobId} must wait for producer publication`);
     assert.match(block, /always\(\)/, `${jobId} must inspect producer failure explicitly`);
     assert.match(block, /download-artifact@v5/, `${jobId} must consume the immutable release`);
   }
+  const smokeShard = blockFor('smoke-play-shard');
+  assert.match(smokeShard, /needs:\s+prerequisite-release/, 'smoke-play shards must wait for producer publication');
+  assert.match(smokeShard, /always\(\)/, 'smoke-play shards must inspect producer failure explicitly');
+  const smokeEnvironment = readFileSync(smokePlayEnvironmentPath, 'utf8');
+  assert.match(smokeEnvironment, /actions\/download-artifact@v5/, 'smoke-play must consume the immutable release');
+  const smokeAggregate = blockFor('smoke-play');
+  assert.match(smokeAggregate, /needs:\s*\[prerequisite-release,\s*smoke-play-shard\]/);
+  assert.match(smokeAggregate, /always\(\)/);
+  assert.match(smokeAggregate, /Require every smoke shard to pass/);
+});
+
+test('prerequisite consumers use the producer artifact identity across failed-job reruns', () => {
+  const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
+  const producer = workflow.jobs['prerequisite-release'];
+  assert.ok(producer, 'prerequisite producer must be present');
+  assert.ok(producer.outputs, 'prerequisite producer must publish rerun-stable outputs');
+  assert.equal(
+    producer.outputs.artifact_id,
+    "${{ steps.upload_prerequisite.outputs['artifact-id'] }}",
+    'producer must publish the immutable artifact ID rather than making consumers reconstruct a name',
+  );
+  assert.equal(
+    producer.outputs.producer_attempt,
+    '${{ steps.producer_identity.outputs.attempt }}',
+    'producer must publish the attempt that created the artifact',
+  );
+
+  const producerSteps = producer.steps;
+  const identityStep = producerSteps.find((step) => step.id === 'producer_identity');
+  assert.ok(identityStep, 'producer must record its attempt as a job output');
+  assert.match(identityStep.run, /GITHUB_RUN_ATTEMPT/);
+  assert.match(identityStep.run, /GITHUB_OUTPUT/);
+  const uploadStep = producerSteps.find((step) => step.id === 'upload_prerequisite');
+  assert.ok(uploadStep, 'upload step must expose its artifact ID');
+  assert.equal(uploadStep.uses, 'actions/upload-artifact@v4');
+
+  for (const jobId of ['b2-self-boot', 'typecheck']) {
+    const job = workflow.jobs[jobId];
+    assert.ok(job, `${jobId} must be present`);
+    const downloadStep = job.steps.find((step) => step.uses === 'actions/download-artifact@v5');
+    assert.ok(downloadStep, `${jobId} must download the prerequisite artifact`);
+    assert.equal(
+      downloadStep.with['artifact-ids'],
+      '${{ needs.prerequisite-release.outputs.artifact_id }}',
+      `${jobId} must download the exact producer artifact ID on reruns`,
+    );
+    assert.equal(
+      downloadStep.with.name,
+      undefined,
+      `${jobId} must not reconstruct an attempt-suffixed artifact name`,
+    );
+    const validationStep = job.steps.find((step) =>
+      typeof step.run === 'string' && step.run.includes(`--consumer ${jobId}`),
+    );
+    assert.ok(validationStep, `${jobId} must validate its prerequisite release`);
+    assert.match(
+      validationStep.run,
+      /--attempt\s+"\$\{\{\s*needs\.prerequisite-release\.outputs\.producer_attempt\s*\}\}"/,
+      `${jobId} must validate the producer attempt, not the rerun attempt`,
+    );
+    assert.doesNotMatch(
+      validationStep.run,
+      /--attempt\s+"\$GITHUB_RUN_ATTEMPT"/,
+      `${jobId} must not validate against the consumer rerun attempt`,
+    );
+  }
+  const smokeShard = workflow.jobs['smoke-play-shard'];
+  assert.ok(smokeShard, 'smoke-play shard must be present');
+  const smokeEnvironmentStep = smokeShard.steps.find(
+    (step) => step.uses === './.github/actions/smoke-play-environment',
+  );
+  assert.ok(smokeEnvironmentStep, 'smoke-play-shard must use the browser-smoke environment action');
+  assert.equal(
+    smokeEnvironmentStep.with['prerequisite-artifact-id'],
+    '${{ needs.prerequisite-release.outputs.artifact_id }}',
+  );
+  assert.equal(
+    smokeEnvironmentStep.with['producer-attempt'],
+    '${{ needs.prerequisite-release.outputs.producer_attempt }}',
+  );
+  assert.equal(smokeEnvironmentStep.with.consumer, 'smoke-play');
+  const smokeEnvironment = parseYaml(readFileSync(smokePlayEnvironmentPath, 'utf8'));
+  const smokeDownloadStep = smokeEnvironment.runs.steps.find(
+    (step) => step.uses === 'actions/download-artifact@v5',
+  );
+  assert.ok(smokeDownloadStep, 'smoke-play environment must download the prerequisite artifact');
+  assert.equal(
+    smokeDownloadStep.with['artifact-ids'],
+    '${{ inputs.prerequisite-artifact-id }}',
+    'smoke-play environment must use the caller-provided immutable artifact ID',
+  );
+  const smokeShardText = readFileSync(ciWorkflowPath, 'utf8').slice(
+    readFileSync(ciWorkflowPath, 'utf8').indexOf('  smoke-play-shard:'),
+  );
+  assert.match(
+    smokeShardText,
+    /prerequisite-artifact-id:\s+\$\{\{\s*needs\.prerequisite-release\.outputs\.artifact_id\s*\}\}/,
+    'smoke-play must pass the producer artifact identity to its environment action',
+  );
+  const smokeValidation = smokeEnvironment.runs.steps.find(
+    (step) => typeof step.run === 'string' && step.run.includes('ci:prerequisite -- validate'),
+  );
+  assert.ok(smokeValidation, 'smoke-play environment must validate its prerequisite release');
+  assert.match(smokeValidation.run, /--consumer\s+"\$CONSUMER"/);
+  assert.match(smokeValidation.run, /--attempt\s+"\$PRODUCER_ATTEMPT"/);
+  assert.match(smokeValidation.run, /if ! .*ci:prerequisite -- validate/s);
+  assert.match(smokeValidation.run, /cat \"\$report_path\"/);
+
+  const smokeShardJob = workflow.jobs['smoke-play-shard'];
+  const smokeEnvironmentFailureStep = smokeShardJob.steps.find((step) => step.id === 'smoke_environment');
+  assert.ok(smokeEnvironmentFailureStep, 'smoke-play environment must expose a failure step outcome');
+  const evidenceStep = smokeShardJob.steps.find(
+    (step) => step.name === 'Upload prerequisite admission evidence',
+  );
+  assert.ok(evidenceStep, 'smoke-play must retain the structured admission report on failure');
+  assert.match(evidenceStep.if, /steps\.smoke_environment\.outcome == 'failure'/);
+  assert.match(evidenceStep.with.path, /smoke-play-prerequisite-report\.json/);
+});
+
+test('portability admission remains declared but stopped until hosted lanes are approved', () => {
+  const text = readFileSync(ciWorkflowPath, 'utf8');
+  const jobStart = text.indexOf('  editor-portability:');
+  assert.ok(jobStart >= 0, 'CI must retain the dormant portability contract entry');
+  const job = text.slice(jobStart);
+  assert.match(text, /push:\s*\n\s+branches:\s+\[main\]/);
+  assert.match(text, /workflow_dispatch:/);
+  assert.match(text, /schedule:/);
+  assert.match(job, /if:\s*\$\{\{\s*false\s*\}\}/);
+  assert.match(job, /matrix:/);
+  assert.match(job, /platform:\s*\[linux, windows, macos\]/);
+  assert.match(job, /editor-portability\.mjs\s+--platform\s+\$\{\{\s*matrix\.platform\s*\}\}/);
+  assert.match(job, /GITHUB_SHA/);
+  assert.match(job, /actions\/upload-artifact@v4/);
+  assert.match(job, /editor-portability-aggregate:[\s\S]*?if:\s*\$\{\{\s*false\s*\}\}/);
+});
+
+test('portability admission keeps the existing required roster unchanged', () => {
+  const contract = JSON.parse(readFileSync(resolve('scripts/ci/editor-ci-contract.json'), 'utf8'));
+  assert.equal(contract.portability.required, false);
+  assert.deepEqual(
+    contract.requiredContexts.map(({ context }) => context),
+    ['b2-self-boot', 'typecheck', 'submodule-pin', 'smoke-play'],
+  );
+  assert.equal(
+    contract.requiredContexts.some(({ checkId }) => checkId === 'editor-portability'),
+    false,
+  );
 });
 
 test('request-scoped release validation precedes every consumer body', () => {
@@ -195,7 +386,6 @@ test('request-scoped release validation precedes every consumer body', () => {
   const consumers = [
     ['b2-self-boot', 'Self-boot B2 (read + write, no studio server)'],
     ['typecheck', 'Run script and contract tests'],
-    ['smoke-play', 'Boot + Play + Content Browser + Save + Mesh Preview smoke (games/sample)'],
   ];
   for (const [consumer, bodyName] of consumers) {
     const blockStart = text.indexOf(`  ${consumer}:`);
@@ -210,6 +400,56 @@ test('request-scoped release validation precedes every consumer body', () => {
     assert.match(beforeBody, /--manifest\s+\.ci\/prerequisite-release\/manifest\.json/);
     assert.doesNotMatch(beforeBody.slice(validationStart - blockStart), /Build wgpu-wasm|Build engine library|Ensure FBX wasm/);
   }
+  const smokeBlockStart = text.indexOf('  smoke-play-shard:');
+  const smokeActionStart = text.indexOf(
+    'uses: ./.github/actions/smoke-play-environment',
+    smokeBlockStart,
+  );
+  const smokeBodyStarts = [
+    'name: Broad core smoke (games/sample)',
+    'name: New-game template smoke (fresh canonical template)',
+    'name: Broad Play runtime smoke (games/sample)',
+    'name: Broad asset smoke (games/sample)',
+  ].map((name) => text.indexOf(name, smokeBlockStart));
+  assert.ok(smokeBlockStart >= 0, 'smoke-play-shard job is present');
+  assert.ok(smokeActionStart >= 0, 'smoke-play-shard uses the browser-smoke environment action');
+  assert.match(
+    text.slice(smokeBlockStart, smokeActionStart),
+    /submodules:\s+recursive/,
+    'smoke-play must recursively materialize nested pins before admission',
+  );
+  assert.ok(smokeBodyStarts.every((start) => start >= 0), 'every broad smoke shard body is present');
+  assert.ok(
+    smokeBodyStarts.every((start) => smokeActionStart < start),
+    'smoke-play environment setup precedes every broad check body',
+  );
+
+  const smokeActionText = readFileSync(smokePlayEnvironmentPath, 'utf8');
+  const smokeNodeSetupStart = smokeActionText.indexOf('Setup Node (for engine pnpm build)');
+  const smokeValidationStart = smokeActionText.indexOf('ci:prerequisite -- validate');
+  assert.ok(smokeNodeSetupStart >= 0, 'smoke-play environment must install Node for prerequisite scripts');
+  assert.ok(smokeValidationStart >= 0, 'smoke-play environment validates its requested payloads');
+  assert.ok(
+    smokeNodeSetupStart < smokeValidationStart,
+    'smoke-play must install Node before prerequisite validation',
+  );
+  assert.match(smokeActionText, /--manifest\s+\.ci\/prerequisite-release\/manifest\.json/);
+  assert.match(smokeActionText, /FORGEAX_SMOKE_RUNTIME_REPORT/);
+  assert.match(smokeActionText, /FORGEAX_DEV_STACK_EVENT_LOG/);
+
+  const smokeAggregateStart = text.indexOf('  smoke-play:');
+  const smokeAggregateEnd = text.indexOf('  editor-portability:', smokeAggregateStart);
+  assert.ok(smokeAggregateStart >= 0, 'smoke-play aggregate job is present');
+  assert.ok(smokeAggregateEnd >= 0, 'smoke-play aggregate job is bounded');
+  const smokeAggregateBlock = text.slice(smokeAggregateStart, smokeAggregateEnd);
+  const aggregateValidationStart = smokeAggregateBlock.indexOf('Validate smoke-play prerequisite release');
+  const aggregateNodeSetupStart = smokeAggregateBlock.indexOf('Setup Node');
+  assert.ok(aggregateValidationStart >= 0, 'smoke-play aggregate validates its requested payloads');
+  assert.ok(aggregateNodeSetupStart >= 0, 'smoke-play aggregate must install Node for prerequisite scripts');
+  assert.ok(
+    aggregateNodeSetupStart < aggregateValidationStart,
+    'smoke-play aggregate must install Node before prerequisite validation',
+  );
 });
 
 test('contract fixture is a workflow-only sparse input with no executable PR payload', () => {
@@ -245,4 +485,87 @@ test('measurement workflow binds every shell variable before invoking the CLI', 
   assert.match(comparablePlan, /--admission admission\.json/);
   assert.match(secondMeasure, /run: \|[\s\S]*set -euo pipefail[\s\S]*unit='\$\{\{ matrix\.unit\.unitId \}\}'[\s\S]*digest='\$\{\{ matrix\.unit\.sample1Digest \}\}'[\s\S]*raw="[^"]*\$\{unit\}[^"]*"[\s\S]*--unit "\$\{unit\}"[\s\S]*--comparable-to "\$\{digest\}"[\s\S]*--output "\$\{raw\}"/);
   assert.match(secondMeasure, /--admission admission\.json/);
+});
+
+test('every heavy smoke shard binds its identity and command to one runtime wrapper', () => {
+  const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
+  const smokeShard = workflow.jobs['smoke-play-shard'];
+  assert.ok(smokeShard, 'smoke-play shard job must be present');
+  assert.equal(smokeShard.strategy?.matrix?.shard?.length, 9);
+  assert.deepEqual(smokeShard.strategy.matrix.shard, [
+    'scriptable',
+    'broad-core',
+    'template',
+    'broad-play',
+    'broad-assets',
+    'vfx',
+    'editor',
+    'create',
+    'repro',
+  ]);
+  assert.equal(smokeShard.strategy['max-parallel'], 2);
+
+  const environmentStep = smokeShard.steps.find(
+    (step) => step.uses === './.github/actions/smoke-play-environment',
+  );
+  assert.ok(environmentStep, 'smoke-play must prepare the shared environment');
+  assert.equal(
+    environmentStep.with?.['isolation-key'],
+    '${{ matrix.shard }}',
+    'each matrix member must pass its shard identity explicitly',
+  );
+
+  const shardSteps = smokeShard.steps.filter(
+    (step) => typeof step.if === 'string' && step.if.includes('matrix.shard'),
+  );
+  assert.equal(shardSteps.length, 9, 'each matrix member must have one command step');
+  for (const step of shardSteps) {
+    assert.match(
+      step.run ?? '',
+      /smoke-shard-runtime\.mjs/,
+      `${step.name ?? 'unnamed shard step'} must invoke the runtime wrapper`,
+    );
+    assert.match(step.run ?? '', /--shard\s+[a-z-]+/, `${step.name ?? 'unnamed shard step'} must declare its shard identity`);
+    assert.match(step.run ?? '', /--ports\s+[0-9,]+/, `${step.name ?? 'unnamed shard step'} must declare its ports`);
+    assert.match(step.run ?? '', /--\s+/, `${step.name ?? 'unnamed shard step'} must pass the original command after the wrapper boundary`);
+  }
+
+  const runtimeEvidence = smokeShard.steps.find((step) => step.name === 'Upload runtime evidence');
+  assert.ok(runtimeEvidence, 'smoke-play must upload runtime evidence');
+  assert.match(runtimeEvidence.if, /always\(\)/);
+  assert.match(runtimeEvidence.with.path, /smoke-shard-runtime/);
+  assert.equal(runtimeEvidence.with['if-no-files-found'], 'error');
+  const runtimeRequired = smokeShard.steps.find((step) => step.name === 'Require runtime evidence file');
+  assert.ok(runtimeRequired, 'smoke-play must validate runtime.json before upload');
+  assert.match(runtimeRequired.if, /always\(\)/);
+  assert.match(runtimeRequired.run, /runtime_path=.*runtime\.json/);
+  assert.match(runtimeRequired.run, /-s \"\$runtime_path\"/);
+  const lifecycleRequired = smokeShard.steps.find((step) => step.name === 'Require lifecycle evidence after failed shard');
+  assert.ok(lifecycleRequired, 'failed smoke-play shards must validate lifecycle.jsonl independently');
+  assert.match(lifecycleRequired.if, /failure\(\)/);
+  assert.match(lifecycleRequired.run, /lifecycle_path=.*lifecycle\.jsonl/);
+  assert.match(lifecycleRequired.run, /-s \"\$lifecycle_path\"/);
+  const testResultsRequired = smokeShard.steps.find((step) => step.name === 'Require Playwright test-results after failed shard');
+  assert.ok(testResultsRequired, 'failed smoke-play shards must validate Playwright test-results independently');
+  assert.match(testResultsRequired.if, /failure\(\)/);
+  assert.match(testResultsRequired.run, /-d test-results/);
+  assert.match(testResultsRequired.run, /find test-results -type f/);
+  assert.ok(
+    smokeShard.steps.indexOf(runtimeRequired) < smokeShard.steps.indexOf(runtimeEvidence),
+    'runtime.json validation must precede its upload',
+  );
+  const failureEvidence = smokeShard.steps.find((step) => step.name === 'Upload smoke failure diagnostics');
+  assert.ok(failureEvidence, 'smoke-play must upload failure diagnostics');
+  assert.match(failureEvidence.if, /failure\(\)/);
+  assert.match(failureEvidence.with.path, /lifecycle\.jsonl/);
+  assert.match(failureEvidence.with.path, /test-results/);
+  assert.equal(failureEvidence.with['if-no-files-found'], 'error');
+  assert.ok(
+    smokeShard.steps.indexOf(lifecycleRequired) < smokeShard.steps.indexOf(failureEvidence),
+    'lifecycle.jsonl validation must precede failure diagnostics upload',
+  );
+  assert.ok(
+    smokeShard.steps.indexOf(testResultsRequired) < smokeShard.steps.indexOf(failureEvidence),
+    'test-results validation must precede failure diagnostics upload',
+  );
 });

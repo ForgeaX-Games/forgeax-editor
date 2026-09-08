@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
-import { projectContract, validateContract, validateProjection } from '../editor-ci-contract.mjs';
+import { projectContract, validateContract, validateProjection, validateRuntimeProjection } from '../editor-ci-contract.mjs';
 
 const contractPath = resolve('scripts/ci/editor-ci-contract.json');
 const fixturePath = resolve('scripts/ci/fixtures/editor-ci-contract-projection-cases.json');
@@ -42,6 +42,62 @@ test('a valid static projection has a stable roster and first failure shape', ()
   assert.equal(result.ok, true);
   assert.ok(projection.roster.length > 0);
   assert.equal(typeof projection.resultEnvelope.firstFailure.code, 'string');
+});
+
+test('contract projection exposes baseline schema and shared fact reference only', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const projection = projectContract(contract);
+  const result = validateProjection(contract, projection);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(projection.baselineEvidence, contract.baselineEvidence);
+  assert.equal(projection.baselineEvidence.topIndex.rawPacket, 'raw packet reference');
+  assert.equal(projection.baselineEvidence.sharedFactReference.source, 'baseline attempt facts');
+  assert.equal(Object.hasOwn(projection.baselineEvidence, 'facts'), false);
+  assert.equal(Object.hasOwn(projection.baselineEvidence, 'packets'), false);
+});
+
+test('projection exposes one integration index without changing portfolio ownership', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const projection = projectContract(contract);
+  const result = validateProjection(contract, projection);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    projection.baselineEvidence.topIndex.integrationIndex,
+    contract.baselineEvidence.topIndex.integrationIndex,
+  );
+  assert.equal(
+    projection.baselineEvidence.topIndex.integrationIndex.browser.command,
+    'bun run ci:browser-release -- project-topology',
+  );
+  assert.deepEqual(
+    projection.baselineEvidence.topIndex.integrationIndex.browser.claimBoundary,
+    ['admission', 'parentCheck', 'population', 'claim'],
+  );
+  assert.equal(projection.baselineEvidence.topIndex.integrationIndex.portability.required, false);
+  assert.equal(projection.baselineEvidence.topIndex.integrationIndex.portability.status, 'disabled');
+  assert.equal(projection.browserReleasePortfolio.parentCheckId, 'smoke-play');
+  assert.equal(projection.browserReleasePortfolio.measurement.required, false);
+  const smokeCheck = contract.checks.find((check) => check.checkId === 'smoke-play');
+  assert.equal(smokeCheck?.owner, 'editor-ci');
+  assert.match(smokeCheck?.command ?? '', /scripts\/ddc-packaging-parity\.mjs --game games\/sample --json/);
+  assert.match(smokeCheck?.command ?? '', /apps\/standalone\/e2e\/__tests__\/ddc-lifecycle\.spec\.ts/);
+  assert.deepEqual(
+    projection.requiredContexts.map((entry) => entry.context),
+    ['b2-self-boot', 'typecheck', 'submodule-pin', 'smoke-play'],
+  );
+});
+
+test('M5 DDC consumer commands remain projected under the smoke-play required owner', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const projection = projectContract(contract);
+  const smokeCheck = contract.checks.find((check) => check.checkId === 'smoke-play');
+
+  assert.equal(smokeCheck?.owner, 'editor-ci');
+  assert.equal(projection.requiredContexts.find((entry) => entry.context === 'smoke-play')?.checkId, 'smoke-play');
+  assert.match(smokeCheck?.command ?? '', /ddc-packaging-parity\.mjs/);
+  assert.match(smokeCheck?.command ?? '', /ddc-lifecycle\.spec\.ts/);
 });
 
 test('portfolio projection has one smoke-play parent and four required contexts', () => {
@@ -157,4 +213,28 @@ test('projection rejects missing or repeated prerequisite declarations', () => {
     assert.notEqual(result.errors[0].observed, undefined, mutation.name);
     assert.equal(typeof result.errors[0].hint, 'string', mutation.name);
   }
+});
+
+test('M4 red controls keep binding, live-context, local-report, and budget boundaries', () => {
+  const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+  const ruleset = JSON.parse(readFileSync(resolve('scripts/ci/fixtures/ruleset.json'), 'utf8'));
+
+  const contractResult = validateContract(contract);
+  assert.equal(contractResult.ok, true);
+  assert.deepEqual(contract.requiredContexts.map((entry) => entry.context), [
+    'b2-self-boot', 'typecheck', 'submodule-pin', 'smoke-play',
+  ]);
+  assert.equal(contract.failurePolicy.sloClaim, null);
+  assert.equal(contract.browserReleasePortfolio.parentCheckId, 'smoke-play');
+  assert.equal(contract.browserReleasePortfolio.measurement.required, false);
+
+  const runtime = validateRuntimeProjection(contract, '.github/workflows', ruleset, {includePortfolio: false});
+  assert.equal(runtime.ok, true, JSON.stringify(runtime.errors));
+
+  const driftedRuleset = structuredClone(ruleset);
+  driftedRuleset.rules[0].parameters.required_status_checks = driftedRuleset.rules[0].parameters.required_status_checks.slice(1);
+  const drift = validateRuntimeProjection(contract, '.github/workflows', driftedRuleset, {includePortfolio: false});
+  assert.equal(drift.ok, false);
+  assert.equal(drift.errors[0].code, 'required-context-drift');
+  assert.equal(typeof drift.errors[0].hint, 'string');
 });

@@ -12,6 +12,16 @@ const descriptor: OpDescriptor = {
     properties: { subjectId: { type: 'string' }, newName: { type: 'string' } },
     required: ['subjectId', 'newName'],
   },
+  confirmation: { required: true, reason: 'Repository state changes.' },
+  operationRun: {
+    acceptedStatuses: ['accepted', 'running'],
+    terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+    read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+    retry: { requiresNewRequestId: true },
+    retention: { kind: 'terminal-only', maxTerminalRuns: 8 },
+    cancellable: false,
+  },
+  recoveryActions: ['version-control.refresh', 'run.wait', 'run.retry'],
 };
 
 describe('command palette product projection', () => {
@@ -31,6 +41,9 @@ describe('command palette product projection', () => {
       schema: descriptor.argsSchema,
       capability: 'write',
       surface: 'both',
+      confirmation: descriptor.confirmation,
+      operationRun: descriptor.operationRun,
+      recoveryActions: descriptor.recoveryActions,
     });
 
     const result = action?.run({ subjectId: 'asset-1', newName: 'Renamed' });

@@ -27,7 +27,10 @@ describe('game-owned Play projection', () => {
         properties: { target: { type: 'string', enum: ['a', 'b'] } },
         required: ['target'],
       },
-      run: (args) => { level = (args as { target: string }).target; },
+      run: (args) => {
+        level = (args as { target: string }).target;
+        return { acknowledged: 1 };
+      },
     });
     registry.registrar.registerRead({
       id: 'test.level.status',
@@ -58,7 +61,7 @@ describe('game-owned Play projection', () => {
     }]);
 
     await expect(gateway.invokeGameAction('test.level.transition', { target: 'b' }))
-      .resolves.toEqual({ ok: true, value: undefined });
+      .resolves.toEqual({ ok: true, value: { acknowledged: 1 } });
     await expect(gateway.readGameState('test.level.status'))
       .resolves.toEqual({ ok: true, value: { activeLevel: 'b', roots: 2 } });
     expect(gateway.ledger).toEqual([]);
@@ -74,6 +77,11 @@ describe('game-owned Play projection', () => {
       argsSchema: { type: 'object', required: ['value'], properties: { value: { type: 'number' } } },
       run: () => { throw new Error('game rejected transition'); },
     });
+    registry.registrar.registerAction({
+      id: 'test.bad-action',
+      title: 'Bad action',
+      run: () => new Map() as never,
+    });
     registry.registrar.registerRead({
       id: 'test.bad-read',
       title: 'Bad read',
@@ -88,6 +96,8 @@ describe('game-owned Play projection', () => {
       .resolves.toMatchObject({ ok: false, error: { code: 'unknown-game-projection' } });
     await expect(gateway.invokeGameAction('test.action', { value: 1 }))
       .resolves.toMatchObject({ ok: false, error: { code: 'game-action-failed', hint: expect.stringContaining('game rejected transition') } });
+    await expect(gateway.invokeGameAction('test.bad-action', {}))
+      .resolves.toMatchObject({ ok: false, error: { code: 'game-action-failed', hint: expect.stringContaining('non-serializable') } });
     await expect(gateway.readGameState('test.bad-read'))
       .resolves.toMatchObject({ ok: false, error: { code: 'game-read-failed' } });
   });

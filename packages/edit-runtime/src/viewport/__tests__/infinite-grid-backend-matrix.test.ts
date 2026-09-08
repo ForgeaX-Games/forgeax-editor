@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { createRenderFeatureHost, runRenderFeatureFrame } from '@forgeax/engine-render/internal';
-import { createRenderFeatureTarget } from '@forgeax/engine-render';
+import { createSceneDataCatalog, type RenderFeaturePlanContext } from '@forgeax/engine-render';
 import { createInfiniteGridFeature } from '../infinite-grid-feature';
 
 type BackendCase = {
   readonly name: string;
   readonly backendKind: 'webgpu' | 'wgpu-webgl2' | 'null';
-  readonly colorFormat: string;
-  readonly depthFormat: string;
+  readonly colorFormat: 'rgba16float' | 'rgba8unorm';
+  readonly depthFormat: 'depth24plus-stencil8' | 'depth24plus' | 'depth32float';
   readonly sampleCount: 1 | 4;
 };
 
@@ -40,82 +39,50 @@ const caps = (backendKind: BackendCase['backendKind']) => ({
   maxColorAttachments: 8,
 } as const);
 
-function targets(testCase: BackendCase) {
-  return [
-    createRenderFeatureTarget({
-      kind: 'scene-color',
-      resource: `scene-color-${testCase.name}`,
-      format: testCase.colorFormat,
-      sampleCount: testCase.sampleCount,
-    }),
-    createRenderFeatureTarget({
-      kind: 'scene-depth',
-      resource: `scene-depth-${testCase.name}`,
-      format: testCase.depthFormat,
-      sampleCount: testCase.sampleCount,
-    }),
-  ] as const;
-}
-
-function run(testCase: BackendCase, includeDepth = true) {
-  const host = createRenderFeatureHost([createInfiniteGridFeature()]).unwrap();
-  const result = runRenderFeatureFrame(host, {
-    worlds: [],
-    owner: 0,
-    frameNumber: 1,
-    generation: 1,
+function run(testCase: BackendCase) {
+  const feature = createInfiniteGridFeature();
+  const extracted = feature.extract({ worlds: [], owner: 0, frameNumber: 1 });
+  if (!extracted.ok) throw extracted.error;
+  const context: RenderFeaturePlanContext = {
     caps: caps(testCase.backendKind),
-    targets: includeDepth ? targets(testCase) : [targets(testCase)[0]],
-  });
-  const pass = result.contributions[0]?.passes[0];
+    frame: { frameNumber: 1 },
+    generation: 1,
+    targets: [
+      { name: 'color', kind: 'color', format: testCase.colorFormat, sampleCount: testCase.sampleCount },
+      { name: 'depth', kind: 'depth', format: testCase.depthFormat, sampleCount: testCase.sampleCount },
+    ],
+    sceneData: createSceneDataCatalog({
+      featureIdentity: 'editor.infinite-grid',
+      generation: 1,
+      planIdentity: 'editor.infinite-grid:1',
+      rgba16floatRenderable: true,
+    }),
+  };
+  const result = feature.plan(extracted.value, context);
+  if (!result.ok) throw result.error;
+  const program = result.value.resources.find((resource) => resource.kind === 'graphics-program');
+  const pass = result.value.passes[0];
   return {
     backendKind: testCase.backendKind,
-    passName: pass?.name ?? null,
-    reads: pass?.descriptor.reads ?? [],
-    writes: pass?.descriptor.writes ?? [],
-    draw: pass?.graphics?.draws[0]?.command ?? null,
-    error: result.errors[0] === undefined
-      ? null
-      : {
-          code: result.errors[0].code,
-          recovery: 'detail' in result.errors[0] && 'recovery' in result.errors[0].detail
-            ? result.errors[0].detail.recovery
-            : undefined,
-          resourceName: 'detail' in result.errors[0] && 'resourceName' in result.errors[0].detail
-            ? result.errors[0].detail.resourceName
-            : undefined,
-        },
+    colorFormats: program?.kind === 'graphics-program' ? program.program.colorFormats : [],
+    depthFormat: program?.kind === 'graphics-program' ? program.program.depthFormat : undefined,
+    sampleCount: program?.kind === 'graphics-program' ? program.program.sampleCount : undefined,
+    colorTarget: pass?.kind === 'raster' ? pass.colorAttachments[0]?.target : undefined,
+    depthTarget: pass?.kind === 'raster' ? pass.depthStencilAttachment?.target : undefined,
+    draw: pass?.kind === 'raster' ? pass.draws[0]?.draw : undefined,
   };
 }
 
 describe('infinite grid backend contract matrix', () => {
-  it('keeps the same public feature contract across declared backend/pipeline cases', () => {
-    const results = backendCases.map((testCase) => run(testCase));
-
-    expect(results).toEqual(backendCases.map((testCase) => ({
+  it('keeps one public declarative feature contract across backend and pipeline cases', () => {
+    expect(backendCases.map(run)).toEqual(backendCases.map((testCase) => ({
       backendKind: testCase.backendKind,
-      passName: 'editor.infinite-grid::editor.infinite-grid',
-      reads: [`scene-depth-${testCase.name}`],
-      writes: [`scene-color-${testCase.name}`],
-      draw: { vertexCount: 3, instanceCount: 1 },
-      error: null,
-    })));
-  });
-
-  it('projects unavailable target capability as the same structured recovery result', () => {
-    const failures = backendCases.map((testCase) => run(testCase, false));
-
-    expect(failures).toEqual(backendCases.map((testCase) => ({
-      backendKind: testCase.backendKind,
-      passName: null,
-      reads: [],
-      writes: [],
-      draw: null,
-      error: {
-        code: 'render-feature-preparation-failed',
-        recovery: 'next-frame',
-        resourceName: 'scene-depth',
-      },
+      colorFormats: [testCase.colorFormat],
+      depthFormat: testCase.depthFormat,
+      sampleCount: testCase.sampleCount,
+      colorTarget: 'color',
+      depthTarget: 'depth',
+      draw: { kind: 'draw', vertexCount: 3, instanceCount: 1 },
     })));
   });
 });

@@ -1,0 +1,51 @@
+{
+  "name": "@forgeax/editor-file-preview",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": [
+    "**/*.css",
+    "./src/renderers/register-builtins.ts"
+  ],
+  "description": "forgeax editor file-preview — a type-keyed preview-renderer registry + <FilePreview> host (shiki code highlight, image/audio/video/font), consumed by the Content Browser detail panel and open to plugin-declared file types",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": { "lines": 0, "functions": 0 }
+    }
+  },
+  "dependencies": {
+    "@forgeax/editor-core": "workspace:*",
+    "react": "19.2.6",
+    "shiki": "^4.4.3"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^20.10.2",
+    "@types/bun": "^1.3.13",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react-dom": "19.2.6",
+    "typescript": "^5.6.3"
+  }
+}

@@ -26,6 +26,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const DIR = resolve(root, '.forgeax-harness');
 const REPO = 'https://github.com/ForgeaX-Games/forgeax-editor-harness.git';
+const sparseDocs = process.env.FORGEAX_HARNESS_SPARSE_DOCS === '1';
 
 // Never let git block on a TTY prompt or a GUI credential helper. Every git
 // invocation below inherits these — a fresh HTTPS clone without a working SSH
@@ -86,6 +87,18 @@ function cloneUrl() {
   return resolveCloneUrl().url;
 }
 
+export function buildCloneArgs(repoUrl, dir, sparse) {
+  return [
+    'clone',
+    '--quiet',
+    ...(sparse
+      ? ['--depth=1', '--no-tags', '--single-branch', '--filter=blob:none', '--sparse', '--no-checkout']
+      : []),
+    repoUrl,
+    dir,
+  ];
+}
+
 function warnExit0(msg) {
   process.stdout.write(`[harness:sync] ${msg} — continuing\n`);
   process.exit(0);
@@ -113,13 +126,27 @@ function main() {
 
   if (!existsSync(resolve(DIR, '.git'))) {
     // First run (or a fresh checkout): clone. Offline → graceful skip.
-    const r = git(['clone', '--quiet', cloneUrl(), DIR], { cwd: root });
+    const r = git(buildCloneArgs(cloneUrl(), DIR, sparseDocs), { cwd: root });
     if (r.status !== 0) {
       warnExit0(
         `clone failed (offline?); .forgeax-harness not materialised:\n${(r.stderr || '').trim()}`,
       );
     }
-    process.stdout.write('[harness:sync] cloned forgeax-editor-harness\n');
+    if (sparseDocs) {
+      const sparse = git(['sparse-checkout', 'set', 'docs'], { cwd: DIR });
+      if (sparse.status !== 0) {
+        warnExit0(
+          `sparse docs checkout failed; .forgeax-harness not fully materialised:\n${(sparse.stderr || '').trim()}`,
+        );
+      }
+      const checkout = git(['read-tree', '-mu', 'HEAD'], { cwd: DIR });
+      if (checkout.status !== 0) {
+        warnExit0(
+          `sparse docs checkout failed; .forgeax-harness not fully materialised:\n${(checkout.stderr || '').trim()}`,
+        );
+      }
+    }
+    process.stdout.write(`[harness:sync] cloned forgeax-editor-harness${sparseDocs ? ' (sparse docs)' : ''}\n`);
     process.exit(0);
   }
 

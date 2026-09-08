@@ -17,6 +17,7 @@ import { Name, Transform } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
+import { createCoreTestWorld } from './fixtures/world';
 
 function spawnAt(world: World, name: string, x: number): EntityHandle {
   const r = world.spawn(
@@ -37,7 +38,7 @@ describe('query follows activeWorld across the play fork (round-5 play-world obs
 
   beforeEach(() => {
     const session = createEditSession();
-    session.world = new World();
+    session.world = createCoreTestWorld();
     gw = new EditGateway(session);
     // one authored entity in the edit world at x=100 (the "edit witness")
     spawnAt(gw.doc.world as unknown as World, 'EditWitness', 100);
@@ -55,7 +56,7 @@ describe('query follows activeWorld across the play fork (round-5 play-world obs
 
   it('(b) play mode: query reads the PLAY world, not the frozen edit world (the fix)', () => {
     // a DISTINCT play world with its own witness at x=7
-    const playWorld = new World();
+    const playWorld = createCoreTestWorld();
     spawnAt(playWorld, 'PlayWitness', 7);
     gw.enterPlay(playWorld);
     expect(gw.mode).toBe('play');
@@ -81,7 +82,7 @@ describe('query follows activeWorld across the play fork (round-5 play-world obs
     const before = q({ with: ['Name'] });
     expect(before.ok && rowOf(before.rows[0]).Name.value).toBe('EditWitness');
 
-    const playWorld = new World();
+    const playWorld = createCoreTestWorld();
     spawnAt(playWorld, 'PlayWitness', 7);
     gw.enterPlay(playWorld);
 
@@ -91,7 +92,7 @@ describe('query follows activeWorld across the play fork (round-5 play-world obs
   });
 
   it('(d) exitPlay: query reads the edit world again (no residue)', () => {
-    const playWorld = new World();
+    const playWorld = createCoreTestWorld();
     spawnAt(playWorld, 'PlayWitness', 7);
     gw.enterPlay(playWorld);
     gw.exitPlay();

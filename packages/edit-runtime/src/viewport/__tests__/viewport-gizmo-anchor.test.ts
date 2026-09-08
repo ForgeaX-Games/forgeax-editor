@@ -11,10 +11,9 @@
 // sizes handles ∝ the view scale.
 
 import { describe, expect, it } from 'bun:test';
-import type { EngineFacade } from '@forgeax/editor-core';
 
 import { gizmoViewScale, GIZMO_VIEW_SCALE_MIN } from '../viewport-camera';
-import { createGizmoPool } from '../viewport-gizmo';
+import { createGizmoPool, type GizmoOverlayDraw } from '../viewport-gizmo';
 import { buildDragGroup, translatedMemberTarget, type DragGroupSeed } from '../viewport-drag-group';
 import type { Vec3 } from '../viewport-ray';
 
@@ -53,20 +52,24 @@ describe('gizmoViewScale (constant on-screen size)', () => {
   });
 });
 
-interface SetCall { entity: number; data: Record<string, unknown> }
+interface LineCall { from: ArrayLike<number>; to: ArrayLike<number>; color: unknown }
+interface ArrowCall { from: ArrayLike<number>; to: ArrayLike<number>; color: unknown; tipLength?: number }
 
-function makeEditorEngine(): { editorEngine: EngineFacade; sets: SetCall[] } {
-  const sets: SetCall[] = [];
-  let nextEntity = 1;
-  const editorEngine = {
-    allocSharedRef() { return 0 as never; },
-    spawn() { nextEntity += 1; return { unwrap: () => nextEntity }; },
-    set(entity: number, _component: unknown, data: Record<string, unknown>) {
-      sets.push({ entity, data });
+function makeDebugDraw(): {
+  draw: GizmoOverlayDraw;
+  lines: LineCall[];
+  arrows: ArrowCall[];
+} {
+  const lines: LineCall[] = [];
+  const arrows: ArrowCall[] = [];
+  return {
+    lines,
+    arrows,
+    draw: {
+      line(from, to, color) { lines.push({ from, to, color }); },
+      arrow(from, to, color, tipLength) { arrows.push({ from, to, color, tipLength }); },
     },
-    despawn() {},
-  } as unknown as EngineFacade;
-  return { editorEngine, sets };
+  };
 }
 
 function expectVecClose(actual: unknown, expected: number[]): void {
@@ -76,12 +79,11 @@ function expectVecClose(actual: unknown, expected: number[]): void {
 }
 
 describe('gizmo pool anchor + view scale', () => {
-  it('places axis bars around the anchor center, sized ∝ the view scale', () => {
-    const { editorEngine, sets } = makeEditorEngine();
+  it('emits post-scene axis arrows around the anchor, sized ∝ the view scale', () => {
+    const { draw, arrows, lines } = makeDebugDraw();
     const viewScaleArgs: Vec3[] = [];
     const center: Vec3 = [2, 4, 6];
     const pool = createGizmoPool({
-      editorEngine,
       getAnchor: () => ({ center, quat: null }),
       getGizmoMode: () => 'translate',
       getGizmoSpace: () => 'world',
@@ -90,29 +92,25 @@ describe('gizmo pool anchor + view scale', () => {
     });
 
     pool.update();
+    pool.drawOverlay(draw);
 
     // The view scale is evaluated AT the anchor (camera→anchor distance in perspective).
     expect(viewScaleArgs.length).toBe(1);
     expect(viewScaleArgs[0]).toEqual([2, 4, 6]);
 
-    // len = viewScale * 0.13 on the long axis; thick = viewScale * 0.007.
-    const len = 10 * 0.13, thick = 10 * 0.007;
-    const barSets = sets.filter((s) => {
-      const sc = s.data.scale as number[];
-      return Array.isArray(sc) && sc.some((v) => Math.abs(v - len) < 1e-9);
-    });
-    expect(barSets.length).toBe(3); // one bar per axis
-    // X bar: center + X * len/2, thickness on the short axes.
-    const xBar = barSets.find((s) => (s.data.pos as number[])[0]! > center[0])!;
-    expectVecClose(xBar.data.pos, [2 + len / 2, 4, 6]);
-    expectVecClose(xBar.data.scale, [len, thick, thick]);
+    // len = viewScale * 0.13; translate arrows include the existing tip reach.
+    const len = 10 * 0.13;
+    const tipLen = len * 0.34;
+    expect(arrows).toHaveLength(3);
+    expect(lines).toHaveLength(12); // four edges for each translate plane
+    expectVecClose(arrows[0]!.from, center);
+    expectVecClose(arrows[0]!.to, [2 + len + tipLen, 4, 6]);
+    expect(arrows[0]!.tipLength).toBeCloseTo(tipLen, 6);
   });
 
   it('re-evaluates the view scale on every update (no stale freeze)', () => {
-    const { editorEngine } = makeEditorEngine();
     let calls = 0;
     const pool = createGizmoPool({
-      editorEngine,
       getAnchor: () => ({ center: [0, 0, 0], quat: null }),
       getGizmoMode: () => 'translate',
       getGizmoSpace: () => 'world',
@@ -124,10 +122,9 @@ describe('gizmo pool anchor + view scale', () => {
     expect(calls).toBe(2);
   });
 
-  it('hides (spawns nothing) when the anchor is null', () => {
-    const { editorEngine, sets } = makeEditorEngine();
+  it('hides when the anchor is null', () => {
+    const { draw, lines, arrows } = makeDebugDraw();
     const pool = createGizmoPool({
-      editorEngine,
       getAnchor: () => null,
       getGizmoMode: () => 'translate',
       getGizmoSpace: () => 'world',
@@ -135,15 +132,16 @@ describe('gizmo pool anchor + view scale', () => {
       getViewScale: () => 10,
     });
     pool.update();
-    expect(sets.length).toBe(0);
+    pool.drawOverlay(draw);
+    expect(lines).toHaveLength(0);
+    expect(arrows).toHaveLength(0);
   });
 
-  it('local space applies the anchor quaternion to the bars', () => {
-    const { editorEngine, sets } = makeEditorEngine();
+  it('local space applies the anchor quaternion to the overlay axes', () => {
+    const { draw, lines } = makeDebugDraw();
     // 90° around Z: [0, 0, sin45, cos45]
     const quat: [number, number, number, number] = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
     const pool = createGizmoPool({
-      editorEngine,
       getAnchor: () => ({ center: [0, 0, 0], quat }),
       getGizmoMode: () => 'scale',
       getGizmoSpace: () => 'local',
@@ -151,11 +149,10 @@ describe('gizmo pool anchor + view scale', () => {
       getViewScale: () => 10,
     });
     pool.update();
-    const bars = sets.filter((s) => Array.isArray(s.data.quat));
-    expect(bars.length).toBeGreaterThan(0);
-    for (const b of bars) {
-      expect(b.data.quat as number[]).toEqual([0, 0, Math.SQRT1_2, Math.SQRT1_2]);
-    }
+    pool.drawOverlay(draw);
+    expect(lines).toHaveLength(3);
+    expectVecClose(lines[0]!.from, [0, 0, 0]);
+    expectVecClose(lines[0]!.to, [0, 1.3, 0]);
   });
 });
 

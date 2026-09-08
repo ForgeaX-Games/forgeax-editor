@@ -1,6 +1,8 @@
 /**
  * Asset spawn bridge — listens for addAssetToScene events on the typed editor
- * bus (single-realm M2/M4: panels and surfaces share the same host window).
+ * bus when panels and surfaces share a host window. Viewport drops also decode
+ * the serialised DataTransfer payload so a Content Browser in a shell window
+ * can cross the Runtime carrier boundary without sharing a Gateway object.
  */
 import { spawnAssetRefToScene, panelBridge, type DragAssetRef } from '@forgeax/editor-core';
 
@@ -14,13 +16,49 @@ export function installAssetSpawnBridge(): () => void {
   });
 }
 
+function assetRefFromDataTransfer(dataTransfer: DataTransfer | null): DragAssetRef | null {
+  if (dataTransfer === null) return null;
+  try {
+    const raw = dataTransfer.getData('application/x-forgeax-asset');
+    if (!raw) return null;
+    const value = JSON.parse(raw) as {
+      guid?: unknown;
+      kind?: unknown;
+      name?: unknown;
+      packPath?: unknown;
+    };
+    if (
+      typeof value.guid !== 'string'
+      || value.guid.length === 0
+      || typeof value.kind !== 'string'
+      || value.kind.length === 0
+      || typeof value.name !== 'string'
+    ) return null;
+    return {
+      type: 'asset',
+      guid: value.guid,
+      kind: value.kind,
+      name: value.name,
+      ...(typeof value.packPath === 'string' ? { path: value.packPath } : {}),
+      payload: {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function carriesAssetRef(dataTransfer: DataTransfer | null): boolean {
+  return dataTransfer?.types.includes('application/x-forgeax-asset') === true;
+}
+
 /**
  * Viewport drop zone — drag a Content Browser asset onto the viewport to spawn it.
  *
- * Content Browser emits `dragAssetStart`/`dragAssetEnd` on the typed bridge; this
- * listener owns the matching viewport gesture in the same realm. The drop routes
- * through the SAME live gateway spawn path as Add-to-Scene (spawnAssetRefToScene →
- * gateway.dispatch), so both are one op (undo/ledger/AI-equal).
+ * Content Browser emits `dragAssetStart`/`dragAssetEnd` on the typed bridge when
+ * it is in the same realm. The DataTransfer fallback is the carrier-safe path
+ * for the standalone iframe. Both routes use the same live Gateway spawn path
+ * (spawnAssetRefToScene → gateway.dispatch), so both remain one op
+ * (undo/ledger/AI-equal).
  *
  * Returns a disposer for cross-game teardown (registered via registerTeardown).
  */
@@ -30,12 +68,14 @@ export function installViewportDropZone(container: HTMLElement): () => void {
   const offEnd = panelBridge.on('dragAssetEnd', () => { pending = null; });
 
   const onDragOver = (e: DragEvent): void => {
-    if (!pending) return; // not a Content Browser asset drag — let it pass
+    // During dragover browsers may expose the MIME type while protecting the
+    // payload itself. Read the JSON only at drop time.
+    if (!pending && !carriesAssetRef(e.dataTransfer)) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   };
   const onDrop = (e: DragEvent): void => {
-    const ref = pending;
+    const ref = pending ?? assetRefFromDataTransfer(e.dataTransfer);
     if (!ref) return;
     e.preventDefault();
     pending = null;

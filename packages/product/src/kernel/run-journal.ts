@@ -20,6 +20,528 @@ import {
 export type RunJournalRecord = OperationRunEvent;
 export type RunJournalEventInput = OperationRunEventInput;
 
+/**
+ * Append-only provenance facts for a reference-creation run.
+ *
+ * These records intentionally do not describe scene entities or pack payloads.
+ * They index the product orchestration and the Gateway OperationRun identities
+ * so a later owner can resume the original run without replaying a committed
+ * mutation. The native scene remains owned by Editor core and the engine.
+ */
+export const CREATION_RUN_RECORD_SCHEMA_VERSION = 'creation-run/v1' as const;
+
+export interface CreationRunJournalRecord {
+  readonly schemaVersion: typeof CREATION_RUN_RECORD_SCHEMA_VERSION;
+  readonly sequence: number;
+  readonly at: number;
+  readonly creationRunId: string;
+  readonly kind: string;
+  readonly [key: string]: unknown;
+}
+
+export interface CreationRunJournalRecordInput {
+  readonly creationRunId: string;
+  readonly kind: string;
+  readonly at?: number;
+  readonly [key: string]: unknown;
+}
+
+export type CreationVisualReviewExpectation = 'edit-prop-after-reopen' | 'play-prop-roundtrip';
+export type CreationVisualReviewVerdict = 'pass' | 'fail' | 'unproven';
+
+export interface CreationCaptureProvenance {
+  readonly backend: string;
+  readonly rendererIdentity: string;
+  readonly rendererGeneration: number;
+  readonly carrierGeneration: number;
+  readonly carrierId: string;
+  readonly carrierKind: string;
+  readonly runtimeId: string;
+  readonly runtimeGeneration: number;
+}
+
+export interface CreationVisualReviewFacts {
+  readonly authoredBy: 'verify';
+  readonly executor: 'step-verify-visual-executor';
+  readonly expectation: CreationVisualReviewExpectation;
+  readonly observed: Readonly<Record<string, unknown>>;
+  readonly verdict: CreationVisualReviewVerdict;
+  readonly confidence: number;
+  readonly mismatchReason?: string;
+  readonly capture: {
+    readonly runId: string;
+    readonly tapePath: string;
+    readonly reportPath: string;
+  };
+  readonly renderer: {
+    readonly backend: string;
+    readonly generation: number;
+    readonly carrierGeneration: number;
+    readonly rendererIdentity: string;
+    readonly carrierId?: string;
+    readonly carrierKind?: string;
+    readonly runtimeId?: string;
+    readonly runtimeGeneration?: number;
+  };
+}
+
+export interface CreationRunJournalOptions {
+  readonly now?: () => number;
+  readonly onAppend?: (records: readonly CreationRunJournalRecord[]) => void;
+}
+
+export const CREATION_RUN_KINDS = [
+  'run-created',
+  'input-blocked',
+  'native-seed-committed',
+  'q5-gap-blocked',
+  'q5-mutation-committed',
+  'native-entity-committed',
+  'correction',
+  'correction-failed',
+  'uncompleted-item',
+  'evidence-failed',
+  'stage-advanced',
+  'save-committed',
+  'capture-committed',
+  'visual-review-committed',
+  'final-report',
+] as const;
+
+export interface CreationRunJournalValidationError {
+  readonly code: 'creation-journal-corrupt';
+  readonly hint: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export type CreationRunJournalValidationResult =
+  | { readonly ok: true; readonly records: readonly CreationRunJournalRecord[] }
+  | { readonly ok: false; readonly error: CreationRunJournalValidationError };
+
+const creationRunKindSet = new Set<string>(CREATION_RUN_KINDS);
+
+function validationError(hint: string, details?: Readonly<Record<string, unknown>>): CreationRunJournalValidationResult {
+  return { ok: false, error: { code: 'creation-journal-corrupt', hint, ...(details === undefined ? {} : { details }) } };
+}
+
+function recordString(record: Record<string, unknown>, key: string): boolean {
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0;
+}
+
+function recordStringArray(record: Record<string, unknown>, key: string, required = false): boolean {
+  const value = record[key];
+  return Array.isArray(value) && (!required || value.length > 0) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
+}
+
+function recordNumber(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === 'number' && Number.isSafeInteger(record[key]) && (record[key] as number) >= 0;
+}
+
+function recordBoolean(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === 'boolean';
+}
+
+function recordIssueGroup(record: Record<string, unknown>): boolean {
+  return recordString(record, 'issueGroupId') && recordStringArray(record, 'issues', true);
+}
+
+function recordCorrectionQueryFacts(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const facts = value as Record<string, unknown>;
+  const entityIds = facts.entityIds;
+  return facts.query === 'world.snapshot'
+    && Array.isArray(facts.with)
+    && facts.with.length === 1
+    && facts.with[0] === 'Name'
+    && recordNumber(facts, 'rowCount')
+    && Array.isArray(entityIds)
+    && entityIds.every((entity) => Number.isSafeInteger(entity) && (entity as number) >= 0)
+    && recordStringArray(facts, 'names');
+}
+
+function recordCorrectionStageJudgment(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const judgment = value as Record<string, unknown>;
+  return judgment.status === 'improved'
+    || judgment.status === 'unchanged'
+    || judgment.status === 'changed'
+    || judgment.status === 'degraded'
+    ? recordString(judgment, 'reason')
+      && recordNumber(judgment, 'preRowCount')
+      && recordNumber(judgment, 'postRowCount')
+    : false;
+}
+
+function recordProvenance(record: Record<string, unknown>): boolean {
+  const provenance = record.provenance;
+  if (provenance === null || typeof provenance !== 'object' || Array.isArray(provenance)) return false;
+  const facts = provenance as Record<string, unknown>;
+  return Array.isArray(facts.sourceSequences)
+    && facts.sourceSequences.length > 0
+    && facts.sourceSequences.every((sequence) => Number.isSafeInteger(sequence) && (sequence as number) > 0)
+    && Array.isArray(facts.operationRunIds)
+    && facts.operationRunIds.length > 0
+    && facts.operationRunIds.every((runId) => typeof runId === 'string' && runId.trim().length > 0);
+}
+
+export function isCreationCaptureProvenance(value: unknown): value is CreationCaptureProvenance {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const facts = value as Record<string, unknown>;
+  return ['backend', 'rendererIdentity', 'carrierId', 'carrierKind', 'runtimeId']
+    .every((key) => typeof facts[key] === 'string' && (facts[key] as string).trim() !== '')
+    && ['rendererGeneration', 'carrierGeneration', 'runtimeGeneration']
+      .every((key) => Number.isSafeInteger(facts[key]) && (facts[key] as number) > 0);
+}
+
+function sameCaptureProvenance(left: CreationCaptureProvenance, right: Record<string, unknown>): boolean {
+  return left.backend === right.backend
+    && left.rendererIdentity === right.rendererIdentity
+    && left.rendererGeneration === right.generation
+    && left.carrierGeneration === right.carrierGeneration
+    && left.carrierId === right.carrierId
+    && left.carrierKind === right.carrierKind
+    && left.runtimeId === right.runtimeId
+    && left.runtimeGeneration === right.runtimeGeneration;
+}
+
+export function validateCreationVisualReviewFacts(
+  value: unknown,
+  expected?: CreationVisualReviewExpectation,
+): value is CreationVisualReviewFacts {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const facts = value as Record<string, unknown>;
+  const observed = facts.observed;
+  const capture = facts.capture;
+  const renderer = facts.renderer;
+  if (facts.authoredBy !== 'verify' || facts.executor !== 'step-verify-visual-executor'
+    || (facts.expectation !== 'edit-prop-after-reopen' && facts.expectation !== 'play-prop-roundtrip')
+    || (expected !== undefined && facts.expectation !== expected)
+    || (facts.verdict !== 'pass' && facts.verdict !== 'fail' && facts.verdict !== 'unproven')
+    || typeof facts.confidence !== 'number' || !Number.isFinite(facts.confidence) || facts.confidence < 0 || facts.confidence > 1
+    || observed === null || typeof observed !== 'object' || Array.isArray(observed)) return false;
+  if (facts.mismatchReason !== undefined && (typeof facts.mismatchReason !== 'string' || facts.mismatchReason.trim() === '')) return false;
+  if (capture === null || typeof capture !== 'object' || Array.isArray(capture)
+    || !isCreationRunCaptureArtifact(capture)) return false;
+  if (renderer === null || typeof renderer !== 'object' || Array.isArray(renderer)) return false;
+  const rendererFacts = renderer as Record<string, unknown>;
+  const baseValid = typeof rendererFacts.backend === 'string' && rendererFacts.backend.trim() !== ''
+    && Number.isSafeInteger(rendererFacts.generation) && (rendererFacts.generation as number) > 0
+    && Number.isSafeInteger(rendererFacts.carrierGeneration) && (rendererFacts.carrierGeneration as number) > 0
+    && typeof rendererFacts.rendererIdentity === 'string' && rendererFacts.rendererIdentity.trim() !== '';
+  if (!baseValid) return false;
+  return (rendererFacts.carrierId === undefined || typeof rendererFacts.carrierId === 'string')
+    && (rendererFacts.carrierKind === undefined || typeof rendererFacts.carrierKind === 'string')
+    && (rendererFacts.runtimeId === undefined || typeof rendererFacts.runtimeId === 'string')
+    && (rendererFacts.runtimeGeneration === undefined || (Number.isSafeInteger(rendererFacts.runtimeGeneration) && (rendererFacts.runtimeGeneration as number) > 0));
+}
+
+function recordVisualReviewProvenance(record: Record<string, unknown>): boolean {
+  const provenance = record.provenance;
+  if (provenance === null || typeof provenance !== 'object' || Array.isArray(provenance)) return false;
+  const facts = provenance as Record<string, unknown>;
+  return facts.authoredBy === 'verify'
+    && facts.executor === 'step-verify-visual-executor'
+    && recordProvenance(record);
+}
+
+function validCreationPayload(record: Record<string, unknown>): boolean {
+  switch (record.kind) {
+    case 'run-created': {
+      const budget = record.correctionBudget;
+      return recordString(record, 'referenceFingerprint')
+        && recordString(record, 'targetProject')
+        && recordString(record, 'targetScene')
+        && recordString(record, 'originalStage')
+        && recordString(record, 'viewSemantics')
+        && recordStringArray(record, 'visibleFacts', true)
+        && recordStringArray(record, 'inferredFacts', true)
+        && recordStringArray(record, 'unknownFacts', true)
+        && recordStringArray(record, 'fidelityFocus', true)
+        && budget !== null
+        && typeof budget === 'object'
+        && Number.isInteger((budget as Record<string, unknown>).perStage)
+        && ((budget as Record<string, unknown>).perStage as number) >= 1
+        && ((budget as Record<string, unknown>).perStage as number) <= 3
+        && Number.isInteger((budget as Record<string, unknown>).total)
+        && ((budget as Record<string, unknown>).total as number) >= 1
+        && ((budget as Record<string, unknown>).total as number) <= 12;
+    }
+    case 'input-blocked':
+      return recordString(record, 'code') && recordString(record, 'stage');
+    case 'native-seed-committed':
+      return recordString(record, 'mutationId') && recordString(record, 'operationRunId')
+        && recordNumber(record, 'dispatchCount') && recordNumber(record, 'commitCount')
+        && recordNumber(record, 'mutationCount') && recordString(record, 'originalStage')
+        && (record.terminalStatus === undefined || record.terminalStatus === 'succeeded');
+    case 'q5-gap-blocked':
+      return record.capabilityId === 'scene.createAsset'
+        && recordString(record, 'originalStage') && recordString(record, 'capabilityGeneration')
+        && recordString(record, 'priorOperationRunId') && recordString(record, 'owner')
+        && recordString(record, 'diagnosticId') && recordString(record, 'nextStep')
+        && recordString(record, 'code') && recordString(record, 'expected');
+    case 'q5-mutation-committed':
+      return recordString(record, 'mutationId') && recordString(record, 'operationRunId')
+        && recordString(record, 'capabilityGeneration') && recordNumber(record, 'mutationCount')
+        && recordString(record, 'originalStage') && record.terminalStatus === 'succeeded';
+    case 'native-entity-committed':
+      return recordString(record, 'mutationId') && recordString(record, 'operationRunId')
+        && recordString(record, 'name') && recordNumber(record, 'entity') && recordNumber(record, 'mutationCount')
+        && recordNumber(record, 'dispatchCount') && recordNumber(record, 'commitCount')
+        && recordString(record, 'stage') && record.terminalStatus === 'succeeded';
+    case 'correction':
+      return recordString(record, 'stage') && recordIssueGroup(record) && recordString(record, 'operationRunId')
+        && record.budgetConsumed === true
+        && recordCorrectionQueryFacts(record.preQuery)
+        && recordCorrectionQueryFacts(record.postQuery)
+        && recordCorrectionStageJudgment(record.stageJudgment);
+    case 'correction-failed':
+      return recordString(record, 'stage') && recordIssueGroup(record) && recordString(record, 'code')
+        && recordBoolean(record, 'budgetConsumed')
+        && (record.operationRunId === undefined || recordString(record, 'operationRunId'))
+        && (record.preQuery === undefined || recordCorrectionQueryFacts(record.preQuery))
+        && (record.postQuery === undefined || recordCorrectionQueryFacts(record.postQuery))
+        && (record.stageJudgment === undefined || recordCorrectionStageJudgment(record.stageJudgment));
+    case 'uncompleted-item':
+      return recordString(record, 'item') && recordString(record, 'reason') && recordString(record, 'stage')
+        && recordIssueGroup(record) && record.budgetConsumed === false;
+    case 'evidence-failed':
+      return recordString(record, 'evidenceKind') && recordString(record, 'requestId') && recordString(record, 'code');
+    case 'stage-advanced':
+      return recordString(record, 'stage') && recordString(record, 'evidenceId') && recordProvenance(record);
+    case 'save-committed':
+      return recordString(record, 'requestId') && recordString(record, 'operationRunId')
+        && record.terminalStatus === 'succeeded' && recordProvenance(record);
+    case 'capture-committed':
+      return (record.stage === 'edit-after-reopen' || record.stage === 'play-roundtrip')
+        && recordString(record, 'evidenceId') && recordString(record, 'requestId')
+        && recordString(record, 'operationRunId') && record.terminalStatus === 'succeeded'
+        && recordProvenance(record) && recordCaptureArtifact(record)
+        && (record.captureProvenance === undefined || isCreationCaptureProvenance(record.captureProvenance));
+    case 'visual-review-committed':
+      return validateCreationVisualReviewFacts(record)
+        && recordVisualReviewProvenance(record);
+    case 'final-report':
+      return ['input', 'structure', 'persistence', 'play', 'visual', 'toolCompleteness']
+        .every((key) => record[key] === 'pass' || record[key] === 'fail' || record[key] === 'unproven')
+        && (record.verdict === 'pass' || record.verdict === 'fail' || record.verdict === 'unproven')
+        && recordStringArray(record, 'uncompletedItems');
+    default:
+      return false;
+  }
+}
+
+export function isCreationRunCaptureArtifact(
+  value: unknown,
+): value is { readonly runId: string; readonly tapePath: string; readonly reportPath: string } {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const artifact = value as Record<string, unknown>;
+  if (!recordString(artifact, 'runId') || !recordString(artifact, 'tapePath') || !recordString(artifact, 'reportPath')) return false;
+  const tapePath = artifact.tapePath as string;
+  const reportPath = artifact.reportPath as string;
+  const runId = artifact.runId as string;
+  const tapeSuffix = /(?:^|[\\/])frame-0\.tape\.bin$/;
+  const reportSuffix = /(?:^|[\\/])frame-0\.report\.json$/;
+  if (!tapeSuffix.test(tapePath) || !reportSuffix.test(reportPath)) return false;
+  if (reportPath !== tapePath.replace(/frame-0\.tape\.bin$/, 'frame-0.report.json')) return false;
+  const tapeSegments = tapePath.split(/[\\/]/);
+  return tapeSegments.length >= 2 && tapeSegments.at(-2) === runId;
+}
+
+function recordCaptureArtifact(record: Record<string, unknown>): boolean {
+  return isCreationRunCaptureArtifact(record.artifact);
+}
+
+function captureProvenance(record: Record<string, unknown>): CreationCaptureProvenance | undefined {
+  return isCreationCaptureProvenance(record.captureProvenance) ? record.captureProvenance : undefined;
+}
+
+function validateCreationRunSemantics(records: readonly CreationRunJournalRecord[]): CreationRunJournalValidationResult {
+  const byRun = new Map<string, CreationRunJournalRecord[]>();
+  const bySequence = new Map<number, CreationRunJournalRecord>();
+  for (const record of records) {
+    const run = byRun.get(record.creationRunId) ?? [];
+    run.push(record);
+    byRun.set(record.creationRunId, run);
+    bySequence.set(record.sequence, record);
+  }
+  for (const [creationRunId, run] of byRun) {
+    if (run[0]?.kind !== 'run-created' || run.filter((record) => record.kind === 'run-created').length !== 1) {
+      return validationError('persisted creation journal must begin each run with exactly one run-created record.', { creationRunId });
+    }
+    const created = run[0];
+    const originalStage = created.originalStage;
+    const seed = run.find((record) => record.kind === 'native-seed-committed');
+    const gap = run.find((record) => record.kind === 'q5-gap-blocked');
+    const mutation = run.find((record) => record.kind === 'q5-mutation-committed');
+    if (gap !== undefined && (seed === undefined || gap.priorOperationRunId !== seed.operationRunId)) {
+      return validationError('persisted creation journal has a q5 gap that does not match the native seed terminal.', { creationRunId });
+    }
+    if (mutation !== undefined && (gap === undefined || mutation.originalStage !== gap.originalStage
+      || mutation.capabilityGeneration === gap.capabilityGeneration)) {
+      return validationError('persisted creation journal has a q5 mutation inconsistent with its blocked gap.', { creationRunId });
+    }
+    const stages = run.filter((record) => record.kind === 'stage-advanced');
+    if (stages.length > 1) {
+      return validationError('persisted creation journal has an invalid or duplicate stage advance.', { creationRunId });
+    }
+    const saves = run.filter((record) => record.kind === 'save-committed');
+    if (saves.length > 1 || (saves.length === 1 && stages.length === 0)) {
+      return validationError('persisted creation journal has a save outside the validated stage boundary.', { creationRunId });
+    }
+    const captures = run.filter((record) => record.kind === 'capture-committed');
+    if (captures.some((record) => saves.length === 0 || stages.length === 0)) {
+      return validationError('persisted creation journal has capture evidence before a validated save and stage.', { creationRunId });
+    }
+    if (captures.filter((record) => record.stage === 'edit-after-reopen').length > 1
+      || captures.filter((record) => record.stage === 'play-roundtrip').length > 1) {
+      return validationError('persisted creation journal contains duplicate capture evidence.', { creationRunId });
+    }
+    for (const capture of captures) {
+      const artifact = capture.artifact as Record<string, unknown>;
+      if (artifact.runId === capture.operationRunId) {
+        return validationError('persisted capture evidence must keep artifactRunId distinct from operationRunId.', { creationRunId, sequence: capture.sequence });
+      }
+      const producer = captureProvenance(capture);
+      if (capture.captureProvenance !== undefined && producer === undefined) {
+        return validationError('persisted capture evidence contains invalid producer provenance.', { creationRunId, sequence: capture.sequence });
+      }
+    }
+    const visualReviews = run.filter((record) => record.kind === 'visual-review-committed');
+    if (visualReviews.some((record) => !validateCreationVisualReviewFacts(record))) {
+      return validationError('persisted creation journal contains invalid Verify visual review facts.', { creationRunId });
+    }
+    if (visualReviews.some((record) => visualReviews.filter((other) => other.expectation === record.expectation).length > 1)) {
+      return validationError('persisted creation journal contains duplicate visual review expectations.', { creationRunId });
+    }
+    for (const review of visualReviews) {
+      const captureStage = review.expectation === 'edit-prop-after-reopen' ? 'edit-after-reopen' : 'play-roundtrip';
+      const capture = captures.find((record) => record.stage === captureStage);
+      const provenance = review.provenance as Record<string, unknown>;
+      const sourceSequences = provenance.sourceSequences;
+      const operationRunIds = provenance.operationRunIds;
+      if (capture === undefined
+        || (review.capture as Record<string, unknown>).runId !== (capture.artifact as Record<string, unknown>).runId
+        || !Array.isArray(sourceSequences) || !sourceSequences.includes(capture.sequence)
+        || !Array.isArray(operationRunIds) || !operationRunIds.includes(capture.operationRunId)) {
+        return validationError('persisted visual review facts do not match the corresponding capture provenance.', { creationRunId, expectation: review.expectation });
+      }
+      const producer = captureProvenance(capture);
+      if (producer !== undefined && !sameCaptureProvenance(producer, review.renderer as Record<string, unknown>)) {
+        return validationError('persisted visual review renderer facts do not match the producer capture provenance.', { creationRunId, expectation: review.expectation });
+      }
+    }
+    for (const evidence of run.filter((record) => ['stage-advanced', 'save-committed', 'capture-committed'].includes(record.kind))) {
+      const provenance = evidence.provenance as Record<string, unknown> | undefined;
+      const sourceSequences = provenance?.sourceSequences;
+      const provenanceOperationRunIds = provenance?.operationRunIds;
+      const operationRunIds = new Set(run
+        .filter((record) => record.sequence <= evidence.sequence)
+        .map((record) => record.operationRunId)
+        .filter((runId): runId is string => typeof runId === 'string'));
+      if (!Array.isArray(sourceSequences) || sourceSequences.some((sequence) => (
+        !Number.isSafeInteger(sequence) || (sequence as number) >= evidence.sequence
+          || bySequence.get(sequence as number)?.creationRunId !== creationRunId
+      )) || !Array.isArray(provenanceOperationRunIds) || provenanceOperationRunIds.some((runId) => (
+        typeof runId !== 'string' || !operationRunIds.has(runId)
+      ))) {
+        return validationError('persisted creation journal contains provenance facts that do not match prior records.', { creationRunId, sequence: evidence.sequence });
+      }
+    }
+    const reports = run.filter((record) => record.kind === 'final-report');
+    if (reports.length > 1 || (reports.length === 1 && captures.length < 2)) {
+      return validationError('persisted creation journal has a final report before both capture facts.', { creationRunId });
+    }
+    if (reports.some((report) => report.visual !== 'unproven' && visualReviews.length === 0)) {
+      return validationError('persisted final report cannot claim a visual verdict without Verify-authored visual review facts.', { creationRunId });
+    }
+  }
+  return { ok: true, records };
+}
+
+export function validateCreationRunJournalRecords(records: readonly unknown[]): CreationRunJournalValidationResult {
+  if (!Array.isArray(records)) return validationError('persisted creation journal must be an array of append-only records.');
+  const normalized: CreationRunJournalRecord[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const raw = records[index];
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return validationError('persisted creation journal contains a non-record value.', { index });
+    }
+    const candidate = raw as Record<string, unknown>;
+    if (candidate.schemaVersion !== CREATION_RUN_RECORD_SCHEMA_VERSION
+      || !Number.isSafeInteger(candidate.sequence) || candidate.sequence !== index + 1
+      || typeof candidate.at !== 'number' || !Number.isFinite(candidate.at)
+      || !recordString(candidate, 'creationRunId') || !recordString(candidate, 'kind')) {
+      return validationError('persisted creation journal failed sequence or envelope validation.', { index });
+    }
+    if (!creationRunKindSet.has(candidate.kind as string)) {
+      return validationError('persisted creation journal contains an unknown record kind.', { index, kind: candidate.kind });
+    }
+    if (!validCreationPayload(candidate)) {
+      return validationError('persisted creation journal record is missing required payload.', { index, kind: candidate.kind });
+    }
+    normalized.push(Object.freeze({ ...candidate }) as CreationRunJournalRecord);
+  }
+  return validateCreationRunSemantics(normalized);
+}
+
+/** Small append-only journal for product-owned creation provenance. */
+export class CreationRunJournal {
+  private readonly now: () => number;
+  private readonly onAppend?: (records: readonly CreationRunJournalRecord[]) => void;
+  private readonly records: CreationRunJournalRecord[] = [];
+  private corruption?: CreationRunJournalValidationError;
+
+  constructor(options: CreationRunJournalOptions = {}) {
+    this.now = options.now ?? (() => Date.now());
+    this.onAppend = options.onAppend;
+  }
+
+  static fromRecords(records: readonly unknown[], options: CreationRunJournalOptions = {}): CreationRunJournal {
+    const journal = new CreationRunJournal(options);
+    const validated = validateCreationRunJournalRecords(records);
+    if (!validated.ok) {
+      journal.corruption = validated.error;
+      return journal;
+    }
+    journal.records.push(...validated.records);
+    return journal;
+  }
+
+  validationError(): CreationRunJournalValidationError | undefined {
+    return this.corruption;
+  }
+
+  append(input: CreationRunJournalRecordInput): CreationRunJournalRecord {
+    if (this.corruption !== undefined) {
+      throw new Error(this.corruption.hint);
+    }
+    const sequence = (this.records.at(-1)?.sequence ?? 0) + 1;
+    const record = Object.freeze({
+      ...input,
+      schemaVersion: CREATION_RUN_RECORD_SCHEMA_VERSION,
+      sequence,
+      at: input.at ?? this.now(),
+    }) as CreationRunJournalRecord;
+    const tentative = Object.freeze([...this.records, record]);
+    const validated = validateCreationRunJournalRecords(tentative);
+    if (!validated.ok) {
+      this.corruption = validated.error;
+      throw new Error(validated.error.hint);
+    }
+    this.onAppend?.(tentative);
+    this.records.push(record);
+    return record;
+  }
+
+  listRecords(creationRunId?: string): readonly CreationRunJournalRecord[] {
+    const selected = creationRunId === undefined
+      ? this.records
+      : this.records.filter((record) => record.creationRunId === creationRunId);
+    return Object.freeze(selected.map((record) => Object.freeze({ ...record })));
+  }
+}
+
 export interface RunJournalOptions {
   readonly scope: string;
   readonly now?: () => number;

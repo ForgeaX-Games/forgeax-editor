@@ -7,10 +7,11 @@ import {
   entName,
 } from '@forgeax/editor-core';
 import type { EditorOp, EditSession } from '@forgeax/editor-core';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

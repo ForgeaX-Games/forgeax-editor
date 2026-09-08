@@ -156,15 +156,15 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
   return { deps, gatewayCtl, log };
 }
 
-/** A HostSessionContext with inert engine/renderer/viewport stand-ins. renderer.ready
- *  resolves; loadByGuid always misses — the boot path tolerates both headlessly. */
+/** A HostSessionContext with inert engine/renderer/viewport stand-ins. loadByGuid
+ *  always misses — the boot path tolerates both headlessly. */
 function makeCtx(over?: Partial<HostSessionContext>): HostSessionContext {
   const emitCalls: string[] = [];
   const stageCalls: string[] = [];
   const ctx = {
     app: { start() {}, pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
     world: {} as never,
-    renderer: { ready: Promise.resolve(), assets: { loadByGuid: async () => ({ ok: false, error: { code: 'miss' } }) }, store: {} },
+    renderer: { assets: { loadByGuid: async () => ({ ok: false, error: { code: 'miss' } }) }, store: {} },
     cameraEntity: 0,
     viewport: { resetCamera() {} },
     viewportContainer: {} as never,

@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
+import { createReferenceCreationRuntime, type GatewayCreationPort } from '@forgeax/editor-product';
 
 import { EditGateway } from '../io/gateway';
 import { registerApplier, type SessionApplier } from '../io/appliers';
 import { OperationRunRegistry } from '../io/operation-runs';
 import { createEditSession } from '../session/document';
+import '../index';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -83,6 +85,263 @@ test('save dispatch is request-correlated and terminal-only', async () => {
   } finally {
     restoreApplier();
   }
+});
+
+test('createAsset stays blocked when its real owner has no terminal OperationRun', async () => {
+  const gateway = new EditGateway(createEditSession());
+  const requestId = 'create-asset-q5-red-1';
+
+  const result = gateway.dispatch({
+    kind: 'createAsset',
+    packPath: 'assets/q5-red.pack.json',
+    guid: 'asset-q5-red-1',
+    assetKind: 'scene',
+    name: 'Q5 Red Asset',
+    requestId,
+  } as never, 'ai');
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code: 'capability-blocked',
+      stage: 'preflight',
+      owner: '@forgeax/editor-core OperationRun/applier contract owner',
+      recoveryAction: 'owner.repair',
+      diagnosticId: 'q5-create-asset-terminal-run',
+    },
+  });
+  expect(gateway.ledger).toHaveLength(0);
+  expect(gateway.operationRunSnapshot().runs).toHaveLength(0);
+  await expect(gateway.waitOperationRun(requestId)).resolves.toMatchObject({
+    ok: false,
+    error: { code: 'run-not-found' },
+  });
+
+  const error = result.ok ? undefined : result.error as unknown as Record<string, unknown>;
+  expect(error?.recoveryActions).not.toContain('save');
+  expect(error?.recoveryActions).not.toContain('capture');
+  expect(error?.recoveryActions).not.toContain('stage.advance');
+});
+
+test('t09 reads the M2 q5 gap without creating a repair or mutation run', async () => {
+  const gateway = new EditGateway(createEditSession());
+  const before = gateway.operationRunSnapshot();
+  const descriptor = gateway.listOps().find((entry) => entry.id === 'createAsset');
+
+  expect(descriptor).toMatchObject({
+    capabilityGeneration: 'g0',
+    capabilityStatus: 'blocked',
+    stage: 'preflight',
+    owner: '@forgeax/editor-core OperationRun/applier contract owner',
+    diagnosticId: 'q5-create-asset-terminal-run',
+    recoveryAction: 'owner.repair',
+    availability: {
+      available: false,
+      code: 'capability-blocked',
+    },
+  });
+
+  const observed = gateway.dispatch({
+    kind: 'createAsset',
+    packPath: 'games/reference/assets/m2-q5.blocked.pack.json',
+    guid: 'creation-m2-1:asset',
+    assetKind: 'scene',
+    name: 'M2 persisted q5 probe',
+    requestId: 'creation-m2-1:q5-probe',
+  } as never, 'ai');
+
+  expect(observed).toMatchObject({
+    ok: false,
+    error: {
+      code: 'capability-blocked',
+      stage: 'preflight',
+      owner: '@forgeax/editor-core OperationRun/applier contract owner',
+      diagnosticId: 'q5-create-asset-terminal-run',
+      recoveryAction: 'owner.repair',
+      capabilityGeneration: 'g0',
+    },
+  });
+  const after = gateway.operationRunSnapshot();
+  expect(after).toEqual(before);
+  expect(gateway.ledger).toHaveLength(0);
+});
+
+test('t10 reconnect invalidates the cached q5 snapshot and publishes a new callable generation', () => {
+  const gateway = new EditGateway(createEditSession());
+  const blocked = gateway.operationCapabilitySnapshot();
+  expect(blocked).toBe(gateway.operationCapabilitySnapshot());
+  expect(blocked).toMatchObject({ capabilityGeneration: 'g0' });
+
+  const observed: string[] = [];
+  const unsubscribe = gateway.subscribeOperationCapabilities((snapshot) => {
+    observed.push(snapshot.capabilityGeneration ?? 'missing');
+  });
+  const repaired = gateway.reconnectCapabilitySnapshot();
+  unsubscribe();
+
+  expect(repaired).not.toBe(blocked);
+  expect(repaired).toMatchObject({ capabilityGeneration: 'g1' });
+  expect(repaired.ops.find((entry) => entry.id === 'createAsset')).toMatchObject({
+    capabilityGeneration: 'g1',
+    capabilityStatus: 'callable',
+    availability: { available: true },
+    operationRun: {
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+    },
+  });
+  expect(observed).toEqual(['g1']);
+});
+
+test('M2 discovers a terminal native seed before probing the live createAsset path', async () => {
+  const gateway = new EditGateway(createEditSession());
+  const discovered = gateway.listOps();
+  const seed = discovered.find((entry) => (
+    entry.id === 'spawnEntity' &&
+    entry.operationRun !== undefined &&
+    entry.availability.available
+  ));
+  expect(seed).toBeDefined();
+
+  const createAsset = discovered.find((entry) => entry.id === 'createAsset');
+  expect(createAsset).toMatchObject({
+    capabilityGeneration: 'g0',
+    capabilityStatus: 'blocked',
+    availability: {
+      available: false,
+      code: 'capability-blocked',
+      diagnosticId: 'q5-create-asset-terminal-run',
+    },
+  });
+
+  const runId = 'm2-native-seed-1';
+  const ledgerBefore = gateway.ledger.length;
+  const seedDispatch = gateway.dispatch({
+    kind: 'spawnEntity',
+    name: 'M2 native seed',
+    components: {},
+    requestId: runId,
+  } as never, 'ai');
+  expect(seedDispatch).toMatchObject({
+    ok: true,
+    result: { operationRun: { requestId: runId, status: 'running' } },
+  });
+  const seedTerminal = await gateway.waitOperationRun(runId);
+  expect(seedTerminal).toMatchObject({
+    ok: true,
+    value: { requestId: runId, status: 'succeeded' },
+  });
+  expect(gateway.ledger).toHaveLength(ledgerBefore + 1);
+
+  const q5 = gateway.dispatch({
+    kind: 'createAsset',
+    packPath: 'assets/m2-q5-red.pack.json',
+    guid: 'asset-m2-q5-red-1',
+    assetKind: 'scene',
+    name: 'M2 Q5 Red Asset',
+  } as never, 'ai');
+  expect(q5).toMatchObject({
+    ok: false,
+    error: {
+      code: 'capability-blocked',
+      stage: 'preflight',
+      owner: '@forgeax/editor-core OperationRun/applier contract owner',
+      diagnosticId: 'q5-create-asset-terminal-run',
+    },
+  });
+  expect(gateway.operationRunSnapshot().runs.some((run) => run.requestId === runId)).toBe(true);
+  expect(gateway.ledger).toHaveLength(ledgerBefore + 1);
+});
+
+test('t04 real Gateway integration records the native terminal run before the q5 gap', async () => {
+  const gateway = new EditGateway(createEditSession());
+  const port: GatewayCreationPort = {
+    listOps: () => gateway.listOps().map((entry) => ({
+      id: entry.id,
+      available: entry.availability.available,
+      ...(entry.operationRun === undefined ? {} : { operationRun: true }),
+      ...(entry.capabilityGeneration === undefined ? {} : { capabilityGeneration: entry.capabilityGeneration }),
+      ...(entry.availability.available ? {} : {
+        blocked: {
+          code: entry.availability.code,
+          stage: entry.stage,
+          owner: entry.owner,
+          diagnosticId: entry.diagnosticId,
+          recoveryAction: entry.recoveryAction,
+        },
+      }),
+    })),
+    assetCatalog: () => gateway.assetCatalog().map((entry) => ({ guid: entry.guid, kind: entry.kind, name: entry.name })),
+    dispatch: (command, origin) => {
+      const result = gateway.dispatch(command as never, origin);
+      if (!result.ok) return { ok: false, error: result.error as never };
+      const nested = result.result as { readonly operationRun?: unknown } | undefined;
+      const operationRun = nested?.operationRun;
+      return {
+        ok: true,
+        ...(operationRun === undefined ? {} : { operationRun: operationRun as never }),
+      };
+    },
+    waitOperationRun: async (requestId) => {
+      const result = await gateway.waitOperationRun(requestId);
+      return result.ok
+        ? { ok: true, value: { requestId, runId: result.value.runId, status: result.value.status as never } }
+        : { ok: false, error: result.error as never };
+    },
+    reconnect: (generation) => {
+      expect(gateway.operationCapabilitySnapshot().capabilityGeneration).toBe(generation);
+      gateway.reconnectCapabilitySnapshot();
+    },
+  };
+  const runtime = createReferenceCreationRuntime({ gateway: port });
+  const result = await runtime.start({
+    creationRunId: 't04-real-gateway-run',
+    referenceFingerprint: 'sha256:t04-real',
+    targetProject: 'games/reference',
+    targetScene: 'default',
+    originalStage: 'blockout',
+    viewSemantics: 'front orthographic reference view',
+    visibleFacts: ['root silhouette'],
+    inferredFacts: ['hidden back face'],
+    unknownFacts: ['occluded underside'],
+    fidelityFocus: ['silhouette'],
+    correctionBudget: { perStage: 3, total: 12 },
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: 'capability-gap', capabilityGeneration: 'g0', capabilityId: 'scene.createAsset' },
+    run: { priorOperationRunId: expect.any(String), dispatchCount: 1, commitCount: 1, mutationCount: 1, status: 'blocked' },
+  });
+  expect(gateway.operationRunSnapshot().runs.some((run) => run.requestId === 't04-real-gateway-run:native-seed')).toBe(true);
+});
+
+test('t10 spawnEntity returns a terminal native OperationRun', async () => {
+  const gateway = new EditGateway(createEditSession());
+  const requestId = 't10-spawn-entity-terminal-1';
+
+  const accepted = gateway.dispatch({
+    kind: 'spawnEntity',
+    requestId,
+    name: 'Reference root',
+    components: {},
+  } as never, 'ai');
+
+  expect(accepted).toMatchObject({
+    ok: true,
+    result: {
+      created: [expect.anything()],
+      operationRun: { requestId, status: 'running' },
+    },
+  });
+
+  await expect(gateway.waitOperationRun(requestId)).resolves.toMatchObject({
+    ok: true,
+    value: {
+      requestId,
+      status: 'succeeded',
+      result: { created: [expect.anything()] },
+    },
+  });
 });
 
 test('createSceneFile dispatch is request-correlated and publishes only its terminal success', async () => {

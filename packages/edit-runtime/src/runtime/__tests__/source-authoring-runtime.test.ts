@@ -34,6 +34,60 @@ const row: SourceCatalogRow = {
 };
 
 describe('source authoring host seam', () => {
+  it('validates Mesh slot identity and MaterialAsset GUID before the CAS seam', async () => {
+    const meshRow: SourceCatalogRow = {
+      ...row,
+      sourceOverrides: {
+        [SOURCE_KEY]: {
+          materialSlots: [
+            { slotName: 'Body', sourceKey: 'material/body' },
+            { slotName: 'Removed', sourceKey: 'material/removed', tombstone: true },
+          ],
+        },
+      },
+      sourceOverrideDescriptors: [{
+        sourceKey: SOURCE_KEY,
+        semantic: 'mesh-material-slot-defaults',
+        payloadSchema: { type: 'object' },
+      }],
+    };
+    const materialRow: SourceCatalogRow = {
+      guid: '019f0000-0000-7000-8000-000000000101',
+      kind: 'material',
+      packageUrl: 'assets/material.pack.json',
+    };
+    const runtime = createSourceAuthoringRuntime({ catalog: () => [meshRow, materialRow] });
+    const command = (key: string, value: string | null) => ({
+      kind: 'saveAssetSourceOverride',
+      guid: meshRow.guid,
+      scope: { sourceKey: SOURCE_KEY },
+      override: {
+        ...meshRow.sourceOverrides?.[SOURCE_KEY],
+        materialSlotDefaultOverrides: { [key]: value },
+      },
+    }) as never;
+
+    await expect(Promise.resolve().then(() => runtime.validateSourceOverride?.(command('material/body', materialRow.guid)))).resolves.toBeUndefined();
+    await expect(Promise.resolve().then(() => runtime.validateSourceOverride?.(command('material/body', null)))).resolves.toBeUndefined();
+    await expect(Promise.resolve().then(() => runtime.validateSourceOverride?.(command('material/removed', materialRow.guid)))).rejects.toMatchObject({
+      code: 'asset-validation-failed',
+    });
+    await expect(Promise.resolve().then(() => runtime.validateSourceOverride?.(command('material/body', 'missing-guid')))).rejects.toMatchObject({
+      code: 'asset-validation-failed',
+    });
+    const validCommand = command('material/body', materialRow.guid) as unknown as Record<string, unknown>;
+    await expect(Promise.resolve().then(() => runtime.validateSourceOverride?.({
+      ...validCommand,
+      override: {
+        materialSlots: [{ slotName: 'Forged', sourceKey: 'material/forged' }],
+        materialSlotDefaultOverrides: { 'material/forged': materialRow.guid },
+      },
+    } as never))).rejects.toMatchObject({
+      code: 'asset-validation-failed',
+      message: expect.stringContaining('producer-owned topology is immutable'),
+    });
+  });
+
   it('projects real Catalog and Meta facts into the SourceAuthoringRuntime seams', async () => {
     const events: string[] = [];
     const runtime = createSourceAuthoringRuntime({
@@ -75,6 +129,43 @@ describe('source authoring host seam', () => {
       'cook:guid:fox:false',
       'observe:host-seam-1:false',
     ]);
+  });
+
+  it('uses the producer preflight for ScriptablePack sources instead of a disk Meta sidecar', async () => {
+    const packRow: SourceCatalogRow = {
+      ...row,
+      guid: 'guid:pack-scene',
+      sourcePath: 'assets/showcase.pack.ts',
+      sourceKey: 'scene/main',
+    };
+    const events: string[] = [];
+    const runtime = createSourceAuthoringRuntime({
+      catalog: () => [packRow],
+      readMetaSidecar: async () => {
+        throw new Error('ScriptablePack Meta must not be read as a sidecar');
+      },
+      preflightSource: async ({ sourcePath, requestId }) => {
+        events.push(`producer:${sourcePath}:${requestId}`);
+        return {
+          sourcePath,
+          revision: 'a'.repeat(64),
+          meta: { subAssets: [{ guid: packRow.guid, sourceKey: packRow.sourceKey }] },
+        };
+      },
+    });
+
+    const input = await runtime.getPreflightInput({
+      kind: 'asset.preflight',
+      guid: packRow.guid,
+      scope: { sourceKey: packRow.sourceKey },
+      requestId: 'pack-preflight-1',
+    } as never);
+
+    expect(input.meta).toMatchObject({
+      metaRevision: 'a'.repeat(64),
+      subAssets: [{ guid: packRow.guid, sourceKey: packRow.sourceKey }],
+    });
+    expect(events).toEqual(['producer:assets/showcase.pack.ts:pack-preflight-1']);
   });
 
   it('projects current scene instance references into source preflight impact', async () => {

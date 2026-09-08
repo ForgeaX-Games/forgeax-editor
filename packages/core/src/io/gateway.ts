@@ -8,10 +8,13 @@ import {
   type ErrorObjectRefs,
   type RunProgress,
 } from '@forgeax/editor-product';
-import type { FieldShapeKind, World } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
+import type { FieldShapeKind } from '@forgeax/engine-ecs/internal';
+import { ChildOf } from '@forgeax/engine-scene';
 import { clearSelection, getSelection, getSelectionList } from '../store/selection';
 import {
   applierFor,
+  applierRequiresEditMode,
   applierRegistrySnapshot,
   domainOf,
   registerApplier,
@@ -33,6 +36,7 @@ import type { ValidateResult } from './args-schema';
 import { EngineFacade } from './engine-facade';
 import { assetIO, type AssetIOFacade } from './asset-io-facade';
 import { bindAllSceneAnimationTargets } from '../scene/animation-target-binding';
+import { syncWorldTransformsAfterWrite } from '../scene/transform-propagation-sync';
 import { pushSpan, popSpan, lastRoot, recentRoots, activeSpan, droppedTracesCount, type SpanNode } from './trace';
 import { assetsErrorRevision, recentAssetsErrors } from '../store/assets-error-bus';
 import {
@@ -55,6 +59,14 @@ import {
 import { catalogStoragePath, catalogGameStoragePath } from '../assets/catalog-storage-path';
 import { resolveGamePathOnce } from '../util/path-resolver';
 import { getViewportRuntimeClientSnapshot } from './viewport-runtime-client';
+import {
+  CAPABILITY_GENERATION_G0,
+  CAPABILITY_GENERATION_G1,
+  createCapabilityBlockedError,
+  createCapabilitySnapshot,
+  createCreateAssetBlockedProjection,
+  createCreateAssetCallableProjection,
+} from './capability-snapshot';
 // gateway.ts keeps the single-entry dispatch/apply/ledger narrative; sibling
 // modules host non-entry helpers (history/step/handle-id shaping, query-side
 // reader binding). None of them route a command or decide a domain.
@@ -72,7 +84,7 @@ import {
   collectSceneAsset as collectLiveSceneAsset,
   type CollectSceneAssetResult,
 } from './scene-asset-collect';
-import { entName, entParent, worldEntityHandles } from '../store/entity-state';
+import { entName, entParent } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
 import {
   sceneInstanceRoots,
@@ -83,7 +95,7 @@ import {
 // Asset read surface: resolveAssetHandle turns a shared<T> handle (query
 // returns it as opaque-handle.raw) into its live payload — covering both
 // builtin (HANDLE_CUBE via BuiltinAssetRegistry) and catalog assets, O(1).
-import { resolveAssetHandle, type AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle, type AssetRegistry, type ScenePublicationFence } from '@forgeax/engine-assets-runtime';
 import type { Asset, AssetGuid, CatalogEntry, Handle } from '@forgeax/engine-types';
 
 function importPayloadFingerprint(base64: string): string {
@@ -95,14 +107,26 @@ function importPayloadFingerprint(base64: string): string {
   return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}:${base64.length}`;
 }
 
+interface MountMemberPublicationIdentity {
+  readonly sourcePath?: string;
+  readonly sourceKey?: string;
+  readonly outputGuid?: string;
+  readonly expectedRevision?: string;
+  readonly actualRevision?: string;
+  readonly candidateGeneration?: number;
+  readonly currentGeneration?: number;
+  readonly publicationFence?: ScenePublicationFence;
+}
+
 /** Keep selected-file bytes only for the active effect, never in retained runs or ledger. */
 function retainedCommand(cmd: EditorOp): EditorOp {
   if (cmd.kind !== 'importAsset') return cmd;
   const source = cmd as EditorOp & {
     readonly base64?: unknown;
     readonly companionSources?: readonly { readonly destPath?: unknown; readonly base64?: unknown }[];
+    readonly sourceFiles?: readonly { readonly destPath?: unknown; readonly relativePath?: unknown; readonly base64?: unknown }[];
   };
-  const { base64, companionSources, ...intent } = source;
+  const { base64, companionSources, sourceFiles, ...intent } = source;
   return {
     ...intent,
     skipUpload: true,
@@ -113,13 +137,20 @@ function retainedCommand(cmd: EditorOp): EditorOp {
         ...(typeof companion.base64 === 'string' ? { fingerprint: importPayloadFingerprint(companion.base64) } : {}),
       })),
     } : {}),
+    ...(Array.isArray(sourceFiles) ? {
+      sourceFingerprints: sourceFiles.map((sourceFile) => ({
+        destPath: sourceFile.destPath,
+        relativePath: sourceFile.relativePath,
+        ...(typeof sourceFile.base64 === 'string' ? { fingerprint: importPayloadFingerprint(sourceFile.base64) } : {}),
+      })),
+    } : {}),
   } as EditorOp;
 }
 // Component read surface: same registry the query snapshot uses to resolve
 // component names, projected here so an AI can discover component names +
 // field schemas BEFORE a spawn/setComponent (instead of learning them only by
 // triggering a SPAWN_FAILED). Derive, don't duplicate.
-import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
+import { componentDefinition } from '@forgeax/engine-ecs';
 import { getComponentSchema } from '../scene/schema';
 import {
   projectSourceFileDeleteStatus,
@@ -139,6 +170,7 @@ import {
   type OperationRunSnapshot,
 } from './operation-runs';
 import { acceptOperationRun } from './operation-run-dispatch';
+import { GatewayWriteBarrier, registerGatewayWriteBarrier } from './gateway-write-barrier';
 
 export type BusListener = (doc: EditSession, lastCommand: EditorOp | null) => void;
 
@@ -334,6 +366,9 @@ export class EditGateway {
     readonly unsubscribe: () => void;
   }>();
   private _runtimeDiagnosticsRevision = 0;
+  private _capabilityGeneration: string = CAPABILITY_GENERATION_G0;
+  private _capabilitySnapshot: GatewayOpSnapshot | null = null;
+  private readonly capabilityListeners = new Set<(snapshot: GatewayOpSnapshot) => void>();
   // Scene-reload listeners (M5 / D-4). Fired by replaceDoc — the SSOT collar every
   // scene reload funnels through (scene switch, disk/storage load). The super
   // (world-manager) subscribes to bump the sceneWorld epoch + revalidate the
@@ -372,6 +407,9 @@ export class EditGateway {
    * edit-runtime's ViewportComponent — research R4).
    */
   transientMode = false;
+
+  /** Shared write gate for scan, save, and version-control transitions. */
+  private readonly _writeBarrier = new GatewayWriteBarrier();
 
   // Async authored operations hold their history entry until the canonical
   // resource/effect promise succeeds. This is deliberately one slot, matching
@@ -421,10 +459,10 @@ export class EditGateway {
   get scanLocked(): boolean { return this._scanLocked; }
 
   /** Lock the gateway: all dispatch() calls will be rejected. */
-  lockForScan(): void { this._scanLocked = true; }
+  lockForScan(): void { this._scanLocked = true; this._writeBarrier.beginScan(); }
 
   /** Unlock the gateway: dispatch() resumes normal operation. */
-  unlockAfterScan(): void { this._scanLocked = false; }
+  unlockAfterScan(): void { this._scanLocked = false; this._writeBarrier.endScan(); }
 
   // ── activeWorld / play-bookmark (plan-strategy D-3, M1) ──────────────────
   //
@@ -538,6 +576,7 @@ export class EditGateway {
   /** Switch the pointer to a play World. Clears selection + emits notification (D-3/D-11).
    *  Success clears the pending flag + any stale error → playPhase 'play'. */
   enterPlay(playWorld: World): void {
+    this._writeBarrier.enterPlay();
     this._remotePlayActive = false;
     this._playWorld = playWorld;
     this._playPending = false;
@@ -549,6 +588,7 @@ export class EditGateway {
 
   /** Enter read-only Play while the disposable child realm owns PlayWorld. */
   enterRemotePlay(): void {
+    this._writeBarrier.enterPlay();
     this._playWorld = null;
     this._remotePlayActive = true;
     this._playPending = false;
@@ -561,6 +601,7 @@ export class EditGateway {
   /** Return the pointer to the edit world. Clears selection + emits notification.
    *  Also clears the pending flag + last error → playPhase back to 'edit'. */
   exitPlay(): void {
+    this._writeBarrier.exitPlay();
     this.clearGameProjection();
     this._playWorld = null;
     this._remotePlayActive = false;
@@ -610,7 +651,7 @@ export class EditGateway {
   }
 
   /** Invoke one registered gameplay action without creating an editor command. */
-  invokeGameAction(id: string, args: unknown): Promise<GameProjectionResult<undefined>> {
+  invokeGameAction(id: string, args: unknown): Promise<GameProjectionResult<GameProjectionValue | undefined>> {
     if (this.mode !== 'play' || this._gameProjection === null) {
       return Promise.resolve({
         ok: false,
@@ -885,6 +926,7 @@ export class EditGateway {
   constructor(doc: EditSession = createEditSession()) {
     this.doc = doc;
     this.registerCatalogReconcile = this.registerCatalogReconcile.bind(this);
+    registerGatewayWriteBarrier(this, this._writeBarrier);
   }
 
   getOperationRun(requestId: string): OperationRun | undefined {
@@ -1165,37 +1207,99 @@ export class EditGateway {
     else if (cmd.kind === 'reparent') reason = 'Reparenting an imported mount member cannot round-trip in mount overrides.';
     else if (cmd.kind === 'setComponent') {
       const set = cmd as Extract<EditorOp, { kind: 'setComponent' }>;
-      const token = resolveComponent(set.component);
-      const schema = token?.schema as Record<string, string> | undefined;
+      const token = this.activeWorld.components.resolve(set.component);
+      const schema = token === undefined
+        ? undefined
+        : Object.fromEntries(Object.entries(componentDefinition(token).fields).map(([field, reflection]) => [field, reflection.type]));
       if (Object.keys(set.patch).some((field) => schema?.[field]?.includes('entity'))) {
         reason = 'Entity-reference patches on mount members cannot round-trip in mount overrides.';
       }
     }
     if (reason === null) return { ok: true };
+    const publication = this._mountMemberPublicationIdentity(entity as EntityHandle);
     return {
       ok: false,
       error: {
         code: 'mount-member-operation-unsupported',
         hint: reason,
         current: { entity, operation: cmd.kind, policy: 'component-add-and-field-patch-only' },
+        details: {
+          entity,
+          operation: cmd.kind,
+          policy: 'component-add-and-field-patch-only',
+          ...(publication === undefined ? {} : publication),
+        },
         recoveryActions: ['promoteImportedScene'],
       },
     };
   }
 
-  private _isMountMember(entity: EntityHandle): boolean {
-    const world = this.doc.world as unknown as {
-      getSceneInstanceState(root: EntityHandle): {
-        ok: boolean;
-        value?: { entityToLocalId: Map<EntityHandle, unknown> };
+  /**
+   * Derive mount publication identity from the existing SceneAsset mount and
+   * catalog records. The live EntityHandle has no second identity namespace;
+   * the source mount and its publication fence remain the only authority.
+   */
+  private _mountMemberPublicationIdentity(entity: EntityHandle): MountMemberPublicationIdentity | undefined {
+    const engine = this.engineFacade();
+    for (const root of sceneInstanceRoots(this.doc.world)) {
+      const state = engine.getSceneInstanceState(root);
+      const localId = state.ok ? state.value?.entityToLocalId.get(entity) : undefined;
+      if (!state.ok || state.value === undefined || localId === undefined) continue;
+      const parent = resolveAssetHandle(this.doc.world, state.value.source);
+      if (!parent.ok || parent.value.kind !== 'scene') continue;
+      let mount = parent.value.mounts?.find((candidate) => {
+        const first = candidate.memberFirst as unknown as number;
+        const local = localId as number;
+        return local >= first && local < first + candidate.memberCount;
+      });
+      if (mount === undefined) {
+        const sourceGuid = this.doc.registry?._guidForAsset(parent.value);
+        let ancestor: EntityHandle | null = root;
+        while (mount === undefined && ancestor !== null) {
+          const parentOf = this.doc.world.get(ancestor, ChildOf);
+          if (!parentOf.ok) break;
+          ancestor = parentOf.value.parent as EntityHandle;
+          const ancestorState = engine.getSceneInstanceState(ancestor);
+          if (!ancestorState.ok || ancestorState.value === undefined) continue;
+          const ancestorAsset = resolveAssetHandle(this.doc.world, ancestorState.value.source);
+          if (!ancestorAsset.ok || ancestorAsset.value.kind !== 'scene') continue;
+          mount = ancestorAsset.value.mounts?.find((candidate) => {
+            const child = resolveAssetHandle(this.doc.world, candidate.source as Handle<string, 'shared'>);
+            return child.ok && sourceGuid !== undefined && this.doc.registry?._guidForAsset(child.value) === sourceGuid;
+          });
+        }
+      }
+      if (mount === undefined) return undefined;
+      const child = resolveAssetHandle(this.doc.world, mount.source as Handle<string, 'shared'>);
+      const outputGuid = child.ok ? this.doc.registry?._guidForAsset(child.value) : undefined;
+      const catalog = outputGuid === undefined
+        ? undefined
+        : this.assetCatalog().find((entry) => entry.guid.toLowerCase() === outputGuid.toLowerCase());
+      const catalogSnapshot = this.doc.registry?.catalogSnapshot?.();
+      const catalogPublication = outputGuid === undefined
+        ? undefined
+        : catalogSnapshot?.entries.find((entry) => entry.guid.toLowerCase() === outputGuid.toLowerCase())?.publication;
+      const fence = mount.publicationFence;
+      const publication = catalogPublication;
+      return {
+        ...(fence?.sourcePath === undefined && catalog?.sourcePath === undefined ? {} : { sourcePath: fence?.sourcePath ?? catalog?.sourcePath }),
+        ...(catalog?.sourceKey === undefined ? {} : { sourceKey: catalog.sourceKey }),
+        ...(outputGuid === undefined ? {} : { outputGuid }),
+        ...(fence?.sourceRevision === undefined ? {} : { expectedRevision: fence.sourceRevision }),
+        ...(publication?.sourceRevision === undefined ? {} : { actualRevision: publication.sourceRevision }),
+        ...(fence?.publicationGeneration === undefined ? {} : { candidateGeneration: fence.publicationGeneration }),
+        ...(publication?.generation === undefined ? {} : { currentGeneration: publication.generation }),
+        ...(fence === undefined ? {} : { publicationFence: fence }),
       };
-    };
-    if (!world || typeof world.getSceneInstanceState !== 'function') return false;
-    for (const candidate of worldEntityHandles(this.doc.world)) {
-      const state = world.getSceneInstanceState(candidate);
-      if (state.ok && state.value?.entityToLocalId.has(entity)) return true;
     }
-    return false;
+    return undefined;
+  }
+
+  private _isMountMember(entity: EntityHandle): boolean {
+    // SceneInstance roots are the ownership authority. Do not enumerate roots
+    // through Name: generated members are allowed to be unnamed, and the
+    // derived-member write boundary must still cover those EntityHandles.
+    return this.sceneInstanceForMember(entity).ok;
   }
 
   /** Execute a document applier through the executor: prepare → build DocApplierCtx
@@ -1210,6 +1314,12 @@ export class EditGateway {
     if (!applier) {
       return { ok: false, error: { code: 'UNKNOWN_OP' as const, hint: `applier not found for "${kind}"` } };
     }
+    // destroyEntity: pre-collect scene-asset snapshot on EVERY execution path
+    // (top-level dispatch, transaction sub-ops, hierarchyGesture delete, etc.).
+    // dispatch() alone is insufficient — nested dispatchSub bypasses it.
+    if (kind === 'destroyEntity') {
+      this._preCollectDestroyAsset(cmd as Extract<EditorOp, { kind: 'destroyEntity' }>);
+    }
     const ctx = this._buildDocCtx(alias);
     pushSpan(kind);
     // Document appliers are (ctx, cmd) => ApplyResult. The registered ApplierFn
@@ -1221,6 +1331,7 @@ export class EditGateway {
     if (!r.ok) {
       popSpan('ERROR');
     } else {
+      syncWorldTransformsAfterWrite(this.activeWorld, cmd);
       popSpan('OK');
     }
     return r;
@@ -1244,6 +1355,11 @@ export class EditGateway {
 
     if (requestedKind === 'catalog.reconcile') return this._dispatchCatalogReconcile(cmd, origin);
 
+    const capability = this.listOps().find((entry) => entry.id === requestedKind);
+    if (capability?.capabilityStatus === 'blocked') {
+      return { ok: false, error: createCapabilityBlockedError(requestedKind) };
+    }
+
     // Three-tier routing: the DOMAIN of an op = which applier table registers its
     // kind (plan-strategy §2 D-1, structural, no bypassable label). Unregistered
     // kind → UNKNOWN_OP (Fail Fast; headless play/stop lands here — D-11).
@@ -1257,6 +1373,18 @@ export class EditGateway {
         ? `op "${requestedKind}" has no applier registered; edit-runtime registers it at boot via registerSessionApplier (D-11) — unavailable in headless core`
         : `no applier registered for "${requestedKind}"; see listOps()`;
       return { ok: false, error: { code: 'UNKNOWN_OP', hint } };
+    }
+
+    if (this.mode === 'play' && applierRequiresEditMode(requestedKind)) {
+      return {
+        ok: false,
+        error: {
+          code: 'edit-rejected-in-play',
+          hint: 'stop play mode before mutating an asset source',
+          retryable: true,
+          recoveryActions: ['stop', 'asset.preflight', 'run.retry'],
+        },
+      };
     }
 
     // The public document command is the single semantic door for both UI and
@@ -1326,22 +1454,52 @@ export class EditGateway {
           return { ok: false, error: { code: 'INVALID_ARGS', hint } };
         }
       }
-      // destroyEntity: pre-collect a scene-asset snapshot so undo can restore
-      // materials via GUID round-trip (instantiateSceneAsset). Collection runs
-      // before the applier despawns while the entity tree remains live. For
-      // multi-delete the commands arrive wrapped in a transaction, so pre-fill
-      // each direct destroy sub-op before the applier iterates them.
-      if (kind === 'destroyEntity') {
-        this._preCollectDestroyAsset(cmd as Extract<EditorOp, { kind: 'destroyEntity' }>);
+      let createAssetRun: OperationRunReadResult | null = null;
+      let spawnEntityRun: OperationRunReadResult | null = null;
+      if (kind === 'createAsset') {
+        const requestId = requestIdOf(cmd);
+        if (requestId === undefined) {
+          return {
+            ok: false,
+            error: {
+              code: 'INVALID_ARGS',
+              hint: 'createAsset requires a requestId so its pack write has a terminal OperationRun.',
+              recoveryActions: ['run.retry'],
+            },
+          };
+        }
+        const actor = origin === 'ai'
+          ? { id: 'ai', kind: 'ai' as const }
+          : { id: 'human', kind: 'human' as const };
+        const accepted = this.operationRuns.acceptOperation(requestId, { ...cmd }, actor, {
+          operationId: kind,
+          cancellable: false,
+          retryable: true,
+        });
+        if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+        if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
+        const running = this.operationRuns.markRunning(accepted.run.runId);
+        if (!running.ok) return { ok: false, error: running.error as unknown as CommandError };
+        createAssetRun = running;
       }
-      if (kind === 'transaction') {
-        for (const sub of (cmd as Extract<EditorOp, { kind: 'transaction' }>).commands) {
-          if (sub.kind === 'destroyEntity') {
-            this._preCollectDestroyAsset(sub as Extract<EditorOp, { kind: 'destroyEntity' }>);
-          }
+      if (kind === 'spawnEntity') {
+        const requestId = requestIdOf(cmd);
+        if (requestId !== undefined) {
+          const actor = origin === 'ai'
+            ? { id: 'ai', kind: 'ai' as const }
+            : { id: 'human', kind: 'human' as const };
+          const accepted = this.operationRuns.acceptOperation(requestId, { ...cmd }, actor, {
+            operationId: kind,
+            cancellable: false,
+            retryable: false,
+          });
+          if (!accepted.ok) return { ok: false, error: accepted.error as unknown as CommandError };
+          if (accepted.reused) return { ok: true, result: { created: [], operationRun: accepted.run } };
+          const running = this.operationRuns.markRunning(accepted.run.runId);
+          if (!running.ok) return { ok: false, error: running.error as unknown as CommandError };
+          spawnEntityRun = running;
         }
       }
-
       // updateMaterialParams: gateway-fill _oldPatch / _oldRefs / _oldEntry from
       // the synchronous assetCatalog so the applier can construct a correct inverse
       // and write the updated entry. Same gateway-fill pattern as destroyEntity._asset.
@@ -1373,7 +1531,30 @@ export class EditGateway {
       const mountPolicy = this._validateMountMemberEdit(cmd);
       if (!mountPolicy.ok) return mountPolicy;
       const r = this._execDocumentApplier(cmd);
-      if (!r.ok) return r;
+      if (!r.ok) {
+        if (createAssetRun !== null) this.operationRuns.fail(createAssetRun.value.runId, r.error as unknown as import('@forgeax/editor-product').CommandError);
+        if (spawnEntityRun !== null) this.operationRuns.fail(spawnEntityRun.value.runId, r.error as unknown as import('@forgeax/editor-product').CommandError);
+        return r;
+      }
+      if (createAssetRun !== null) {
+        if (r.completion === undefined) {
+          const error: CommandError = {
+            code: 'operation-completion-missing',
+            hint: 'createAsset must return the canonical pack-write completion before it can be considered accepted.',
+            retryable: false,
+            recoveryActions: ['run.retry'],
+          };
+          this.operationRuns.fail(createAssetRun.value.runId, error as unknown as import('@forgeax/editor-product').CommandError);
+          return { ok: false, error };
+        }
+        this.operationRuns.bindCompletion(createAssetRun.value.runId, r.completion);
+      }
+      if (spawnEntityRun !== null) {
+        this.operationRuns.bindCompletion(
+          spawnEntityRun.value.runId,
+          Promise.resolve({ ok: true as const, result: { created: r.created } }),
+        );
+      }
       // transientMode (play·scene): still apply + emit for immediate feedback,
       // but skip undo/ledger writes (AC-09) — the non-committing edit mode.
       if (!this.transientMode && !this.deferHistory) {
@@ -1389,7 +1570,14 @@ export class EditGateway {
       this.emit(cmd);
       // Surface the new roots the applier produced (spawn/instantiate/duplicate/
       // transaction) so the caller learns what it just made without re-reading cmd.
-      return { ok: true, result: { created: r.created } };
+      return {
+        ok: true,
+        result: {
+          created: r.created,
+          ...(createAssetRun === null ? {} : { operationRun: createAssetRun.value }),
+          ...(spawnEntityRun === null ? {} : { operationRun: spawnEntityRun.value }),
+        },
+      };
     }
 
     // F-4: entry args validation (boundary #8 / D-7 Fail Fast). Document ops are
@@ -1803,9 +1991,12 @@ export class EditGateway {
     }
 
     if (acceptedRun !== null) {
-      if (sResult.completion !== undefined) {
-        const completion = isRequestCorrelatedImport
-          ? sResult.completion.then((value) => {
+      const completion = 'completion' in sResult && sResult.completion !== undefined
+        ? sResult.completion
+        : Promise.resolve(sResult);
+      if (completion !== undefined) {
+        const terminalCompletion = isRequestCorrelatedImport
+          ? completion.then((value) => {
             const envelope = value as { readonly ok?: unknown; readonly result?: unknown };
             if (envelope.ok !== true || envelope.result === undefined || typeof envelope.result !== 'object' || envelope.result === null) return value;
             const imported = envelope.result as { readonly status?: unknown; readonly guid?: unknown; readonly subAssets?: readonly { readonly guid?: unknown }[] };
@@ -1825,8 +2016,8 @@ export class EditGateway {
             });
             return { ok: true, result: { ...imported, runtimeReadiness } };
           })
-          : sResult.completion;
-        this.operationRuns.bindCompletion(acceptedRun.value.runId, completion, (run) => {
+          : completion;
+        this.operationRuns.bindCompletion(acceptedRun.value.runId, terminalCompletion, (run) => {
           if (run.status !== 'succeeded' || this.transientMode || domain !== 'session') return;
           this.ledger.push(retainedCommand(cmd));
           this.origins.push(origin);
@@ -1982,6 +2173,54 @@ export class EditGateway {
     const handle: OpHandle = { id: nextOpHandleId() };
     this._activeOp = { handle, beginCmd: cmd, beginInverse: validateR.inverse, lastCmd: cmd, origin };
     return { ok: true, handle };
+  }
+
+  /**
+   * Apply the current value of an active continuous operation without
+   * discharging it first. Drag previews call this once per animation frame:
+   * unlike update(), it does not revert to beginInverse and does not notify
+   * document subscribers on every pointer movement. The original inverse is
+   * retained until commit(), so undo/cancel still return to the drag origin.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  preview(handle: OpHandle, patch: Record<string, any>): DispatchResult {
+    const active = this._activeOp;
+    if (active === null || active.handle.id !== handle.id) {
+      return { ok: false, error: { code: 'OP_INTERRUPTED', hint: 'operation was interrupted; begin a new one' } };
+    }
+    const previewCmd = { ...active.beginCmd, ...patch } as EditorOp;
+    const engine = this._getEngineFacade();
+    const applyPreview = (cmd: EditorOp): DispatchResult => {
+      if (cmd.kind === 'transaction') {
+        const transaction = cmd as Extract<EditorOp, { kind: 'transaction' }>;
+        for (const child of transaction.commands) {
+          const result = applyPreview(child);
+          if (!result.ok) return result;
+        }
+        return { ok: true };
+      }
+      if (cmd.kind !== 'setComponent') {
+        const result = applyCommand(this.doc, cmd);
+        return result.ok ? { ok: true } : result;
+      }
+      const set = cmd as Extract<EditorOp, { kind: 'setComponent' }>;
+      const token = this.activeWorld.components.resolve(set.component);
+      if (token === undefined) {
+        return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${set.component}` } };
+      }
+      const result = engine.set(set.entity as EntityHandle, token, set.patch as never);
+      if (!result.ok) {
+        return { ok: false, error: { code: 'SET_FAILED', hint: String(result.error) } };
+      }
+      return { ok: true };
+    };
+    const applyR = applyPreview(previewCmd);
+    if (!applyR.ok) return applyR;
+    active.lastCmd = previewCmd;
+    // Mark the world as changed for consumers that use the gateway revision,
+    // without notifying React/document subscribers on every pointermove.
+    this._rev++;
+    return { ok: true };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2270,6 +2509,13 @@ export class EditGateway {
   /** Operation contracts joined with the live unified-applier availability fact. */
   operationCapabilitySnapshot(): GatewayOpSnapshot {
     const registry = applierRegistrySnapshot();
+    if (
+      this._capabilitySnapshot !== null
+      && this._capabilitySnapshot.revision === registry.revision
+      && this._capabilitySnapshot.capabilityGeneration === this._capabilityGeneration
+    ) {
+      return this._capabilitySnapshot;
+    }
     const registered = new Map(registry.entries.map((entry) => [entry.id, entry]));
     const ops: GatewayOpDescriptor[] = catalogListOps().map((descriptor) => {
       const entry = registered.get(descriptor.id);
@@ -2290,6 +2536,12 @@ export class EditGateway {
       };
     });
     for (const entry of registered.values()) {
+      if (entry.id === 'createAsset') {
+        ops.push(this._capabilityGeneration === CAPABILITY_GENERATION_G1
+          ? createCreateAssetCallableProjection()
+          : createCreateAssetBlockedProjection());
+        continue;
+      }
       ops.push({
         id: entry.id,
         domain: entry.domain,
@@ -2297,19 +2549,44 @@ export class EditGateway {
         source: 'registered',
         ...(entry.title === undefined ? {} : { title: entry.title }),
         ...(entry.operationRun === undefined ? {} : { operationRun: entry.operationRun }),
+        ...(entry.confirmation === undefined ? {} : { confirmation: entry.confirmation }),
+        ...(entry.recoveryActions === undefined ? {} : { recoveryActions: entry.recoveryActions }),
         availability: { available: true },
       });
     }
-    return Object.freeze({ revision: registry.revision, ops: Object.freeze(ops) });
+    if (!ops.some((entry) => entry.id === 'createAsset')) {
+      ops.push(this._capabilityGeneration === CAPABILITY_GENERATION_G1
+        ? createCreateAssetCallableProjection()
+        : createCreateAssetBlockedProjection());
+    }
+    this._capabilitySnapshot = createCapabilitySnapshot(registry.revision, ops, this._capabilityGeneration);
+    return this._capabilitySnapshot;
   }
 
   /** Operation catalog — AI self-introspection + command palette SSOT. */
   listOps(): readonly GatewayOpDescriptor[] {
-    return this.operationCapabilitySnapshot().ops;
+    // The capability snapshot is cached for subscribers and internal reads. Keep
+    // the public catalog projection detached so callers cannot mutate nested
+    // argsSchema data and poison later introspection results.
+    return structuredClone(this.operationCapabilitySnapshot().ops);
   }
 
   subscribeOperationCapabilities(listener: (snapshot: GatewayOpSnapshot) => void): () => void {
-    return subscribeApplierRegistry(() => listener(this.operationCapabilitySnapshot()));
+    const unsubscribeRegistry = subscribeApplierRegistry(() => listener(this.operationCapabilitySnapshot()));
+    this.capabilityListeners.add(listener);
+    return () => {
+      unsubscribeRegistry();
+      this.capabilityListeners.delete(listener);
+    };
+  }
+
+  /** Reconnect the capability carrier after an owner repair. */
+  reconnectCapabilitySnapshot(): GatewayOpSnapshot {
+    this._capabilityGeneration = CAPABILITY_GENERATION_G1;
+    this._capabilitySnapshot = null;
+    const snapshot = this.operationCapabilitySnapshot();
+    for (const listener of this.capabilityListeners) listener(snapshot);
+    return snapshot;
   }
 
   /** Register a builtin op at catalog build time. */
@@ -2328,8 +2605,8 @@ export class EditGateway {
   }
 
   /** Pre-fill a destroyEntity op's _asset / _parent / _name before the applier
-   *  runs. Called from dispatch for both top-level destroyEntity AND for
-   *  destroyEntity sub-ops inside a transaction (deleteManyCascade). Collection
+   *  runs. Called from _execDocumentApplier so every destroy path (including
+   *  hierarchyGesture delete via dispatchSub) gets collection. Collection
    *  failure is non-fatal: the applier falls back to the legacy spawnEntity
    *  inverse path (materials lost, but delete still works). */
   private _preCollectDestroyAsset(
@@ -2349,8 +2626,21 @@ export class EditGateway {
    *  the synchronous assetCatalog before the applier runs. Idempotent — skips if
    *  already filled (redo replay carries the pre-filled fields). */
   private _preFillMaterialOp(
-    cmd: { guid: string; _oldPatch?: unknown; _oldRefs?: unknown; _oldEntry?: unknown; [k: string]: unknown },
+    cmd: { guid: string; packPath?: unknown; _oldPatch?: unknown; _oldRefs?: unknown; _oldEntry?: unknown; [k: string]: unknown },
   ): void {
+    // The runtime catalog names authored packs in serve-mount coordinates
+    // (`host-games/<slug>/...`). Project that address through the declared
+    // catalog roots before the document applier reaches `/api/files`, whose
+    // safe-path contract only accepts the host's on-disk game coordinates.
+    // Derive this from the catalog row instead of parsing the slug here: the
+    // host remains the sole owner of its game layout and path resolver.
+    const row = this.assetCatalog().find(
+      (entry) => entry.guid.toLowerCase() === cmd.guid.toLowerCase(),
+    );
+    if (row !== undefined) {
+      const storagePath = this._catalogStoragePathFor(row);
+      if (storagePath !== null) cmd.packPath = storagePath;
+    }
     if (cmd._oldPatch !== undefined) return;
     const registry = this.doc.registry;
     if (!registry) return;
@@ -2552,8 +2842,8 @@ export class EditGateway {
         knownAssetTypes.add(binding.target.assetType);
       }
     }
-    for (const token of getRegisteredComponents().values()) {
-      for (const fieldType of Object.values(token.schema)) {
+    for (const token of this.activeWorld.components.entries().values()) {
+      for (const fieldType of Object.values(componentDefinition(token).fields).map((field) => field.type)) {
         const match = /^shared<(.+)>$/.exec(String(fieldType));
         if (match?.[1] !== undefined) knownAssetTypes.add(match[1]);
       }
@@ -2592,12 +2882,12 @@ export class EditGateway {
   /**
    * List every registered component name (sorted). The "what components exist?"
    * self-introspection leg, parallel to listOps() (ops) and assetCatalog()
-   * (assets). Same source as the UNKNOWN_COMPONENT hint (getRegisteredComponents),
-   * so the two never drift. An AI enumerates this before a spawn/setComponent
+   * (assets). Same World-local source as the UNKNOWN_COMPONENT hint, so the two
+   * never drift. An AI enumerates this before a spawn/setComponent
    * instead of guessing a name and triggering an error.
    */
   listComponents(): readonly string[] {
-    return Array.from(getRegisteredComponents().keys()).sort();
+    return Array.from(this.activeWorld.components.entries().keys()).sort();
   }
 
   /**
@@ -2631,9 +2921,9 @@ export class EditGateway {
         transient?: Record<string, true>;
       }
     | { ok: false; error: CommandError } {
-    const token = resolveComponent(name);
+    const token = this.activeWorld.components.resolve(name);
     if (!token) {
-      const known = Array.from(getRegisteredComponents().keys()).sort();
+      const known = Array.from(this.activeWorld.components.entries().keys()).sort();
       return {
         ok: false,
         error: {
@@ -2642,11 +2932,12 @@ export class EditGateway {
         },
       };
     }
-    // token.schema is a frozen field-name → type-keyword map; copy to a plain
+    const definition = componentDefinition(token);
+    // Engine definition fields are the schema owner; copy to a plain
     // JSON-safe object (values are already string keywords like 'array<f32, 3>').
     const schema: Record<string, string> = {};
-    for (const [field, type] of Object.entries(token.schema)) {
-      schema[field] = String(type);
+    for (const [field, reflection] of Object.entries(definition.fields)) {
+      schema[field] = String(reflection.type);
     }
     const result: {
       ok: true;
@@ -2662,13 +2953,13 @@ export class EditGateway {
       name: token.name,
       schema,
     };
-    if (token.defaults !== undefined) {
+    if (definition.defaults !== undefined) {
       // defaults values may be TypedArrays (e.g. Transform.pos is a Float32Array)
       // — snap-copy those into plain number[] so the result is JSON-safe (mirrors
       // query-snapshot's TypedArray handling; without this the object round-trips
       // to indexed-key garbage). Scalars pass through untouched.
       const defaults: Record<string, unknown> = {};
-      for (const [field, value] of Object.entries(token.defaults as Record<string, unknown>)) {
+      for (const [field, value] of Object.entries(definition.defaults as Record<string, unknown>)) {
         defaults[field] = ArrayBuffer.isView(value) ? Array.from(value as unknown as ArrayLike<number>) : value;
       }
       result.defaults = defaults;
@@ -2682,7 +2973,7 @@ export class EditGateway {
     // field carries labels (backward-compatible: predates the engine change →
     // token.fields[f].labels is undefined for every field → key omitted).
     const enums: Record<string, Record<string, number>> = {};
-    const fields = token.fields as Record<
+    const fields = definition.fields as Record<
       string,
       { labels?: Readonly<Record<string, number>>; transient?: boolean } | undefined
     >;
@@ -2696,7 +2987,7 @@ export class EditGateway {
     // that a flat ECS keyword cannot recover (optional / nested) plus the
     // representative vocabulary used by schema-driven consumers.
     const shapes: Record<string, FieldShapeKind> = {};
-    const shapeFields = token.fields as Record<string, { shape?: FieldShapeKind } | undefined>;
+    const shapeFields = definition.fields as Record<string, { shape?: FieldShapeKind } | undefined>;
     for (const field of Object.keys(schema)) {
       const shape = shapeFields[field]?.shape;
       if (shape !== undefined) shapes[field] = shape;
@@ -2706,7 +2997,7 @@ export class EditGateway {
     // is not itself an Inspector renderer, without maintaining a second field map
     // in the Gateway.
     const arrays: Record<string, { elementType: string; length?: number; group?: string }> = {};
-    for (const field of getComponentSchema(name)?.fields ?? []) {
+    for (const field of getComponentSchema(name, this.activeWorld)?.fields ?? []) {
       if (field.arrayMeta === undefined) continue;
       arrays[field.key] = {
         elementType: field.arrayMeta.elementType,
@@ -2937,4 +3228,51 @@ export class EditGateway {
 
     return { ok: true };
   }
+}
+
+export interface ThinAuthoringRunRequest {
+  readonly operationId: string;
+  readonly subject: { readonly kind: 'material' | 'mesh' | 'vfx'; readonly guid: string };
+  readonly snapshot: {
+    readonly subject: { readonly kind: 'material' | 'mesh' | 'vfx'; readonly guid: string };
+    readonly revision: string;
+    readonly state: unknown;
+  };
+  readonly expectedRevision: string;
+  readonly patch: unknown;
+}
+
+export interface ThinGatewayRunPort {
+  readonly run: (request: ThinAuthoringRunRequest) => Promise<unknown>;
+}
+
+export function assertThinGatewayOwnerSurface(surface: Readonly<Record<string, unknown>>): void {
+  const forbidden = ['descriptor', 'registry', 'executor', 'runJournal'];
+  const owner = forbidden.find((key) => Object.prototype.hasOwnProperty.call(surface, key));
+  if (owner !== undefined) throw new Error(`Thin Gateway cannot own ${owner}; project authoring belongs to host ToolClient.`);
+}
+
+export function createThinGatewayProjection(port: ThinGatewayRunPort) {
+  return {
+    begin(subject: ThinAuthoringRunRequest['subject'], initial: Readonly<Record<string, unknown>>, snapshot: ThinAuthoringRunRequest['snapshot']): {
+      update: (patch: Readonly<Record<string, unknown>>) => void;
+      cancel: () => void;
+      commit: () => Promise<unknown>;
+    } {
+      let patch: Record<string, unknown> = { ...initial };
+      let cancelled = false;
+      return {
+        update(next) { if (!cancelled) patch = { ...patch, ...next }; },
+        cancel() { cancelled = true; },
+        async commit() {
+          if (cancelled) return { ok: false, error: { code: 'authoring-gesture-cancelled', hint: 'Cancelled authoring gestures do not write the Project.', recoveryActions: [] } };
+          const operationId = `${subject.kind}.author.update`;
+          return port.run({ operationId, subject, snapshot, expectedRevision: snapshot.revision, patch });
+        },
+      };
+    },
+    async runMissing(operationId: string): Promise<never> {
+      throw Object.assign(new Error(`Authoring operation '${operationId}' is unavailable in the Project Entry.`), { code: 'authoring-operation-unavailable', recoveryActions: ['authoring.discover'] });
+    },
+  };
 }

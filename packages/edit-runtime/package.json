@@ -51,6 +51,10 @@
       "types": "./src/save-operation-projection.ts",
       "import": "./src/save-operation-projection.ts"
     },
+    "./product": {
+      "types": "./src/public/product.ts",
+      "import": "./src/public/product.ts"
+    },
     "./visual-source": {
       "types": "./src/viewport/visual-source.ts",
       "import": "./src/viewport/visual-source.ts"
@@ -94,6 +98,10 @@
     "@forgeax/engine-audio": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-codec": "workspace:*",
+    "@forgeax/engine-remote": "workspace:*",
+    "@forgeax/engine-rhi-debug": "workspace:*",
+    "@forgeax/engine-tool-runtime": "workspace:*",
     "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-font": "workspace:*",
@@ -121,6 +129,7 @@
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-picking": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
@@ -129,13 +138,14 @@
     "@forgeax/engine-vfx": "workspace:*",
     "@forgeax/engine-vfx-compiler": "workspace:*",
     "@forgeax/engine-vfx-render": "workspace:*",
+    "@forgeax/engine-preview": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",
     "@tanstack/virtual-core": "^3.17.1",
     "lucide-react": "^0.460.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
     "scheduler": "^0.27.0"
   },
   "devDependencies": {

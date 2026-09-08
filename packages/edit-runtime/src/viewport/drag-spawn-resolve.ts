@@ -33,7 +33,14 @@
 // mesh) re-patches from cache without a second loadByGuid.
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { EditGateway, awaitAuthoredMaterialReady, broadcastAssetsError, type EditorOp, type EngineFacade } from '@forgeax/editor-core';
+import {
+  EditGateway,
+  awaitAuthoredMaterialReady,
+  broadcastAssetsError,
+  validateMeshRendererMaterialBinding,
+  type EditorOp,
+  type EngineFacade,
+} from '@forgeax/editor-core';
 
 /** Loose renderer handle — the renderer type evolves independently, so we
  *  mirror host-boot's `as never` discipline with a narrow structural shape. */
@@ -54,9 +61,10 @@ function pendingMeshGuid(cmd: EditorOp | null): string | null {
   return typeof guid === 'string' && guid.length > 0 ? guid : null;
 }
 
-/** Pull the pending-material marker GUID list from a spawnEntity command, or null.
- *  One entry per submesh in submesh order; `''` marks a primitive with no source
- *  glTF material (feat-20260708 M1, plan-strategy D-2). */
+/** Pull an explicit pending-material marker from a spawnEntity command.
+ * Imported meshes never carry this marker: their default bindings are owned by
+ * MeshAsset.materialSlots. The marker remains only for placing a MaterialAsset
+ * on the one-slot builtin proxy mesh. */
 function pendingMaterialGuids(cmd: EditorOp | null): string[] | null {
   if (cmd === null || cmd.kind !== 'spawnEntity') return null;
   const components = (cmd as { components?: Record<string, unknown> }).components;
@@ -98,7 +106,7 @@ function spawnTransform(cmd: EditorOp | null): { pos: [number, number, number]; 
  * Subscribe the drag-spawn resolver to the EditGateway. Two INDEPENDENT branches
  * ride the same spawnEntity command:
  *   - the MESH branch resolves EditorPendingMeshAsset -> MeshFilter.assetHandle;
- *   - the MATERIAL branch resolves EditorPendingMeshMaterials -> MeshRenderer.materials[].
+ *   - the MATERIAL-ASSET branch resolves the explicit proxy binding marker.
  * Both are idempotent per GUID: failed GUIDs are never retried, resolved GUIDs are
  * re-patched from cache (redo replay / a second entity sharing the asset).
  */
@@ -115,12 +123,17 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
   const resolved = new Map<string, number>();
   const failedMat = new Set<string>();
   const resolvedMat = new Map<string, number>();
+  const meshResolveStartedAt = new Map<string, number>();
 
-  const patchMesh = (entity: number, assetHandle: number): void => {
+  const patchMesh = (entity: number, assetHandle: number, guid: string, phase: 'cache-hit' | 'loaded'): void => {
+    const startedAt = meshResolveStartedAt.get(`${entity}:${guid}`);
     const result = bus.dispatch({ kind: 'setComponent', entity, component: 'MeshFilter', patch: { assetHandle } }, 'ai');
     console.info(`[placement-diag] resolver.mesh.patch ${JSON.stringify({
       entity,
+      guid,
       assetHandle,
+      phase,
+      elapsedMs: startedAt === undefined ? undefined : Date.now() - startedAt,
       ok: result.ok,
       error: result.ok ? undefined : result.error,
     })}`);
@@ -128,6 +141,7 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
 
   // ── MESH branch (feat-20260705 M3, behaviour unchanged) ──────────────────────
   const resolveMesh = (entity: number, guid: string): void => {
+    meshResolveStartedAt.set(`${entity}:${guid}`, Date.now());
     console.info(`[placement-diag] resolver.mesh.begin ${JSON.stringify({ entity, guid })}`);
     // Retry-storm guard: a GUID that already failed is never re-attempted.
     if (failed.has(guid)) {
@@ -136,7 +150,7 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     }
     // Cache hit (redo replay / second entity sharing the mesh): re-patch, no reload.
     const cached = resolved.get(guid);
-    if (cached !== undefined) { patchMesh(entity, cached); return; }
+    if (cached !== undefined) { patchMesh(entity, cached, guid, 'cache-hit'); return; }
 
     const parsed = AssetGuid.parse(guid);
     if (!parsed.ok) {
@@ -161,7 +175,7 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       const handle = engine.allocSharedRef('MeshAsset', res.value) as number;
       console.info(`[placement-diag] resolver.mesh.allocated ${JSON.stringify({ entity, guid, handle })}`);
       resolved.set(guid, handle);
-      patchMesh(entity, handle);
+      patchMesh(entity, handle, guid, 'loaded');
     })();
   };
 
@@ -227,6 +241,22 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     }
 
     const materials = guids.map((g) => (g !== '' ? (handleByGuid.get(g) ?? firstMatHandle) : firstMatHandle));
+    const bindGuids = guids.filter((g) => g !== '');
+    const bindHandles = bindGuids.map((g) => handleByGuid.get(g) ?? firstMatHandle);
+    const compatibilityError = validateMeshRendererMaterialBinding(entity, bindGuids, bindHandles);
+    if (compatibilityError !== undefined) {
+      console.error('[drag-spawn-resolve:material]', {
+        entity,
+        guids: bindGuids,
+        code: compatibilityError.code,
+        hint: compatibilityError.hint,
+      });
+      broadcastAssetsError({
+        op: 'placeAsset',
+        hint: compatibilityError.hint,
+      });
+      return;
+    }
     const result = bus.dispatch({ kind: 'setComponent', entity, component: 'MeshRenderer', patch: { materials } }, 'ai');
     console.info(`[placement-diag] resolver.materials.patch ${JSON.stringify({
       entity,

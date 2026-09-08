@@ -29,7 +29,7 @@ describe('resolveViewMode', () => {
   it('other project directories → file mode', () => {
     expect(resolveViewMode('scripts', ROOTS)).toBe('file');
     expect(resolveViewMode('characters', ROOTS)).toBe('file');
-    expect(resolveViewMode('workbench', ROOTS)).toBe('file');
+    expect(resolveViewMode('tools', ROOTS)).toBe('file');
   });
 
   it('external (@shared) roots are excluded from asset mode', () => {

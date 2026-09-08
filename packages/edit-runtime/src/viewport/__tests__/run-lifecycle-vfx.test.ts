@@ -5,10 +5,43 @@
 // Anchors: requirements AC-03/AC-06/AC-08, plan-strategy §2 D-2/D-6 and §7 M3.
 
 import { describe, expect, it } from 'bun:test';
+import type {
+  RendererOwnerAdmissionIdentity,
+  RendererOwnerAdmissionRequest,
+} from '@forgeax/editor-product';
 import { World } from '@forgeax/engine-ecs';
-import { createEditVfxRuntimeBridge } from '../vfx-runtime-bridge';
-import { createRunLifecycle, type RunGateway } from '../run-lifecycle';
 import type { PlayAssembly } from '../play-assemble';
+import { createRendererOwnerAdmissionLease } from '../renderer-owner-admission';
+import { createRunLifecycle, type RunGateway } from '../run-lifecycle';
+import { createEditVfxRuntimeBridge } from '../vfx-runtime-bridge';
+
+const ownerIdentity: RendererOwnerAdmissionIdentity = {
+  carrierId: 'carrier-gta-route-dev',
+  pageIdentity: 'http://localhost:18920/editor',
+  browserRealmId: 'realm-vfx',
+  runtimeId: 'runtime-vfx',
+  canvasIdentity: 'canvas-vfx',
+  rendererGeneration: 'renderer-generation-vfx-1',
+};
+
+const ownerRequest: RendererOwnerAdmissionRequest = {
+  schema: 'renderer-owner-admission/v1',
+  operation: 'renderer.ownerAdmission',
+  shadowSubmitMode: 'coalesced-with-frame',
+  identity: ownerIdentity,
+};
+
+type OwnerLease = {
+  applyAtFrameBoundary(input: RendererOwnerAdmissionRequest): { ok: boolean };
+  restoreOnce(reason: 'finally' | 'stop' | 'unmount'): void;
+};
+
+const createOwnerLease = createRendererOwnerAdmissionLease as unknown as (deps: {
+  identity: RendererOwnerAdmissionIdentity;
+  readRendererGeneration(): string;
+  apply(input: RendererOwnerAdmissionRequest): void;
+  restore(): void;
+}) => OwnerLease;
 
 function createFakeHost() {
   const attached: Array<{ world: World; assets: object }> = [];
@@ -120,5 +153,61 @@ describe('in-process VFX Play lifecycle', () => {
     expect(fake.attached.filter(({ world }) => !fake.detached.includes(world))).toEqual([
       { world: editWorld, assets },
     ]);
+  });
+});
+
+describe('renderer owner admission during VFX Play lifecycle', () => {
+  it('uses the same restore guard for Stop/unmount and a completed finally path', async () => {
+    let rendererGeneration = ownerIdentity.rendererGeneration;
+    let appliedCount = 0;
+    let restoredCount = 0;
+    const lease = createOwnerLease({
+      identity: ownerIdentity,
+      readRendererGeneration: () => rendererGeneration,
+      apply() { appliedCount += 1; },
+      restore() { restoredCount += 1; },
+    });
+    const events: string[] = [];
+    const lifecycle = createRunLifecycle({
+      editorApp: {
+        pause() { events.push('edit-pause'); return { ok: true as const }; },
+        resume() { events.push('edit-resume'); return { ok: true as const }; },
+      },
+      gateway: createGateway(events),
+      rendererOwnerAdmission: lease,
+      assemble: async () => ({
+        ok: true as const,
+        value: {
+          playApp: {
+            start() { events.push('play-start'); return { ok: true as const }; },
+            stop() { events.push('play-stop'); return { ok: true as const }; },
+            pause() { return { ok: true as const }; },
+            resume() { return { ok: true as const }; },
+          },
+          playWorld: new World(),
+          detach() { events.push('unmount'); },
+        } satisfies PlayAssembly,
+      }),
+    } as Parameters<typeof createRunLifecycle>[0]);
+
+    expect(lease.applyAtFrameBoundary(ownerRequest)).toEqual({ ok: true });
+    expect(appliedCount).toBe(1);
+
+    await lifecycle.playSimulation();
+    await lifecycle.stopSimulation();
+    expect(restoredCount).toBe(1);
+    lease.restoreOnce('finally');
+    lease.restoreOnce('unmount');
+    lifecycle.dispose();
+
+    expect(restoredCount).toBe(1);
+    expect(events).toContain('play-stop');
+    expect(events).toContain('unmount');
+
+    rendererGeneration = 'renderer-generation-vfx-2';
+    expect(lease.applyAtFrameBoundary({
+      ...ownerRequest,
+      identity: { ...ownerIdentity, rendererGeneration },
+    })).toEqual({ ok: false });
   });
 });

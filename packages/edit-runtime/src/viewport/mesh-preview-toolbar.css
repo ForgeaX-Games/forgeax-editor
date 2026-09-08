@@ -1,0 +1,16 @@
+/* mesh-preview-toolbar — header control for the Mesh preview. Buttons reuse the
+   global `.fx-panel-action` header-button class (lime active state); only the
+   row wrapper and separator are bespoke. Mirrors material-preview-toolbar. */
+
+.fx-meshpv-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.fx-meshpv-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line, #2a2d30);
+}

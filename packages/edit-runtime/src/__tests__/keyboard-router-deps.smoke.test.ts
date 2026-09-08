@@ -20,6 +20,10 @@ const EXPECTED_KEYS = [
   'undo',
   'redo',
   'save',
+  // Viewport 恢复动作:反馈卡片的「重启渲染进程 / 重新加载预览 / 重连运行时」
+  // 三个主操作都经命令总线走它重建 Play/运行时表面。属视口生命周期,不是被
+  // 迁走的 focus-routing 依赖。
+  'restartPreview',
   'handleViewportKeyDown',
 ] as const;
 

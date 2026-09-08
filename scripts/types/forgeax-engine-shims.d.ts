@@ -55,9 +55,12 @@ declare module '@forgeax/engine-fbx' {
   // fbxImporter — the build-time Importer registered into the edit-runtime
   // pluginPack so /__import can cook meta.importer==='fbx' (engine-vite-preset).
   export const fbxImporter: any;
+  export const deriveFbxSourceKeys: any;
   export const parseMesh: any;
   export const parseScene: any;
   export const parseMaterial: any;
+  export const parseTextures: any;
+  export const resolveFbxTexturePath: any;
   export const parseSkeleton: any;
   export const parseSkin: any;
   export const parseAnimationClips: any;
@@ -65,6 +68,11 @@ declare module '@forgeax/engine-fbx' {
   export type FbxRawMesh = any;
   export type FbxRawNodes = any;
   export type FbxRawMaterial = any;
+  export type FbxRawTexture = any;
+  export type FbxRawTextures = any;
+  export type FbxTextureCandidate = any;
+  export type FbxTexturePathRequest = any;
+  export type FbxTextureResolution = any;
   export type FbxRawSkeletonDoc = any;
   export type FbxRawSkinDoc = any;
   export type FbxRawAnimDoc = any;

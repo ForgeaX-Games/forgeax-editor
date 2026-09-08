@@ -3,6 +3,8 @@ import {
   VagCarrierFailureSchema,
   VagCarrierHandshakeSchema,
   VagCarrierHeartbeatSchema,
+  VagGameplayRequestSchema,
+  VagGameplayResponseSchema,
 } from '../protocol';
 
 const basePayload = {
@@ -145,5 +147,24 @@ describe('carrier VAG protocol', () => {
       },
     });
     expect(unavailable.success).toBe(true);
+  });
+
+  it('validates source-gated remote gameplay projection requests and responses', () => {
+    expect(VagGameplayRequestSchema.safeParse({
+      type: 'VAG_GAMEPLAY_REQUEST',
+      payload: { version: 1, requestId: 'play-1-1', operation: 'read', id: 'state' },
+    }).success).toBe(true);
+    expect(VagGameplayRequestSchema.safeParse({
+      type: 'VAG_GAMEPLAY_REQUEST',
+      payload: { version: 1, requestId: 'play-1-2', operation: 'run', id: 'input', args: { key: 'ArrowRight' } },
+    }).success).toBe(true);
+    expect(VagGameplayResponseSchema.safeParse({
+      type: 'VAG_GAMEPLAY_RESPONSE',
+      payload: { version: 1, requestId: 'play-1-1', ok: true, data: { score: 1 } },
+    }).success).toBe(true);
+    expect(VagGameplayResponseSchema.safeParse({
+      type: 'VAG_GAMEPLAY_RESPONSE',
+      payload: { version: 1, requestId: 'play-1-2', ok: false, error: { code: 'unknown', hint: 'retry' } },
+    }).success).toBe(true);
   });
 });

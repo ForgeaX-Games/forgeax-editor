@@ -4,7 +4,8 @@
 // implementation remains in io/ so the existing executor and registration
 // tables stay single-source-of-truth.
 
-export { EditGateway } from '../io/gateway';
+export { EditGateway, assertThinGatewayOwnerSurface, createThinGatewayProjection } from '../io/gateway';
+export type { ThinAuthoringRunRequest, ThinGatewayRunPort } from '../io/gateway';
 export type {
   AssetImpactAsset,
   AssetImpactEdge,
@@ -41,7 +42,29 @@ export type {
 export { createEngineFacade } from '../io/engine-facade';
 export type { EngineFacade } from '../io/engine-facade';
 export { registerSessionApplier, registerTransientApplier } from '../io/appliers';
+export { GatewayWriteBarrier, acquireGatewayWrite, getGatewayWriteBarrier, registerGatewayWriteBarrier } from '../io/gateway-write-barrier';
+export type { GatewayWriteAcquireResult, GatewayWriteBarrierSnapshot, GatewayWriteKind, GatewayWriteLease, GatewayWritePhase } from '../io/gateway-write-barrier';
 export type { SessionApplier, SessionApplierMeta } from '../io/appliers';
+export {
+  VERSION_CONTROL_ERROR_CODES,
+  VERSION_CONTROL_OPERATION_IDS,
+  createVersionControlSnapshotEnvelope,
+  isVersionControlOperationId,
+  isVersionControlSnapshotForGeneration,
+} from '../io/version-control-schema';
+export type {
+  VersionControlDirtyRecord,
+  VersionControlErrorCode,
+  VersionControlGraph,
+  VersionControlOperationDescriptor,
+  VersionControlOperationId,
+  VersionControlSnapshot,
+  VersionControlSnapshotEnvelope,
+} from '../io/version-control-schema';
+export { versionControlOperationDescriptors } from '../io/catalog';
+export { VersionControlSnapshotClient } from '../io/viewport-runtime-client';
+export { createVersionControlCommandError, normalizeVersionControlFailure } from '../io/errors';
+export type { VersionControlCommandErrorInput } from '../io/errors';
 export type {
   ArgsSchema,
   GatewayOpAvailability,
@@ -66,12 +89,20 @@ export type {
 } from '../io/operation-runs';
 export {
   createGatewayCapabilityAdapter,
+  createEditorCarrierFacade,
+  EDITOR_CARRIER_CONTRACT_VERSION,
+  EDITOR_CARRIER_RECOVERY_ACTIONS,
 } from '../product/gateway-executor';
 export { createGatewayCommitCollar } from '../product/commit-collar';
 export type {
   GatewayCapabilityAdapter,
   GatewayCapabilitySource,
   GatewayDispatchResult,
+  CreateEditorCarrierFacadeOptions,
+  EditorCarrierDiscovery,
+  EditorCarrierFacade,
+  EditorCarrierSchemaDescriptor,
+  EditorPageCarrierDescriptor,
 } from '../product/gateway-executor';
 export type {
   GatewayCommitCollar,

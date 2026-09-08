@@ -5,7 +5,8 @@
 // add/remove/reorder/update here gives the AI and Inspector the same group,
 // index, and default semantics without creating a second mutation door.
 
-import { getComponentSchema, type FieldSchema } from './schema';
+import type { World } from '@forgeax/engine-ecs';
+import { getComponentSchema, type ComponentSchema, type FieldSchema } from './schema';
 
 export type ArrayEditAction = 'add' | 'remove' | 'reorder' | 'update';
 
@@ -78,13 +79,14 @@ function defaultElement(field: FieldSchema): unknown {
  * such as asset binders may replace a whole array or target a slot, but still
  * submit exactly one complete group patch through setComponent.
  */
-export function planGroupedArrayPatch(
+/** Plan a grouped patch from an already World-bound schema projection. */
+export function planGroupedArrayPatchFromSchema(
   request: GroupedArrayPatchRequest,
   data: Record<string, unknown>,
+  schema: ComponentSchema | undefined,
 ): GroupedArrayPatchPlan {
-  const schema = getComponentSchema(request.component);
   const field = schema?.fields.find((candidate) => candidate.key === request.field);
-  if (field?.arrayMeta === undefined) {
+  if (field?.arrayMeta === undefined || field.type === 'vec') {
     return {
       ok: false,
       fieldPath: `${request.component}.${request.field}`,
@@ -178,6 +180,15 @@ export function planGroupedArrayPatch(
   return { ok: true, patch: Object.fromEntries(patch) };
 }
 
+/** Plan a grouped patch by resolving the schema from the supplied World. */
+export function planGroupedArrayPatch(
+  request: GroupedArrayPatchRequest,
+  data: Record<string, unknown>,
+  world: World,
+): GroupedArrayPatchPlan {
+  return planGroupedArrayPatchFromSchema(request, data, getComponentSchema(request.component, world));
+}
+
 function move<T>(items: T[], from: number, to: number): T[] {
   const next = [...items];
   const [item] = next.splice(from, 1);
@@ -189,14 +200,15 @@ function move<T>(items: T[], from: number, to: number): T[] {
 export function planArrayEdit(
   request: ArrayEditRequest,
   data: Record<string, unknown>,
+  world: World,
 ): ArrayEditPlan {
-  const field = getComponentSchema(request.component)?.fields.find((candidate) => candidate.key === request.field);
-  if (field?.arrayMeta === undefined) {
+  const field = getComponentSchema(request.component, world)?.fields.find((candidate) => candidate.key === request.field);
+  if (field?.arrayMeta === undefined || field.type === 'vec') {
     return fail(request, 'array-field-required', `${request.component}.${request.field} is not an editable array field`);
   }
 
   const group = field.arrayGroup;
-  const fields = (getComponentSchema(request.component)?.fields ?? [])
+  const fields = (getComponentSchema(request.component, world)?.fields ?? [])
     .filter((candidate) => candidate.arrayMeta !== undefined && (group === undefined ? candidate.key === field.key : candidate.arrayGroup === group));
   const arrays = new Map<string, unknown[]>();
   for (const candidate of fields) {

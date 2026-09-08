@@ -2,7 +2,8 @@
 
 import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-render';
-import type { EntityHandle, Handle, World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { Handle } from '@forgeax/engine-types';
 import type { EngineFacade } from '@forgeax/editor-core';
 import { resolveVisibility } from '@forgeax/editor-core';
 import { mat4, vec3, quat as quatMath } from '@forgeax/engine-math';
@@ -12,7 +13,10 @@ import { isEntEffectivelyHidden } from './viewport-entity-read';
 
 const STENCIL_REFERENCE = 1;
 const OUTLINE_QUEUE = 2001;
-const OUTLINE_SCALE = 1.05;
+// Keep the shell's border in world units instead of multiplying the selected
+// object's scale. A multiplicative shell makes outline thickness grow/shrink
+// with authored Transform.scale.
+const OUTLINE_EXPANSION = 0.10;
 const OUTLINE_COLOR: [number, number, number] = [1, 0.55, 0.05];
 
 type RenderTarget = {
@@ -34,7 +38,13 @@ export type SelectionStencilOutlineDeps = {
   readonly isEditMode: () => boolean;
 };
 
-export type SelectionStencilOutlinePool = { update(): void; dispose(): void };
+export type SelectionStencilOutlinePool = {
+  /** Reconcile selection/renderable membership and synchronize all ghosts. */
+  update(): void;
+  /** Remove transient ghost meshes while retaining reusable materials/assets. */
+  clear(): void;
+  dispose(): void;
+};
 
 export function createSelectionStencilOutlinePool(
   deps: SelectionStencilOutlineDeps,
@@ -46,7 +56,8 @@ export function createSelectionStencilOutlinePool(
   let disposed = false;
 
   function ensureWriterMaterial(): Handle<'MaterialAsset', 'shared'> {
-    if (writerMaterial !== null) return writerMaterial;
+    const existing = writerMaterial;
+    if (existing !== null) return existing;
     const base = Materials.unlit([1, 1, 1, 1], { castShadow: false }) as {
       passes?: readonly MaterialPass[];
     };
@@ -66,11 +77,12 @@ export function createSelectionStencilOutlinePool(
         },
       })),
     } as unknown as MaterialAsset);
-    return writerMaterial;
+    return writerMaterial!;
   }
 
   function ensureOutlineMaterial(): Handle<'MaterialAsset', 'shared'> {
-    if (outlineMaterial !== null) return outlineMaterial;
+    const existing = outlineMaterial;
+    if (existing !== null) return existing;
     const base = Materials.unlit([...OUTLINE_COLOR, 1], { castShadow: false }) as {
       passes?: readonly MaterialPass[];
     };
@@ -91,7 +103,7 @@ export function createSelectionStencilOutlinePool(
       ...base,
       passes,
     } as unknown as MaterialAsset);
-    return outlineMaterial;
+    return outlineMaterial!;
   }
 
   function resolveEditorMesh(
@@ -170,8 +182,13 @@ export function createSelectionStencilOutlinePool(
     deps.editorEngine.set(entity, Transform, {
       pos: [pos[0]!, pos[1]!, pos[2]!],
       quat: [rot[0]!, rot[1]!, rot[2]!, rot[3]!],
-      scale: [scl[0]! * expansion, scl[1]! * expansion, scl[2]! * expansion],
+      scale: [scl[0]! + expansion, scl[1]! + expansion, scl[2]! + expansion],
     });
+  }
+
+  function clear(): void {
+    for (const pair of ghosts.values()) despawn(pair);
+    ghosts.clear();
   }
 
   function spawnGhost(
@@ -197,8 +214,7 @@ export function createSelectionStencilOutlinePool(
     if (disposed) return;
     const scene = deps.sceneWorld();
     if (!scene || !deps.isEditMode() || !deps.isAuxVisible()) {
-      for (const pair of ghosts.values()) despawn(pair);
-      ghosts.clear();
+      clear();
       return;
     }
     const next = new Map<number, RenderTarget>();
@@ -219,18 +235,18 @@ export function createSelectionStencilOutlinePool(
         };
         ghosts.set(key, pair);
       }
-      syncTransform(pair.writer, target.world, 1);
-      syncTransform(pair.shell, target.world, OUTLINE_SCALE);
+      syncTransform(pair.writer, target.world, 0);
+      syncTransform(pair.shell, target.world, OUTLINE_EXPANSION);
     }
   }
 
   return {
     update,
+    clear,
     dispose() {
       if (disposed) return;
       disposed = true;
-      for (const pair of ghosts.values()) despawn(pair);
-      ghosts.clear();
+      clear();
     },
   };
 }

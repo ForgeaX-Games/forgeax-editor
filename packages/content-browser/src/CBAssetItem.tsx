@@ -21,6 +21,10 @@ interface Props {
   onToggleFavorite: (item: CBAsset) => void;
   onClickIndex: (index: number, e: React.MouseEvent) => void;
   onFocusItem: (item: CBAsset) => void;
+  /** Group path when this card is a member of an inline-unpacked resource group.
+   *  Emitted as `data-cb-group` so CBGrid can measure the members and paint the
+   *  connected per-row backdrop behind them. */
+  groupKey?: string;
   renaming?: boolean;
   renameValidate?: (value: string) => string | null;
   onRenameCommit?: (item: CBAsset, value: string) => void;
@@ -53,6 +57,7 @@ function CBAssetItemImpl({
   onToggleFavorite,
   onClickIndex,
   onFocusItem,
+  groupKey,
   renaming = false,
   renameValidate,
   onRenameCommit,
@@ -118,18 +123,19 @@ function CBAssetItemImpl({
       guid: asset.guid, kind: asset.kind, name: asset.name, packPath: asset.packPath,
     }));
     e.dataTransfer.effectAllowed = 'copy';
-    if (placementAvailable) panelBridge.emit('dragAssetStart', ref);
-  }, [asset, placementAvailable]);
+    panelBridge.emit('dragAssetStart', ref);
+  }, [asset]);
 
   const handleDragEnd = useCallback(() => {
-    if (placementAvailable) panelBridge.emit('dragAssetEnd');
-  }, [placementAvailable]);
+    panelBridge.emit('dragAssetEnd');
+  }, []);
 
   return (
     <div
       ref={rootRef}
-      className={`cb-grid-item cb-fe-card${selected ? ' sel' : ''}`}
+      className={`cb-grid-item cb-fe-card${selected ? ' sel' : ''}${groupKey ? ' cb-group-member' : ''}`}
       style={{ '--cb-type-color': colorForAssetKind(asset.kind) } as CSSProperties}
+      data-cb-group={groupKey}
       data-testid="cb-asset-item"
       data-asset-name={asset.name}
       data-asset-kind={asset.kind}

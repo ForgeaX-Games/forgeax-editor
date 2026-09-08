@@ -3,16 +3,17 @@
 // normal AI origin/ledger, and collapses to one undo step.
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { World } from '@forgeax/engine-ecs';
+import { Camera, DirectionalLight, PointLightShadow, SpotLight } from '@forgeax/engine-render';
 import { EditGateway } from '../io/gateway';
 import { querySnapshot } from '../io/query-snapshot';
 import { createEditSession } from '../session/document';
 import type { EditSession } from '../types';
 import '../index';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createGateway(): EditGateway {
   const session: EditSession = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld([Camera, DirectionalLight, PointLightShadow, SpotLight]);
   return new EditGateway(session);
 }
 

@@ -18,12 +18,13 @@ import { registerTransientApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, EntityId } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

@@ -1,5 +1,44 @@
 {
   "schemaVersion": "forgeax-prerequisite-release-evidence/v1",
+  "editorArtifactAdmission": {
+    "manifest": {
+      "entryBackend": "./dist/editor-runtime.js",
+      "runtimeKind": "world-backed",
+      "runtimeOwner": "editor-edit-runtime",
+      "requiredCapabilities": ["editor.gameplay.carrier", "editor.world.runtime"]
+    },
+    "build": { "entry": "src/extension/editor-runtime.ts" },
+    "archive": {
+      "requiredEntries": ["forgeax-extension.json", "dist/editor-runtime.js", "signature.json"],
+      "forbiddenEntryPatterns": ["(^|/)baseline\\.js$", "(^|/)editor-baseline\\.js$"],
+      "bundleRequiredTokens": ["editor-runtime/v1", "world-backed", "createEditorRuntimeEntry"],
+      "bundleForbiddenTokens": ["createEditorBaselineAdapter", "dist/baseline.js"],
+      "signature": {
+        "keyId": "editor-runtime-v1",
+        "releaseId": "forgeax.editor.edit@1.1.0",
+        "sourceCommitPattern": "^[0-9a-f]{40}$",
+        "payloadDigestPattern": "^sha256-[0-9a-f]{64}$"
+      }
+    },
+    "builder": { "forbiddenTokens": ["createEditorBaselineAdapter", "dist/baseline\\.js"] }
+  },
+  "editorArtifactFalsifiers": [
+    {
+      "name": "baseline manifest is not a gameplay artifact",
+      "subject": "manifest",
+      "forbiddenTokens": ["dist/editor-baseline\\.js"]
+    },
+    {
+      "name": "baseline builder is not an immutable runtime entry",
+      "subject": "builder",
+      "forbiddenTokens": ["createEditorBaselineAdapter", "dist/baseline\\.js"]
+    },
+    {
+      "name": "baseline archive is not an admitted runtime",
+      "subject": "archive",
+      "forbiddenTokens": ["(^|/)baseline\\.js$", "(^|/)editor-baseline\\.js$"]
+    }
+  ],
   "cases": [
     {
       "name": "cold release has one physical production",

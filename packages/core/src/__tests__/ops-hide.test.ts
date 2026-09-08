@@ -22,10 +22,11 @@ import { Visibility, VisibilityStateValue, readVisibilityIntent, resolveVisibili
 import { worldEntityHandles } from '../store/entity-state';
 import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

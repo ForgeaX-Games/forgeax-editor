@@ -113,6 +113,17 @@ describe('viewport runtime client cache', () => {
     dispose();
   });
 
+  test('can accept a Runtime operation before a deliberate carrier teardown', async () => {
+    const requests: TransportRequest[] = [];
+    const dispose = bindViewportRuntimeClient(runtime(5), client((request) => {
+      requests.push(request);
+      return { jsonrpc: '2.0', version: TRANSPORT_PROTOCOL_VERSION, id: request.id, correlationId: request.correlationId, result: { runId: 'switch-run', status: 'running' } };
+    }));
+    await dispatchViewportRuntimeOperation('switchGameVersion', { tag: 'release/1', expectedCommit: 'a'.repeat(40), requestId: 'switch-request' }, undefined, { async: true });
+    expect(requests[0]).toMatchObject({ method: 'run.dispatch', params: { async: true, operationId: 'editor.switchGameVersion' } });
+    dispose();
+  });
+
   test('retries the Runtime-owned run without creating a shell run registry', async () => {
     const requests: TransportRequest[] = [];
     const dispose = bindViewportRuntimeClient(runtime(5), client((request) => {

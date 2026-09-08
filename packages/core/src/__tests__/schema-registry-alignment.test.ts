@@ -1,11 +1,10 @@
 ﻿// schema-registry-alignment.test.ts — verify reflection-based schema against engine SSOT
 //
-// Registers components ONLY when missing (resolveComponent). Never overwrites
-// tokens already registered by other tests / @forgeax/engine-runtime imports —
-// global nameToToken overwrite would poison query-snapshot / roundtrip suites.
+// Registers components in one World-local catalog. The editor schema must not
+// read a process-global component registry or share facts with another World.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
-import { defineComponent, resolveComponent } from '@forgeax/engine-ecs';
+import { Entity, World, defineComponent, type Component } from '@forgeax/engine-ecs';
 
 // Side-effect: register real runtime components (production tokens).
 import { Transform, ChildOf, Children, Name } from '@forgeax/engine-scene';
@@ -21,25 +20,59 @@ void SceneInstance; void ChildOf; void Children; void Name;
 
 import {
   _resetSchemaCache,
-  getComponentSchema,
-  getAnimationComponentMeta,
-  getTransportDescriptor,
-  fieldSchema,
-  listComponentSchemas,
+  getComponentSchema as getComponentSchemaForWorld,
+  getAnimationComponentMeta as getAnimationComponentMetaForWorld,
+  getTransportDescriptor as getTransportDescriptorForWorld,
+  fieldSchema as fieldSchemaForWorld,
+  listComponentSchemas as listComponentSchemasForWorld,
   defaultComponentData,
   defaultFieldValue,
   fieldVisible,
   type FieldType,
 } from '../scene/schema';
 
-/** Register only if the name is not already in the global engine registry. */
+const testWorld = new World();
+
+const RUNTIME_COMPONENTS: readonly Component[] = [
+  Entity, Transform, ChildOf, Children, Name, SceneInstance,
+  MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera,
+  Skylight, SkyboxBackground, AnimationPlayer, GlyphText,
+  Layer, SortKey, PointLightShadow, SpriteRegionOverride,
+];
+for (const component of RUNTIME_COMPONENTS) testWorld.components.register(component);
+
+function getComponentSchema(name: string) {
+  return getComponentSchemaForWorld(name, testWorld);
+}
+
+function getAnimationComponentMeta(name: string) {
+  return getAnimationComponentMetaForWorld(name, testWorld);
+}
+
+function getTransportDescriptor(name: string) {
+  return getTransportDescriptorForWorld(name, testWorld);
+}
+
+function fieldSchema(component: string, key: string) {
+  return fieldSchemaForWorld(component, key, testWorld);
+}
+
+function listComponentSchemas() {
+  return listComponentSchemasForWorld(testWorld);
+}
+
+function defaultComponentDataForWorld(name: string) {
+  return defaultComponentData(name, testWorld);
+}
+
+/** Register only if the name is not already in this World catalog. */
 function ensureComponent(
   name: string,
   fields: Parameters<typeof defineComponent>[1],
   options?: Parameters<typeof defineComponent>[2],
 ): void {
-  if (resolveComponent(name)) return;
-  defineComponent(name, fields, options);
+  if (testWorld.components.resolve(name)) return;
+  testWorld.components.register(defineComponent(name, fields, options)).unwrap();
 }
 
 function ensurePhysicsAndFilterFixtures(): void {
@@ -103,7 +136,7 @@ function expectFieldType(comp: string, key: string, type: FieldType) {
 
 beforeAll(() => {
   ensurePhysicsAndFilterFixtures();
-  _resetSchemaCache();
+  _resetSchemaCache(testWorld);
 });
 
 describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
@@ -139,8 +172,8 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
       'depthBias', 'normalBias', 'shadowDistance', 'pcfKernelSize']) {
       const fs = fieldSchema('DirectionalLight', k);
       expect(fs?.showWhen, `${k} missing showWhen`).toEqual({ key: 'castShadow', in: ['true'] });
-      expect(fieldVisible('DirectionalLight', fs, { castShadow: false })).toBe(false);
-      expect(fieldVisible('DirectionalLight', fs, { castShadow: true })).toBe(true);
+      expect(fieldVisible('DirectionalLight', fs, { castShadow: false }, testWorld)).toBe(false);
+      expect(fieldVisible('DirectionalLight', fs, { castShadow: true }, testWorld)).toBe(true);
     }
   });
 
@@ -164,13 +197,13 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
 
   it('Camera ortho bounds hidden in perspective mode', () => {
     for (const k of ['left', 'right', 'bottom', 'top']) {
-      expect(fieldVisible('Camera', fieldSchema('Camera', k), { projection: 0 })).toBe(false);
+      expect(fieldVisible('Camera', fieldSchema('Camera', k), { projection: 0 }, testWorld)).toBe(false);
     }
   });
 
   it('Camera ortho bounds visible in orthographic mode (projection=1)', () => {
     for (const k of ['left', 'right', 'bottom', 'top']) {
-      expect(fieldVisible('Camera', fieldSchema('Camera', k), { projection: 1 })).toBe(true);
+      expect(fieldVisible('Camera', fieldSchema('Camera', k), { projection: 1 }, testWorld)).toBe(true);
     }
   });
 
@@ -282,7 +315,7 @@ describe('Reflection: filtering rules', () => {
     expect(getComponentSchema('SceneInstance')).toBeUndefined();
   });
 
-  it('RELATIONSHIP_COMPONENTS are excluded (ChildOf, Children)', () => {
+  it('relationship components are excluded (ChildOf, Children)', () => {
     expect(getComponentSchema('ChildOf')).toBeUndefined();
     expect(getComponentSchema('Children')).toBeUndefined();
   });
@@ -328,7 +361,7 @@ describe('Reflection: listComponentSchemas completeness', () => {
 
   it('all components produce valid defaultComponentData', () => {
     for (const cs of listComponentSchemas()) {
-      const data = defaultComponentData(cs.name);
+      const data = defaultComponentDataForWorld(cs.name);
       expect(data, `${cs.name} defaultComponentData null`).not.toBeNull();
       expect(typeof data, `${cs.name} not object`).toBe('object');
       for (const f of cs.fields) {
@@ -392,7 +425,7 @@ describe('Reflection: animation preview meta contract (M1)', () => {
         },
       },
     });
-    _resetSchemaCache();
+    _resetSchemaCache(testWorld);
     const meta = getAnimationComponentMeta('R1_AnimMetaFixture');
     expect(meta?.transport.clips).toBe('clips');
     expect(meta?.runtimeFields).toEqual(['times']);
@@ -403,7 +436,7 @@ describe('Reflection: _resetSchemaCache', () => {
   it('resetting cache and re-querying returns fresh schemas', () => {
     const before = getComponentSchema('Transform');
     expect(before).toBeDefined();
-    _resetSchemaCache();
+    _resetSchemaCache(testWorld);
     const after = getComponentSchema('Transform');
     expect(after).toBeDefined();
     expect(after!.fields.length).toBe(before!.fields.length);

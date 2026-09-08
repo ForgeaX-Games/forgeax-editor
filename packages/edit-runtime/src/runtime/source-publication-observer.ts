@@ -8,6 +8,7 @@ export interface SourcePublicationObservation {
   readonly desiredRevision: string;
   readonly current: SourcePublicationCurrent;
   readonly lastKnownGood?: SourcePublicationCurrent;
+  readonly adoptLiveMeshMaterialSlots?: boolean;
 }
 
 export interface SourcePublicationCurrent {
@@ -90,42 +91,54 @@ export function createSourcePublicationObserver(input: {
   readonly probes: SourcePublicationProbes;
 }): SourcePublicationObserver {
   const observe = async (target: SourcePublicationObservation, signal?: AbortSignal): Promise<SourcePublicationObservationResult> => {
+    const deadline = Date.now() + input.timeoutMs;
     try {
-      const catalog = await withTimeout(input.probes.catalog(target), input.timeoutMs, signal);
-      if (!sameCurrent(catalog, {
-        identity: target.guid,
-        revision: catalog === false ? target.desiredRevision : catalog.revision,
-      })) {
-        return {
-          status: 'failed',
-          ...target,
-          error: { code: 'asset-cook-failed', recoveryActions: ['run.retry', 'catalog.reconcile'] },
-        };
-      }
-      // Catalog owns the consumed revision. A cook can publish a new DDC
-      // revision between the bridge's preflight read and this first probe;
-      // preview and runtime must converge on the Catalog row observed here.
-      const consumedTarget: SourcePublicationObservation = {
-        ...target,
-        desiredRevision: catalog.revision,
-        current: catalog,
-      };
-      const preview = await withTimeout(input.probes.preview(consumedTarget), input.timeoutMs, signal);
-      const runtime = await withTimeout(input.probes.runtime(consumedTarget), input.timeoutMs, signal);
-      if (!sameCurrent(preview, catalog) || !sameCurrent(runtime, catalog)) {
-        return {
-          status: 'failed',
-          ...consumedTarget,
-          error: { code: 'asset-cook-failed', recoveryActions: ['run.retry', 'catalog.reconcile'] },
-        };
+      while (Date.now() < deadline) {
+        const remaining = Math.max(1, deadline - Date.now());
+        const catalog = await withTimeout(input.probes.catalog(target), remaining, signal);
+        if (sameCurrent(catalog, {
+          identity: target.guid,
+          revision: catalog === false ? target.desiredRevision : catalog.revision,
+        })) {
+          // Catalog owns the consumed revision. A cook can publish a new DDC
+          // revision between probes while sidecar watchers settle. Treat that
+          // mismatch as a transient publication state and retry the complete
+          // barrier; reporting a hard cook failure here races a valid recook.
+          const consumedTarget: SourcePublicationObservation = {
+            ...target,
+            desiredRevision: catalog.revision,
+            current: catalog,
+          };
+          const preview = await withTimeout(
+            input.probes.preview(consumedTarget),
+            Math.max(1, deadline - Date.now()),
+            signal,
+          );
+          const runtime = await withTimeout(
+            input.probes.runtime(consumedTarget),
+            Math.max(1, deadline - Date.now()),
+            signal,
+          );
+          if (sameCurrent(preview, catalog) && sameCurrent(runtime, catalog)) {
+            return {
+              status: 'succeeded',
+              runId: target.runId,
+              guid: target.guid,
+              desiredRevision: catalog.revision,
+              current: catalog,
+              observations: { catalog, preview, runtime },
+            };
+          }
+        }
+        const pauseMs = Math.min(20, deadline - Date.now());
+        if (pauseMs > 0) {
+          await withTimeout(new Promise<void>((resolve) => setTimeout(resolve, pauseMs)), pauseMs + 1, signal);
+        }
       }
       return {
-        status: 'succeeded',
-        runId: target.runId,
-        guid: target.guid,
-        desiredRevision: catalog.revision,
-        current: catalog,
-        observations: { catalog, preview, runtime },
+        status: 'failed',
+        ...target,
+        error: { code: 'asset-cook-failed', recoveryActions: ['run.retry', 'catalog.reconcile'] },
       };
     } catch (error) {
       if (error instanceof Error && (error.message === 'observation-timeout' || error.message === 'observation-aborted')) {

@@ -30,6 +30,7 @@ import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { Name, Transform, ChildOf } from '@forgeax/engine-scene';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 import * as entityState from '../store/entity-state';
 import { entName, entComponent, entComponents, entExists, entParent } from '../store/entity-state';
 
@@ -52,20 +53,20 @@ function staleHandle(): EntityHandle {
 describe('w14 — entity-state handle + activeWorld read face', () => {
   // ── (a) signatures take (world, handle) ──────────────────────────────────
   it('(a) entName(world, handle) reads Name from the world', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Alpha');
     expect(entName(world, h)).toBe('Alpha');
   });
 
   it('(a) entExists(world, handle) is true for a live handle, false for stale', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Beta');
     expect(entExists(world, h)).toBe(true);
     expect(entExists(world, staleHandle())).toBe(false);
   });
 
   it('(a) entComponents(world, handle) returns a component dict keyed by name', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Gamma');
     const comps = entComponents(world, h);
     expect(Object.keys(comps)).toContain('Name');
@@ -73,7 +74,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   });
 
   it('(a) entParent(world, handle) returns the parent handle, or null for a root', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const root = spawn(world, 'Root');
     const child = spawn(world, 'Child', root);
     expect(entParent(world, root)).toBeNull();
@@ -82,7 +83,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
 
   // ── (b) entComponent returns a StaleHandleResult (AC-14 / Finding 13) ─────
   it('(b) entComponent returns { ok:true, value } for a live handle', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Delta');
     const r = entComponent(world, h, 'Transform');
     expect(r.ok).toBe(true);
@@ -94,7 +95,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   });
 
   it('(b) entComponent returns stale-entity-handle for a stale handle (no silent undefined)', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const stale = staleHandle();
     const r = entComponent(world, stale, 'Transform');
     expect(r.ok).toBe(false);
@@ -107,7 +108,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   });
 
   it('(b) entComponent distinguishes stale handle from an absent (but live) component', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Epsilon'); // no ChildOf
     const r = entComponent(world, h, 'ChildOf');
     // Live handle, component simply not present: ok:false but NOT stale-entity-handle.
@@ -143,7 +144,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   const WORLD_REF_EDITOR = 0;
 
   it('(d) entComponent with a bumped-epoch pair returns detail.reason world-epoch-mismatch', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Zeta');
     // Pair minted at epoch 0; the live binding advanced to epoch 1 (a reload).
     const r = entComponent(world, h, 'Transform', {
@@ -160,7 +161,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   });
 
   it('(d) entComponent with a despawned entity (same epoch) returns detail.reason stale-entity', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Eta');
     world.despawn(h);
     const r = entComponent(world, h, 'Transform', {
@@ -176,7 +177,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   });
 
   it('(d) entComponent with a wrong-world pair returns world-mismatch', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Theta');
     // Pair claims the editor world; validated against the scene binding.
     const r = entComponent(world, h, 'Transform', {
@@ -188,7 +189,7 @@ describe('w14 — entity-state handle + activeWorld read face', () => {
   });
 
   it('(d) entComponents with an invalid pair returns {} (batch read guard)', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const h = spawn(world, 'Iota');
     const comps = entComponents(world, h, {
       binding: { worldRef: WORLD_REF_SCENE, epoch: 1, world },

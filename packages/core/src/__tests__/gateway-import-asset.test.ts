@@ -70,6 +70,12 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
       const method = opts?.method ?? 'GET';
       calls.push({ url: String(url), method });
+      if (String(url).includes('optional=1')) {
+        return Promise.resolve(new Response(JSON.stringify({ exists: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }));
+      }
       // upload / sidecar write / cook trigger all succeed.
       return Promise.resolve(new Response('', { status: 200 }));
     }) as unknown as typeof fetch;
@@ -126,6 +132,78 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(calls.filter((call) => call.url.includes('/api/files/upload'))).toHaveLength(2);
   });
 
+  it('uploads the complete FBX dependency closure before cooking the root', async () => {
+    const r = await executeAssetImport({
+      destPath: '/games/demo/assets/Mesh/character.fbx',
+      sourceName: 'character.fbx',
+      base64: btoa('not-an-fbx'),
+      sourceFiles: [
+        {
+          destPath: '/games/demo/assets/Textures/body.tga',
+          relativePath: '../Textures/body.tga',
+          base64: btoa('tga-bytes'),
+        },
+        {
+          destPath: '/games/demo/assets/Textures/body_normal.tga',
+          relativePath: '../Textures/body_normal.tga',
+          base64: btoa('normal-bytes'),
+        },
+      ],
+    });
+
+    expect(r.status).toBe('error');
+    expect(r.errorDetail?.code).toBe('IMPORT_FBX_SOURCE_INVALID');
+    expect(calls.filter((call) => call.url.includes('/api/files/upload'))).toHaveLength(3);
+  });
+
+  it('rejects an existing target before staging any selected bytes', async () => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
+      calls.push({ url: String(url), method: 'GET' });
+      if (String(url).includes('optional=1')) {
+        return Promise.resolve(new Response(JSON.stringify({ exists: true }), { status: 200 }));
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/existing.png',
+      sourceName: 'existing.png',
+      base64: btoa('new-bytes'),
+    });
+    expect(result.errorDetail).toMatchObject({
+      code: 'IMPORT_SOURCE_TARGET_CONFLICT',
+      path: '/games/demo/assets/existing.png',
+      retryable: false,
+    });
+    expect(calls.some((call) => call.url.includes('/api/files/upload'))).toBe(false);
+    expect(calls.some((call) => call.url === '/api/files')).toBe(false);
+  });
+
+  it('rolls back staged and promoted files when the atomic promotion fails', async () => {
+    let renameCount = 0;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
+      const method = opts?.method ?? 'GET';
+      calls.push({ url: String(url), method });
+      if (String(url).includes('optional=1')) {
+        return Promise.resolve(new Response(JSON.stringify({ exists: false }), { status: 200 }));
+      }
+      if (String(url) === '/api/files/rename') {
+        renameCount++;
+        return Promise.resolve(new Response('', { status: renameCount === 1 ? 200 : 500 }));
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/atomic.png',
+      sourceName: 'atomic.png',
+      base64: btoa('bytes'),
+    });
+    expect(result.errorDetail?.code).toBe('IMPORT_SIDECAR_WRITE_FAILED');
+    expect(calls.some((call) => call.url.includes('/__pack/scopes/test-scope/1/import/'))).toBe(false);
+    const deletes = calls.filter((call) => call.method === 'DELETE').map((call) => call.url);
+    expect(deletes.some((url) => url.includes('atomic.png'))).toBe(true);
+    expect(deletes.some((url) => url.includes('atomic.png.meta.json'))).toBe(true);
+  });
+
   it('unsupported extension fails fast without any disk write', async () => {
     const r = await executeAssetImport({
       destPath: '/games/demo/assets/notes.xyz',
@@ -148,7 +226,23 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(fmt!.subAssetKinds).toEqual(['texture', 'sampler', 'font']);
   });
 
-  it('font import sidecar carries three sub-assets with distinct GUIDs', async () => {
+  it('font import sidecar carries three sub-assets with distinct GUIDs and sourceIndex values', async () => {
+    let sidecarContent = '';
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string; body?: string }) => {
+      const method = opts?.method ?? 'GET';
+      calls.push({ url: String(url), method });
+      if (String(url).includes('optional=1')) {
+        return Promise.resolve(new Response(JSON.stringify({ exists: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }));
+      }
+      if (method === 'POST' && String(url) === '/api/files' && typeof opts?.body === 'string') {
+        sidecarContent = JSON.parse(opts.body).content as string;
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+
     const r = await executeAssetImport({
       destPath: '/games/demo/assets/DejaVuSans.ttf',
       sourceName: 'DejaVuSans.ttf',
@@ -159,10 +253,14 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(r.subAssets).toHaveLength(3);
     expect(r.subAssets?.every((asset) => asset.guid && asset.kind)).toBe(true);
 
-    const sidecarPaths = calls.filter((c) => c.url.startsWith('/api/files') && !c.url.includes('upload') && !c.url.includes('raw'));
+    const meta = JSON.parse(sidecarContent) as {
+      subAssets: Array<{ guid: string; sourceIndex: number; kind: string; sourceKey?: string }>;
+    };
+    expect(meta.subAssets.map((asset) => asset.sourceIndex)).toEqual([0, 1, 2]);
+    expect(meta.subAssets.map((asset) => asset.sourceKey)).toEqual(['font:texture', 'font:sampler', 'font:font']);
+
+    const sidecarPaths = calls.filter((c) => c.method === 'POST' && c.url === '/api/files');
     expect(sidecarPaths.length).toBe(1);
-    // The sidecar body is written via fetch; we assert the importer is correct
-    // and the cook endpoint was triggered.
     const cookRequests = calls.filter((c) => c.url.includes('/__pack/scopes/test-scope/1/import/'));
     expect(cookRequests.length).toBe(1);
   });
@@ -188,8 +286,10 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
 
   beforeEach(() => {
     assetIO.setRuntimeBinding(testRuntimeBinding());
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
-      Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) =>
+      String(url).includes('optional=1')
+        ? Promise.resolve(new Response(JSON.stringify({ exists: false }), { status: 200 }))
+        : Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
     // The applier resolves game-relative destPath through the host resolver.
     setPathResolver((rel) => `/games/demo/${rel}`);
     const session: EditSession = createEditSession();
@@ -212,6 +312,31 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     const terminal = await gw.waitOperationRun('import-test-1');
     expect(terminal).toMatchObject({ ok: true, value: { status: 'succeeded', result: { status: 'done', filename: 'logo.png' } } });
     expect(gw.ledger.length).toBe(beforeLedger + 1);
+  });
+
+  it('rejects traversal and root/dependency destination collisions at the Gateway boundary', () => {
+    const traversal = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/../escape.fbx',
+      sourceName: 'escape.fbx',
+      requestId: 'import-invalid-traversal',
+    });
+    expect(traversal).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
+
+    const collision = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/character.fbx',
+      sourceName: 'character.fbx',
+      base64: btoa('fbx'),
+      skipUpload: false,
+      requestId: 'import-invalid-collision',
+      sourceFiles: [{
+        destPath: 'assets/character.fbx',
+        relativePath: '../character.fbx',
+        base64: btoa('tga'),
+      }],
+    });
+    expect(collision).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
   });
 
   it('retains only a bounded fingerprint after Runtime consumes selected-file bytes', async () => {
@@ -479,8 +604,10 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
 
 describe('importAsset terminal error taxonomy', () => {
   beforeEach(() => {
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
-      Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) =>
+      String(url).includes('optional=1')
+        ? Promise.resolve(new Response(JSON.stringify({ exists: false }), { status: 200 }))
+        : Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -516,8 +643,10 @@ describe('importAsset terminal error taxonomy', () => {
     });
     expect(read.errorDetail).toMatchObject({ code: 'IMPORT_SOURCE_READ_FAILED', path: '/games/demo/assets/model.glb' });
 
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
-      Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) =>
+      String(url).includes('optional=1')
+        ? Promise.resolve(new Response(JSON.stringify({ exists: false }), { status: 200 }))
+        : Promise.resolve(new Response('', { status: 200 }))) as unknown as typeof fetch;
     const cook = await executeAssetImport({
       destPath: '/games/demo/assets/model.glb',
       sourceName: 'model.glb',

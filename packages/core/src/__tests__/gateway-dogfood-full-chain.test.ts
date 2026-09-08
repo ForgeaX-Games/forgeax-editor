@@ -26,12 +26,13 @@ import type { EditorOp, EditSession, EntityId } from '../types';
 // eagerly registers every session/transient applier (selection, scene-persistence,
 // hover, field-preview, …), making this gate self-sufficient (mirrors m2-w8 fixup).
 import '../store/store';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 

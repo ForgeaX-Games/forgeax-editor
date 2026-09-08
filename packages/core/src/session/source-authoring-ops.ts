@@ -13,13 +13,22 @@ import {
   type SourceMutationPreflightCommand,
 } from '../assets/source-mutation-preflight';
 import { assetIO } from '../io/asset-io-facade';
-import { registerSessionApplier, registerTransientApplier, type SessionApplier, type SessionApplierCtx } from '../io/appliers';
+import {
+  registerSessionApplier,
+  registerTransientApplier,
+  type SessionApplier,
+  type SessionApplierCtx,
+  type SessionApplierMeta,
+} from '../io/appliers';
 import { awaitPostAssetWriteCatalogSync } from './authored-asset-write';
+import { broadcastAssetsChanged } from '../store/assets-changed';
 import type { CommandError, EditorOp, SourceAuthoringPhase, SourceAuthoringSubjectRef } from '../types';
 
 export interface SourceAuthoringRuntime {
   readonly getPreflightInput: (op: EditorOp) => SourceMutationPreflightInput | Promise<SourceMutationPreflightInput>;
   readonly metaPath: (op: EditorOp) => string;
+  /** Catalog-aware semantic validation performed after preflight and before Meta CAS. */
+  readonly validateSourceOverride: (op: EditorOp) => void | Promise<void>;
   readonly commitSourceOverrides?: (input: {
     readonly op: EditorOp;
     readonly discard: boolean;
@@ -28,7 +37,30 @@ export interface SourceAuthoringRuntime {
   }) => Promise<unknown>;
   readonly rebuild: (input: { readonly op: EditorOp; readonly signal: AbortSignal }) => Promise<unknown>;
   readonly observePublication?: (input: { readonly op: EditorOp; readonly signal: AbortSignal }) => Promise<unknown>;
+  /** Engine-owned structured source capabilities use this same Gateway seam. */
+  readonly structuredOperations?: readonly SourceAuthoringOperationDescriptor[];
+  readonly executeStructured?: (op: EditorOp) => Promise<SourceAuthoringRuntimeResult>;
 }
+
+export interface SourceAuthoringOperationDescriptor {
+  readonly id: string;
+  readonly domain: 'session' | 'transient';
+  readonly title: string;
+  readonly argsSchema?: SessionApplierMeta['argsSchema'];
+}
+
+export type SourceAuthoringRuntimeResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: CommandError };
+
+const sourceOperationRunContract = {
+  acceptedStatuses: ['accepted', 'running'],
+  terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+  read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+  retry: { requiresNewRequestId: true },
+  retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+  cancellable: false,
+} as const;
 
 export interface SourceRecoveryState {
   readonly metaRevision: string;
@@ -354,6 +386,13 @@ function runSourceOperation(
       });
       if (!authorized.ok) return failure(authorized.error);
     }
+    if (kind === 'saveAssetSourceOverride') {
+      try {
+        await runtime.validateSourceOverride(rawOp);
+      } catch (error) {
+        return failure(normalizeSourceAuthoringError(error, op, 'validation'));
+      }
+    }
     const committed = await commitSourceOperation(rawOp, op, runtime, kind);
     if (!committed.ok) return committed;
     if (kind !== 'reimportAsset') {
@@ -363,6 +402,7 @@ function runSourceOperation(
     if (!rebuilt.ok) return rebuilt;
     const observed = await observeSourceOperation(op, runtime, cancellation.signal);
     if (!observed.ok) return observed;
+    broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'changed', guid: op.guid });
     return { ok: true as const, result: { guid: op.guid, requestId: op.requestId } };
   })().catch((error: unknown) => failure(normalizeSourceAuthoringError(error, op, 'cook')));
   return { ok: true, completion };
@@ -399,7 +439,14 @@ function runSourcePreflight(
       intent: 'discard-source-overrides-and-reimport',
     });
     if (!preflight.ok) return failure(normalizeSourceAuthoringError(preflight.error, op, 'entry'));
-    return { ok: true as const, result: { source, impact: preflight.preflight } };
+    return {
+      ok: true as const,
+      result: {
+        revision: source.expectedRevision,
+        source,
+        impact: preflight.preflight,
+      },
+    };
   })().catch((error: unknown) => failure({
     code: 'INVALID_ARGS',
     hint: error instanceof Error ? error.message : 'Asset source preflight failed.',
@@ -409,7 +456,48 @@ function runSourcePreflight(
   return { ok: true, completion };
 }
 
-/** Register all three source-authoring intent operations through the Gateway seam. */
+function runStructuredSourceOperation(
+  rawOp: EditorOp,
+  runtime: SourceAuthoringRuntime,
+): { ok: true; completion: Promise<unknown> } | { ok: false; error: CommandError } {
+  const op = rawOp as {
+    readonly guid?: unknown;
+    readonly ownerGuid?: unknown;
+    readonly sourcePath?: unknown;
+    readonly requestId?: unknown;
+  };
+  if (
+    (typeof op.guid !== 'string' || op.guid.trim() === '') &&
+    (typeof op.ownerGuid !== 'string' || op.ownerGuid.trim() === '') &&
+    (typeof op.sourcePath !== 'string' || op.sourcePath.trim() === '')
+  ) {
+    return failure({ code: 'INVALID_ARGS', hint: 'asset source operation requires a guid, ownerGuid, or sourcePath subject' });
+  }
+  if (typeof op.requestId !== 'string' || op.requestId.trim() === '') {
+    return failure({ code: 'INVALID_ARGS', hint: 'requestId must be a non-empty caller-minted id' });
+  }
+  if (runtime.executeStructured === undefined) {
+    return failure({
+      code: 'engine-source-authoring-unavailable',
+      hint: 'The current producer does not expose structured source authoring.',
+      retryable: false,
+      recoveryActions: ['editor.discover'],
+    });
+  }
+  return {
+    ok: true,
+    completion: runtime.executeStructured(rawOp).then((result) => (
+      result.ok ? { ok: true as const, result: result.value } : result
+    )).catch((error: unknown) => failure({
+      code: 'asset-cook-failed',
+      hint: error instanceof Error ? error.message : String(error),
+      retryable: true,
+      recoveryActions: ['run.retry', 'catalog.reconcile'],
+    })),
+  };
+}
+
+/** Register source authoring and producer-provided structured capabilities through one Gateway seam. */
 export function installSourceAuthoringOps(runtime: SourceAuthoringRuntime): () => void {
   const unregisterPreflight = registerTransientApplier(
     'asset.preflight',
@@ -422,7 +510,20 @@ export function installSourceAuthoringOps(runtime: SourceAuthoringRuntime): () =
     ['discardSourceOverridesAndReimport', (op: EditorOp, ctx?: SessionApplierCtx) => runSourceOperation(op, ctx, runtime, 'discardSourceOverridesAndReimport')],
   ] as const;
   const unregister = registrations.map(([kind, applier]) => registerSessionApplier(kind, applier as SessionApplier));
+  const structured = (runtime.structuredOperations ?? []).map((descriptor) => {
+    const meta: SessionApplierMeta = {
+      ...(descriptor.argsSchema === undefined ? {} : { argsSchema: descriptor.argsSchema }),
+      operationRun: sourceOperationRunContract,
+      title: descriptor.title,
+      ...(descriptor.domain === 'session' ? { editModeOnly: true } : {}),
+    };
+    const applier: SessionApplier = (op) => runStructuredSourceOperation(op, runtime);
+    return descriptor.domain === 'transient'
+      ? registerTransientApplier(descriptor.id, applier, meta)
+      : registerSessionApplier(descriptor.id, applier, meta);
+  });
   return () => {
+    for (const remove of structured.reverse()) remove();
     for (const remove of unregister.reverse()) remove();
     unregisterPreflight();
   };

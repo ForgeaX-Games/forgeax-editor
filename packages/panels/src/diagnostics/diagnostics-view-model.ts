@@ -72,7 +72,7 @@ const EMPTY_SNAPSHOT: DiagnosticsSnapshot = Object.freeze({
       scanDiagnostics: 'file+severity+code+message+suggestion',
       assetErrors: 'op+path+hint',
       operationRuns: 'runId',
-      runtimeFacts: 'providerId+id',
+      runtimeFacts: 'providerId+dedupeKey|id',
     }),
   }),
 });

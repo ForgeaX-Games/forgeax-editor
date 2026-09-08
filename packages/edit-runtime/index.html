@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>forgeax editor</title>
+    <!-- React Refresh may execute a transformed viewport module before its HMR
+         runtime is installed during a dependency-optimizer reload. Keep the
+         development entry bootable; the real runtime overwrites these no-ops. -->
+    <script>
+      var $RefreshSig$ = $RefreshSig$ || function() { return function(t) { return t; }; };
+      var $RefreshReg$ = $RefreshReg$ || function() {};
+    </script>
     <style>
       html, body { margin: 0; height: 100%; background: #16161a; overflow: hidden; }
       #app { position: fixed; inset: 0; }

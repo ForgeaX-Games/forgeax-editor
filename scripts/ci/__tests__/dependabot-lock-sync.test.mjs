@@ -174,6 +174,19 @@ test('workflow keeps trusted-base authorization ahead of PR-head checkout/instal
   assert.match(workflow, /pull-requests: read/);
 });
 
+test('skips ordinary pull requests and reads the stable PR Files endpoint', () => {
+  const workflow = readFileSync(resolve('.github/workflows/sync-bun-lock-on-dependabot.yml'), 'utf8');
+  assert.match(
+    workflow,
+    /if: >-[\s\S]*github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'[\s\S]*github\.event\.pull_request\.head\.repo\.full_name == github\.repository/,
+  );
+  assert.match(
+    workflow,
+    /gh api --paginate "repos\/\$\{GITHUB_REPOSITORY\}\/pulls\/\$\{PR_NUMBER\}\/files" --jq '\.\[\]\.filename'/,
+  );
+  assert.doesNotMatch(workflow, /repos\/\$\{GITHUB_REPOSITORY\}\/compare\//);
+});
+
 test('relative trusted-base CLI invocation executes authorization and writes its output', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-dependabot-lock-cli-'));
   try {

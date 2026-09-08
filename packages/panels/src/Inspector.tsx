@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { showContextMenu } from '@forgeax/editor-core';
-import { clampToField, defaultComponentData, eulerToQuat, fieldSchema, fieldVisible, getComponentSchema, isComponentHidden, listComponentSchemas, planArrayEdit, quatToEuler, type ArrayEditAction, type FieldSchema } from '@forgeax/editor-core';
+import { clampToField, defaultComponentData as schemaDefaultComponentData, eulerToQuat, fieldSchema as schemaFieldSchema, fieldVisible as schemaFieldVisible, getComponentSchema as schemaGetComponentSchema, isComponentHidden as schemaIsComponentHidden, listComponentSchemas as schemaListComponentSchemas, planArrayEdit as schemaPlanArrayEdit, quatToEuler, type ArrayEditAction, type FieldSchema } from '@forgeax/editor-core';
 // Shared component-name localization (SSOT with the hierarchy type column/filter):
 // engine component names → per-name i18n label, raw English fallback for unmapped.
 import { componentTypeLabel, getHierarchyPanelSnapshot, subscribeHierarchyPanelState } from './hierarchy-state';
@@ -26,10 +26,6 @@ import type { EditorOp, EntityHandle, HandleCheckOpts } from '@forgeax/editor-co
 import {
   ForgeaxIcon,
   type ForgeaxIconName,
-  // Shared asset-preview primitive (SSOT for the kind→visual mapping); the
-  // Content Browser cards render the same deriver. Panels reference the ui
-  // primitive rather than reaching into the content-browser panel.
-  AssetThumbnail,
   // Form/menu primitives (editor-ui-primitives-plan): the Inspector consumes the
   // shared shadcn-over-tokens components instead of native <select>/<input
   // type=checkbox>/ad-hoc popovers. DropdownMenu reproduces the app-wide menu
@@ -50,11 +46,32 @@ import {
 } from '@forgeax/editor-ui';
 import { useNumberDraft } from './useNumberDraft';
 import { AssetPicker } from './AssetPicker';
+import type { AssetPickerAnchor } from './asset-picker-placement';
+import { AssetRefControl } from './AssetRefControl';
+import { AssetRefSlotList } from './AssetRefSlotList';
+import { expectedAssetType } from './asset-ref-contract';
 import { getBespokeEditor } from './bespoke-editors';
 import { inspectorFieldRendererKind, isUnsupportedRendererKind, isVectorRendererKind } from './inspector-field-shape';
+import { inspectorFieldLabel } from './inspector-field-label';
 import './inspector.css';
 import { getOperationProjectionSource } from './operations/run-view-model';
-import type { InspectorRuntimeProjection } from './inspector-runtime-projection';
+import {
+  isRemoteInspectorCarrier,
+  type InspectorRuntimeProjection,
+} from './inspector-runtime-projection';
+
+// Every schema read is bound to the active Runtime World. The Engine catalog is
+// World-local, so a module-level registry snapshot would silently render an
+// empty or foreign game's component vocabulary after a carrier/world swap.
+const getComponentSchema = (name: string) => schemaGetComponentSchema(name, gateway.activeWorld);
+const fieldSchema = (component: string, key: string) => schemaFieldSchema(component, key, gateway.activeWorld);
+const fieldVisible = (component: string, field: FieldSchema | undefined, data: Record<string, unknown>) =>
+  schemaFieldVisible(component, field, data, gateway.activeWorld);
+const listComponentSchemas = () => schemaListComponentSchemas(gateway.activeWorld);
+const defaultComponentData = (name: string) => schemaDefaultComponentData(name, gateway.activeWorld);
+const isComponentHidden = (name: string) => schemaIsComponentHidden(name, gateway.activeWorld);
+const planArrayEdit = (request: Parameters<typeof schemaPlanArrayEdit>[0], data: Parameters<typeof schemaPlanArrayEdit>[1]) =>
+  schemaPlanArrayEdit(request, data, gateway.activeWorld);
 
 // Component → header/section glyph (interaction spec). Falls back to `box`.
 const COMP_ICON: Record<string, ForgeaxIconName> = {
@@ -105,17 +122,6 @@ function deriveKind(components: Record<string, unknown>): string {
   if (components.Camera) return 'Camera';
   if (components.MeshRenderer || components.MeshFilter) return 'Mesh';
   return 'Entity';
-}
-
-// Derive a field's expected asset-union type (e.g. 'MeshAsset') from the engine
-// component schema's raw type keyword ('shared<MeshAsset>' / 'array<shared<
-// MaterialAsset>>'). This editor copy's FieldSchema doesn't carry assetType, so
-// we read it live from gateway.describeComponent — the SSOT the drop path trusts.
-function expectedAssetType(comp: string, field: string): string | undefined {
-  const d = gateway.describeComponent(comp);
-  if (!d.ok) return undefined;
-  const raw = d.schema[field] ?? '';
-  return /shared<([^>]+)>/.exec(raw)?.[1];
 }
 
 // Submesh count of the mesh bound to this entity's MeshFilter, or null when there
@@ -216,12 +222,12 @@ function ScrubInput({
         onWheel={(e) => { if (document.activeElement === e.currentTarget) { e.preventDefault(); stepBy(e.deltaY < 0 ? 1 : -1, e); } }}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
+          // Focused: text selection/caret drags must not arm the scrub gesture.
+          if (document.activeElement === e.currentTarget) return;
           start.current = { x: e.clientX };
           // Don't grab focus on press: a press-and-drag must scrub, not enter
           // text-edit mode. preventDefault on pointerdown suppresses the focus.
-          // Focus is granted on pointerup only when the gesture was a clean
-          // click (no drag). If already editing, keep default (caret move).
-          if (document.activeElement !== e.currentTarget) e.preventDefault();
+          e.preventDefault();
         }}
         onPointerMove={(e) => {
           if (drag) {
@@ -257,20 +263,6 @@ function ScrubInput({
       </span>
     </span>
   );
-}
-
-// UE-style compact asset preview for the left of an asset field. Instead of a
-// raw handle badge, render a real thumbnail: image (texture/image), a material
-// baseColor sphere, or a kind-tinted glyph — reusing the Content Browser's
-// shared `getThumbnailData` deriver so both surfaces stay 1:1. `bound=false`
-// falls back to the dashed empty box.
-function AssetPreview({ bound, kind, meta, guid }: { bound: boolean; kind?: string | undefined; meta?: Record<string, unknown> | undefined; guid?: string | undefined }) {
-  if (!bound) return <span className="ab empty" />;
-  if (!kind) return <span className="ab" />;
-  // packPath lets the deriver resolve a real image URL for texture/image kinds;
-  // the catalog is the only place that carries it. Missing → glyph fallback.
-  const packPath = guid ? (gateway.assetCatalog().find((e) => e.guid === guid)?.packageUrl ?? '') : '';
-  return <AssetThumbnail kind={kind} payload={meta} packPath={packPath} size={15} />;
 }
 
 // enum widget — editor-ui Select (Radix) styled compact to sit in a field row.
@@ -465,7 +457,7 @@ function UnsupportedField({ component, field, kind }: { component: string; field
   const label = kind === 'unsupported' ? 'unknown' : kind;
   return (
     <div className="f-row" data-testid={`insp-field-${component}-${field}`}>
-      <span className="f-name">{field}</span>
+      <span className="f-name" title={field}>{inspectorFieldLabel(field)}</span>
       <span className="f-val">
         <span className="unsupported-field" role="status" data-testid={`insp-${component}-${field}-unsupported`}>
           Unsupported field shape: {label}
@@ -814,7 +806,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                       const hex = linearToSrgbHex(vec);
                       rows.push(
                         <div className="f-row" data-testid={`batch-field-${comp}-${f.key}`} key={`__vec_${f.key}`}>
-                          <span className="f-name" title={f.tooltip}>{f.key}</span>
+                          <span className="f-name" title={f.tooltip ?? f.key}>{inspectorFieldLabel(f.key)}</span>
                           <span className="f-val">
                             {mixedAxes.some(Boolean) && <span className="batch-mixed" data-testid={`batch-${comp}-${f.key}-mixed`}>mixed</span>}
                             <input
@@ -837,7 +829,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                     const labels = vecAxisLabels(f);
                     rows.push(
                       <div className="f-row" data-testid={`batch-${comp}-${f.key}`} key={`__vec_${f.key}`}>
-                        <span className="f-name" title={f.tooltip}>{f.key}</span>
+                        <span className="f-name" title={f.tooltip ?? f.key}>{inspectorFieldLabel(f.key)}</span>
                         <span className="f-val vec">
                           {vec.map((axVal, i) => (
                             <span className={`vcell ${labels[i] ?? i}`} key={i}>
@@ -883,7 +875,7 @@ function BatchPanel({ ids }: { ids: EntityHandle[] }) {
                         }
                         return (
                           <div className="f-row" key={k}>
-                            <span className="f-name" title={fs?.tooltip}>{k}</span>
+                            <span className="f-name" title={fs?.tooltip ?? k}>{inspectorFieldLabel(k)}</span>
                             <span className="f-val">
                               {mixed && <span className="batch-mixed" data-testid={`batch-${comp}-${k}-mixed`}>mixed</span>}
                               {renderer === 'boolean' ? (
@@ -1002,9 +994,10 @@ function useRemoteInspectorProjection(): RemoteInspectorState {
     getViewportRuntimeClientSnapshot,
     getViewportRuntimeClientSnapshot,
   );
+  const remoteCarrier = isRemoteInspectorCarrier(connection);
   const [projection, setProjection] = useState<InspectorRuntimeProjection | undefined>();
   useEffect(() => {
-    if (connection.status !== 'ready') {
+    if (!remoteCarrier) {
       setProjection(undefined);
       return;
     }
@@ -1031,8 +1024,13 @@ function useRemoteInspectorProjection(): RemoteInspectorState {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
-  return { connected: connection.status === 'ready', projection };
+  }, [
+    connection.runtime?.runtimeId,
+    connection.runtime?.runtimeGeneration,
+    connection.runtime?.carrierKind,
+    remoteCarrier,
+  ]);
+  return { connected: remoteCarrier, projection };
 }
 
 function remoteInspectorMutation(
@@ -1106,7 +1104,7 @@ function RemoteComponentFields({
           const labels = vecAxisLabels(fs);
           return (
             <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
-              <span className="f-name" title={fs?.tooltip}>{key}</span>
+              <span className="f-name" title={fs?.tooltip ?? key}>{inspectorFieldLabel(key)}</span>
               <span className="f-val vec">
                 {vec.map((axisValue, axis) => (
                   <span className={`vcell ${labels[axis] ?? axis}`} key={axis}>
@@ -1130,7 +1128,7 @@ function RemoteComponentFields({
         if (renderer === 'array' && fs !== undefined) {
           return (
             <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
-              <span className="f-name" title={fs.tooltip}>{key}</span>
+              <span className="f-name" title={fs.tooltip ?? key}>{inspectorFieldLabel(key)}</span>
               <span className="f-val">
                 <ArrayFieldEditor
                   entity={entity.id}
@@ -1150,7 +1148,7 @@ function RemoteComponentFields({
         if (renderer === 'asset-ref') {
           return (
             <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
-              <span className="f-name" title={fs?.tooltip}>{key}</span>
+              <span className="f-name" title={fs?.tooltip ?? key}>{inspectorFieldLabel(key)}</span>
               <span className="f-val">
                 <span className="asset-slotnote">{JSON.stringify(raw)}</span>
               </span>
@@ -1162,7 +1160,7 @@ function RemoteComponentFields({
         }
         return (
           <div className="f-row" data-testid={`insp-field-${component}-${key}`} key={key}>
-            <span className="f-name" title={fs?.tooltip}>{key}</span>
+            <span className="f-name" title={fs?.tooltip ?? key}>{inspectorFieldLabel(key)}</span>
             <span className="f-val">
               {renderer === 'boolean' ? (
                 <BoolCheckbox checked={raw === true} testid={testid} onToggle={(next) => remoteInspectorMutation(entity, component, { [key]: next })} />
@@ -1191,10 +1189,37 @@ function RemoteComponentFields({
 
 function RemoteInspectorPanel({ projection }: { projection: InspectorRuntimeProjection | undefined }) {
   const { t } = useTranslation();
+  const hierarchyView = useSyncExternalStore(
+    subscribeHierarchyPanelState,
+    getHierarchyPanelSnapshot,
+    getHierarchyPanelSnapshot,
+  );
+  const editorInspectionId = hierarchyView.showEditorWorld ? hierarchyView.editorInspectionId : null;
+  const editorRow = editorInspectionId !== null
+    ? ((projection?.editorWorld?.rows ?? getEditorWorldProjection().rows).find((row) => row.id === editorInspectionId) ?? {
+        name: 'Editor Camera',
+        id: editorInspectionId,
+        camera: {},
+        transform: null,
+      })
+    : undefined;
+
   const entity = projection?.entity;
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameAttempt, setRenameAttempt] = useState(0);
   useEffect(() => setRenameError(null), [entity?.id]);
+
+  if (editorRow) {
+    return (
+      <EditorWorldChromeInspector
+        name={editorRow.name}
+        id={editorRow.id}
+        camera={editorRow.camera}
+        transform={editorRow.transform}
+      />
+    );
+  }
+
   if (projection === undefined) {
     return (
       <div className="fx-inspector" data-testid="panel-inspector" data-runtime-projection="1" data-runtime-status="connecting">
@@ -1312,8 +1337,15 @@ function EditorWorldChromeInspector({
 }): ReactNode {
   const { t } = useTranslation();
   const fovRad = typeof camera.fov === 'number' ? camera.fov : null;
-  const fovDeg = fovRad !== null ? (fovRad * 180 / Math.PI).toFixed(1) : '—';
-  const projection = camera.projection === 1 ? 'Orthographic' : 'Perspective';
+  const fovDeg = fovRad !== null ? Number((fovRad * 180 / Math.PI).toFixed(1)) : 60;
+  const isOrtho = camera.projection === 1;
+  const pos = Array.isArray(transform?.pos)
+    ? (transform.pos as number[])
+    : transform?.pos instanceof Float32Array
+      ? Array.from(transform.pos)
+      : [0, 0, 0];
+  const axisLabels = ['X', 'Y', 'Z'];
+
   return (
     <div className="fx-inspector" data-testid="panel-inspector">
       <div className="dp-name">
@@ -1325,25 +1357,104 @@ function EditorWorldChromeInspector({
       <div className="dp-note" data-testid="inspector-editor-world-chrome">
         {t('editor.inspector.editorCameraHint')}
       </div>
-      <div className="f-row"><span className="f-name">Projection</span><span className="f-val">{projection}</span></div>
-      <div className="f-row"><span className="f-name">Field Of View</span><span className="f-val">{fovDeg}°</span></div>
-      <div className="f-row"><span className="f-name">Aspect</span><span className="f-val">{fmtChromeNum(camera.aspect)}</span></div>
-      <div className="f-row"><span className="f-name">Near Clip</span><span className="f-val">{fmtChromeNum(camera.near)}</span></div>
-      <div className="f-row"><span className="f-name">Far Clip</span><span className="f-val">{fmtChromeNum(camera.far)}</span></div>
-      <div className="f-row"><span className="f-name">Location</span><span className="f-val">{fmtChromeVec(transform?.pos)}</span></div>
-      <div className="f-row"><span className="f-name">Rotation</span><span className="f-val">{fmtChromeVec(transform?.quat)}</span></div>
+
+      <div className="f-row" data-testid="insp-field-EditorCamera-projection">
+        <span className="f-name">Projection</span>
+        <span className="f-val">
+          <EnumSelect
+            value={isOrtho ? 1 : 0}
+            options={[
+              { value: 0, label: 'Perspective' },
+              { value: 1, label: 'Orthographic' },
+            ]}
+            testid="insp-editor-camera-projection"
+            onChange={(val) => {
+              void dispatchActiveEditorOperation({
+                kind: 'setViewportPreferences',
+                patch: { projection: val === 1 ? 'orthographic' : 'perspective' },
+              });
+            }}
+          />
+        </span>
+      </div>
+
+      {!isOrtho && (
+        <div className="f-row" data-testid="insp-field-EditorCamera-fov">
+          <span className="f-name">Field Of View</span>
+          <span className="f-val">
+            <ScrubInput
+              value={fovDeg}
+              fs={{ key: 'fov', type: 'number', step: 1, tooltip: 'Field of View in degrees' }}
+              testid="insp-editor-camera-fov"
+              className="box-i num"
+              onCommit={(nextDeg) => {
+                const clampedDeg = Math.max(20, Math.min(120, nextDeg));
+                void dispatchActiveEditorOperation({
+                  kind: 'setViewportPreferences',
+                  patch: { fov: (clampedDeg * Math.PI) / 180 },
+                });
+              }}
+            />
+          </span>
+        </div>
+      )}
+
+      <div className="f-row">
+        <span className="f-name">Aspect</span>
+        <span className="f-val">{fmtChromeNum(camera.aspect)}</span>
+      </div>
+
+      <div className="f-row">
+        <span className="f-name">Near Clip</span>
+        <span className="f-val">{fmtChromeNum(camera.near)}</span>
+      </div>
+
+      <div className="f-row">
+        <span className="f-name">Far Clip</span>
+        <span className="f-val">{fmtChromeNum(camera.far)}</span>
+      </div>
+
+      <div className="f-row" data-testid="insp-field-EditorCamera-location">
+        <span className="f-name">Location</span>
+        <span className="f-val vec">
+          {[0, 1, 2].map((axis) => (
+            <span className={`vcell ${axisLabels[axis]}`} key={axis}>
+              <ScrubInput
+                value={typeof pos[axis] === 'number' ? pos[axis]! : 0}
+                fs={{ key: axisLabels[axis]!, type: 'number', step: 0.1 }}
+                testid={`insp-editor-camera-pos-${axis}`}
+                className="box-i"
+                onCommit={(nextVal) => {
+                  const nextPos: [number, number, number] = [
+                    axis === 0 ? nextVal : (pos[0] ?? 0),
+                    axis === 1 ? nextVal : (pos[1] ?? 0),
+                    axis === 2 ? nextVal : (pos[2] ?? 0),
+                  ];
+                  void dispatchActiveEditorOperation({
+                    kind: 'cameraTeleport',
+                    pos: nextPos,
+                  });
+                }}
+              />
+            </span>
+          ))}
+        </span>
+      </div>
+
+      <div className="f-row">
+        <span className="f-name">Rotation</span>
+        <span className="f-val">{fmtChromeVec(transform?.quat)}</span>
+      </div>
     </div>
   );
 }
 
 export function InspectorPanel() {
   const remote = useRemoteInspectorProjection();
-  // The in-process Studio realm has a live Gateway world and must keep using
-  // LocalInspectorPanel so schema-driven controls (vectors, enums, assets,
-  // arrays, color pickers, etc.) remain interactive. The runtime projection is
-  // the fallback for a shell realm that has no local world of its own.
-  if (gateway.activeWorld != null) return <LocalInspectorPanel />;
+  // Runtime projection wins for isolated carriers. In-process Studio keeps the
+  // schema-driven local Inspector only when this realm owns the live graph.
   if (remote.connected) return <RemoteInspectorPanel projection={remote.projection} />;
+  if (getActiveRuntimeUiGraph() !== null) return <LocalInspectorPanel />;
   return (
     <div className="fx-inspector" data-testid="panel-inspector" data-runtime-status="unavailable">
       <div className="dp-empty">Viewport Runtime unavailable</div>
@@ -1362,7 +1473,12 @@ function LocalInspectorPanel() {
   );
   const editorInspectionId = hierarchyView.showEditorWorld ? hierarchyView.editorInspectionId : null;
   const editorRow = editorInspectionId !== null
-    ? getEditorWorldProjection().rows.find((row) => row.id === editorInspectionId)
+    ? (getEditorWorldProjection().rows.find((row) => row.id === editorInspectionId) ?? {
+        name: 'Editor Camera',
+        id: editorInspectionId,
+        camera: {},
+        transform: null,
+      })
     : undefined;
   // Component values are the authored document snapshot. Asset binding resolves
   // asynchronously through bindAssetRef and may keep the same selection, so the
@@ -1385,7 +1501,14 @@ function LocalInspectorPanel() {
   const [query, setQuery] = useState('');
   // Open asset-picker target: which field (and array slot) the click-to-browse
   // modal is bound to. null = closed.
-  const [picker, setPicker] = useState<{ comp: string; field: string; assetType: string; slot?: number; currentGuid?: string | null } | null>(null);
+  const [picker, setPicker] = useState<{
+    comp: string;
+    field: string;
+    assetType: string;
+    slot?: number;
+    currentGuid?: string | null;
+    anchor: AssetPickerAnchor;
+  } | null>(null);
   // euler React state — scheme B: quat SSOT in world, euler is transient overlay.
   const [rotationDraft, setRotationDraft] = useState<{ rotX: number; rotY: number; rotZ: number }>({ rotX: 0, rotY: 0, rotZ: 0 });
   const cancelDraft = () => {
@@ -1542,7 +1665,7 @@ function LocalInspectorPanel() {
             .filter((override) => override.member === sel && override.field !== undefined)
             .map((override) => (
               <div className="f-row" key={`${override.component}:${override.field}`} data-testid={`insp-scene-instance-override-${override.component}-${override.field}`}>
-                <span className="f-name">{override.component}.{override.field}</span>
+                <span className="f-name">{override.component}.{inspectorFieldLabel(override.field!)}</span>
                 <span className="f-val">
                   <button
                     type="button"
@@ -1762,7 +1885,7 @@ function LocalInspectorPanel() {
                         const hex = linearToSrgbHex(vec);
                         out.push(
                           <div className="f-row" data-testid={`insp-field-${comp}-${f.key}`} key={`__vec_${f.key}`}>
-                            <span className="f-name" title={f.tooltip}>{f.key}</span>
+                            <span className="f-name" title={f.tooltip ?? f.key}>{inspectorFieldLabel(f.key)}</span>
                             <span className="f-val">
                               <input
                                 type="color"
@@ -1781,7 +1904,7 @@ function LocalInspectorPanel() {
                       const labels = vecAxisLabels(f);
                       out.push(
                         <div className="f-row" data-testid={`insp-${comp}-${f.key}`} key={`__vec_${f.key}`}>
-                          <span className="f-name" title={f.tooltip}>{f.key}</span>
+                          <span className="f-name" title={f.tooltip ?? f.key}>{inspectorFieldLabel(f.key)}</span>
                           <span className="f-val vec">
                             {vec.map((axVal, i) => (
                               <span className={`vcell ${labels[i] ?? i}`} key={i}>
@@ -1826,7 +1949,7 @@ function LocalInspectorPanel() {
                       ];
                       out.push(
                         <div className="f-row" data-testid="insp-Transform-rot-vec3" key="__rot">
-                          <span className="f-name">rotation</span>
+                          <span className="f-name">Rotation</span>
                           <span className="f-val vec">
                             {ROTATIONS.map((r) => (
                               <span className={`vcell ${r.axis}`} key={r.key}>
@@ -1879,132 +2002,89 @@ function LocalInspectorPanel() {
                         for (let k = 0; k < n; k++) next.push(typeof items[k] === 'number' ? (items[k] as number) : 0);
                         return next;
                       };
-                      const pickSlot = (i: number, currentGuid?: string) => {
+                      const pickSlot = (i: number, currentGuid: string | undefined, anchor: AssetPickerAnchor) => {
                         if (sel === null) return;
                         if (locked) {
                           if (items.length !== slotCount) {
                             dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
                           }
-                          setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid });
+                          setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid, anchor });
                           return;
                         }
-                        // Fixed-capacity arrays (array<shared<T>,N>, e.g.
-                        // AnimationPlayer.clips): every slot already exists —
-                        // open the picker AT slot i. The variable-array path
-                        // below would append an element past the engine's fixed
-                        // column capacity.
                         if (f.arrayMeta?.length !== undefined) {
-                          setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid });
+                          setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid, anchor });
                           return;
                         }
                         const at = items.length;
                         dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
-                        setPicker({ comp, field: f.key, assetType: arrType, slot: at });
+                        setPicker({ comp, field: f.key, assetType: arrType, slot: at, anchor });
                       };
-                      const rowCount = locked ? slotCount : Math.max(items.length, 1);
+                      const handles = items.map((item) => (typeof item === 'number' ? item : 0));
                       out.push(
-                        <div className="f-row" key={`__arr_${f.key}`} data-testid={`insp-${comp}-${f.key}-array`} style={{ alignItems: 'flex-start' }}>
-                          <span className="f-name" title={f.tooltip}>
-                            {f.key}
-                            <span className="asset-dot">{items.some((x) => typeof x === 'number' && x > 0) ? <ForgeaxIcon name="dot" size={9} /> : <ForgeaxIcon name="hexagon" size={9} />}</span>
-                          </span>
+                        <div className="f-row" key={`__arr_${f.key}`} data-testid={`insp-${comp}-${f.key}-array`}>
+                          <span className="f-name" title={f.tooltip ?? f.key}>{inspectorFieldLabel(f.key)}</span>
                           <span className="f-val">
-                            <div className="asset-slots">
-                              {mismatch && (
-                                <button
-                                  type="button"
-                                  className="asset-fix"
-                                  data-testid={`insp-${comp}-${f.key}-fix`}
-                                  onClick={() => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } })}
-                                  title={`materials (${items.length}) must equal submeshes (${slotCount}) — click to fix`}
-                                >
-                                  <ForgeaxIcon name="flag" size={11} /> {items.length} / {slotCount} submeshes — click to fix
-                                </button>
-                              )}
-                              {Array.from({ length: rowCount }, (_unused, i) => {
-                                const virtual = !locked && i >= items.length;
-                                const rawItem = items[i];
-                                const handleNum = typeof rawItem === 'number' ? rawItem : 0;
-                                const desc = handleNum > 0 ? gateway.describeAsset(handleNum) : null;
-                                const assetMissing = handleNum > 0 && desc?.ok !== true;
-                                const matName = desc?.ok ? ((desc.name && desc.name.trim()) || (desc.guid ? desc.guid.slice(0, 8) : '')) : '';
-                                const slotGuid = desc?.ok ? desc.guid : undefined;
-                                const slotKind = desc?.ok ? desc.kind : undefined;
-                                const slotMeta = desc?.ok ? desc.meta : undefined;
-                                return (
-                                  <div
-                                    key={i}
-                                    className="asset-f"
-                                    role="button"
-                                    tabIndex={0}
-                                    data-testid={`insp-${comp}-${f.key}-slot-${i}`}
-                                    title={handleNum > 0 ? `${matName} — click to change` : `slot ${i}: click to browse or drop a ${arrType}`}
-                                    onClick={() => pickSlot(i, slotGuid)}
-                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickSlot(i, slotGuid); } }}
-                                    onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
-                                    onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
-                                    onDrop={(e) => {
-                                      e.preventDefault();
-                                      e.currentTarget.classList.remove('drop-hot');
-                                      const assetJson = e.dataTransfer.getData('application/x-forgeax-asset');
-                                      if (!assetJson) return;
-                                      let ref: { guid?: string; kind?: string } = {};
-                                      try { ref = JSON.parse(assetJson); } catch { return; }
-                                      if (!ref.guid) return;
-                                      if (locked && items.length !== slotCount) {
-                                        dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
-                                      } else if (virtual) {
-                                        dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
-                                      }
-                                      dispatchMutation({
-                                        kind: 'bindAssetRef',
-                                        entity: sel,
-                                        component: comp,
-                                        field: f.key,
-                                        assetType: arrType,
-                                        guids: [ref.guid],
-                                        requestId: crypto.randomUUID(),
-                                        slot: virtual ? items.length : i,
-                                      });
-                                    }}
-                                    onDragOver={(e) => e.preventDefault()}
-                                  >
-                                    <AssetPreview bound={handleNum > 0 && !assetMissing} kind={slotKind} meta={slotMeta} guid={slotGuid ?? undefined} />
-                                    <span className={`an${handleNum > 0 && !assetMissing ? '' : ' empty'}`} title={matName}>
-                                      {assetMissing ? 'Missing asset — browse to repair' : handleNum > 0 ? matName : (locked ? `slot ${i} — browse ${arrType}` : `click / drop ${arrType}`)}
-                                    </span>
-                                    {assetMissing && <span className="asset-missing" role="status" data-testid={`insp-${comp}-${f.key}-slot-${i}-missing`}>missing</span>}
-                                    <span className="abtn">
-                                      {locked && handleNum > 0 && (
-                                        <button type="button" title="clear slot" onClick={(e) => {
-                                          e.stopPropagation();
-                                          dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount).map((h, j) => (j === i ? 0 : h)) } });
-                                        }}><ForgeaxIcon name="x" size={12} /></button>
-                                      )}
-                                      {!locked && !virtual && (
-                                        <button type="button" title="remove slot" onClick={(e) => {
-                                          e.stopPropagation();
-                                          const next = items.filter((_, j) => j !== i);
-                                          dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: next } });
-                                        }}><ForgeaxIcon name="x" size={12} /></button>
-                                      )}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                              {locked ? (
-                                <div className="asset-slotnote">{slotCount} slot{slotCount === 1 ? '' : 's'} — matches mesh submeshes</div>
-                              ) : (
-                                <div className="asset-actions">
-                                  <button type="button" className="fbtn" data-testid={`insp-${comp}-${f.key}-pick`} onClick={() => pickSlot(items.length)}>
-                                    <ForgeaxIcon name="folder" size={11} /> pick
-                                  </button>
-                                  <button type="button" className="fbtn" onClick={() => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } })}>
-                                    <ForgeaxIcon name="plus" size={11} /> slot
-                                  </button>
-                                </div>
-                              )}
-                            </div>
+                            <AssetRefSlotList
+                              assetType={arrType}
+                              testIdPrefix={`insp-${comp}-${f.key}`}
+                              items={handles}
+                              readOnly={readOnly}
+                              lockedCount={locked ? slotCount : null}
+                              mismatch={mismatch}
+                              onBrowseSlot={(index, currentGuid, anchor) => pickSlot(index, currentGuid, anchor)}
+                              onBindSlot={(index, guid) => {
+                                if (sel === null) return;
+                                const virtual = !locked && index >= items.length;
+                                if (locked && items.length !== slotCount) {
+                                  dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } });
+                                } else if (virtual) {
+                                  dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                                }
+                                dispatchMutation({
+                                  kind: 'bindAssetRef',
+                                  entity: sel,
+                                  component: comp,
+                                  field: f.key,
+                                  assetType: arrType,
+                                  guids: [guid],
+                                  requestId: crypto.randomUUID(),
+                                  slot: virtual ? items.length : index,
+                                });
+                              }}
+                              onClearSlot={(index) => {
+                                if (sel === null) return;
+                                if (locked) {
+                                  dispatchMutation({
+                                    kind: 'setComponent',
+                                    entity: sel,
+                                    component: comp,
+                                    patch: { [f.key]: resizedTo(slotCount).map((h, j) => (j === index ? 0 : h)) },
+                                  });
+                                  return;
+                                }
+                                dispatchMutation({
+                                  kind: 'setComponent',
+                                  entity: sel,
+                                  component: comp,
+                                  patch: { [f.key]: items.filter((_, j) => j !== index) },
+                                });
+                              }}
+                              onFixMismatch={() => dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: resizedTo(slotCount) } })}
+                              onPickNew={(anchor) => pickSlot(items.length, undefined, anchor)}
+                              onAppendSlot={() => {
+                                if (sel === null) return;
+                                dispatchMutation({ kind: 'setComponent', entity: sel, component: comp, patch: { [f.key]: [...items, 0] } });
+                              }}
+                              onRemoveSlot={(index) => {
+                                if (sel === null) return;
+                                dispatchMutation({
+                                  kind: 'setComponent',
+                                  entity: sel,
+                                  component: comp,
+                                  patch: { [f.key]: items.filter((_, j) => j !== index) },
+                                });
+                              }}
+                            />
                           </span>
                         </div>,
                       );
@@ -2029,7 +2109,7 @@ function LocalInspectorPanel() {
                       if (renderer === 'array' && fs !== undefined) {
                         out.push(
                           <div className="f-row" key={`${sel}:${comp}:${k}`} data-testid={`insp-field-${comp}-${k}`} style={{ alignItems: 'flex-start' }}>
-                            <span className="f-name" title={fs.tooltip}>{k}</span>
+                            <span className="f-name" title={fs.tooltip ?? k}>{inspectorFieldLabel(k)}</span>
                             <span className="f-val">
                               <ArrayFieldEditor
                                 entity={sel}
@@ -2066,7 +2146,7 @@ function LocalInspectorPanel() {
                       if (renderer === 'optional') {
                         out.push(
                           <div className="f-row" key={`${sel}:${comp}:${k}`} data-testid={`insp-field-${comp}-${k}`}>
-                            <span className="f-name" title={fs?.tooltip}>{k}</span>
+                            <span className="f-name" title={fs?.tooltip ?? k}>{inspectorFieldLabel(k)}</span>
                             <span className="f-val">
                               <OptionalInput
                                 value={v}
@@ -2090,7 +2170,7 @@ function LocalInspectorPanel() {
                         const ranged = fs?.min !== undefined && fs?.max !== undefined;
                         out.push(
                           <div className="f-row" key={`${sel}:${comp}:${k}`} data-testid={`insp-field-${comp}-${k}`}>
-                            <span className="f-name" title={fs?.tooltip}>{k}</span>
+                            <span className="f-name" title={fs?.tooltip ?? k}>{inspectorFieldLabel(k)}</span>
                             <span className="f-val">
                               {ranged && (
                                 <input type="range" min={fs!.min} max={fs!.max} step={fs?.step ?? 0.01} data-testid={`insp-${comp}-${k}-slider`} value={liveNum} onChange={(e) => setField(Number(e.target.value))} />
@@ -2118,13 +2198,9 @@ function LocalInspectorPanel() {
                       // Asset (shared<T>) fields store a numeric handle where 0 = unbound.
                       // Never surface the raw handle ("0" / "1025"): only a positive handle
                       // (or a non-empty guid string) counts as "bound".
-                      const assetBound = renderer === 'asset-ref' ? (typeof v === 'number' ? v > 0 : strVal !== '') : false;
                       out.push(
                         <div className="f-row" key={k} data-testid={`insp-field-${comp}-${k}`}>
-                          <span className="f-name" title={fs?.tooltip}>
-                            {k}
-                            {renderer === 'asset-ref' && <span className="asset-dot" data-testid={`insp-${comp}-${k}-dot`}>{assetBound ? <ForgeaxIcon name="dot" size={9} /> : <ForgeaxIcon name="hexagon" size={9} />}</span>}
-                          </span>
+                          <span className="f-name" title={fs?.tooltip ?? k}>{inspectorFieldLabel(k)}</span>
                           <span className="f-val">
                             {renderer === 'boolean' ? (
                               <BoolCheckbox checked={v === true} testid={`insp-${comp}-${k}`} onToggle={(c) => setField(c)} />
@@ -2141,61 +2217,35 @@ function LocalInspectorPanel() {
                                 onChange={setField}
                               />
                             ) : renderer === 'asset-ref' ? (
-                              (() => {
-                                const scalarType = expectedAssetType(comp, k) ?? 'MeshAsset';
-                                const curDesc = typeof v === 'number' && v > 0 ? gateway.describeAsset(v) : null;
-                                const curGuid = curDesc?.ok ? curDesc.guid : undefined;
-                                const curKind = curDesc?.ok ? curDesc.kind : undefined;
-                                const curMeta = curDesc?.ok ? curDesc.meta : undefined;
-                                const assetMissing = assetBound && curDesc?.ok !== true;
-                                // Numeric handle → show the resolved asset name (never the
-                                // raw #handle); fall back to a short guid, else empty so the
-                                // placeholder shows. unbound (0) → empty.
-                                const assetName = curDesc?.ok ? ((curDesc.name && curDesc.name.trim()) || (curDesc.guid ? curDesc.guid.slice(0, 8) : '')) : '';
-                                const display = typeof v === 'number' ? (v > 0 ? assetName : '') : strVal;
-                                return (
-                                  <div
-                                    className="asset-f"
-                                    onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-hot'); }}
-                                    onDragLeave={(e) => e.currentTarget.classList.remove('drop-hot')}
-                                    onDragOver={(e) => e.preventDefault()}
-                                    onDrop={(e) => {
-                                      e.preventDefault();
-                                      e.currentTarget.classList.remove('drop-hot');
-                                      const assetJson = e.dataTransfer.getData('application/x-forgeax-asset');
-                                      if (!assetJson) return;
-                                      try {
-                                        const ref = JSON.parse(assetJson);
-                                        if (ref.guid) {
-                                          dispatchMutation({ kind: 'bindAssetRef', entity: sel, component: comp, field: k, assetType: scalarType, guids: [ref.guid], requestId: crypto.randomUUID() });
-                                        }
-                                      } catch { /* noop */ }
-                                    }}
-                                  >
-                                    <AssetPreview bound={assetBound} kind={curKind} meta={curMeta} guid={curGuid ?? undefined} />
-                                    <input
-                                      className="an"
-                                      style={{ background: 'transparent', border: 'none', outline: 'none' }}
-                                      data-testid={`insp-${comp}-${k}`}
-                                      placeholder={`drop / paste ${scalarType} uuid`}
-                                      value={display}
-                                      readOnly={typeof v === 'number' && v > 0}
-                                      onChange={(e) => setField(e.target.value)}
-                                    />
-                                    {assetMissing && <span className="asset-missing" role="status" data-testid={`insp-${comp}-${k}-missing`}>Missing asset — browse to repair</span>}
-                                    <span className="abtn">
-                                      <button type="button" data-testid={`insp-${comp}-${k}-browse`} title={`browse ${scalarType}`} onClick={() => setPicker({ comp, field: k, assetType: scalarType, currentGuid: curGuid })}>
-                                        <ForgeaxIcon name="folder" size={12} />
-                                      </button>
-                                      {assetBound && (
-                                        <button type="button" data-testid={`insp-${comp}-${k}-clear`} title="unbind this asset" onClick={() => setField(typeof v === 'number' ? 0 : '')}>
-                                          <ForgeaxIcon name="x" size={12} />
-                                        </button>
-                                      )}
-                                    </span>
-                                  </div>
-                                );
-                              })()
+                              <AssetRefControl
+                                assetType={expectedAssetType(comp, k) ?? 'MeshAsset'}
+                                handle={typeof v === 'number' ? v : 0}
+                                testId={`insp-${comp}-${k}`}
+                                readOnly={readOnly}
+                                onBrowse={(anchor) => {
+                                  const curDesc = typeof v === 'number' && v > 0 ? gateway.describeAsset(v) : null;
+                                  const curGuid = curDesc?.ok ? curDesc.guid : undefined;
+                                  setPicker({
+                                    comp,
+                                    field: k,
+                                    assetType: expectedAssetType(comp, k) ?? 'MeshAsset',
+                                    currentGuid: curGuid,
+                                    anchor,
+                                  });
+                                }}
+                                onBind={(guid) => {
+                                  dispatchMutation({
+                                    kind: 'bindAssetRef',
+                                    entity: sel,
+                                    component: comp,
+                                    field: k,
+                                    assetType: expectedAssetType(comp, k) ?? 'MeshAsset',
+                                    guids: [guid],
+                                    requestId: crypto.randomUUID(),
+                                  });
+                                }}
+                                onClear={() => setField(typeof v === 'number' ? 0 : '')}
+                              />
                             ) : (
                               <input className="box-i txt" data-testid={`insp-${comp}-${k}`} value={strVal} onChange={(e) => setField(e.target.value)} />
                             )}
@@ -2222,6 +2272,7 @@ function LocalInspectorPanel() {
         <AssetPicker
           assetType={picker.assetType}
           currentGuid={picker.currentGuid}
+          anchor={picker.anchor}
           onPick={bindPicked}
           onClear={clearPicked}
           onClose={() => setPicker(null)}

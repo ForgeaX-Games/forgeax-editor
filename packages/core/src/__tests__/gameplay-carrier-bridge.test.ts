@@ -19,7 +19,10 @@ describe('live gameplay carrier bridge', () => {
     const registry = gateway.createGameProjectionRegistry();
     registry.registrar.registerAction({
       id: 'input', title: 'Input',
-      run: (args) => { inputCalls.push(args); },
+      run: (args) => {
+        inputCalls.push(args);
+        return { acknowledged: inputCalls.length };
+      },
     });
     registry.registrar.registerRead({ id: 'world', title: 'World', read: () => ({ entities: [1] }) });
     gateway.enterPlay(new World());
@@ -40,10 +43,10 @@ describe('live gameplay carrier bridge', () => {
         },
       },
     });
-    await expect(bridge.execute({ version: 1, operation: 'input', action: { type: 'key', key: 'ArrowRight', phase: 'down' } })).resolves.toMatchObject({ ok: true, operation: 'input', identity });
+    await expect(bridge.execute({ version: 1, operation: 'input', action: { type: 'key', key: 'ArrowRight', phase: 'down' } })).resolves.toMatchObject({ ok: true, operation: 'input', data: { acknowledged: 1 }, identity });
     await expect(bridge.execute({ version: 1, operation: 'input', action: {
       type: 'pointer', phase: 'down', pointerId: 7, pointerType: 'touch', x: 120, y: 80,
-    } })).resolves.toMatchObject({ ok: true, operation: 'input', identity });
+    } })).resolves.toMatchObject({ ok: true, operation: 'input', data: { acknowledged: 2 }, identity });
     await expect(bridge.execute({ version: 1, operation: 'query', query: '' })).resolves.toMatchObject({ ok: true, operation: 'query', data: { entities: [1] }, identity });
     const captureResult = await bridge.execute({ version: 1, operation: 'capture' });
     expect(captureResult).toMatchObject({ ok: true, operation: 'capture', data: { provenance: identity }, identity });

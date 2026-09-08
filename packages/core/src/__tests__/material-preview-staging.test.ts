@@ -7,9 +7,11 @@ import { describe, expect, it } from 'bun:test';
 import {
   clearMaterialPreviewParams,
   getMaterialPreviewParams,
+  resolveMaterialPreviewDisplayValues,
   setMaterialPreviewParam,
   subscribeMaterialPreviewParams,
 } from '../assets/material-preview-staging';
+import { openMaterialStaging, patchMaterialStagingParam } from '../assets/material-staging';
 
 const GUID = 'aaaaaaaa-0000-4000-8000-000000000001';
 
@@ -61,5 +63,23 @@ describe('material-preview-staging', () => {
 
     clearMaterialPreviewParams(GUID);
     clearMaterialPreviewParams(other);
+  });
+
+  it('resolveMaterialPreviewDisplayValues prefers live staging over catalog', () => {
+    const guid = 'cccccccc-0000-4000-8000-000000000003';
+    openMaterialStaging({
+      guid,
+      packPath: 'materials/test.mat.json',
+      name: 'Test',
+      payload: { values: { metallic: 0.1, roughness: 0.9 } },
+    });
+    patchMaterialStagingParam(guid, { metallic: 0.85 });
+    const lookup = () => ({
+      guid,
+      kind: 'material',
+      payload: { values: { metallic: 0.1, roughness: 0.9 } },
+    });
+    expect(resolveMaterialPreviewDisplayValues(guid, lookup).metallic).toBe(0.85);
+    clearMaterialPreviewParams(guid);
   });
 });

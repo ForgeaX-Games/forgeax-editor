@@ -1,0 +1,16 @@
+{
+  "name": "@forgeax/editor-engine-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "forgeaxCi": {
+    "ownership": "Editor-owned",
+    "quality": {
+      "test": "bun test",
+      "coverage": {"lines": 80, "functions": 100}
+    }
+  }
+}

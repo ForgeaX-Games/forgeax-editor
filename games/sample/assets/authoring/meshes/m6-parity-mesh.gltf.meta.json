@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "gltf",
+  "importSettings": {},
+  "subAssets": [
+    {
+      "guid": "019f0000-0000-7000-8000-000000000010",
+      "sourceIndex": 0,
+      "sourceKey": "mesh/main",
+      "kind": "mesh"
+    },
+    {
+      "guid": "019f0000-0000-7000-8000-000000000011",
+      "sourceIndex": 0,
+      "sourceKey": "material/default",
+      "kind": "material"
+    },
+    {
+      "guid": "019f0000-0000-7000-8000-000000000012",
+      "sourceIndex": 0,
+      "sourceKey": "scene/main",
+      "kind": "scene"
+    }
+  ],
+  "sourceOverrides": {
+    "mesh/main": {
+      "sourceKey": "mesh/main",
+      "materialSlots": [
+        {
+          "slotName": "Default",
+          "sourceKey": "default"
+        }
+      ],
+      "materialSlotDefaultOverrides": {
+        "default": "019f0000-0000-7000-8000-000000000011"
+      }
+    }
+  },
+  "sourceOverrideDescriptors": [
+    {
+      "sourceKey": "mesh/main",
+      "semantic": "mesh-material-slot-defaults",
+      "payloadSchema": { "type": "object" }
+    }
+  ]
+}

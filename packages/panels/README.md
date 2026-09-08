@@ -2,6 +2,20 @@
 
 > forgeax editor 业务面板清单 — 8 个可停靠面板组件（Hierarchy、Inspector、Assets、History、Capabilities、Material、Timeline、MaterialGraph）及面板组件注入。
 
+## Material Inspector contract
+
+The Material Inspector reads the Runtime's GUID-addressed
+`MaterialPublicationInspection` projection. Its parameter rows come from the
+cooked `parameterContract`, with values and inherited overrides projected by
+the existing core helpers. The panel does not build a second schema, read the
+deleted game shader manifest, or own a material store.
+
+Publication failures remain structured facts: branch on `code`,
+`materialGuid`, `specializationKey`, `publicationGeneration`, `expected`,
+`actual`, `retryable`, and `recoveryActions`. A transport URL is provenance,
+not an identity or readiness signal. Writes continue through the existing
+Gateway operation path.
+
 ## AI 最小命题
 
 Inspector 的 generic `AssetPicker` 与 AI 使用同一条发现路径：producer token →

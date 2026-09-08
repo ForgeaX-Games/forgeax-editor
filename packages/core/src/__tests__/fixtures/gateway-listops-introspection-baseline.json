@@ -1523,6 +1523,33 @@
             "additionalProperties": false
           }
         },
+        "sourceFiles": {
+          "type": "array",
+          "description": "Bounded dependency closure for an FBX root; each file keeps its source-relative path and is copied before cooking.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "destPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "relativePath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base64": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "destPath",
+              "relativePath",
+              "base64"
+            ],
+            "additionalProperties": false
+          }
+        },
         "skipUpload": {
           "type": "boolean",
           "description": "Bytes already on disk — do not re-upload (default true for path-only callers)."
@@ -1609,6 +1636,54 @@
     "source": "builtin",
     "argsSchema": null,
     "title": "Load from Disk"
+  },
+  {
+    "id": "moveDirectory",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Game-relative existing directory path to move (same jailbreak rules as deleteDirectory.path)."
+        },
+        "targetDir": {
+          "type": "string",
+          "description": "Game-relative destination PARENT directory (e.g. \"assets/levels\"). Empty string defaults to \"assets\". The basename is preserved; the applier rejects moving a directory into itself or a descendant, and a no-op move into the current parent."
+        }
+      },
+      "required": [
+        "path",
+        "targetDir"
+      ]
+    },
+    "title": "Move Directory"
+  },
+  {
+    "id": "moveSourceFile",
+    "domain": "session",
+    "source": "builtin",
+    "argsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Game-relative existing source file path to move (e.g. \"assets/Fox.glb\"). Its .meta.json sidecar moves with it."
+        },
+        "targetDir": {
+          "type": "string",
+          "description": "Game-relative destination PARENT directory. Empty string defaults to \"assets\". The basename is preserved; the applier rejects a no-op move into the current parent."
+        }
+      },
+      "required": [
+        "path",
+        "targetDir"
+      ]
+    },
+    "title": "Move Source File"
   },
   {
     "id": "openAssetEditor",
@@ -3067,10 +3142,40 @@
         "_id": {
           "type": "number",
           "description": "transaction-only NEGATIVE forward-reference id (e.g. -1); a later sub-op references it as `parent`/`entity` to point at this spawn before its real handle exists. See the note above; use dispatch().result.created[] outside a transaction."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "description": "Caller-minted correlation id used to await the authored entity creation terminal run."
         }
       }
     },
-    "title": "Spawn Entity"
+    "title": "Spawn Entity",
+    "operationRun": {
+      "acceptedStatuses": [
+        "accepted",
+        "running"
+      ],
+      "terminalStatuses": [
+        "succeeded",
+        "failed"
+      ],
+      "read": {
+        "get": "getOperationRun",
+        "wait": "waitOperationRun",
+        "subscribe": "subscribeOperationRun"
+      },
+      "retry": {
+        "requiresNewRequestId": true
+      },
+      "retention": {
+        "kind": "terminal-only",
+        "maxTerminalRuns": 64
+      },
+      "cancellable": false
+    }
   },
   {
     "id": "stop",

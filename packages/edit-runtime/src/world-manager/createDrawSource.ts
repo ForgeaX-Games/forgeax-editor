@@ -38,7 +38,7 @@ export interface DrawSourceResult {
 /**
  * Build the per-frame composite draw-source callback.
  *
- * @param editorWorld  the editor-owned world (camera + gizmo); cameraOwner=0.
+ * @param editorWorld  the editor-owned world (camera + residual chrome); cameraOwner=0.
  * @param getSceneWorld lazy accessor for the live scene world (doc.world);
  *        resourceOwner=1. Returns undefined until injected.
  */

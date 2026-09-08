@@ -12,6 +12,7 @@ import {
   type ViewportRuntimeIdentity,
 } from '@forgeax/editor-product';
 import type { RuntimeCatalogRoot } from '@forgeax/engine-types';
+import type { VersionControlSnapshot } from './version-control-schema';
 
 export type ViewportRuntimeClientStatus = 'disconnected' | 'ready';
 
@@ -31,6 +32,33 @@ export interface ViewportRuntimeSelectionSnapshot {
   }[];
   readonly paths: readonly { readonly path: string; readonly kind: 'dir' | 'file' }[];
   readonly lastDomain: 'entity' | 'asset' | 'folder' | null;
+}
+
+/** Generation-fenced client cache for the Runtime-owned version-control read model. */
+export class VersionControlSnapshotClient {
+  private readonly generation: number;
+  private current: VersionControlSnapshot = {
+    generation: 0,
+    status: 'unavailable',
+    error: { code: 'version-control-unavailable', hint: 'The version-control provider is not connected.' },
+  };
+
+  constructor(generation: number) { this.generation = generation; }
+
+  publish(next: VersionControlSnapshot): void {
+    if (next.generation !== this.generation) throw new Error('version-control-stale-generation');
+    this.current = next;
+  }
+
+  clear(): void {
+    this.current = {
+      generation: this.generation,
+      status: 'unavailable',
+      error: { code: 'version-control-unavailable', hint: 'The version-control provider is not connected.' },
+    };
+  }
+
+  read(): VersionControlSnapshot { return this.current; }
 }
 
 const EMPTY_SELECTION: ViewportRuntimeSelectionSnapshot = Object.freeze({
@@ -204,12 +232,14 @@ export function dispatchViewportRuntimeOperation(
   operationId: string,
   input: unknown,
   actor: TransportActor = { id: 'editor-panel', kind: 'human' },
+  options: { readonly async?: boolean } = {},
 ): Promise<TransportResponse> {
   return request('run.dispatch', {
     operationId: `editor.${operationId}`,
     input,
     actor,
     sessionId: 'editor-panel',
+    ...(options.async === true ? { async: true } : {}),
   });
 }
 

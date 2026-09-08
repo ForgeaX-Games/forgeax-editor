@@ -35,10 +35,19 @@ describe('Hierarchy Editor World chrome', () => {
     expect(inspectFn).not.toContain('id: id');
   });
 
-  it('Inspector shows a read-only chrome strip for the editor camera', () => {
+  it('Inspector shows interactive chrome controls for the editor camera', () => {
     expect(inspector).toContain('inspector-editor-world-chrome');
     expect(inspector).toContain('EditorWorldChromeInspector');
     expect(inspector).toContain('getEditorWorldProjection');
+    expect(inspector).toContain('insp-editor-camera-projection');
+    expect(inspector).toContain('insp-editor-camera-fov');
+    expect(inspector).toContain('setViewportPreferences');
+    expect(inspector).toContain('cameraTeleport');
+  });
+
+  it('supports remote editorWorld projection in Hierarchy and Inspector', () => {
+    expect(hierarchy).toContain('remoteProjectionState?.editorWorld?.rows');
+    expect(inspector).toContain('projection?.editorWorld?.rows');
   });
 
   it('spawns the orbit camera with a Name and registers the projection provider', () => {

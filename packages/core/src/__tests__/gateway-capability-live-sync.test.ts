@@ -72,3 +72,31 @@ test('product adapter follows live Gateway capability changes and releases its p
   publish([]);
   expect(adapter.capabilities()).toEqual([]);
 });
+
+test('registration projects operation confirmation, retry, cancellation, and recovery metadata', () => {
+  const operationRun = {
+    acceptedStatuses: ['accepted'] as const,
+    terminalStatuses: ['succeeded', 'failed', 'cancelled'] as const,
+    read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+    retry: { requiresNewRequestId: true },
+    retention: { kind: 'terminal-only' as const, maxTerminalRuns: 8 },
+    cancellable: false,
+  };
+  const adapter = createGatewayCapabilityAdapter({
+    listOps: () => [{
+      id: 'switchGameVersion', domain: 'session', source: 'builtin', argsSchema: null,
+      title: 'Switch version', confirmation: { required: true, reason: 'Repository state changes.' },
+      operationRun, recoveryActions: ['version-control.refresh', 'run.wait', 'run.retry'],
+      availability: { available: true },
+    }],
+    dispatch: () => ({ ok: true }),
+  });
+  expect(adapter.capabilities()[0]).toMatchObject({
+    id: 'editor.switchGameVersion',
+    confirmation: { required: true, reason: 'Repository state changes.' },
+    retry: { supported: true, createsNewAttempt: true },
+    cancellation: { supported: false },
+    recoveryActions: ['version-control.refresh', 'run.wait', 'run.retry'],
+  });
+  adapter.dispose();
+});

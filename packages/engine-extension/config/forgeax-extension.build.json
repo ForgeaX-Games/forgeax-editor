@@ -1,0 +1,7 @@
+{
+  "id": "forgeax.engine.runtime",
+  "version": "1.0.0",
+  "input": "packages/engine-extension/forgeax-extension.json",
+  "entry": "packages/engine-extension/src/extension/engine-baseline.ts",
+  "output": "dist/forgeax-engine-runtime.fxe"
+}

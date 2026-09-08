@@ -137,7 +137,7 @@ export class GameProjectionRegistry {
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  async invokeAction(id: string, args: unknown): Promise<GameProjectionResult<undefined>> {
+  async invokeAction(id: string, args: unknown): Promise<GameProjectionResult<GameProjectionValue | undefined>> {
     if (this.closed) return fail('game-projection-unavailable', 'game projections are unavailable because Play is not active');
     const action = this.actions.get(id);
     if (!action) return fail('unknown-game-projection', `no registered game action named "${id}"`);
@@ -152,8 +152,11 @@ export class GameProjectionRegistry {
       return fail('INVALID_ARGS', `game action "${id}" args must be JSON-shaped data`);
     }
     try {
-      await action.run(args);
-      return { ok: true, value: undefined };
+      const value = await action.run(args);
+      if (value !== undefined && !isProjectionValue(value)) {
+        return fail('game-action-failed', `game action "${id}" returned non-serializable data`);
+      }
+      return { ok: true, value: value === undefined ? undefined : value };
     } catch (error) {
       const hint = error instanceof Error ? error.message : String(error);
       return fail('game-action-failed', `game action "${id}" failed: ${hint}`);

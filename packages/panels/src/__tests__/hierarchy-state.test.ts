@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { World } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-scene';
 import { gateway } from '@forgeax/editor-core';
 
 import {
@@ -171,15 +173,38 @@ describe('view-state mutators', () => {
 });
 
 describe('world-backed reads over the active world', () => {
-  it('returns array structural reads and a code-derived filter option list', () => {
-    // The gateway world is shared, mutable process state, so assert on shape
-    // rather than emptiness (another suite may have populated it first).
-    expect(Array.isArray(getHierarchyParentEntities())).toBe(true);
-    expect(Array.isArray(getHierarchyVisibleMatches())).toBe(true);
+  it('returns no filter options during the cross-game realm gap', () => {
+    const doc = gateway.doc as { world: World | undefined };
+    const previous = doc.world;
+    doc.world = undefined;
+    try {
+      expect(getHierarchyFilterOptions()).toEqual([]);
+    } finally {
+      doc.world = previous;
+    }
+  });
 
-    const options = getHierarchyFilterOptions();
-    expect(options.length).toBeGreaterThan(0);
-    // Options come from the registry: id === label and a non-negative live count.
-    expect(options.every((option) => option.id === option.label && option.count >= 0)).toBe(true);
+  it('returns array structural reads and a code-derived filter option list', () => {
+    // Component reflection is World-local in the current Engine. Give this
+    // read-only projection test a deterministic, minimal catalog instead of
+    // depending on another test having populated the singleton Gateway World.
+    const doc = gateway.doc as { world: World };
+    const previous = doc.world;
+    const world = new World();
+    const lease = world.components.register(Transform);
+    if (!lease.ok) throw lease.error;
+    doc.world = world;
+    try {
+      expect(Array.isArray(getHierarchyParentEntities())).toBe(true);
+      expect(Array.isArray(getHierarchyVisibleMatches())).toBe(true);
+
+      const options = getHierarchyFilterOptions();
+      expect(options.length).toBeGreaterThan(0);
+      // Options come from the registry: id === label and a non-negative live count.
+      expect(options.every((option) => option.id === option.label && option.count >= 0)).toBe(true);
+    } finally {
+      doc.world = previous;
+      lease.value.dispose();
+    }
   });
 });

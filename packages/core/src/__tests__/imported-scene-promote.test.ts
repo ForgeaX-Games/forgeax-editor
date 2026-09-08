@@ -14,6 +14,7 @@ import {
   importedPreviewSession,
 } from '../io/scene-authoring-session';
 import { setPathResolver } from '../util/path-resolver';
+import { createCoreTestWorld } from './fixtures/world';
 
 const importedGuid = '11111111-1111-4111-8111-111111111111';
 const sourceKey = 'scene:main';
@@ -125,7 +126,7 @@ describe.serial('imported scene Phase E Promote', () => {
   });
 
   function activatePreview(effective = scene('Effective')): void {
-    const world = new World();
+    const world = createCoreTestWorld();
     const assets = registry();
     const doc = createEditSession();
     doc.world = world;
@@ -215,5 +216,31 @@ describe.serial('imported scene Phase E Promote', () => {
     expect(gateway.doc.world).toBe(world);
     expect(ctx.authoringSession.mode).toBe('imported-preview');
     expect(ctx.sceneList).toEqual([]);
+  });
+
+  it('fails closed when a bare source CAS revision is used for an imported preview', () => {
+    activatePreview();
+    const world = gateway.doc.world;
+    const result = gateway.dispatch({
+      kind: 'promoteImportedScene',
+      importedGuid,
+      sourceKey,
+      revision: 'a'.repeat(64),
+      targetPackPath: 'assets/scenes/stale.pack.json',
+      targetName: 'Stale',
+      contentPolicy: 'effective-base',
+      requestId: 'promote-stale-cas',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'promote-session-mismatch',
+        expected: { revision: 'a'.repeat(64) },
+        recoveryActions: ['previewImportedScene'],
+      },
+    });
+    expect(writes).toHaveLength(0);
+    expect(gateway.doc.world).toBe(world);
   });
 });

@@ -11,9 +11,9 @@ export function PropertyRow({ label, value }: PropertyRowProps) {
       : String(value);
 
   return (
-    <div className="field" style={{ display: 'flex', gap: 8 }}>
-      <label style={{ minWidth: 100, flexShrink: 0 }}>{label}</label>
-      <span style={{ wordBreak: 'break-all' }}>{display}</span>
+    <div className="f-row">
+      <span className="f-name" title={label}>{label}</span>
+      <span className="f-val"><span className="f-fact">{display}</span></span>
     </div>
   );
 }

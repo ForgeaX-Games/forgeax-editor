@@ -1,21 +1,25 @@
 import {
   createApp,
+  gameHostPlugin,
+  renderFeaturePlugin,
   ensureFallbackCamera,
-  addGamePluginSystems,
-  describeGamePluginSystems,
-  installGamePluginProducers,
-  loadGame,
-  loadGamePluginModules,
   type App,
   type ExecutionApp,
-  type GamePluginLoad,
-  type BootstrapEntry,
+  type Plugin,
 } from '@forgeax/engine-app';
+import {
+  addGamePluginSystems,
+  describeGamePluginSystems,
+  editorComponentVocabularyPlugin,
+  installGamePluginProducers,
+  loadGamePluginModules,
+  type GamePluginLoad,
+} from '@forgeax/editor-game-plugins';
 // engine #610 (Tier-1 decomposition) moved procedural geometry out of
 // engine-runtime into the @forgeax/engine-geometry leaf package.
 import { createCylinderGeometry } from '@forgeax/engine-geometry';
 import { physicsPlugin } from '@forgeax/engine-physics';
-import { ParticleEffectPlayer } from '@forgeax/engine-vfx';
+import { skinningPlugin } from '@forgeax/engine-skinning';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import {
   sendVagMessage,
@@ -28,6 +32,7 @@ import {
   VagCarrierHandshakeSchema,
   VagCarrierHeartbeatSchema,
   VagCarrierFailureSchema,
+  VagGameplayResponseSchema,
   VAG_CARRIER_PROTOCOL_VERSION,
   type VagCarrierFailureDetail,
 } from '@forgeax/editor-core/protocol';
@@ -38,10 +43,10 @@ import {
   FORGE_JSON,
 } from '@forgeax/engine-project';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { isRuntimeCatalogRoots, type SceneAsset, type AssetError, type RuntimeAssetBinding } from '@forgeax/engine-types';
+import { type SceneAsset, type AssetError, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { ImageError } from '@forgeax/engine-types';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import type { BootstrapContext } from './types';
+import type { BootstrapContext, BootstrapEntry } from './types';
 import { createResolveGuidAdapter } from './resolve-guid-adapter';
 import { installShortcutForwarder } from './shortcut-forwarder';
 import { createPlayProductRuntimeAdapter } from './product-runtime-adapter';
@@ -50,20 +55,22 @@ import { startPlayExecution, type StartedPlayExecution } from './execution-host'
 import {
   createPlayExecutionDiagnosticsStore,
   isPlayExecutionRealmMessage,
+  createPlayRendererProvenance,
+  PLAY_EXECUTION_PROTOCOL,
+  type PlayRendererProvenance,
 } from './execution-contract';
 import { supportsVfxRenderFeature } from './vfx-render-capability';
 import { installCompletedFrameHeartbeat } from './completed-frame-heartbeat';
+import './vite-build-health';
+import { createPlayGameplayProjection } from './gameplay-projection';
+import { importFirstGameEntry } from './game-entry-loader';
+import { loadRuntimeBinding as fetchRuntimeBinding } from './runtime-binding-loader';
 import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
 import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
 
 // TODO 004: When this Play/preview viewport is embedded as a studio iframe,
 // forward global shortcuts to the studio shell. Standalone mode is a no-op.
 installShortcutForwarder();
-
-// Keep the authored VFX component in the Play bundle's ECS name registry so
-// scene-pack instantiation can restore ParticleEffectPlayer before the host
-// simulation advances the fresh Play World.
-void ParticleEffectPlayer;
 
 const root = document.getElementById('app') ?? document.body;
 
@@ -118,83 +125,135 @@ const requestedGameIdValidated = requestedGameId && GAME_ID_RE.test(requestedGam
 const expectedScopeId = qp.get('runtimeScopeId');
 const expectedGenerationText = qp.get('runtimeGeneration');
 const expectedGeneration = expectedGenerationText === null ? null : Number(expectedGenerationText);
+const carrierRuntimeId = qp.get('runtimeId')?.trim() || null;
+const carrierOwnershipChallenge = qp.get('ownershipChallenge')?.trim() || null;
+const carrierPageNonce = crypto.randomUUID();
+const carrierCanvasId = `canvas-${carrierPageNonce}`;
+const carrierPageIdentity = `${location.origin}${location.pathname}`;
+let carrierScope: { projectId: string; gameId: string | null } | null = null;
+let carrierRendererProvenance: PlayRendererProvenance | null = null;
+let nextMainRendererGeneration = 0;
+let carrierSentinel = 0;
+let carrierFailure: VagCarrierFailureDetail | null = null;
+let carrierExecutionReport: ReturnType<import('@forgeax/engine-app').ExecutionControl['report']> | null = null;
+
+function bootErrorRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', failure: VagCarrierFailureDetail | null = carrierFailure) {
+  const rendererIdentity = carrierRendererProvenance?.identity ?? 'renderer-pending';
+  const rendererGeneration = carrierRendererProvenance?.generation ?? null;
+  const effectiveReadiness = rendererGeneration === null && renderReadiness === 'ready'
+    ? 'unavailable' as const
+    : renderReadiness;
+  return {
+    version: VAG_CARRIER_PROTOCOL_VERSION,
+    runtimeId: carrierRuntimeId,
+    runtimeGeneration: expectedGeneration !== null && Number.isSafeInteger(expectedGeneration) && expectedGeneration > 0
+      ? expectedGeneration : undefined,
+    carrierId: qp.get('carrierId')?.trim() || undefined,
+    carrierKind: qp.get('carrierKind') === 'iframe' ? 'iframe' as const : undefined,
+    challengeResponse: carrierOwnershipChallenge,
+    scope: carrierScope,
+    pageNonce: carrierPageNonce,
+    pageIdentity: carrierPageIdentity,
+    canvasIdentity: carrierCanvasId,
+    rendererIdentity,
+    rendererGeneration,
+    sentinel: carrierSentinel,
+    liveness: 'alive' as const,
+    renderReadiness: effectiveReadiness,
+    execution: carrierExecutionReport,
+    failure: failure ?? carrierFailure,
+  };
+}
+
+function publishCarrierBootFailure(error: unknown): void {
+  const detail = bootErrorRecord(error);
+  const message = error instanceof Error
+    ? error.message
+    : typeof detail?.message === 'string'
+      ? detail.message
+      : typeof detail?.hint === 'string'
+        ? detail.hint
+        : String(error);
+  carrierFailure = {
+    code: 'play-carrier-boot-failed',
+    stage: 'handshake',
+    retryable: true,
+    hint: message,
+    at: new Date().toISOString(),
+    message,
+  };
+  try {
+    const payload = carrierPayload('unavailable', carrierFailure);
+    sendVagMessage(window.parent, VagCarrierFailureSchema, { ...payload, failure: carrierFailure });
+  } catch { /* parent might be cross-origin */ }
+}
 
 async function loadRuntimeBinding(): Promise<RuntimeAssetBinding | undefined> {
   if (__FORGEAX_STATIC_BUILD__) return undefined;
   const bindingUrl = `${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/__pack/runtime-binding.json`;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(bindingUrl, { cache: 'no-store' });
-      if (response.status === 503) {
-        const unavailable = await response.json().catch(() => null) as { status?: unknown } | null;
-        if (unavailable?.status === 'unbound') return undefined;
-      }
-      if (response.ok) {
-        const candidate = await response.json() as Partial<RuntimeAssetBinding>;
-        if (
-          candidate.schemaVersion === 'runtime-asset-binding-v1'
-          && typeof candidate.gameId === 'string'
-          && typeof candidate.scopeId === 'string'
-          && Number.isSafeInteger(candidate.generation)
-          && (candidate.status === 'ready' || candidate.status === 'degraded')
-          && typeof candidate.catalogUrl === 'string'
-          && typeof candidate.importUrlBase === 'string'
-          && typeof candidate.packageUrlBase === 'string'
-          && (candidate.catalogRoots === undefined || isRuntimeCatalogRoots(candidate.catalogRoots))
-        ) {
-          return candidate as RuntimeAssetBinding;
-        }
-      }
-    } catch {
-      // The sidecar may still be starting or rebinding.
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error('[engine] no authoritative runtime asset binding became ready');
+  return fetchRuntimeBinding(bindingUrl, fetch);
 }
 
-const runtimeBinding = await loadRuntimeBinding();
-if (runtimeBinding !== undefined && requestedGameIdValidated !== null && runtimeBinding.gameId !== requestedGameIdValidated) {
-  throw new Error(
-    `[engine] requested game ${requestedGameIdValidated} does not match active runtime scope ${runtimeBinding.gameId}`,
-  );
-}
-if (
-  expectedScopeId !== null
-  || expectedGeneration !== null
-) {
-  if (
-    expectedScopeId === null
-    || expectedGeneration === null
-    || !Number.isSafeInteger(expectedGeneration)
-    || expectedGeneration < 1
-    || runtimeBinding === undefined
-    || runtimeBinding.scopeId !== expectedScopeId
-    || runtimeBinding.generation !== expectedGeneration
-  ) {
-    throw new Error('[engine] requested runtime generation does not match the active binding');
+let runtimeBinding: RuntimeAssetBinding | undefined;
+try {
+  runtimeBinding = await loadRuntimeBinding();
+  if (runtimeBinding !== undefined && requestedGameIdValidated !== null && runtimeBinding.gameId !== requestedGameIdValidated) {
+    throw new Error(
+      `[engine] requested game ${requestedGameIdValidated} does not match active runtime scope ${runtimeBinding.gameId}`,
+    );
   }
+  if (
+    expectedScopeId !== null
+    || expectedGeneration !== null
+  ) {
+    if (
+      expectedScopeId === null
+      || expectedGeneration === null
+      || !Number.isSafeInteger(expectedGeneration)
+      || expectedGeneration < 1
+      || runtimeBinding === undefined
+      || runtimeBinding.scopeId !== expectedScopeId
+      || runtimeBinding.generation !== expectedGeneration
+    ) {
+      throw new Error('[engine] requested runtime generation does not match the active binding');
+    }
+  }
+} catch (error) {
+  publishCarrierBootFailure(error);
+  throw error;
 }
 const gameId = runtimeBinding?.gameId ?? requestedGameIdValidated ?? '_template';
-const carrierRuntimeId = qp.get('runtimeId')?.trim() || null;
-const carrierOwnershipChallenge = qp.get('ownershipChallenge')?.trim() || null;
-let carrierScope: { projectId: string; gameId: string | null } | null = null;
-const carrierPageNonce = crypto.randomUUID();
-const carrierCanvasId = `canvas-${carrierPageNonce}`;
-let carrierRendererId = 'renderer-pending';
-let carrierRendererGeneration: number | null = null;
-const carrierPageIdentity = `${location.origin}${location.pathname}`;
 canvas.id = carrierCanvasId;
 
-let carrierSentinel = 0;
-let carrierFailure: VagCarrierFailureDetail | null = null;
+function markRendererProvenanceFailure(message: string): void {
+  carrierFailure = {
+    code: 'renderer-provenance-unavailable',
+    stage: 'renderer',
+    retryable: true,
+    hint: 'The Play renderer realm did not publish complete producer provenance.',
+    at: new Date().toISOString(),
+    message,
+  };
+}
+
+Object.defineProperty(window, '__forgeaxPlayRendererProvenance', {
+  configurable: true,
+  enumerable: false,
+  get: () => () => carrierRendererProvenance,
+});
 
 async function resolveManagedCarrierScope(): Promise<void> {
   if (!carrierRuntimeId || !carrierOwnershipChallenge) return;
   try {
     const [healthResponse, activeGameResponse] = await Promise.all([
       fetch('/api/health', { cache: 'no-store' }),
-      fetch('/api/workbench/active-game', { cache: 'no-store' }),
+      fetch('/api/projects/active', { cache: 'no-store' }),
     ]);
     if (!healthResponse.ok || !activeGameResponse.ok) return;
     const health = await healthResponse.json() as { instanceRootAbs?: unknown };
@@ -213,33 +272,6 @@ async function resolveManagedCarrierScope(): Promise<void> {
 }
 
 const carrierScopeReady = resolveManagedCarrierScope();
-let carrierExecutionReport: ReturnType<import('@forgeax/engine-app').ExecutionControl['report']> | null = null;
-
-function carrierPayload(renderReadiness: 'pending' | 'ready' | 'unavailable', failure: VagCarrierFailureDetail | null = carrierFailure) {
-  const rendererUnavailable = carrierRendererGeneration === null;
-  return {
-    version: VAG_CARRIER_PROTOCOL_VERSION,
-    runtimeId: carrierRuntimeId,
-    challengeResponse: carrierOwnershipChallenge,
-    scope: carrierScope,
-    pageNonce: carrierPageNonce,
-    pageIdentity: carrierPageIdentity,
-    canvasIdentity: carrierCanvasId,
-    rendererIdentity: carrierRendererId,
-    rendererGeneration: carrierRendererGeneration,
-    sentinel: carrierSentinel,
-    liveness: 'alive' as const,
-    renderReadiness: rendererUnavailable ? 'unavailable' as const : renderReadiness,
-    execution: carrierExecutionReport,
-    failure: failure ?? (rendererUnavailable ? {
-      code: 'renderer-generation-unavailable',
-      stage: 'renderer' as const,
-      retryable: true,
-      hint: 'The live renderer has not published a numeric generation.',
-      at: new Date().toISOString(),
-    } : null),
-  };
-}
 
 // ── Physics gate (per-game opt-in via forge.json "physics") ──
 // Physics is OFF by default so non-physics games pay zero rapier-WASM cost. A
@@ -359,11 +391,16 @@ if (executionEntry !== null) {
     playApp = executionHost.app;
     carrierExecutionReport = playApp.execution.report();
     executionHost.hostPort.addEventListener('message', (event: MessageEvent<unknown>): void => {
-      if (!isPlayExecutionRealmMessage(event.data)) return;
+      if (!isPlayExecutionRealmMessage(event.data)) {
+        const candidate = event.data as { protocol?: unknown; kind?: unknown } | null;
+        if (candidate?.protocol === PLAY_EXECUTION_PROTOCOL && candidate.kind === 'realm-ready') {
+          markRendererProvenanceFailure('execution realm-ready message failed provenance validation');
+        }
+        return;
+      }
       carrierExecutionReport = playApp?.execution.report() ?? carrierExecutionReport;
       if (event.data.kind === 'realm-ready') {
-        carrierRendererGeneration = event.data.rendererGeneration;
-        carrierRendererId = `renderer-${event.data.rendererIdentity}-generation-${event.data.rendererGeneration}`;
+        carrierRendererProvenance = event.data.renderer;
         hideLoadingOverlay();
         return;
       }
@@ -383,6 +420,7 @@ if (executionEntry !== null) {
   } catch (error) {
     hideLoadingOverlay();
     paintDiagnosticMessage(canvas, error);
+    publishCarrierBootFailure(error);
     throw error;
   }
 } else {
@@ -405,34 +443,54 @@ const vfxRuntime = createPlayVfxRuntime({ world: () => runtimeWorld });
 const devImportTransport = runtimeBinding === undefined
   ? undefined
   : createDevImportTransport(runtimeBinding);
-const app = await createApp(canvas, {
-  ...(physics ? { plugins: [physicsPlugin(physics)] } : {}),
-  lockProvider: {
-    requestLock: () => post(true),
-    exitLock: () => post(false),
-  },
-  profiler: createUserTimingProfiler({ captureId: 'play-user-timing' }),
-}, {
-  shaderManifestUrl: '/preview/shaders/manifest.json',
-  ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
-});
+async function createCarrierApp() {
+  try {
+    return await createApp(canvas, {
+      plugins: [
+        editorComponentVocabularyPlugin(),
+        skinningPlugin(),
+        ...(physics === undefined ? [] : [physicsPlugin(physics)]),
+      ],
+      lockProvider: {
+        requestLock: () => post(true),
+        exitLock: () => post(false),
+      },
+      profiler: createUserTimingProfiler({ captureId: 'play-user-timing' }),
+    }, {
+      shaderManifestUrl: '/preview/shaders/manifest.json',
+      ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
+    });
+  } catch (error) {
+    publishCarrierBootFailure(error);
+    throw error;
+  }
+}
+const app = await createCarrierApp();
 
 if (!app.ok) {
   hideLoadingOverlay();
   paintDiagnosticMessage(canvas, app.error);
+  publishCarrierBootFailure(app.error);
   throw new Error('[engine] createApp failed');
 }
 
 const { world, renderer } = app.value;
+const assets = app.value.assets;
+if (assets === undefined) {
+  const error = new Error('[engine] createApp returned without its host-owned asset registry');
+  hideLoadingOverlay();
+  paintDiagnosticMessage(canvas, error);
+  publishCarrierBootFailure(error);
+  throw error;
+}
 playApp = app.value;
 playWorld = world;
-subscribePlayFrameEnd = (listener) => renderer.subscribeFrameEnd(listener);
-if (supportsVfxRenderFeature(renderer.device.caps)) {
+subscribePlayFrameEnd = (listener) => renderer.subscribe((event) => {
+  if (event.kind === 'frame-submitted') listener();
+});
+if (supportsVfxRenderFeature(renderer.inspect().capabilities)) {
   try {
-    const installed = await renderer.installRenderFeature(vfxRuntime.host.feature);
-    if (!installed.ok) {
-      console.warn('[play] VFX render feature disabled:', installed.error);
-    }
+    await app.value.pluginContext.plugin(renderFeaturePlugin(vfxRuntime.host.feature));
   } catch (error) {
     console.warn('[play] VFX render feature installation failed:', error);
   }
@@ -441,30 +499,29 @@ if (supportsVfxRenderFeature(renderer.device.caps)) {
 }
 carrierExecutionReport = app.value.execution.report();
 if (runtimeBinding !== undefined) {
-  renderer.assets.configureRuntimeBinding(runtimeBinding);
+  assets.configureRuntimeBinding(runtimeBinding);
 }
 runtimeWorld = world;
-const vfxAttached = await vfxRuntime.attachWorld(world, renderer.assets);
+const vfxAttached = await vfxRuntime.attachWorld(world, assets);
 if (!vfxAttached.ok) {
   hideLoadingOverlay();
   paintDiagnosticMessage(canvas, vfxAttached.error);
+  publishCarrierBootFailure(vfxAttached.error);
   throw new Error(`[engine] particle runtime host attach failed: ${vfxAttached.error.code}`);
 }
-// Renderer identity belongs to the renderer producer, not to the page nonce.
-// Prefer the renderer producer's explicit numeric generation. The current public
-// Renderer contract has no generation field, so 0 is the initial producer
-// generation; pageNonce/canvasIdentity still distinguish each carrier instance.
-const rendererRecord = renderer as unknown as { identity?: unknown; generation?: unknown };
-const rendererProducerId = typeof rendererRecord.identity === 'string' && rendererRecord.identity.length > 0
-  ? rendererRecord.identity
-  : 'unavailable';
-const rendererGeneration = typeof rendererRecord.generation === 'number' && Number.isInteger(rendererRecord.generation) && rendererRecord.generation >= 0
-  ? rendererRecord.generation
-  : 0;
-carrierRendererGeneration = rendererGeneration;
-carrierRendererId = rendererGeneration === null
-  ? 'renderer-unavailable'
-  : `renderer-${rendererProducerId}-generation-${rendererGeneration}`;
+// Main-serial owns this Renderer directly, so it uses the same producer rule as
+// the Worker execution realm. A missing fact remains unavailable; it is never
+// replaced with a page/runtime/world identity or a numeric zero.
+const mainRendererProvenance = createPlayRendererProvenance(
+  renderer,
+  nextMainRendererGeneration + 1,
+);
+if (mainRendererProvenance === null) {
+  markRendererProvenanceFailure('main-serial Play renderer provenance could not be minted');
+} else {
+  nextMainRendererGeneration = mainRendererProvenance.generation;
+  carrierRendererProvenance = mainRendererProvenance;
+}
 
 // ── Studio cylinder mesh (host-side registration) ─────────────────────────
 // The editor offers cube/sphere/cylinder primitives. cube + sphere are engine
@@ -484,14 +541,14 @@ const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
   const cylG = AssetGuid.parse(CYLINDER_GUID);
   const cylGeo = createCylinderGeometry(0.5, 0.5, 1, 18);
   if (cylG.ok && cylGeo.ok) {
-    (renderer.assets as unknown as { catalog: (g: unknown, p: unknown) => unknown }).catalog(cylG.value, cylGeo.value);
+    (assets as unknown as { catalog: (g: unknown, p: unknown) => unknown }).catalog(cylG.value, cylGeo.value);
   }
 }
 
 // ── Pack catalog (prod or bound dev realm) ──
 const packBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
 const globalUrl = `${packBase}/pack-index.json`;
-if (__FORGEAX_STATIC_BUILD__) renderer.assets.configurePackIndex(globalUrl);
+if (__FORGEAX_STATIC_BUILD__) assets.configurePackIndex(globalUrl);
 
 // Asset-resident game plugins must register their component tokens before the
 // host instantiates defaultScene. The editor Play path discovers the same files
@@ -535,12 +592,35 @@ if (gameId !== '_template') {
   }
 }
 
-// DEBUG: expose for console probing
-(window as unknown as Record<string, unknown>).__forgeax = { app: app.value, world, renderer };
-void renderer.ready.then((r) => {
-  console.log('[debug] renderer.ready settled:', r);
-  if (!r.ok) console.error('[debug] ready err:', r.error.code, r.error.expected, r.error.hint, r.error.detail);
-});
+// Plugin modules are loaded after the host App exists so discovery stays
+// host-owned, but activation must still go through that App's Cordis realm.
+// This keeps component leases and systems World-local without a process-wide owner
+// and ensures defaultScene loading below sees the plugin vocabulary.
+if (gamePluginLoad.plugins.length > 0) {
+  const beforeComponents = new Set(world.components.entries().keys());
+  const beforeSystems = new Set(world.inspect().systems.map((system) => system.name));
+  try {
+    for (const loaded of gamePluginLoad.plugins) {
+      if (loaded.plugin !== undefined) await app.value.pluginContext.plugin(loaded.plugin);
+    }
+    gamePluginLoad = {
+      ...gamePluginLoad,
+      components: [...world.components.entries().keys()].filter((name) => !beforeComponents.has(name)),
+      systems: world.inspect().systems.map((system) => system.name).filter((name) => !beforeSystems.has(name)),
+    };
+  } catch (error) {
+    console.warn('[engine] game plugin activation failed:', error);
+  }
+}
+
+// DEBUG: expose for console probing without replacing Engine-owned capture hooks.
+const forgeaxDebug = (window as unknown as { __forgeax?: Record<string, unknown> }).__forgeax;
+(window as unknown as { __forgeax?: Record<string, unknown> }).__forgeax = {
+  ...(forgeaxDebug ?? {}),
+  app: app.value,
+  world,
+  renderer,
+};
 
 // ── Resize handler ──
 window.addEventListener('resize', () => {
@@ -600,18 +680,18 @@ if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.
       if (!parsedG.ok) return { ok: false as const, error: parsedG.error };
       // loadByGuid returns the asset payload directly (D-17); SceneAsset
       // carries .kind so the adapter can extract it and backfill guid.
-      const assetRes = await renderer.assets.loadByGuid<SceneAsset>(parsedG.value);
+      const assetRes = await assets.loadByGuid<SceneAsset>(parsedG.value);
       return assetRes;
     });
     const resolved = await resolveDefaultScene({ read: fetchRead, resolveGuid: adapter });
     if (resolved.ok) {
       // Success: loadByGuid returns the SceneAsset payload (D-17).
       // Mint a shared handle via world.allocSharedRef then instantiate.
-      const assetRes = await renderer.assets.loadByGuid<SceneAsset>(parsed.value);
+      const assetRes = await assets.loadByGuid<SceneAsset>(parsed.value);
       if (assetRes.ok) {
         defaultScene = assetRes.value; // capture loaded SceneAsset (D-4)
         const handle = world.allocSharedRef('SceneAsset', assetRes.value);
-        const instantiateRes = renderer.assets.instantiate(handle, world);
+        const instantiateRes = assets.instantiate(handle, world);
         if (instantiateRes.ok) {
           defaultSceneRoot = instantiateRes.value; // capture synthetic root (D-2)
         } else {
@@ -640,6 +720,55 @@ playUiRoot.id = 'game-ui-root';
 playUiRoot.style.cssText = 'position:fixed;inset:0;pointer-events:none';
 document.body.appendChild(playUiRoot);
 
+const gameplayProjection = createPlayGameplayProjection();
+const disposeGameplayBridge = onVagMessage(window, {
+  // Keep the origin gate as the trust boundary, but do not add an exact
+  // WindowProxy source gate here. The embedded Play page can cross a reverse
+  // proxy / COOP boundary where the browser exposes the parent WindowProxy
+  // differently on the inbound event. The request is still accepted only
+  // from an origin derived from this page/referrer, and the response returns
+  // to the current parent that owns this carrier.
+  allowedOrigins: allowedParentOrigins(),
+  handlers: {
+    VAG_GAMEPLAY_REQUEST: (message) => {
+      void (async () => {
+        const request = message.payload;
+        let result:
+          | { readonly ok: true; readonly data?: unknown }
+          | { readonly ok: false; readonly error: { readonly code: string; readonly hint: string } };
+        try {
+          result = request.operation === 'describe'
+            ? { ok: true as const, data: gameplayProjection.describe() }
+            : request.operation === 'run'
+              ? await gameplayProjection.run(request.id, request.args as Parameters<typeof gameplayProjection.run>[1])
+              : await gameplayProjection.read(request.id);
+        } catch (error) {
+          result = {
+            ok: false,
+            error: {
+              code: 'gameplay-projection-failed',
+              hint: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+        try {
+          sendVagMessage(window.parent, VagGameplayResponseSchema, {
+            version: 1,
+            requestId: request.requestId,
+            ok: result.ok,
+            ...(result.ok
+              ? (result.data === undefined ? {} : { data: result.data })
+              : { error: result.error }),
+          });
+        } catch (error) {
+          console.error('[engine] gameplay response failed:', error);
+        }
+      })();
+    },
+  },
+});
+window.addEventListener('pagehide', disposeGameplayBridge, { once: true });
+
 const ctx: BootstrapContext = {
   // `world` is the first parameter of the bootstrap(world, ctx) entry hook, not a
   // ctx field, so it is passed separately at the entry() call below. Expose the
@@ -647,13 +776,14 @@ const ctx: BootstrapContext = {
   // register their pipelines, while assets remain available through the
   // dedicated registry field.
   renderer,
-  assets: renderer.assets,
+  assets,
   app: app.value,
   uiRoot: playUiRoot,
   // A (cleanup hook): no-op — this host reloads the whole document on ■ Stop,
   // so every side effect is discarded regardless. Present only to keep the
   // contract identical to the editor host (games register defensively).
   registerCleanup() { /* reload-on-stop discards everything */ },
+  gameProjection: gameplayProjection.registrar,
   // M5 w22 / D-3: command-set pointer-lock gate. The game template calls this
   // when the view mode changes (setPointerLockAllowed(mode === 'fps')). Delegate
   // to the input backend, which owns the lock SSOT and immediately releases on
@@ -662,8 +792,52 @@ const ctx: BootstrapContext = {
   ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
   ...(defaultScene !== undefined ? { defaultScene } : {}),
 };
+
+// The native template plugin is mounted into the same Cordis realm created by
+// createApp. This is the only place that can satisfy its `gameHost` injection
+// while preserving the one App/World/Renderer authority. Legacy bootstrap
+// functions below continue to receive the plain BootstrapContext.
+const gameHost = {
+  canvas,
+  renderer,
+  assets,
+  app: app.value,
+  uiRoot: playUiRoot,
+  setPointerLockAllowed: (allowed: boolean) => app.value.input?.setPointerLockAllowed?.(allowed),
+  gameProjection: gameplayProjection.registrar,
+  ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
+  ...(defaultScene !== undefined ? { defaultScene } : {}),
+};
 // ── loadGame ──
-async function resolveGame(id: string): Promise<BootstrapEntry | null> {
+type LegacyGameEntry = BootstrapEntry | { apply(ctx?: unknown): void | Promise<void> };
+
+/**
+ * Native game entries are Cordis plugins. Their `inject` contract must be
+ * resolved by the App-owned plugin Context; calling `entry.apply(ctx)` with
+ * the plain BootstrapContext bypasses providers such as `gameHost`.
+ */
+function isNativeCordisPlugin(entry: LegacyGameEntry): boolean {
+  return typeof entry === 'object'
+    && entry !== null
+    && Array.isArray((entry as { readonly inject?: unknown }).inject);
+}
+
+function normalizeLegacyGameEntry(module: unknown): LegacyGameEntry | null {
+  if (typeof module !== 'object' || module === null) return null;
+  const record = module as { default?: unknown; bootstrap?: unknown };
+  const candidate = record.default ?? record.bootstrap;
+  if (typeof candidate === 'function') return candidate as BootstrapEntry;
+  if (
+    typeof candidate === 'object'
+    && candidate !== null
+    && typeof (candidate as { apply?: unknown }).apply === 'function'
+  ) {
+    return candidate as LegacyGameEntry;
+  }
+  return null;
+}
+
+async function resolveGame(id: string): Promise<LegacyGameEntry | null> {
   // id is already validated by GAME_ID_RE before reaching here.
   // Non-template slugs that fail validation are replaced with '_template'
   // during URL construction.
@@ -675,12 +849,7 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
   const gameBase = gameUrlBase(base, id);
 
   if (__FORGEAX_STATIC_BUILD__ && id === __FORGEAX_STATIC_GAME_ID__ && typeof staticGameBootstrap === 'function') {
-    const result = await loadGame(id, async () => ({ bootstrap: staticGameBootstrap }));
-    if (!result.ok) {
-      console.error('[engine] static game entry failed validation:', result.error);
-      return null;
-    }
-    return result.value;
+    return normalizeLegacyGameEntry({ bootstrap: staticGameBootstrap });
   }
 
   // Entry resolution. The game entry filename is no longer hardcoded: the
@@ -700,28 +869,25 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
     if (!candidates.includes(fallback)) candidates.push(fallback);
   }
 
-  const resolver = async () => {
-    for (const rel of candidates) {
-      const url = `${gameBase}/${rel}`;
-      const head = await fetch(url, { method: 'HEAD' });
-      const ct = head.headers.get('content-type') ?? '';
-      if (head.ok && ct.includes('javascript')) {
-        return await import(/* @vite-ignore */ `${url}?t=${Date.now()}`);
-      }
-    }
-    throw new Error(`module not found: ${id}`);
-  };
-  const result = await loadGame(id, resolver);
-  if (!result.ok) {
-    // Graceful degradation stays (return null → fallback scene), but surface the
-    // REAL reason: LoadGameError carries the underlying throw in .detail.cause
-    // (e.g. a syntax/import error inside the game's src/*.ts). Passing the whole
-    // error object lets the fmtArg console bridge unwrap .detail.cause + stack —
-    // logging only .code hid the actual failure behind a bare `import-failed`.
-    console.error('[engine] loadGame failed — using fallback scene:', result.error);
+  let module: unknown;
+  try {
+    // Import is the authority for module availability. A preliminary HEAD
+    // request is not equivalent: desktop WebViews can abort HEAD responses
+    // from Vite even when the same module is available via GET, which made
+    // valid packaged games silently fall through to the fallback scene.
+    module = await importFirstGameEntry(
+      candidates.map((relative) => `${gameBase}/${relative}`),
+      (url) => import(/* @vite-ignore */ `${url}?t=${Date.now()}`),
+    );
+  } catch (error) {
+    console.error('[engine] game entry failed — using fallback scene:', error);
     return null;
   }
-  return result.value;
+  const entry = normalizeLegacyGameEntry(module);
+  if (entry === null) {
+    console.error('[engine] game entry has no legacy default/bootstrap export — using fallback scene');
+  }
+  return entry;
 }
 
 // ── entry bootstrap hook (D-2: semantic downgrade — host instantiates
@@ -731,7 +897,21 @@ async function resolveGame(id: string): Promise<BootstrapEntry | null> {
 // bootstrap(world, ctx?) — world as first param.
 const entry = await resolveGame(gameId);
 if (entry) {
-  await entry(world, ctx);
+  // 三种 entry 形态整体包一层:任何一种引导失败都要发 carrier boot 失败信号,
+  // 否则 §4「Play 无法启动」的卡片拿不到原因。rethrow 保持原有失败语义不变。
+  try {
+    if (typeof entry === 'function') {
+      await entry(world, ctx);
+    } else if (isNativeCordisPlugin(entry)) {
+      await app.value.pluginContext.plugin(gameHostPlugin(gameHost));
+      await app.value.pluginContext.plugin(entry as Plugin);
+    } else if (typeof (entry as { apply?: (ctx?: unknown) => unknown })?.apply === 'function') {
+      await (entry as { apply: (ctx?: unknown) => unknown }).apply(ctx);
+    }
+  } catch (error) {
+    publishCarrierBootFailure(error);
+    throw error;
+  }
 } else {
   console.log('[engine] using fallback scene; write games/<id>/main.ts to override');
   ensureFallbackCamera(world, window.innerWidth / window.innerHeight);
@@ -924,27 +1104,6 @@ window.addEventListener('unhandledrejection', (ev) => {
     sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `unhandled rejection: ${String(ev.reason)}`, ts: Date.now() });
   } catch { /* ignore */ }
 });
-
-// Forward vite BUILD errors (import-analysis / transform) to VAG_CONSOLE. These
-// fire at module-transform time — BEFORE any game code runs — so the console
-// wrappers above never see them, and the agent (which can't see the red HMR
-// overlay) was blind to "Failed to resolve import './src/foo'" class failures.
-// Surfacing them as VAG_CONSOLE errors makes the Studio Console (hence the
-// agent) aware the Preview is broken even when nothing executed.
-if (import.meta.hot) {
-  // Narrow via ...args because the generic inference on ViteHotContext.on is
-  // fragile — the cb parameter resolves to () => void under strict mode even
-  // though 'vite:error' maps to ErrorPayload in CustomEventMap. Runtime
-  // behaviour is unchanged.
-  import.meta.hot.on('vite:error', (...args: unknown[]) => {
-    try {
-      const payload = args[0] as { err?: { message?: string; id?: string; loc?: { file?: string; line?: number } } } | undefined;
-      const err = payload?.err;
-      const where = err?.loc?.file ? ` (${err.loc.file}${err.loc.line ? `:${err.loc.line}` : ''})` : err?.id ? ` (${err.id})` : '';
-      sendVagMessage(window.parent, VagConsoleSchema, { level: 'error', text: `[vite build] ${err?.message ?? 'build error'}${where}`, ts: Date.now() });
-    } catch { /* ignore */ }
-  });
-}
 
 // ── Network bridge (VAG_NETWORK postMessage) ──
 // Mirror the console bridge for fetch / XHR / WebSocket so the Studio Network

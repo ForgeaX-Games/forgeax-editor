@@ -23,13 +23,18 @@ describe('Edit Runtime no-vertex consumer seam probe', () => {
       depthLoadStore: ['load', 'store'],
     } as const;
 
-    expect(viewportSource).toContain('const installedGrid = await renderer.installRenderFeature(');
+    expect(viewportSource).toContain('features: renderFeatures');
     expect(viewportSource).toContain('createInfiniteGridFeature({');
     expect(viewportSource).not.toContain('rawDevice');
     expect(viewportSource).not.toContain('createRenderPipeline');
     expect(featureSource).toContain('identity: INFINITE_GRID_FEATURE_ID');
     expect(featureSource).toContain('INFINITE_GRID_PASS_NAME');
     expect(featureSource).toContain('vertexData: []');
+    // The grid shader consumes the shared view UBO; it does not declare a
+    // depth-texture binding. Passing sceneDepth through prepared bindings makes
+    // the graph resolver manufacture a texture-only group 0 against pbr-view-bgl.
+    expect(featureSource).toContain('values: { group: 0 }');
+    expect(featureSource).not.toContain('values: { group: 0, sceneDepth: nextDepthTarget }');
     expect(featureSource).toContain('recover: () =>');
     expect(featureSource).toContain('RenderFeaturePreparedStateMismatchError');
     expect(featureSource).toContain('findMaterialArtifact(INFINITE_GRID_SHADER_ID)');
@@ -49,11 +54,11 @@ describe('Edit Runtime no-vertex consumer seam probe', () => {
     expect(candidate.vertexCount).toBe(3);
     expect(preparedGraphicsSource).toContain("draw.vertexLayout === 'none'");
     expect({
-      consumerStage: 'renderer.installRenderFeature',
+      consumerStage: 'createApp.features',
       producerStage: 'validate-prepared-state',
       outcome: 'accepted-by-public-producer',
     }).toEqual({
-      consumerStage: 'renderer.installRenderFeature',
+      consumerStage: 'createApp.features',
       producerStage: 'validate-prepared-state',
       outcome: 'accepted-by-public-producer',
     });

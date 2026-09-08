@@ -1,22 +1,33 @@
 // schema-native.test.ts — reflection-based engine-native field assertions
 //
 // NEVER call defineComponent() for Transform/MeshFilter/MeshRenderer/… here.
-// A second defineComponent(name, …) overwrites the canonical token in the
-// shared global registry and corrupts every other test in the same process
-// (sceneload-native.test.ts documents the same trap). Import runtime tokens.
+// Register imported runtime tokens in a World-local catalog; no process-global
+// component registry is consulted by the schema projector.
 
 import { describe, expect, it, beforeAll } from 'bun:test';
 import { Transform } from '@forgeax/engine-scene';
+import { World, componentDefinition, type Component } from '@forgeax/engine-ecs';
 import { ParticleEffectPlayer } from '../../../engine/packages/vfx/src/player';
 import { MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera } from '@forgeax/engine-render';
-import { _resetSchemaCache, getComponentSchema } from '../scene/schema';
+import { _resetSchemaCache, getComponentSchema as getComponentSchemaForWorld } from '../scene/schema';
 
 void Transform; void MeshFilter; void MeshRenderer;
 void DirectionalLight; void PointLight; void SpotLight; void Camera;
 void ParticleEffectPlayer;
 
+const testWorld = new World();
+const RUNTIME_COMPONENTS: readonly Component[] = [
+  Transform, MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight,
+  Camera, ParticleEffectPlayer,
+];
+for (const component of RUNTIME_COMPONENTS) testWorld.components.register(component);
+
+function getComponentSchema(name: string) {
+  return getComponentSchemaForWorld(name, testWorld);
+}
+
 beforeAll(() => {
-  _resetSchemaCache();
+  _resetSchemaCache(testWorld);
 });
 
 describe('Reflection: engine-native field assertions', () => {
@@ -140,6 +151,6 @@ describe('Reflection: engine-native field assertions', () => {
     const schema = getComponentSchema('ParticleEffectPlayer');
     expect(schema).toBeDefined();
     expect(schema!.fields.map((field) => field.key)).toEqual(['effect', 'playing', 'seed', 'timeScale']);
-    expect(ParticleEffectPlayer.schema.effect).toBe('shared<ParticleEffectAsset>');
+    expect(componentDefinition(ParticleEffectPlayer).fields.effect?.type).toBe('shared<ParticleEffectAsset>');
   });
 });

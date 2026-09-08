@@ -376,6 +376,63 @@ registerApplier('session', 'renameSourceFile', (op) => {
   return { ok: true };
 });
 
+// ── Session appliers: moveDirectory / moveSourceFile ─────────────────────────
+// Cross-directory MOVE: relocate an existing file/dir under a NEW parent while
+// keeping its basename. Reuses the same disk primitives as rename (POST
+// /api/files/rename already supports arbitrary from→to). The applier is the
+// north-star SSOT for "is this move legal?" so human DnD and AI dispatch share
+// one guard set: path/target jailbreak, same-parent no-op, and (for a directory)
+// a self/descendant cycle guard so a folder can never be moved inside itself.
+function _resolveMoveTarget(
+  path: string,
+  targetDir: string,
+  isDirectory: boolean,
+): { basename: string; base: string } | string {
+  const jailPath = checkPathNotJailbreak(path);
+  if (!jailPath.ok) return jailPath.hint;
+  const base = targetDir || 'assets';
+  const jailTarget = checkPathNotJailbreak(base);
+  if (!jailTarget.ok) return `target ${jailTarget.hint}`;
+  const slash = path.lastIndexOf('/');
+  const basename = path.slice(slash + 1);
+  const currentParent = slash < 0 ? '' : path.slice(0, slash);
+  if (base === currentParent) return `"${path}" already lives in "${base}"`;
+  if (isDirectory && (base === path || base.startsWith(`${path}/`))) {
+    return `cannot move "${path}" into itself or a descendant`;
+  }
+  return { basename, base };
+}
+
+registerApplier('session', 'moveDirectory', (op) => {
+  const { path, targetDir } = op as { path: string; targetDir: string };
+  const resolved = _resolveMoveTarget(path, targetDir, true);
+  if (typeof resolved === 'string') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `moveDirectory: ${resolved}` } };
+  }
+  const fullPath = resolveGamePath(path);
+  const newFullPath = resolveGamePath(`${resolved.base}/${resolved.basename}`);
+  void renameOnDisk(fullPath, newFullPath).then(ok => {
+    if (ok) broadcastAssetsChanged('directory-only');
+    else broadcastAssetsError({ op: 'moveDirectory', path, hint: `moveDirectory("${path}" -> "${resolved.base}/") failed on server` });
+  }).catch(e => broadcastAssetsError({ op: 'moveDirectory', path, hint: _ioFailHint('moveDirectory', path, e) }));
+  return { ok: true };
+});
+
+registerApplier('session', 'moveSourceFile', (op) => {
+  const { path, targetDir } = op as { path: string; targetDir: string };
+  const resolved = _resolveMoveTarget(path, targetDir, false);
+  if (typeof resolved === 'string') {
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `moveSourceFile: ${resolved}` } };
+  }
+  const fullPath = resolveGamePath(path);
+  const newFullPath = resolveGamePath(`${resolved.base}/${resolved.basename}`);
+  void renameSourceFileOnDisk(fullPath, newFullPath).then(ok => {
+    if (ok) broadcastAssetsChanged();
+    else broadcastAssetsError({ op: 'moveSourceFile', path, hint: `moveSourceFile("${path}" -> "${resolved.base}/") failed on server` });
+  }).catch(e => broadcastAssetsError({ op: 'moveSourceFile', path, hint: _ioFailHint('moveSourceFile', path, e) }));
+  return { ok: true };
+});
+
 registerApplier('session', 'revealInFileManager', (op) => {
   const { path } = op as { path: string };
   void fetch('/api/files/reveal', {
@@ -460,6 +517,10 @@ registerApplier('document', 'restoreAsset', applyRestoreAsset as unknown as Appl
 // D2: createAsset is a DOCUMENT-domain op — it produces an inverse (destroyAsset)
 // for free Undo, enters the ledger, and writes through ctx.assetIO (the sole
 // asset write gate, symmetric to ctx.engine for ECS writes).
+// M2 deliberately observes this existing owner through Gateway discovery and
+// dispatch. Its fire-and-forget completion remains the q5 red condition; the
+// product creation runtime must not call this applier directly or add a second
+// completion path. The terminal owner repair is reserved for M5.
 
 /** Payload factory — the ONLY location with knowledge of what a blank asset looks
  *  like per kind. UI/AI never carry payloads; the applier constructs them here.
@@ -530,30 +591,51 @@ export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
   // than duplicating those derived references in the source entry.
   const assetRefs = assetKind === 'particle-effect' ? [] : refs;
 
-  // Fire-and-forget async IO through the asset gate (symmetrical to destroyAsset).
-  // The document-applier contract is synchronous: return inverse immediately,
-  // IO completes in background. The write result is CHECKED — a failed write is
-  // broadcast as an assetsError so the UI does not show an asset that never
-  // reached disk (same discipline as createMaterial; no completion tracking
-  // here because nothing binds to a fresh blank scene asset).
-  void ctx.assetIO.createAssetInPack({
+  // The asset gate owns the actual pack mutation. The returned completion is
+  // bound by EditGateway to the request-correlated OperationRun, so dispatch
+  // acceptance cannot be mistaken for a committed pack write.
+  const completion = ctx.assetIO.createAssetInPack({
     packPath,
     asset: { guid, kind: assetKind, name, payload, refs: assetRefs, execution },
     extraAssets: extraAssets.length > 0 ? extraAssets : undefined,
   })
     .then((r) => {
       if (!r.ok) {
-        console.error('[editor-core] createAsset write failed:', { guid, packPath, reason: r.reason, hint: r.hint });
         broadcastAssetsError({ op: 'createAsset', path: packPath, hint: `createAsset write failed (${r.reason}): ${r.hint}` });
-        return;
+        return {
+          ok: false as const,
+          error: {
+            code: 'asset-write-failed',
+            hint: `createAsset write failed (${r.reason}): ${r.hint}`,
+            retryable: true,
+            recoveryActions: ['run.retry'],
+          },
+        };
       }
       broadcastAssetsChanged();
+      return { ok: true as const, result: r };
     })
     .catch((e) => {
-      console.warn('[editor-core] createAsset IO failed:', e);
-      broadcastAssetsError({ op: 'createAsset', path: packPath, hint: _ioFailHint('createAsset', packPath, e) });
+      const hint = _ioFailHint('createAsset', packPath, e);
+      broadcastAssetsError({ op: 'createAsset', path: packPath, hint });
+      return {
+        ok: false as const,
+        error: { code: 'asset-write-failed', hint, retryable: true, recoveryActions: ['run.retry'] },
+      };
     });
-  return { ok: true, inverse: { kind: 'destroyAsset', _resolvedPackPath: packPath, guid } as unknown as EditorOp, created: [] };
+  trackPendingAssetWrite(
+    guid,
+    completion.then((result) => {
+      if (!result.ok) throw new Error(result.error.hint);
+    }),
+    (error) => console.warn('[editor-core] createAsset completion barrier failed:', error),
+  );
+  return {
+    ok: true,
+    inverse: { kind: 'destroyAsset', _resolvedPackPath: packPath, guid } as unknown as EditorOp,
+    created: [],
+    completion,
+  };
 }
 
 registerApplier('document', 'createAsset', applyCreateAsset as unknown as ApplierFn);

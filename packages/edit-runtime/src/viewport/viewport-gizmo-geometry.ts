@@ -5,28 +5,22 @@
 //   The createViewport factory in viewport.ts had grown to ~1010 lines because the
 //   pure geometry that BUILDS the gizmo/param-gizmo point sets lived inline in the
 //   closure next to the engine-writing wiring. This file lifts that geometry out:
-//   the axis/plane/ring layout constants, the cone-mesh vertex builder, and the
-//   dotted-wireframe point generators for Camera frusta.
+//   the axis/plane/ring layout constants and the wireframe point generators for
+//   Camera frusta.
 //   viewport.ts now imports these and stays focused on the engine wiring + the
 //   pointer/gizmo interaction state machine.
 //
 // WHY PURE (same discipline as viewport-ray.ts / viewport-camera.ts, D-8)
 //   Every function here is pure: it takes explicit numbers/tuples and returns
-//   Vec3 point arrays or typed-array mesh data — no DOM, no engine World, no
+//   Vec3 point arrays — no DOM, no engine World, no
 //   EngineFacade, no closure state. The caller (createViewport) owns the engine
 //   writes (engine.set / spawn / allocSharedRef); this file only computes WHERE
 //   things go. That keeps the reader's concept count down and lets the geometry be
 //   reasoned about in isolation. Imports are limited to @forgeax/engine-math (quat/
 //   vec3) + the sibling pure module viewport-ray (Vec3/num/orthoBasis).
 //
-// OOS-1 / OOS-3 (zero behavior change, no semantic rewrite)
-//   Every body below is the VERBATIM math previously inline in viewport.ts
-//   (ensureCone vertex loop, addSeg/circlePts/forwardOf, and the camera branch of
-//   updateParamGizmo). Only the surrounding orchestration (getSelection,
-//   entComponents, isAuxVisible, placeDots) stays in viewport.ts. This is a pure
-//   MOVE, not a rewrite — the sister loop world-partition rewrites the camera-pose
-//   WRITE path (viewport.ts:167) and the pick path, neither of which lives here, so
-//   this extraction adds no conflict surface to the controlled intersection (AC-10).
+// The functions below are pure geometry. Selection, visibility, and the
+// post-scene DebugDraw side effect stay in the viewport pools.
 //
 // Anchors:
 //   (forward) plan-strategy feat-20260709-editor-large-file-di-decompose-wave2-c-domain-scen
@@ -70,33 +64,7 @@ export const PLANES: PlaneHandle[] = [
 /** Cube segments per rotation ring. */
 export const RING_SEG = 24;
 
-/** Quaternion that rotates the cone's local +Y to point down each world axis. */
-export const TIP_QUAT: [number, number, number, number][] = [
-  [0, 0, -0.70710678, 0.70710678], // X: +Y → +X
-  [0, 0, 0, 1],                     // Y: identity
-  [0.70710678, 0, 0, 0.70710678],   // Z: +Y → +Z
-];
-
-// ── pure mesh + point builders ────────────────────────────────────────────────
-
-/** Cone mesh data (apex at +Y, base ring at Y=0, closed) for the translate
- *  arrowheads. Unlit material ignores normals/uv, so those are dummy. Interleaved
- *  layout is [px,py,pz, nx,ny,nz, u,v]. Caller wraps it via meshFromInterleaved. */
-export function buildConeMeshData(): { vertices: Float32Array; indices: Uint16Array } {
-  const SEG = 16;
-  const v: number[] = [];
-  const push = (x: number, y: number, z: number): void => { v.push(x, y, z, 0, 1, 0, 0, 0); };
-  push(0, 1, 0);  // 0: apex
-  push(0, 0, 0);  // 1: base center
-  for (let i = 0; i < SEG; i++) { const t = (i / SEG) * Math.PI * 2; push(Math.cos(t), 0, Math.sin(t)); }
-  const idx: number[] = [];
-  for (let i = 0; i < SEG; i++) {
-    const a = 2 + i, b = 2 + ((i + 1) % SEG);
-    idx.push(0, a, b);  // side face
-    idx.push(1, b, a);  // base cap
-  }
-  return { vertices: new Float32Array(v), indices: new Uint16Array(idx) };
-}
+// ── pure point builders ───────────────────────────────────────────────────────
 
 /** Append `n`+1 evenly-spaced points along the segment a→b into `out`. */
 export const addSeg = (out: Vec3[], a: Vec3, b: Vec3, n = 10): void => {
@@ -142,4 +110,25 @@ export function cameraGizmoPoints(
   const n4 = rect(near), f4 = rect(far);
   for (let i = 0; i < 4; i++) { addSeg(pts, n4[i]!, n4[(i + 1) % 4]!, 6); addSeg(pts, f4[i]!, f4[(i + 1) % 4]!, 8); addSeg(pts, n4[i]!, f4[i]!, 10); }
   return pts;
+}
+
+/** Solid line segments for the same camera frustum represented by
+ * `cameraGizmoPoints`. Keeping the segment grouping here avoids accidental
+ * bridge lines between the near edge, far edge, and depth connector when the
+ * geometry is sent to DebugDraw. */
+export function cameraGizmoSegments(
+  cam: Record<string, unknown>, center: Vec3, t: Record<string, number> | undefined, dist: number, aspect: number,
+): Array<readonly [Vec3, Vec3]> {
+  const points = cameraGizmoPoints(cam, center, t, dist, aspect);
+  const segments: Array<readonly [Vec3, Vec3]> = [];
+  let offset = 0;
+  for (let i = 0; i < 4; i++) {
+    for (const subdivisions of [6, 8, 10]) {
+      for (let j = 0; j < subdivisions; j++) {
+        segments.push([points[offset + j]!, points[offset + j + 1]!]);
+      }
+      offset += subdivisions + 1;
+    }
+  }
+  return segments;
 }

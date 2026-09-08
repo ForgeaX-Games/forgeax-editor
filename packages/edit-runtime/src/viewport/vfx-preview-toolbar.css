@@ -1,0 +1,40 @@
+/* vfx-preview-toolbar — header control for the VFX preview. Transport buttons
+   reuse the global `.fx-panel-action` header-button class (lime active state);
+   the phase scrubber, emitter-mask chips and live inspect label are bespoke but
+   fully tokenised. Mirrors mesh-preview-toolbar. */
+
+.fx-vfxpv-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fx-vfxpv-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line, var(--color-border-subtle, #2a2d30));
+}
+
+.fx-vfxpv-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--color-text-tertiary);
+}
+.fx-vfxpv-phase > span { font-family: var(--prim-font-mono); text-transform: uppercase; letter-spacing: 0.04em; }
+.fx-vfxpv-phase input[type='range'] { width: 96px; accent-color: var(--color-brand-primary); }
+.fx-vfxpv-phase output { min-width: 26px; font-family: var(--prim-font-mono); color: var(--color-text-secondary); text-align: right; }
+
+.fx-vfxpv-inspect {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-family: var(--prim-font-mono);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}

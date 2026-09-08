@@ -53,6 +53,8 @@ export type EngineInterfaceName =
   | 'assetIO.writeMetaSidecar'
   | 'assetIO.triggerCook'
   | 'assetIO.readSourceBytes'
+  | 'assetIO.probeSourceFile'
+  | 'assetIO.moveSourceFile'
   | 'assetIO.deleteSourceFile'
   | 'assetIO.readPack'
   | 'assetIO.verifySourceFileAbsent'

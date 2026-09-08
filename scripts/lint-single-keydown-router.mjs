@@ -14,6 +14,10 @@ const allowed = new Set([
   'packages/interface/src/lib/global-shortcuts.ts',
   'packages/core/src/shortcut-forwarder.ts',
   'packages/play-runtime/src/shortcut-forwarder.ts',
+  // The UE dock drag controller captures Escape only while a pointer drag is
+  // active to cancel that transient gesture; it never dispatches an editor
+  // command or mutates authored state.
+  'packages/interface/src/components/DockShell/ueDrag/controller.ts',
 ]);
 const globalKeydown = /\b(?:window|document)\s*\.addEventListener\(\s*['"]keydown['"]/;
 const files = (await new Promise((resolveFiles) => {
@@ -35,7 +39,7 @@ for (const file of files) {
 if (offenders.length) {
   console.error(`${label} G-1 violation: found ${offenders.length} global keydown executor(s).`);
   for (const offender of offenders) console.error(`  ${offender}`);
-  console.error(`${label} Move editor commands to packages/interface/src/lib/global-shortcuts.ts; move modal Escape/Enter to the modal root onKeyDown. Only exact shortcut-forwarder.ts files may remain as transport exceptions.`);
+  console.error(`${label} Move editor commands to packages/interface/src/lib/global-shortcuts.ts; move modal Escape/Enter to the modal root onKeyDown. Only exact shortcut-forwarder.ts files and transient gesture-capture owners may remain as exceptions.`);
   process.exit(1);
 }
 console.log(`${label} AC-A1 OK -- one command executor and only exact transport exceptions`);

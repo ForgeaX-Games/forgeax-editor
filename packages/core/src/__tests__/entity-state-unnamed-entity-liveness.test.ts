@@ -34,6 +34,7 @@ import { World } from '@forgeax/engine-ecs';
 import { ChildOf, Name, Transform } from '@forgeax/engine-scene';
 import { entComponent } from '../store/entity-state';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 
 /** Spawn an organizational node the way prefab instantiation does: Transform
  *  (and hierarchy links) but deliberately NO Name component. */
@@ -48,7 +49,7 @@ function spawnUnnamed(world: World, parent?: EntityHandle): EntityHandle {
 
 describe('isStale legacy probe — Name-keyed contract (cross-world guard)', () => {
   it('(a) an unnamed live entity reads as stale via entComponent — bypass with world.get', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const parent = spawnUnnamed(world);
 
     // The gated read reports stale (Name probe) even though the entity is
@@ -65,7 +66,7 @@ describe('isStale legacy probe — Name-keyed contract (cross-world guard)', () 
   });
 
   it('(b) a despawned entity is still reported stale-entity-handle', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const r0 = world.spawn({ component: Name, data: { value: 'doomed' } });
     if (!r0.ok) throw new Error('spawn failed');
     const e = r0.value;
@@ -79,7 +80,7 @@ describe('isStale legacy probe — Name-keyed contract (cross-world guard)', () 
   });
 
   it('(c) a named live entity missing the requested component reports component-absent, not stale', () => {
-    const world = new World();
+    const world = createCoreTestWorld();
     const r0 = world.spawn({ component: Name, data: { value: 'org-node' } });
     if (!r0.ok) throw new Error('spawn failed');
     const org = r0.value;

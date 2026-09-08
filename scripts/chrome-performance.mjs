@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { chromium as defaultChromium } from '@playwright/test';
 import {
   disableSurfaceProfiler,
+  pickSurfaceFrameId,
   selectedSurfaceFrame,
   startSurfaceProfiler,
 } from '../skills/forgeax-editor-performance/scripts/cpu-profile-attribution.mjs';
@@ -57,9 +58,11 @@ const SURFACES = ['edit', 'play-scene', 'play-game'];
 const BACKGROUND_REQUEST_PATTERNS = [
   /^\/api\/logs$/,
   /^\/api\/bus\/ui\/surfaces\/[^/]+\/pending$/,
-  /^\/api\/workbench\/games$/,
+  /^\/api\/projects$/,
   /^\/api\/extensions\/list$/,
   /^\/api\/health$/,
+  /^\/api\/tools$/,
+  /^\/api\/events\/stream$/,
 ];
 
 export function classifyResourceRequest(request) {
@@ -1475,24 +1478,11 @@ async function waitForSelectorAcrossFrames(page, selector, visible) {
 
 async function applicationFrameIdForSurface(client, surface) {
   const { frameTree } = await client.send('Page.getFrameTree');
-  const rows = [];
-  const visit = (node) => {
-    rows.push({ id: node.frame.id, url: node.frame.url });
-    for (const child of node.childFrames ?? []) visit(child);
-  };
-  visit(frameTree);
-  const candidates = rows.filter((row) => {
-    try {
-      const path = new URL(row.url).pathname;
-      return surface === 'edit' ? path.startsWith('/editor/') : path.startsWith('/preview/');
-    } catch {
-      return false;
-    }
-  });
-  if (candidates.length !== 1) {
-    throw new Error(`expected one Chrome frame for ${surface}, found ${JSON.stringify(candidates)}`);
+  const frameId = pickSurfaceFrameId(frameTree, surface);
+  if (frameId === undefined) {
+    throw new Error(`expected an authoritative Chrome frame for ${surface}`);
   }
-  return candidates[0].id;
+  return frameId;
 }
 
 async function main() {

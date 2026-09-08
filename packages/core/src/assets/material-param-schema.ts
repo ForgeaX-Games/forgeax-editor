@@ -3,19 +3,15 @@
 //
 // WHY THIS EXISTS
 //   The old material panel hard-coded baseColor / metallic / roughness + three
-//   texture slots. The engine's SSOT for "which parameters a material shader
-//   exposes" is the shader's paramSchema, shipped to every host inside the
-//   shader manifest (`/shaders/manifest.json` → materialShaders[].paramSchema,
-//   a JSON string) — the same manifest the renderer and the preview viewport
-//   already boot from. This module turns (material payload × manifest) into a
-//   flat row model the panel renders, so custom shaders and the full standard
+//   texture slots. The Engine's cooked Material record owns the parameter
+//   contract consumed by runtime and Inspector. This module turns that record
+//   projection into a flat row model, so custom shaders and the full standard
 //   PBR surface (emissive / clearcoat / channel selectors / specularTint /
 //   specularTintTexture …) appear without per-field hand wiring.
 //
 // Resolution order for a material's effective parameter list:
-//   1. the material's pass module → manifest paramSchema (factory-module
-//      aliases applied, e.g. `forgeax_material::standard`);
-//   2. known engine standard ids → DEFAULT_STANDARD_PBR_PARAM_SCHEMA
+//   1. cooked parameterContract.parameters;
+//   2. retained built-in shader ids → DEFAULT_STANDARD_PBR_PARAM_SCHEMA
 //      (offline/test fallback when no manifest is reachable);
 //   3. the material's own `parameters` declarations overlaid by name
 //      (authored custom-material contract);
@@ -59,6 +55,43 @@ const STANDARD_PBR_FALLBACK_IDS: ReadonlySet<string> = new Set([
 ]);
 
 export type ShaderParamSchemaIndex = ReadonlyMap<string, readonly ParamSchemaEntry[]>;
+
+/**
+ * Read-only, GUID-addressed publication facts shared by Runtime, Inspector,
+ * and AI callers. The five publication fields are identity facts; transport
+ * only records where the same publication was read and never participates in
+ * tuple equality.
+ */
+export type MaterialPublicationInspection =
+  | {
+      readonly ok: true;
+      readonly materialGuid: string;
+      readonly publicationGeneration: number;
+      readonly specializationKey: string;
+      readonly sourceClosure: readonly { readonly module: string; readonly digest: string }[];
+      readonly artifactDigest: string;
+      readonly parameterContract: Readonly<Record<string, unknown>>;
+      readonly transport: { readonly url: string; readonly host: 'editor' | 'standalone' | 'play' };
+    }
+  | {
+      readonly ok: false;
+      readonly code:
+        | 'shader-module-not-found'
+        | 'material-reflection-binding-mismatch'
+        | 'material-specialization-not-cooked'
+        | 'asset-artifact-missing'
+        | 'asset-artifact-integrity-mismatch'
+        | 'material-cook-record-invalid'
+        | 'material-reference-not-ready';
+      readonly materialGuid: string;
+      readonly specializationKey?: string;
+      readonly publicationGeneration?: number;
+      readonly expected?: unknown;
+      readonly actual?: unknown;
+      readonly hint: string;
+      readonly retryable: boolean;
+      readonly recoveryActions: readonly string[];
+    };
 
 function isParamSchemaEntry(value: unknown): value is ParamSchemaEntry {
   if (typeof value !== 'object' || value === null) return false;
@@ -159,6 +192,14 @@ export function resolveMaterialParamSchema(
 ): { descriptors: MaterialParamDescriptor[]; declaredNames: Set<string> } {
   const byName = new Map<string, MaterialParamDescriptor>();
 
+  const cookedContract = payload.parameterContract;
+  if (cookedContract !== null && typeof cookedContract === 'object' && !Array.isArray(cookedContract)) {
+    const parameters = (cookedContract as { parameters?: unknown }).parameters;
+    const cooked = declaredParameters({ parameters });
+    for (const entry of cooked) byName.set(entry.name, entry);
+    return { descriptors: [...byName.values()], declaredNames: new Set(cooked.map((d) => d.name)) };
+  }
+
   for (const module of passModules(payload)) {
     const schema = index?.get(module) ?? index?.get(ENGINE_MODULE_ALIASES[module] ?? '');
     if (schema !== undefined) {
@@ -173,6 +214,14 @@ export function resolveMaterialParamSchema(
 
   const declared = declaredParameters(payload);
   for (const entry of declared) byName.set(entry.name, entry);
+
+  // If no pass schema and no declared parameters found (e.g. default standard material
+  // with no explicit pass list), fallback to DEFAULT_STANDARD_PBR_PARAM_SCHEMA so standard
+  // PBR parameters (baseColor, metallic, roughness, texture slots, etc.) are always editable.
+  if (byName.size === 0 && declared.length === 0) {
+    for (const entry of DEFAULT_STANDARD_PBR_PARAM_SCHEMA) byName.set(entry.name, entry);
+  }
+
   return { descriptors: [...byName.values()], declaredNames: new Set(declared.map((d) => d.name)) };
 }
 

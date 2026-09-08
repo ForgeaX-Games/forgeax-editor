@@ -1,32 +1,28 @@
-// AssetPicker — a Unity-style modal asset browser for Inspector asset fields.
-//
-// The Inspector asset widgets are drop-only: to bind a mesh/material you must
-// drag a Content Browser row onto the field. This modal adds the second,
-// discoverable path — click the field's "browse" affordance to open a searchable,
-// type-filtered list of catalogued assets and pick one.
-//
-// Self-contained overlay (no portal / no AssetThumbnail dependency — this editor
-// copy has none). Data comes from the gateway read surface the drop path uses:
-//   - gateway.assetCatalog()          → { guid, kind, name, packageUrl }[]
-//   - gateway.describeAssetByGuid(g)  → { kind, meta } for a lightweight swatch
-// Filtering is by the producer-owned binding target token, so the picker can
-// never offer an asset the field would reject.
+// AssetPicker — UE-style anchored asset browser for Inspector asset fields.
+// Portaled to document.body with adaptive above/below placement.
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 import { gateway } from '@forgeax/editor-core';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ForgeaxIcon, AssetThumbnail } from '@forgeax/editor-ui';
+import { readRuntimeAssetCatalog } from './runtime-asset-catalog';
+import {
+  computeAssetPickerPlacement,
+  type AssetPickerAnchor,
+} from './asset-picker-placement';
 import './inspector.css';
 
+export type { AssetPickerAnchor } from './asset-picker-placement';
+export { anchorFromElement } from './asset-picker-placement';
+
 export interface AssetPickerProps {
-  /** The field's expected asset-union type, e.g. 'MeshAsset' / 'MaterialAsset'. */
   assetType: string;
-  /** GUID of the currently bound asset (to mark the active row), if any. */
   currentGuid?: string | null;
-  /** Bind the chosen asset's GUID to the field. */
+  /** Anchor rect from the invoking asset-ref control; defaults to a viewport fallback. */
+  anchor?: AssetPickerAnchor | null;
   onPick: (guid: string) => void;
-  /** Unbind (clear) the field. Omit to hide the "None" row. */
   onClear?: () => void;
-  /** Dismiss without changing the binding. */
   onClose: () => void;
 }
 
@@ -37,48 +33,85 @@ interface Row {
   packageUrl: string;
 }
 
-// A never-empty display label. The engine's listCatalog returns `name: ''` for
-// assets with no stored name (builtin meshes, or GLB sub-meshes the importer
-// left unnamed — "genuinely no name" is a deliberate signal, not a bug), so a
-// bare `e.name ?? e.guid` renders a blank row (`?? ` doesn't catch `''`). Fall
-// back to the source file's basename (imported GLB/FBX → "Fox"), then the
-// runtime URL's basename, then a `kind + short-guid` tag, so a MeshAsset row is
-// always identifiable even without a real thumbnail.
 function baseName(path: string | undefined): string {
   if (!path) return '';
   const last = path.split('/').pop() ?? '';
   return last.replace(/\.(pack\.json|meta\.json)$/i, '').replace(/\.[^.]+$/, '');
 }
+
 function catalogEntryName(e: { name?: string; guid: string; kind: string; packageUrl: string; sourcePath?: string }): string {
   if (e.name && e.name.trim()) return e.name.trim();
   return baseName(e.sourcePath) || baseName(e.packageUrl) || `${e.kind} ${e.guid.slice(0, 8)}`;
 }
 
-// Real asset preview via the shared editor-ui primitive: image thumbnail for
-// texture/image, material baseColor sphere, kind-tinted glyph otherwise. The
-// POD payload (baseColor, source, …) comes from the by-guid describe leg; the
-// catalog packageUrl lets texture kinds resolve an image URL.
 function Swatch({ guid, kind, packageUrl }: { guid: string; kind: string; packageUrl?: string }) {
-  const desc = gateway.describeAssetByGuid(guid);
-  const meta = desc?.ok ? (desc.meta as Record<string, unknown> | undefined) : undefined;
-  return <AssetThumbnail kind={kind} payload={meta} packPath={packageUrl} size={20} />;
+  const described = gateway.describeAssetByGuid(guid);
+  const meta = described?.ok ? (described.meta as Record<string, unknown> | undefined) : undefined;
+  return <AssetThumbnail kind={kind} payload={meta} packPath={packageUrl} size={24} />;
 }
 
-export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }: AssetPickerProps) {
+const FALLBACK_ANCHOR: AssetPickerAnchor = { top: 120, bottom: 152, left: 240, right: 560, width: 320, height: 32 };
+
+function PickerRow({
+  row,
+  active,
+  focused,
+  onHover,
+  onClick,
+}: {
+  row: Row;
+  active: boolean;
+  focused: boolean;
+  onHover: () => void;
+  onClick: () => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      className={`fx-asset-picker-row${active ? ' active' : ''}${focused ? ' focused' : ''}`}
+      data-testid={`asset-picker-row-${row.guid}`}
+      onMouseEnter={onHover}
+      onClick={onClick}
+      title={`${row.name}\n${row.kind} · ${row.guid}`}
+    >
+      <span className="fx-asset-picker-row-thumb">
+        <Swatch guid={row.guid} kind={row.kind} packageUrl={row.packageUrl} />
+      </span>
+      <span className="fx-asset-picker-row-name">{row.name}</span>
+    </button>
+  );
+}
+
+export function AssetPicker({
+  assetType,
+  currentGuid,
+  anchor,
+  onPick,
+  onClear,
+  onClose,
+}: AssetPickerProps): ReactElement {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState(() => computeAssetPickerPlacement(anchor ?? FALLBACK_ANCHOR));
 
-  const rows = useMemo<Row[]>(() => {
-    const queried = gateway.assetCatalog({ compatibleWith: assetType });
-    if (!queried.ok) return [];
-    const catalog = queried.assets;
-    const out: Row[] = [];
-    for (const e of catalog) {
-      out.push({ guid: e.guid, kind: e.kind, name: catalogEntryName(e), packageUrl: e.packageUrl });
-    }
-    out.sort((a, b) => a.name.localeCompare(b.name));
-    return out;
+  const [rows, setRows] = useState<Row[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void readRuntimeAssetCatalog(assetType).then((catalog) => {
+      if (cancelled) return;
+      const out = catalog.map((entry) => ({
+        guid: entry.guid,
+        kind: entry.kind,
+        name: catalogEntryName(entry),
+        packageUrl: entry.packageUrl,
+      }));
+      out.sort((left, right) => left.name.localeCompare(right.name));
+      setRows(out);
+    }).catch(() => { if (!cancelled) setRows([]); });
+    return () => { cancelled = true; };
   }, [assetType]);
 
   const filtered = useMemo(() => {
@@ -92,6 +125,12 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
     setFocused((i) => Math.min(Math.max(i, 0), Math.max(filtered.length - 1, 0)));
   }, [filtered.length]);
 
+  useLayoutEffect(() => {
+    const resolved = anchor ?? FALLBACK_ANCHOR;
+    const measured = panelRef.current?.offsetHeight ?? placement.maxHeight;
+    setPlacement(computeAssetPickerPlacement(resolved, measured));
+  }, [anchor, filtered.length, query, placement.maxHeight]);
+
   const commit = (guid: string) => { onPick(guid); onClose(); };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -101,82 +140,76 @@ export function AssetPicker({ assetType, currentGuid, onPick, onClear, onClose }
     else if (e.key === 'Enter') { e.preventDefault(); const row = filtered[focused]; if (row) commit(row.guid); }
   };
 
-  return (
-    <div
-      className="fx-asset-picker-backdrop"
-      data-testid="asset-picker"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
+  return createPortal(
+    <>
+      <div className="fx-asset-picker-backdrop" onMouseDown={onClose} />
       <div
-        className="fx-asset-picker"
-        role="dialog"
-        aria-label={`Select ${assetType}`}
+        ref={panelRef}
+        className={`fx-asset-picker fx-asset-picker--${placement.placement}`}
+        data-testid="asset-picker"
+        role="listbox"
+        aria-label={t('editor.inspector.assetPicker.browseSection')}
+        style={{
+          top: placement.top,
+          left: placement.left,
+          width: placement.width,
+          minHeight: placement.minHeight,
+          height: placement.maxHeight,
+          maxHeight: placement.maxHeight,
+        }}
         onKeyDown={onKeyDown}
+        onMouseDown={(e) => e.stopPropagation()}
       >
-        <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--color-divider-default)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>Select {assetType}</span>
-          <button type="button" data-testid="asset-picker-close" title="close (Esc)" onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 2 }}>
-            <ForgeaxIcon name="x" size={14} />
-          </button>
+        <div className="fx-asset-picker-section">
+          <div className="fx-asset-picker-section-label">{t('editor.inspector.assetPicker.browseSection')}</div>
+          <div className="fx-asset-picker-search">
+            <ForgeaxIcon name="search" size={13} />
+            <input
+              ref={inputRef}
+              type="text"
+              data-testid="asset-picker-search"
+              value={query}
+              placeholder={t('editor.inspector.assetPicker.searchPlaceholder')}
+              onChange={(e) => { setQuery(e.target.value); setFocused(0); }}
+            />
+          </div>
         </div>
-        <div style={{ padding: 8, borderBottom: '1px solid var(--color-divider-default)' }}>
-          <input
-            ref={inputRef}
-            type="text"
-            data-testid="asset-picker-search"
-            value={query}
-            placeholder={`Search ${rows.length} ${assetType}…`}
-            onChange={(e) => { setQuery(e.target.value); setFocused(0); }}
-            style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '5px 8px', background: 'var(--color-background-elevated)', border: '1px solid var(--color-border-subtle)', borderRadius: 6, color: 'var(--color-text-primary)', outline: 'none' }}
-          />
+        <div className="fx-asset-picker-list-head">
+          <ForgeaxIcon name="layers" size={12} />
+          <span>{t('editor.inspector.assetPicker.nameColumn')}</span>
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
+        <div className="fx-asset-picker-list">
           {onClear && (
-            <button type="button" data-testid="asset-picker-none" onClick={() => { onClear(); onClose(); }} style={rowStyle(!currentGuid, false)}>
-              <span style={{ width: 20, height: 20, minWidth: 20, borderRadius: 3, border: '1px dashed var(--color-border-default)' }} />
-              <span style={{ flex: 1, fontSize: 12, color: 'var(--color-text-tertiary)' }}>None (unbind)</span>
+            <button
+              type="button"
+              className="fx-asset-picker-row fx-asset-picker-row-none"
+              data-testid="asset-picker-none"
+              onClick={() => { onClear(); onClose(); }}
+            >
+              <span className="fx-asset-picker-row-thumb empty" />
+              <span className="fx-asset-picker-row-name">{t('editor.inspector.assetPicker.none')}</span>
             </button>
           )}
           {filtered.length === 0 && (
-            <div data-testid="asset-picker-empty" style={{ padding: 16, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12 }}>
-              {rows.length === 0 ? `No ${assetType} in project` : `No matches for "${query}"`}
+            <div className="fx-asset-picker-empty" data-testid="asset-picker-empty">
+              {rows.length === 0
+                ? t('editor.inspector.assetPicker.emptyType', { assetType })
+                : t('editor.inspector.assetPicker.emptyQuery', { query })}
             </div>
           )}
-          {filtered.map((r, i) => (
-            <PickerRow key={r.guid} row={r} active={r.guid === currentGuid} focused={i === focused} onHover={() => setFocused(i)} onClick={() => commit(r.guid)} />
+          {filtered.map((row, index) => (
+            <PickerRow
+              key={row.guid}
+              row={row}
+              active={row.guid === currentGuid}
+              focused={index === focused}
+              onHover={() => setFocused(index)}
+              onClick={() => commit(row.guid)}
+            />
           ))}
         </div>
-        <div style={{ padding: '4px 10px', borderTop: '1px solid var(--color-divider-default)', fontSize: 10, color: 'var(--color-text-tertiary)' }}>
-          ↑↓ navigate · ⏎ select · Esc close
-        </div>
       </div>
-    </div>
-  );
-}
-
-function rowStyle(active: boolean, focused: boolean): CSSProperties {
-  return {
-    display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '5px 10px',
-    border: 'none', borderLeft: active ? '2px solid var(--color-brand-primary)' : '2px solid transparent',
-    background: focused ? 'var(--color-interaction-hover)' : 'transparent', cursor: 'pointer', textAlign: 'left',
-  };
-}
-
-function PickerRow({ row, active, focused, onHover, onClick }: { row: Row; active: boolean; focused: boolean; onHover: () => void; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      data-testid={`asset-picker-row-${row.guid}`}
-      onMouseEnter={onHover}
-      onClick={onClick}
-      title={`${row.name}\n${row.kind} · ${row.guid}`}
-      style={rowStyle(active, focused)}
-    >
-      <Swatch guid={row.guid} kind={row.kind} packageUrl={row.packageUrl} />
-      <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {row.name}
-      </span>
-      {active && <span style={{ display: 'grid', placeItems: 'center', color: 'var(--color-brand-primary)' }}><ForgeaxIcon name="check" size={13} /></span>}
-    </button>
+    </>,
+    document.body,
   );
 }

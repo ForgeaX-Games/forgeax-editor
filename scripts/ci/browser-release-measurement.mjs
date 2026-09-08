@@ -10,6 +10,7 @@ import {
   validateMeasurementIndex,
   validateBrowserReleaseDiscovery,
 } from './browser-release-portfolio.mjs';
+import {toStructuredError, validateBaselineEvidence} from './ci-baseline.mjs';
 import {validateAdmissionEnvelope} from './editor-ci-contract-envelope.mjs';
 
 export const MEASUREMENT_SCHEMA_VERSION = 'forgeax-browser-release-measurement/v1';
@@ -268,6 +269,31 @@ function readJson(path) {
 function writeJson(path, value) {
   mkdirSync(dirname(path), {recursive: true});
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function loadBaselineEvidence(path) {
+  if (!path) return {ok: false, error: issue('baseline-fact-reference-missing', '--baseline-evidence <baseline.json> or --shared-fact-reference <reference.json>', 'missing', 'Provide the current baseline evidence or its digest-backed shared fact reference before projecting browser topology.')};
+  if (!existsSync(path)) return {ok: false, error: issue('baseline-fact-reference-missing', path, 'missing', 'Materialize the current baseline evidence or shared fact reference; do not project browser topology without it.')};
+  try {
+    const value = readJson(path);
+    validateBaselineEvidence(value);
+    return {ok: true, value};
+  } catch (error) {
+    const structured = toStructuredError(error);
+    return {ok: false, error: structured.code === 'baseline-contract-error'
+      ? issue('baseline-fact-reference-input-invalid', 'collector-produced forgeax-ci-baseline/v2 evidence', String(error), 'Regenerate the baseline evidence from the current attempt packet before projecting browser topology.')
+      : structured};
+  }
+}
+
+function loadSharedFactReference(path) {
+  if (!path) return {ok: true, value: undefined};
+  if (!existsSync(path)) return {ok: false, error: issue('baseline-fact-reference-missing', path, 'missing', 'Materialize the current digest-backed baseline fact reference before projecting browser topology.')};
+  try {
+    return {ok: true, value: readJson(path)};
+  } catch (error) {
+    return {ok: false, error: issue('baseline-fact-reference-input-invalid', 'parseable baseline fact reference JSON', String(error), 'Regenerate the shared fact reference from the current baseline evidence.')};
+  }
 }
 
 function loadContract(path = resolve(ROOT, 'scripts/ci/editor-ci-contract.json')) {
@@ -563,7 +589,24 @@ async function main(argv = process.argv.slice(2)) {
       process.exitCode = 1;
       return;
     }
-    const projected = projectPortfolioTopology(indexValidation.value, contract.browserReleasePortfolio, {aggregate: null});
+    const baselineEvidencePath = argument(argv, '--baseline-evidence');
+    const sharedFactReferencePath = argument(argv, '--shared-fact-reference');
+    const baselineInput = baselineEvidencePath ? loadBaselineEvidence(resolve(baselineEvidencePath)) : {ok: true, value: null};
+    const referenceInput = loadSharedFactReference(sharedFactReferencePath ? resolve(sharedFactReferencePath) : null);
+    if (!baselineInput.ok || !referenceInput.ok || (!baselineEvidencePath && !sharedFactReferencePath)) {
+      let error;
+      if (!baselineInput.ok) error = baselineInput.error;
+      else if (!referenceInput.ok) error = referenceInput.error;
+      else error = issue('baseline-fact-reference-missing', '--baseline-evidence <baseline.json> or --shared-fact-reference <reference.json>', 'missing', 'Provide the current baseline evidence or its digest-backed shared fact reference before projecting browser topology.');
+      console.error(JSON.stringify(error));
+      process.exitCode = 1;
+      return;
+    }
+    const projected = projectPortfolioTopology(indexValidation.value, contract.browserReleasePortfolio, {
+      aggregate: null,
+      baselineEvidence: baselineInput.value,
+      ...(referenceInput.value !== undefined ? {sharedFactReference: referenceInput.value} : {}),
+    });
     if (!projected.ok) {
       console.error(JSON.stringify(projected.errors[0]));
       process.exitCode = 1;

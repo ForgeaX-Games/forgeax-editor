@@ -24,7 +24,6 @@ import type { SceneAsset } from '@forgeax/engine-types';
 
 import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { getRegisteredComponents, resolveComponent } from '@forgeax/engine-ecs';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
@@ -34,8 +33,8 @@ import { assetIO } from '../io/asset-io-facade';
 import { normalizeAnimationPlayerSceneAsset } from '../scene/animation-slot-sync';
 import { bindAllSceneAnimationTargets, type AnimationTargetBindingFailure } from '../scene/animation-target-binding';
 import { worldRootHandles } from '../store/entity-state';
-import { getComponentSchema, type FieldSchema } from '../scene/schema';
-import { planGroupedArrayPatch } from '../scene/array-edit';
+import type { FieldSchema } from '../scene/schema';
+import { planGroupedArrayPatchFromSchema } from '../scene/array-edit';
 
 export { createEditSession } from './edit-session';
 
@@ -65,7 +64,7 @@ export function applyCanonicalDocumentEffect(
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
+  'get' | 'resolveComponent' | 'componentDefinition' | 'editorComponentSchema' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.
@@ -108,21 +107,11 @@ export interface DocApplierCtx {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CToken = any;
 
-const _cmpCache = new Map<string, CToken | undefined>();
-
-function resolveToken(name: string): CToken | undefined {
-  const cached = _cmpCache.get(name);
-  if (cached !== undefined || _cmpCache.has(name)) return cached;
-  const tok = getRegisteredComponents().get(name);
-  _cmpCache.set(name, tok);
-  return tok;
+function resolveToken(engine: Pick<EngineFacade, 'resolveComponent'>, name: string): CToken | undefined {
+  // The World-local ComponentCatalog is the only dynamic resolution owner.
+  // Built-in tokens are registered by the World's scene/render plugins.
+  return engine.resolveComponent(name);
 }
-(function _seedCache() {
-  _cmpCache.set('Name', Name);
-  _cmpCache.set('Transform', Transform);
-  _cmpCache.set('ChildOf', ChildOf);
-  _cmpCache.set('Visibility', Visibility);
-})();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -138,19 +127,20 @@ function isArrayLikeValue(value: unknown): value is ArrayLike<unknown> {
   return Array.isArray(value) || ArrayBuffer.isView(value);
 }
 
-function componentFieldSchema(component: string, field: string): FieldSchema | undefined {
-  return getComponentSchema(component)?.fields.find((candidate) => candidate.key === field);
+function componentFieldSchema(engine: Pick<EngineFacade, 'editorComponentSchema'>, component: string, field: string): FieldSchema | undefined {
+  return (engine.editorComponentSchema(component) as ReturnType<EngineFacade['editorComponentSchema']>)?.fields.find((candidate) => candidate.key === field);
 }
 
-function rawComponentSchema(component: string): Record<string, string> | undefined {
-  const token = resolveComponent(component) as { schema?: Record<string, string> } | undefined;
-  return token?.schema;
+function rawComponentSchema(engine: Pick<EngineFacade, 'componentDefinition'>, component: string): Record<string, string> | undefined {
+  const definition = engine.componentDefinition(component) as ReturnType<EngineFacade['componentDefinition']>;
+  if (definition === undefined) return undefined;
+  return Object.fromEntries(Object.entries(definition.fields).map(([field, reflection]) => [field, reflection.type]));
 }
 
-function arrayFieldInfo(component: string, field: string): { rawType: string; schema?: FieldSchema } | undefined {
-  const rawType = rawComponentSchema(component)?.[field];
+function arrayFieldInfo(engine: Pick<EngineFacade, 'componentDefinition' | 'editorComponentSchema'>, component: string, field: string): { rawType: string; schema?: FieldSchema } | undefined {
+  const rawType = rawComponentSchema(engine, component)?.[field];
   if (typeof rawType !== 'string' || !rawType.startsWith('array<')) return undefined;
-  return { rawType, schema: componentFieldSchema(component, field) };
+  return { rawType, schema: componentFieldSchema(engine, component, field) };
 }
 
 function arrayLength(value: unknown): number | null {
@@ -239,11 +229,12 @@ type CompleteGroupedArrays =
  * field-path error; array add/remove/reorder callers use the pure planner and
  * send one complete patch explicitly. */
 function completeGroupedArrays(
+  engine: Pick<EngineFacade, 'editorComponentSchema'>,
   component: string,
   values: Record<string, unknown>,
   base: Record<string, unknown> | undefined,
 ): CompleteGroupedArrays {
-  const fields = getComponentSchema(component)?.fields ?? [];
+  const fields = (engine.editorComponentSchema(component) as ReturnType<EngineFacade['editorComponentSchema']>)?.fields ?? [];
   const groups = new Map<string, FieldSchema[]>();
   for (const field of fields) {
     if (field.arrayGroup === undefined) continue;
@@ -304,12 +295,13 @@ function completeGroupedArrays(
  * write. `details.fieldPath` is the machine-readable breadcrumb; callers must
  * not parse the human hint. */
 function validateComponentWrite(
+  engine: Pick<EngineFacade, 'componentDefinition' | 'editorComponentSchema'>,
   component: string,
   values: Record<string, unknown>,
   base: Record<string, unknown> | undefined,
   code: 'SET_FAILED' | 'ADD_FAILED',
 ): ComponentWriteValidation {
-  const schema = rawComponentSchema(component);
+  const schema = rawComponentSchema(engine, component);
   if (schema === undefined) {
     return { ok: false, hint: `unknown component ${component}`, details: { fieldPath: component } };
   }
@@ -323,7 +315,7 @@ function validateComponentWrite(
         details: { fieldPath, reason: 'unknown-field', knownFields: Object.keys(schema).sort() },
       };
     }
-    const arrayInfo = arrayFieldInfo(component, field);
+    const arrayInfo = arrayFieldInfo(engine, component, field);
     const fieldPath = `${component}.${field}`;
     const invalid = invalidFieldValue(schema[field]!, value);
     if (invalid !== null) {
@@ -339,7 +331,7 @@ function validateComponentWrite(
         },
       };
     }
-    const enumOptions = componentFieldSchema(component, field)?.enumOptions;
+    const enumOptions = componentFieldSchema(engine, component, field)?.enumOptions;
     if (enumOptions !== undefined && !enumOptions.some((option) => option.value === value)) {
       const fieldPath = `${component}.${field}`;
       return {
@@ -374,7 +366,7 @@ function validateComponentWrite(
   }
 
   const effective = base === undefined ? values : { ...base, ...values };
-  const schemaFields = getComponentSchema(component)?.fields ?? [];
+  const schemaFields = (engine.editorComponentSchema(component) as ReturnType<EngineFacade['editorComponentSchema']>)?.fields ?? [];
   const groups = new Map<string, FieldSchema[]>();
   for (const field of schemaFields) {
     if (field.arrayGroup === undefined) continue;
@@ -409,6 +401,7 @@ function validateComponentWrite(
 }
 
 function spawnComponentData(
+  engine: Pick<EngineFacade, 'resolveComponent'>,
   name: string,
   parent: EntityHandle | null,
   extraComponents?: Record<string, unknown>,
@@ -447,7 +440,7 @@ function spawnComponentData(
       if (BASELINE_NAMES.has(compName)) continue;
       if (compName === 'Children') continue; // Half B: engine owns Children mirror
       if (isIntentionalEditorMarker(compName)) continue;
-      const tok = resolveToken(compName);
+      const tok = resolveToken(engine, compName);
       if (tok) {
         out.push({ component: tok, data: (value ?? {}) as Record<string, unknown> });
         if (compName === 'MeshFilter') hasMeshFilter = true;
@@ -510,7 +503,7 @@ export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
   if (parentEng !== null && !engine.get(parentEng, Name).ok) {
     return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
   }
-  const compData = spawnComponentData(cmd.name ?? 'Entity', parentEng, cmd.components);
+  const compData = spawnComponentData(engine, cmd.name ?? 'Entity', parentEng, cmd.components);
   console.info(`[placement-diag] spawn-applier.before ${JSON.stringify({
     name: cmd.name ?? 'Entity',
     parent: parentEng,
@@ -799,7 +792,7 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
   const { engine, alias } = ctx;
-  const tok = resolveToken(cmd.component);
+  const tok = resolveToken(ctx.engine, cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
   const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
@@ -815,10 +808,10 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
     return { ok: false, error: { code: 'INVALID_ARGS', hint: `setComponent requires an object "patch" field (got ${cmd.patch === null ? 'null' : Array.isArray(cmd.patch) ? 'array' : typeof cmd.patch}); note setComponent uses "patch", addComponent uses "value"` } };
   }
   const before = clone(cur.value) as Record<string, unknown>;
-  const completed = completeGroupedArrays(cmd.component, cmd.patch as Record<string, unknown>, before);
+  const completed = completeGroupedArrays(ctx.engine, cmd.component, cmd.patch as Record<string, unknown>, before);
   if (!completed.ok) return { ok: false, error: { code: 'SET_FAILED', hint: completed.hint, details: completed.details } };
   const patch = completed.values;
-  const validation = validateComponentWrite(cmd.component, patch, before, 'SET_FAILED');
+  const validation = validateComponentWrite(ctx.engine, cmd.component, patch, before, 'SET_FAILED');
   if (!validation.ok) return { ok: false, error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details } };
   const restore: Record<string, unknown> = {};
   for (const k of Object.keys(patch)) restore[k] = before[k];
@@ -851,7 +844,7 @@ export function applySetSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Apply
     _beforeHadOverride?: boolean;
     _beforeOverride?: unknown;
   };
-  const tok = resolveToken(cmd.component);
+  const tok = resolveToken(ctx.engine, cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
   const root = toEntity(ctx.alias, cmd.root);
   const member = toEntity(ctx.alias, cmd.member);
@@ -864,16 +857,20 @@ export function applySetSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Apply
   const current = ctx.engine.get(member, tok);
   if (!current.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.member}` } };
   const before = clone(current.value) as Record<string, unknown>;
-  const field = getComponentSchema(cmd.component)?.fields.find((candidate) => candidate.key === cmd.field);
+  const field = componentFieldSchema(ctx.engine, cmd.component, cmd.field);
   let patch: Record<string, unknown> = { [cmd.field]: cmd.value };
-  if (field?.arrayMeta !== undefined) {
-    const planned = planGroupedArrayPatch({ component: cmd.component, field: cmd.field, value: cmd.value }, before);
+  if (field?.arrayMeta !== undefined && field.type !== 'vec') {
+    const planned = planGroupedArrayPatchFromSchema(
+      { component: cmd.component, field: cmd.field, value: cmd.value },
+      before,
+      ctx.engine.editorComponentSchema(cmd.component),
+    );
     if (!planned.ok) {
       return { ok: false, error: { code: 'SET_FAILED', hint: planned.hint, details: { fieldPath: planned.fieldPath, reason: planned.reason } } };
     }
     patch = planned.patch;
   }
-  const validation = validateComponentWrite(cmd.component, patch, before, 'SET_FAILED');
+  const validation = validateComponentWrite(ctx.engine, cmd.component, patch, before, 'SET_FAILED');
   if (!validation.ok) return { ok: false, error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details } };
   const resolved = resolveSharedFields(ctx.engine, cmd.component, patch);
   if (!resolved.ok) return { ok: false, error: { code: 'SET_FAILED', hint: resolved.hint } };
@@ -915,7 +912,7 @@ export function applyRemoveSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Ap
     component: string;
     field: string;
   };
-  const tok = resolveToken(cmd.component);
+  const tok = resolveToken(ctx.engine, cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
   const root = toEntity(ctx.alias, cmd.root);
   const member = toEntity(ctx.alias, cmd.member);
@@ -980,8 +977,7 @@ function resolveSharedFieldGuids(
   componentName: string,
   value: Record<string, unknown>,
 ): { ok: true; value: Record<string, unknown> } | { ok: false; hint: string } {
-  const tok = resolveComponent(componentName) as { schema?: Record<string, string> } | undefined;
-  const schema = tok?.schema;
+  const schema = rawComponentSchema(engine, componentName);
   if (!schema) return { ok: true, value };
 
   let out: Record<string, unknown> | null = null; // lazily cloned on first change
@@ -1048,7 +1044,7 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
   const { engine, alias } = ctx;
-  const tok = resolveToken(cmd.component);
+  const tok = resolveToken(ctx.engine, cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
   const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
@@ -1060,9 +1056,9 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
     Object.entries((cmd.value ?? {}) as Record<string, unknown>)
       .filter(([, value]) => value !== undefined),
   );
-  const completed = completeGroupedArrays(cmd.component, inputValue, undefined);
+  const completed = completeGroupedArrays(ctx.engine, cmd.component, inputValue, undefined);
   if (!completed.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: completed.hint, details: completed.details } };
-  const validation = validateComponentWrite(cmd.component, completed.values, undefined, 'ADD_FAILED');
+  const validation = validateComponentWrite(ctx.engine, cmd.component, completed.values, undefined, 'ADD_FAILED');
   if (!validation.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: validation.hint, details: validation.details } };
   // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
   // in shared fields to live handles before the engine sees them (Fail Fast on a
@@ -1083,7 +1079,7 @@ export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
   // Name is intrinsic: removeComponent Name → PROTECTED_COMPONENT. Guard before
   // token resolution.
   if (cmd.component === 'Name') return { ok: false, error: { code: 'PROTECTED_COMPONENT', hint: 'Name is intrinsic and cannot be removed' } };
-  const tok = resolveToken(cmd.component);
+  const tok = resolveToken(ctx.engine, cmd.component);
   if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
   const eH = toEntity(alias, cmd.entity);
   if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };

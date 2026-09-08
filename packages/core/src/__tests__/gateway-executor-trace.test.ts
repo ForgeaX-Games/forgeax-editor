@@ -29,12 +29,13 @@ import { EditGateway } from '../io/gateway';
 import { registerApplier } from '../io/appliers';
 import { createEditSession } from '../session/document';
 import type { ApplyResult, EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld([Skylight, SkyboxBackground, MeshFilter]);
   return session;
 }
 
@@ -394,7 +395,7 @@ describe('t12d — undo/redo span + ring buffer overflow (GREEN)', () => {
 describe('t20a — skylight gateway ops (behavioral regression)', () => {
   function createSkySession(): EditSession {
     const session = createEditSession();
-    session.world = new World();
+    session.world = createCoreTestWorld([Skylight, SkyboxBackground, MeshFilter]);
     return session;
   }
 
@@ -459,7 +460,7 @@ describe('t20a — skylight gateway ops (behavioral regression)', () => {
 describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t20d)', () => {
   function createCamSession(): EditSession {
     const session = createEditSession();
-    session.world = new World();
+    session.world = createCoreTestWorld([Skylight, SkyboxBackground, MeshFilter]);
     return session;
   }
 
@@ -537,7 +538,7 @@ describe('t20c — cameraOrbit AC-30 session op (RED before t20d, GREEN after t2
 describe('feat-20260716 UE5 nav — cameraFly / cameraTeleport / cameraLookAt session ops', () => {
   function createCamSession(): EditSession {
     const session = createEditSession();
-    session.world = new World();
+    session.world = createCoreTestWorld([Skylight, SkyboxBackground, MeshFilter]);
     return session;
   }
   function spawnCamera(gw: EditGateway): number {

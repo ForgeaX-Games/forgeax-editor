@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 // Ambient declarations for build-time globals injected by edit-runtime's vite
 // `define` (see vite.config.ts). These are not real runtime imports — vite
 // string-replaces them — so they live here as ambient `declare const`, out of

@@ -1,38 +1,21 @@
 // rotator.plugin.ts — an ASSET-RESIDENT game-logic plugin (no code in main.ts).
 //
-// This file lives under the game's `assets/` root, NOT compiled into main.ts. The
-// editor's game-plugin loader (packages/edit-runtime/src/viewport/game-plugins.ts)
-// dynamically imports every `*.plugin.ts` under assets/ via a `/@fs/` URL, so:
-//
-//   • the `defineComponent` / `defineSystem` calls below run as an import side
-//     effect and register into the ONE live engine registry the editor booted
-//     (the `gameEngineResolve` vite plugin re-anchors the bare `@forgeax/*`
-//     imports to the editor's single engine instance — runtime-vite-preset.ts);
-//   • in ✎ Edit the loader registers the COMPONENT only, so you can attach
-//     `Rotator` to an entity (e.g. BlueBall) and it round-trips into the scene
-//     pack like any builtin component (collect-scene-asset iterates every
-//     registered component) — but the system is NOT added to the edit world, so
-//     nothing spins while you author;
-//   • in ▶ Play the loader ALSO `world.addSystem(rotate)` into the fresh play
-//     world, so `rotate` ticks and the entity actually rotates. Which systems a
-//     scene runs is DERIVED from which `*.plugin.ts` exist under assets/ — it is
-//     not persisted per-scene (Derive, Don't Duplicate).
-//
-// Authoring contract for a plugin file:
-//   - export nothing that must be called; registration happens as an import side
-//     effect (defineComponent / defineSystem mutate the global registry).
-//   - component + system names are GLOBALLY UNIQUE (the loader fails fast on a
-//     duplicate name across plugin files).
+// This file lives under the game's `assets/` root, NOT compiled into main.ts.
+// The host validates the native default Cordis Plugin through Engine `loadGame`
+// and installs it into the target World with `createWorldContext`. Component
+// leases and system ownership are therefore World-local and disposed with the
+// Play realm; importing this module has no ECS side effects.
 
 import { defineComponent, defineSystem } from '@forgeax/engine-ecs';
-import type { World } from '@forgeax/engine-ecs';
+import { Update, type World } from '@forgeax/engine-ecs';
+import type { Plugin } from '@forgeax/engine-plugin';
 import { quat } from '@forgeax/engine-math';
 import { Transform } from '@forgeax/engine-scene';
 import {
   GAMEPLAY_PRODUCER_CONTRACT,
   GAMEPLAY_PRODUCER_CONTRACT_VERSION,
   type GamePluginProducer,
-} from '@forgeax/engine-app';
+} from '@forgeax/editor-game-plugins';
 
 // ── Component ────────────────────────────────────────────────────────────────
 // A tiny authoring component: spin `speed` radians/second about local `axis`.
@@ -116,7 +99,7 @@ export const gameplay: GamePluginProducer = {
     id: 'sample.rotator',
     title: 'Sample Rotator Gameplay',
   },
-  register: ({ world, gameProjection, lifecycle }) => {
+  register: ({ world, gameProjection, onDispose, onReload }) => {
     world.insertResource(SAMPLE_ROTATOR_SPEED_KEY, DEFAULT_ROTATOR_SPEED);
 
     const removeAction = gameProjection?.registerAction({
@@ -139,7 +122,7 @@ export const gameplay: GamePluginProducer = {
         return { speed };
       },
     });
-    if (removeAction) lifecycle.registerCleanup(removeAction);
+    if (removeAction) onDispose(removeAction);
 
     const query = world.query({ with: [Rotator] }).unwrap();
     const removeRead = gameProjection?.registerRead({
@@ -159,15 +142,38 @@ export const gameplay: GamePluginProducer = {
         };
       },
     });
-    if (removeRead) lifecycle.registerCleanup(removeRead);
+    if (removeRead) onDispose(removeRead);
 
-    lifecycle.registerReload(() => {
+    onReload?.(() => {
       // Source reload recovery is producer-owned: re-admit the runtime with a
       // deterministic default instead of leaving stale action state behind.
       world.insertResource(SAMPLE_ROTATOR_SPEED_KEY, DEFAULT_ROTATOR_SPEED);
     });
-    lifecycle.registerCleanup(() => {
+    onDispose(() => {
       if (world.hasResource(SAMPLE_ROTATOR_SPEED_KEY)) world.removeResource(SAMPLE_ROTATOR_SPEED_KEY);
     });
   },
 };
+
+/** Native Engine entrypoint consumed by `loadGame`. */
+const plugin: Plugin = {
+  name: 'sample.rotator',
+  inject: ['world'],
+  apply(ctx) {
+    ctx.effect(() => {
+      const lease = ctx.world.components.register(Rotator);
+      if (!lease.ok) throw lease.error;
+      const system = ctx.world.addSystem(Update, rotate);
+      if (!system.ok) {
+        lease.value.dispose();
+        throw system.error;
+      }
+      return () => {
+        ctx.world.removeSystem(Update, rotate.name);
+        lease.value.dispose();
+      };
+    }, 'sample/rotator');
+  },
+};
+
+export default plugin;

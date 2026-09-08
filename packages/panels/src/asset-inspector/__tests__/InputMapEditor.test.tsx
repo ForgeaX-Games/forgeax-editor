@@ -68,7 +68,11 @@ async function renderEditor(actions: readonly InputMapAction[]): Promise<string>
 }
 
 describe('InputMapEditor controls', () => {
-  it('renders unified search, filters, transfer, save, and mapping controls', async () => {
+  // Save / Import JSON / Export JSON are contributed as panel-header actions
+  // (asset-editors-contributions) and rendered by PanelShell from
+  // host.panelActions, so they are outside this component's static markup — the
+  // body owns only search, filters, and the mapping controls.
+  it('renders unified search, filters, and mapping controls', async () => {
     const html = await renderEditor([{
       action: 'jump',
       bindings: [{ type: 'key', key: ' ' }],
@@ -76,9 +80,6 @@ describe('InputMapEditor controls', () => {
 
     expect(html).toContain('data-testid="input-map-search"');
     expect(html).toContain('data-testid="input-map-filter-errors"');
-    expect(html).toContain('data-testid="input-map-save"');
-    expect(html).toContain('Import JSON');
-    expect(html).toContain('Export JSON');
     expect(html).toContain('Select mapping 1');
     expect(html).toContain('Drag to reorder action');
     expect(html).toContain('Paste');

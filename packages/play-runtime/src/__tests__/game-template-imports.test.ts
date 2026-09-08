@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { resolveGameEngineEntry } from '../../vite.config';
+import { resolveGameEngineEntry, resolvePlayEngineEntry } from '../../vite.config';
 
 const PLAY_RUNTIME = resolve(import.meta.dir, '..', '..');
 const GAME_TEMPLATE = resolve(PLAY_RUNTIME, '..', 'engine', 'templates', 'game-default');
@@ -27,6 +27,12 @@ function gameTemplateEngineImports(dir: string): string[] {
 }
 
 describe('new-game template Play imports', () => {
+  test('resolves the engine plugin from the current Editor worktree', () => {
+    expect(resolvePlayEngineEntry('@forgeax/engine-plugin')).toBe(
+      resolve(PLAY_RUNTIME, '..', 'engine', 'packages/plugin/dist/index.mjs'),
+    );
+  });
+
   test('resolve from the standalone Play Runtime dependency graph', () => {
     const unresolved = gameTemplateEngineImports(GAME_TEMPLATE)
       .filter((specifier) => resolveGameEngineEntry(specifier) === null);

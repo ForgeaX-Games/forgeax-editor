@@ -17,6 +17,7 @@ import type { EntityHandle } from '../scene/scene-types';
 import { EditGateway } from '../io/gateway';
 import { createEditSession, childrenOf } from '../session/document';
 import { entComponent, entName, worldEntityHandles } from '../store/entity-state';
+import { createCoreTestWorld } from './fixtures/world';
 
 const CYCLE_COUNT = 10;
 
@@ -40,7 +41,7 @@ function names(world: World): string[] {
 describe('R0-06E repeated Play/Stop world fork', () => {
   it('keeps the authored world stable, rejects every stale play handle, and emits one lifecycle notification per transition', () => {
     const session = createEditSession();
-    const editWorld = new World();
+    const editWorld = createCoreTestWorld();
     session.world = editWorld;
     const editRoot = spawn(editWorld, 'EditRoot');
     spawn(editWorld, 'EditChild', editRoot);
@@ -53,7 +54,7 @@ describe('R0-06E repeated Play/Stop world fork', () => {
     const playWorlds = new Set<World>();
 
     for (let cycle = 1; cycle <= CYCLE_COUNT; cycle += 1) {
-      const playWorld = new World();
+      const playWorld = createCoreTestWorld();
       playWorlds.add(playWorld);
 
       // Force a generation difference from the authored slot-0 handle. Without
@@ -78,6 +79,10 @@ describe('R0-06E repeated Play/Stop world fork', () => {
       });
       expect(entComponent(gateway.activeWorld, playChild, 'Transform')).toMatchObject({ ok: true });
       expect(childrenOf(gateway.activeWorld, playRoot)).toContain(playChild);
+      expect(gateway.dispatch({ kind: 'rename', entity: editRoot, name: 'edit-mutation-during-play' }, 'ai')).toMatchObject({
+        ok: false,
+        error: { code: 'edit-rejected-in-play', recoveryActions: expect.arrayContaining(['stop']) },
+      });
 
       gateway.exitPlay();
 

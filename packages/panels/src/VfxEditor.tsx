@@ -1,4 +1,17 @@
-import { useSyncExternalStore, type ReactElement } from 'react';
+import { useState, useSyncExternalStore, type ComponentType, type ReactElement } from 'react';
+import {
+  Braces,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  FileCode2,
+  Layers,
+  Radio,
+  SlidersHorizontal,
+  Sparkles,
+  Zap,
+} from 'lucide-react';
 import {
   describeVfxGpuEffect,
   isVfxGpuEffectAsset,
@@ -7,8 +20,21 @@ import {
   type VfxAuthoringValue,
 } from '@forgeax/engine-vfx';
 import { useDocumentAsset } from './AssetEditors';
+import { InspectorSection } from './asset-inspector/InspectorSection';
 import { getVfxPreview } from './vfx-preview-slot';
+import { toggleVfxEmitterHidden, useHiddenVfxEmitters } from './vfx-emitter-mask';
 import './vfx-editor.css';
+
+const ROLE_ICON: Record<string, ComponentType<{ size?: number }>> = {
+  emitter: Sparkles,
+  program: FileCode2,
+  renderer: Layers,
+  stage: Layers,
+  parameters: SlidersHorizontal,
+  custom: Braces,
+  channel: Radio,
+  event: Zap,
+};
 
 interface SelectionSnapshot { readonly assetGuid: string; readonly nodeId: string }
 let selection: SelectionSnapshot | undefined;
@@ -52,41 +78,106 @@ function renderValue(value: VfxAuthoringValue): string {
   return String(value);
 }
 
-function NodeTree({ assetGuid, nodes, depth = 0 }: {
+interface NodeTreeProps {
   readonly assetGuid: string;
   readonly nodes: readonly VfxAuthoringNodeDescriptor[];
-  readonly depth?: number;
-}): ReactElement {
-  const fallback = nodes[0]?.id ?? '';
-  const selected = useSelectedNodeId(assetGuid, fallback);
-  return <div className="vfx-tree">{nodes.map((node) => (
-    <div key={node.id}>
-      <button
-        type="button"
-        className="vfx-tree-row"
-        data-active={selected === node.id ? '1' : undefined}
-        style={{ paddingLeft: 10 + depth * 14 }}
-        onClick={() => selectNode(assetGuid, node.id)}
-      >
-        <span className={`vfx-role vfx-role-${node.role}`}>{node.role}</span>
-        <span>{node.label}</span>
-      </button>
-      {node.children.length > 0 && <NodeTree assetGuid={assetGuid} nodes={node.children} depth={depth + 1} />}
-    </div>
-  ))}</div>;
+  readonly depth: number;
+  readonly selected: string;
+  readonly collapsed: ReadonlySet<string>;
+  readonly hidden: ReadonlySet<string>;
+  readonly onToggleCollapse: (id: string) => void;
+}
+
+// Pure recursive tree renderer that reuses the global scene-Hierarchy `.tn` row
+// chrome (eye · caret · icon · name), so the VFX System Outline reads exactly
+// like the entity tree. Emitter rows own a visibility eye that drives the shared
+// emitter mask (the preview viewport dispatches setEmitterMask off it).
+function NodeTree({ assetGuid, nodes, depth, selected, collapsed, hidden, onToggleCollapse }: NodeTreeProps): ReactElement {
+  return <>{nodes.map((node) => {
+    const Icon = ROLE_ICON[node.role];
+    const hasKids = node.children.length > 0;
+    const isCollapsed = collapsed.has(node.id);
+    const isEmitter = node.role === 'emitter';
+    const isHidden = isEmitter && hidden.has(node.label);
+    return (
+      <div key={node.id}>
+        <div
+          className={`tn${selected === node.id ? ' sel' : ''}${isHidden ? ' dim' : ''}`}
+          data-testid={`vfx-node-${node.id}`}
+          onClick={() => selectNode(assetGuid, node.id)}
+        >
+          {isEmitter ? (
+            <span
+              className={`eye${isHidden ? ' off' : ''}`}
+              data-testid={`vfx-node-vis-${node.label}`}
+              title={isHidden ? 'Show emitter in preview' : 'Hide emitter in preview'}
+              onClick={(event) => { event.stopPropagation(); toggleVfxEmitterHidden(assetGuid, node.label); }}
+            >
+              {isHidden ? <EyeOff size={13} aria-hidden="true" /> : <Eye size={13} aria-hidden="true" />}
+            </span>
+          ) : <span className="eye" aria-hidden="true" />}
+          <span className="name-cell" style={{ paddingLeft: depth * 15 }}>
+            <span
+              className="caret"
+              onClick={hasKids ? (event) => { event.stopPropagation(); onToggleCollapse(node.id); } : undefined}
+              style={hasKids ? { cursor: 'pointer' } : undefined}
+            >
+              {hasKids
+                ? (isCollapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />)
+                : <span className="leafdot" />}
+            </span>
+            {Icon && <span className="ico" aria-hidden="true"><Icon size={15} /></span>}
+            <span className="nm" title={node.label}>{node.label}</span>
+            <span className="vfx-role-tag">{node.role}</span>
+          </span>
+        </div>
+        {hasKids && !isCollapsed && (
+          <NodeTree
+            assetGuid={assetGuid}
+            nodes={node.children}
+            depth={depth + 1}
+            selected={selected}
+            collapsed={collapsed}
+            hidden={hidden}
+            onToggleCollapse={onToggleCollapse}
+          />
+        )}
+      </div>
+    );
+  })}</>;
 }
 
 function PanelMessage({ children }: { readonly children: string }): ReactElement {
-  return <div className="panel vfx-panel"><div className="field muted">{children}</div></div>;
+  return <div className="panel vfx-panel vfx-panel--message"><div className="field muted">{children}</div></div>;
 }
 
 export function VfxSystemPanel(): ReactElement {
   const state = useVfxDescriptor();
+  const fallback = state.descriptor?.emitters[0]?.id ?? '';
+  const selected = useSelectedNodeId(state.assetGuid, fallback);
+  const hidden = useHiddenVfxEmitters(state.assetGuid);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCollapse = (id: string): void => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   if (!state.descriptor) return <PanelMessage>{state.error ?? 'VFX unavailable.'}</PanelMessage>;
-  return <div className="panel vfx-panel" data-testid="panel-vfx-system" data-subject-id={state.assetGuid}>
-    <div className="vfx-panel-heading">System Outline</div>
-    <NodeTree assetGuid={state.assetGuid} nodes={state.descriptor.emitters} />
-  </div>;
+  return (
+    <div className="panel vfx-panel" data-testid="panel-vfx-system" data-subject-id={state.assetGuid}>
+      <div className="vfx-tree">
+        <NodeTree
+          assetGuid={state.assetGuid}
+          nodes={state.descriptor.emitters}
+          depth={0}
+          selected={selected}
+          collapsed={collapsed}
+          hidden={hidden}
+          onToggleCollapse={toggleCollapse}
+        />
+      </div>
+    </div>
+  );
 }
 
 export function VfxDetailsPanel(): ReactElement {
@@ -96,11 +187,18 @@ export function VfxDetailsPanel(): ReactElement {
   if (!state.descriptor) return <PanelMessage>{state.error ?? 'VFX unavailable.'}</PanelMessage>;
   const node = findNode(state.descriptor.emitters, selected) ?? state.descriptor.emitters[0];
   return <div className="panel vfx-panel" data-testid="panel-vfx-details" data-subject-id={state.assetGuid}>
-    <div className="vfx-panel-heading">{node?.label ?? 'Details'}</div>
-    <div className="field muted vfx-source-path">{node?.sourcePath}</div>
-    {node?.fields.map((entry) => <div className="vfx-field" key={entry.path} title={entry.path}>
-      <span>{entry.label}</span><code>{renderValue(entry.value)}</code>
-    </div>)}
+    <div className="fx-inspector">
+      <InspectorSection id="details" title={node?.label ?? 'Details'} dim="all">
+        {node?.sourcePath && <div className="f-row" title={node.sourcePath}>
+          <span className="f-name">Source</span>
+          <span className="f-val"><span className="f-fact vfx-source-path">{node.sourcePath}</span></span>
+        </div>}
+        {node?.fields.map((entry) => <div className="f-row" key={entry.path} title={entry.path}>
+          <span className="f-name">{entry.label}</span>
+          <span className="f-val"><code className="f-fact">{renderValue(entry.value)}</code></span>
+        </div>)}
+      </InspectorSection>
+    </div>
   </div>;
 }
 
@@ -109,20 +207,23 @@ export function VfxTimelinePanel(): ReactElement {
   if (!state.descriptor) return <PanelMessage>{state.error ?? 'VFX unavailable.'}</PanelMessage>;
   const maxDuration = Math.max(1, ...state.descriptor.timeline.map((track) => track.loopDuration ?? 1));
   return <div className="panel vfx-panel" data-testid="panel-vfx-timeline" data-subject-id={state.assetGuid}>
-    <div className="vfx-panel-heading">Emitter Timeline</div>
-    {state.descriptor.timeline.map((track) => <div className="vfx-track" key={track.emitterId}>
-      <div className="vfx-track-label"><strong>{track.emitterId}</strong><span>{track.rate}/s</span></div>
-      <div className="vfx-track-rail">
-        <div className="vfx-rate-band" title={`Continuous rate ${track.rate}/s`} />
-        {track.bursts.map((burst, index) => <span
-          className="vfx-burst"
-          key={`${burst.time}:${index}`}
-          style={{ left: `${Math.min(100, (burst.time / maxDuration) * 100)}%` }}
-          title={`Burst ${burst.count} at ${burst.time}s`}
-        />)}
-      </div>
-      <div className="field muted">loop {track.loopDuration === undefined ? 'continuous' : `${track.loopDuration}s`} · {track.bursts.length} bursts</div>
-    </div>)}
+    <div className="fx-inspector">
+      <InspectorSection id="timeline" title="Emitter Timeline" dim="type">
+        {state.descriptor.timeline.map((track) => <div className="vfx-track" key={track.emitterId}>
+          <div className="vfx-track-label"><strong>{track.emitterId}</strong><span>{track.rate}/s</span></div>
+          <div className="vfx-track-rail">
+            <div className="vfx-rate-band" title={`Continuous rate ${track.rate}/s`} />
+            {track.bursts.map((burst, index) => <span
+              className="vfx-burst"
+              key={`${burst.time}:${index}`}
+              style={{ left: `${Math.min(100, (burst.time / maxDuration) * 100)}%` }}
+              title={`Burst ${burst.count} at ${burst.time}s`}
+            />)}
+          </div>
+          <div className="field muted vfx-track-meta">loop {track.loopDuration === undefined ? 'continuous' : `${track.loopDuration}s`} · {track.bursts.length} bursts</div>
+        </div>)}
+      </InspectorSection>
+    </div>
   </div>;
 }
 
@@ -130,16 +231,20 @@ export function VfxDiagnosticsPanel(): ReactElement {
   const state = useVfxDescriptor();
   if (!state.descriptor) return <PanelMessage>{state.error ?? 'VFX unavailable.'}</PanelMessage>;
   return <div className="panel vfx-panel" data-testid="panel-vfx-diagnostics" data-subject-id={state.assetGuid}>
-    <div className="vfx-panel-heading">Capability Truth</div>
-    {state.descriptor.capabilities.map((capability) => <div className="vfx-capability" key={capability.id}>
-      <span data-state={capability.state}>{capability.state}</span>
-      <strong>{capability.id}</strong>
-      {capability.reason && <small>{capability.reason}</small>}
-    </div>)}
-    <div className="vfx-panel-heading vfx-section-heading">Dependencies</div>
-    {state.descriptor.dependencies.map((dependency) => <div className="vfx-dependency" key={`${dependency.kind}:${dependency.identity}`}>
-      <span>{dependency.kind}</span><code>{dependency.identity}</code>
-    </div>)}
+    <div className="fx-inspector">
+      <InspectorSection id="capabilities" title="Capability Truth" dim="cap">
+        {state.descriptor.capabilities.map((capability) => <div className="vfx-capability" key={capability.id}>
+          <span data-state={capability.state}>{capability.state}</span>
+          <strong>{capability.id}</strong>
+          {capability.reason && <small>{capability.reason}</small>}
+        </div>)}
+      </InspectorSection>
+      <InspectorSection id="dependencies" title="Dependencies" dim="all">
+        {state.descriptor.dependencies.map((dependency) => <div className="vfx-dependency" key={`${dependency.kind}:${dependency.identity}`}>
+          <span className="f-name">{dependency.kind}</span><code className="f-fact">{dependency.identity}</code>
+        </div>)}
+      </InspectorSection>
+    </div>
   </div>;
 }
 

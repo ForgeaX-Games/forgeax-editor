@@ -26,6 +26,7 @@ import {
   FACING_PIVOT_NAME,
 } from '../scene/skin-joints';
 import { summarizeCalibration } from '../scene/calibration-projection';
+import { createCoreTestWorld } from './fixtures/world';
 
 function spawn(
   world: World,
@@ -47,7 +48,7 @@ function spawn(
 
 describe('socket-calibration M1 — skin-joints read face', () => {
   it('findSkinEntity walks the ChildOf chain to the Skin ancestor (inclusive of self)', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const root = spawn(world, 'Character', undefined, {
       component: Skin,
       data: { skeleton: 0, joints: [] },
@@ -60,13 +61,13 @@ describe('socket-calibration M1 — skin-joints read face', () => {
   });
 
   it('findSkinEntity returns null when no Skin ancestor exists', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const orphan = spawn(world, 'Prop');
     expect(findSkinEntity(world, orphan)).toBeNull();
   });
 
   it('listSkinJoints projects Skin.joints handles to {name,handle} pairs', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const boneA = spawn(world, 'spine');
     const boneB = spawn(world, 'arm');
     const root = spawn(world, 'Character', undefined, {
@@ -82,7 +83,7 @@ describe('socket-calibration M1 — skin-joints read face', () => {
   });
 
   it('listSkinJoints returns [] for an entity without Skin or empty joints', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const plain = spawn(world, 'Prop');
     expect(listSkinJoints(world, plain)).toEqual([]);
     const root = spawn(world, 'Character', undefined, {
@@ -93,7 +94,7 @@ describe('socket-calibration M1 — skin-joints read face', () => {
   });
 
   it('listSkinJointsFor chains findSkinEntity + listSkinJoints for a prop', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const root = spawn(world, 'Character');
     const boneA = spawn(world, 'spine', root);
     const boneB = spawn(world, 'arm', root);
@@ -106,7 +107,7 @@ describe('socket-calibration M1 — skin-joints read face', () => {
   });
 
   it('listSkinJointsFor returns [] for a prop outside any skinned character', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const prop = spawn(world, 'looseProp');
     expect(listSkinJointsFor(world, prop)).toEqual([]);
   });
@@ -144,14 +145,14 @@ describe('socket-calibration M2 — joint root, facing pivot, sockets, projectio
   }
 
   it('findJointRoot returns the lowest common ancestor of all joints', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const { skin, boneSpine } = buildSkinnedCharacter(world);
     // All joints (spine, arm, hand) descend from spine → spine is the LCA.
     expect(findJointRoot(world, skin)).toBe(boneSpine);
   });
 
   it('findJointRoot returns null for a Skin with no joints', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const skin = spawn(world, 'Character', undefined, {
       component: Skin,
       data: { skeleton: 0, joints: [] },
@@ -160,14 +161,14 @@ describe('socket-calibration M2 — joint root, facing pivot, sockets, projectio
   });
 
   it('findFacingPivot returns null when no FacingPivot exists above the joint root', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const { skin, boneSpine } = buildSkinnedCharacter(world);
     expect(findFacingPivot(world, boneSpine)).toBeNull();
     expect(readFacingYaw(world, skin)).toBeNull();
   });
 
   it('findFacingPivot + readFacingYaw read a pivot inserted above the joint root', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const { skin, boneSpine } = buildSkinnedCharacter(world);
     // Insert a FacingPivot above the joint root (spine): reparent spine under pivot.
     const pivot = spawn(world, FACING_PIVOT_NAME, undefined, {
@@ -187,7 +188,7 @@ describe('socket-calibration M2 — joint root, facing pivot, sockets, projectio
   });
 
   it('listSkinSockets enumerates props (non-joint children of joints) with local TRS', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const { skin, propSword, propShield } = buildSkinnedCharacter(world);
     // Give the sword a distinct local pos so the projection carries it.
     const tfR = world.set(propSword, Transform, { pos: [2, 1, 0] } as never);
@@ -202,7 +203,7 @@ describe('socket-calibration M2 — joint root, facing pivot, sockets, projectio
   });
 
   it('summarizeCalibration projects every skinned character to pure-numeric JSON', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     const { skin, boneSpine, propSword } = buildSkinnedCharacter(world);
     // Author a facing pivot + a socket TRS.
     const pivot = spawn(world, FACING_PIVOT_NAME, undefined, {
@@ -230,7 +231,7 @@ describe('socket-calibration M2 — joint root, facing pivot, sockets, projectio
   });
 
   it('summarizeCalibration returns empty characters for a scene with no Skin', () => {
-    const world = new World();
+    const world = createCoreTestWorld([Skin]);
     spawn(world, 'looseProp');
     const proj = summarizeCalibration(world);
     expect(proj.characters).toEqual([]);

@@ -9,6 +9,7 @@
 //   3. two consecutive delete-undo cycles keep materials (idempotent)
 //   4. deleteManyCascade + undo restores all roots with materials
 //   5. legacy fallback (no _asset) still works (names survive)
+//   6. hierarchyGesture delete + undo restores materials and parent
 
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
@@ -26,6 +27,7 @@ import { gateway } from '../store/store';
 import { deleteEntityCascade, deleteManyCascade } from '../session/ops';
 import { entName } from '../store/entity-state';
 import type { EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Registry / material setup (shared with duplicate-material-roundtrip) ────
 
@@ -58,7 +60,7 @@ function makeMaterial(): MaterialAsset {
 
 function setupSessionWithMeshEntity(): { session: EditSession; ball: EntityHandle } {
   const registry = new AssetRegistry(makeMockShaderRegistry());
-  const world = new World();
+  const world = createCoreTestWorld([MeshFilter, MeshRenderer]);
 
   const mat = makeMaterial();
   const g = AssetGuid.parse(MATERIAL_GUID);
@@ -222,5 +224,55 @@ describe('destroyEntity undo material round-trip (bug lock)', () => {
     const rs = roots();
     expect(rs.length).toBe(1);
     expect(entName(gateway.activeWorld, rs[0]!)).toBe('BouncyBall');
+  });
+
+  it('hierarchyGesture delete + undo restores materials and parent', () => {
+    const world = gateway.activeWorld as unknown as World;
+    const session = gateway.doc as unknown as EditSession;
+    const registry = session.registry!;
+    const mat = makeMaterial();
+    const g = AssetGuid.parse(MATERIAL_GUID);
+    if (!g.ok) throw new Error('bad test GUID');
+    const cat = registry.catalog(g.value, mat);
+    if (!cat.ok) throw new Error(`material catalog failed: ${JSON.stringify(cat.error)}`);
+    const matHandle = world.allocSharedRef('MaterialAsset', mat);
+
+    const parentR = world.spawn(
+      { component: Name, data: { value: 'Parent' } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
+    );
+    if (!parentR.ok) throw new Error('parent spawn failed');
+    const parent = parentR.value;
+
+    const meshR = world.spawn(
+      { component: Name, data: { value: 'MeshChild' } },
+      { component: Transform, data: { pos: [1, 2, 3] } },
+      { component: ChildOf, data: { parent } },
+      { component: MeshFilter, data: {} },
+      { component: MeshRenderer, data: { materials: [matHandle as unknown as Handle<'MaterialAsset', 'shared'>] } },
+    );
+    if (!meshR.ok) throw new Error('mesh child spawn failed');
+    const meshChild = meshR.value;
+
+    expect(materialCount(world, meshChild)).toBe(1);
+    expect(childrenOf(gateway.activeWorld, parent).length).toBe(1);
+
+    const deleted = gateway.dispatch({
+      kind: 'hierarchyGesture',
+      action: 'delete',
+      entities: [meshChild],
+    });
+    expect(deleted.ok).toBe(true);
+    expect(childrenOf(gateway.activeWorld, parent).length).toBe(0);
+
+    expect(gateway.undo()).toBe(true);
+
+    const restoredKids = childrenOf(gateway.activeWorld, parent);
+    expect(restoredKids.length).toBe(1);
+    const restored = restoredKids[0]!;
+    expect(entName(gateway.activeWorld, restored)).toBe('MeshChild');
+    expect(materialCount(world, restored)).toBe(1);
+    const co = world.get(restored, ChildOf);
+    expect(co.ok && co.value.parent).toBe(parent);
   });
 });

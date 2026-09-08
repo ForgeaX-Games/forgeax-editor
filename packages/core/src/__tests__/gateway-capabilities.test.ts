@@ -10,7 +10,7 @@
 // material round-trip required for Edit = reopen = Play.
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { defineComponent, World } from '@forgeax/engine-ecs';
+import { defineComponent, World, type Component } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
@@ -26,11 +26,18 @@ import { createCatalogReconcileProvider } from '../public/gateway';
 import { childrenOf, createEditSession } from '../session/document';
 import type { EditorOp, EditSession } from '../types';
 import type { EntityHandle } from '../scene/scene-types';
+import { createCoreTestWorld } from './fixtures/world';
 
 void AnimationPlayer;
 
 const MATERIAL_GUID = 'cbe42beb-8975-5096-b3a1-3dda4cb4c077';
 const TEXTURE_GUID = 'd1f2a3b4-c5d6-5e70-8901-234567890abc';
+
+function createEditSessionWithCoreWorld(extra: readonly Component[] = []): EditSession {
+  const session = createEditSession();
+  session.world = createCoreTestWorld(extra);
+  return session;
+}
 
 // A tiny 2×2 RGBA texture — small enough to keep the test cheap, but its `data`
 // buffer is exactly what describeAssetByGuid must NOT return (the friction that
@@ -80,7 +87,7 @@ function setupBall(opts: { catalogMaterial?: boolean } = {}): {
   world: World;
   ball: EntityHandle;
 } {
-  const world = new World();
+  const world = createCoreTestWorld([MeshFilter, MeshRenderer]);
   const registry = new AssetRegistry(makeShaderRegistry());
   const mat = material();
   if (opts.catalogMaterial !== false) {
@@ -276,7 +283,9 @@ describe('Gateway public capability matrix', () => {
   });
 
   it('Reject: missing registry and unresolved material collection are structured', () => {
-    const withoutRegistry = new EditGateway(createEditSession());
+    const withoutRegistrySession = createEditSession();
+    withoutRegistrySession.world = createCoreTestWorld([MeshFilter, MeshRenderer]);
+    const withoutRegistry = new EditGateway(withoutRegistrySession);
     const noRegistry = withoutRegistry.collectSceneAsset(ball);
     expect(noRegistry.ok).toBe(false);
     if (!noRegistry.ok) expect(noRegistry.error.code).toBe('NO_REGISTRY');
@@ -303,7 +312,7 @@ describe('Gateway public capability matrix', () => {
     expect(gateway.appliedCount()).toBe(1);
     expect(gateway.undo()).toBe(true);
 
-    gateway.enterPlay(new World());
+    gateway.enterPlay(createCoreTestWorld([MeshFilter, MeshRenderer]));
     const blocked = gateway.dispatch({ kind: 'duplicateEntity', entity: ball }, 'ai');
     expect(blocked.ok).toBe(false);
     if (!blocked.ok) expect(blocked.error.code).toBe('edit-rejected-in-play');
@@ -378,7 +387,7 @@ describe('Gateway catalog reconcile adapter', () => {
       syntheticDeltas += 1;
     });
 
-    const gateway = new EditGateway();
+    const gateway = new EditGateway(createEditSessionWithCoreWorld());
     const unregister = gateway.registerCatalogReconcile(createCatalogReconcileProvider(registry));
     try {
       const aiAccepted = gateway.dispatch(
@@ -409,7 +418,7 @@ describe('Gateway catalog reconcile adapter', () => {
     await registry.enumerateCatalog();
     source.publishGap();
 
-    const gateway = new EditGateway();
+    const gateway = new EditGateway(createEditSessionWithCoreWorld());
     const unregister = gateway.registerCatalogReconcile(createCatalogReconcileProvider(registry));
     try {
       gateway.dispatch({ kind: 'catalog.reconcile', requestId: 'catalog-reconcile-failed' }, 'human');
@@ -527,7 +536,7 @@ describe('Gateway asset read surface', () => {
     matHandle: number;
     texHandle: number;
   } {
-    const world = new World();
+    const world = createCoreTestWorld([MeshFilter, MeshRenderer]);
     const registry = new AssetRegistry(makeShaderRegistry());
     const mat = material();
     const guid = AssetGuid.parse(MATERIAL_GUID);
@@ -550,7 +559,7 @@ describe('Gateway asset read surface', () => {
       { component: MeshRenderer, data: { materials: [matHandle as unknown as Handle<'MaterialAsset', 'shared'>] } },
     );
     if (!spawned.ok) throw new Error(`spawn failed: ${String(spawned.error)}`);
-    const session = createEditSession();
+    const session = createEditSessionWithCoreWorld([MeshFilter, MeshRenderer]);
     session.world = world as unknown as EditSession['world'];
     session.registry = registry;
     return {
@@ -676,7 +685,7 @@ describe('Gateway asset read surface', () => {
   });
 
   it('assetCatalog returns an empty readonly result without a registry', () => {
-    const session = createEditSession();
+    const session = createEditSessionWithCoreWorld([MeshFilter, MeshRenderer]);
     const gateway = new EditGateway(session);
     expect(gateway.assetCatalog()).toEqual([]);
   });
@@ -743,8 +752,8 @@ describe('Gateway asset read surface', () => {
 // BEFORE constructing a spawn/setComponent payload, instead of learning them
 // only from a SPAWN_FAILED. Parallel to the asset read surface above.
 describe('Gateway component read surface', () => {
-  function gw(): EditGateway {
-    return new EditGateway(createEditSession());
+  function gw(extra: readonly Component[] = []): EditGateway {
+    return new EditGateway(createEditSessionWithCoreWorld([MeshFilter, MeshRenderer, ...extra]));
   }
 
   it('listComponents lists registered names, sorted, including Transform', () => {
@@ -801,14 +810,14 @@ describe('Gateway component read surface', () => {
   // Register a synthetic labels-bearing component so the projection is tested
   // generically (no physics dep, no registration-order coupling).
   it('describeComponent projects an enum field label map under `enums`', () => {
-    // Uniquely-named to avoid clobbering the global component registry across runs.
+    // Uniquely-named to avoid token-name collisions across test worlds/runs.
     const compName = `R24_DescribeEnum_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
-    defineComponent(compName, {
+    const component = defineComponent(compName, {
       motion: { type: 'enum', default: 1, labels: { static: 0, dynamic: 1, kinematic: 2 } },
       mass: { type: 'f32', default: 1 },
     });
 
-    const d = gw().describeComponent(compName);
+    const d = gw([component]).describeComponent(compName);
     expect(d.ok).toBe(true);
     if (d.ok) {
       // the enum field is projected with its full label map
@@ -823,7 +832,7 @@ describe('Gateway component read surface', () => {
 
   it('describeComponent projects producer-owned field shapes without a second registry', () => {
     const compName = `R0_03A_FieldShapes_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
-    defineComponent(compName, {
+    const component = defineComponent(compName, {
       scalar: { type: 'f32', shape: 'scalar', default: 0 },
       enabled: { type: 'bool', shape: 'boolean', default: false },
       mode: { type: 'enum', shape: 'enum', labels: { idle: 0, active: 1 } },
@@ -835,7 +844,7 @@ describe('Gateway component read surface', () => {
       material: { type: 'shared<MaterialAsset>', shape: 'asset-ref' },
     });
 
-    const d = gw().describeComponent(compName);
+    const d = gw([component]).describeComponent(compName);
     expect(d.ok).toBe(true);
     if (d.ok) {
       expect(d.shapes).toEqual({
@@ -880,12 +889,12 @@ describe('Gateway component read surface', () => {
   // declares `world` transient (D-5); this projects that flag through the door.
   it('describeComponent projects derived fields under `transient` (synthetic)', () => {
     const compName = `R25_DescribeTransient_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
-    defineComponent(compName, {
+    const component = defineComponent(compName, {
       pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
       derived: { type: 'array<f32, 16>', default: new Float32Array(16), transient: true },
     });
 
-    const d = gw().describeComponent(compName);
+    const d = gw([component]).describeComponent(compName);
     expect(d.ok).toBe(true);
     if (d.ok) {
       // the transient field is projected; the authored field is NOT in the map
@@ -916,11 +925,11 @@ describe('Gateway component read surface', () => {
     // A synthetic all-authored component → key absent (backward-compatible with a
     // pre-round-25 pin, which never sets the key).
     const compName = `R25_NoTransient_${Math.floor(performance.now())}_${Math.random().toString(36).slice(2, 8)}`;
-    defineComponent(compName, {
+    const component = defineComponent(compName, {
       a: { type: 'f32', default: 0 },
       b: { type: 'f32', default: 1 },
     });
-    const d = gw().describeComponent(compName);
+    const d = gw([component]).describeComponent(compName);
     expect(d.ok).toBe(true);
     if (d.ok) expect(d.transient).toBeUndefined();
   });

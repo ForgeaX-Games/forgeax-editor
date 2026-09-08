@@ -63,6 +63,137 @@ export interface MessagePortCarrier {
   dispose(): void;
 }
 
+const OMIT_TRANSPORT_VALUE = Symbol('omit-transport-value');
+
+/**
+ * Runtime projections are typed as `unknown` at the product boundary. Keep the
+ * fast path in `postMessage`, but if the browser rejects a response because a
+ * producer leaked a runtime token or function, rebuild it as plain structured
+ * data before retrying. This is the last defense at the actual cross-realm
+ * boundary; it prevents one malformed projection from killing the carrier.
+ */
+function projectCloneableTransportValue(
+  value: unknown,
+  active = new WeakSet<object>(),
+): unknown | typeof OMIT_TRANSPORT_VALUE {
+  const kind = typeof value;
+  if (value === null || kind === 'undefined' || kind === 'string' || kind === 'number' || kind === 'boolean' || kind === 'bigint') {
+    return value;
+  }
+  if (kind === 'function' || kind === 'symbol') return OMIT_TRANSPORT_VALUE;
+  if (kind !== 'object') return OMIT_TRANSPORT_VALUE;
+
+  const object = value as object;
+  if (active.has(object)) return OMIT_TRANSPORT_VALUE;
+  active.add(object);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => {
+        const projected = projectCloneableTransportValue(item, active);
+        return projected === OMIT_TRANSPORT_VALUE ? undefined : projected;
+      });
+    }
+    if (value instanceof Date) {
+      try {
+        return value.toISOString();
+      } catch {
+        return String(value);
+      }
+    }
+    if (value instanceof RegExp) return String(value);
+    if (value instanceof ArrayBuffer) {
+      try {
+        return Array.from(new Uint8Array(value));
+      } catch {
+        return [];
+      }
+    }
+    if (ArrayBuffer.isView(value)) {
+      try {
+        if (value instanceof DataView) {
+          return Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+        }
+        return Array.from(value as unknown as ArrayLike<unknown>);
+      } catch {
+        return [];
+      }
+    }
+    if (value instanceof Map) {
+      const entries: unknown[] = [];
+      for (const [key, entry] of value) {
+        const projectedKey = projectCloneableTransportValue(key, active);
+        const projectedEntry = projectCloneableTransportValue(entry, active);
+        if (projectedKey !== OMIT_TRANSPORT_VALUE && projectedEntry !== OMIT_TRANSPORT_VALUE) {
+          entries.push([projectedKey, projectedEntry]);
+        }
+      }
+      return entries;
+    }
+    if (value instanceof Set) {
+      const entries: unknown[] = [];
+      for (const entry of value) {
+        const projected = projectCloneableTransportValue(entry, active);
+        if (projected !== OMIT_TRANSPORT_VALUE) entries.push(projected);
+      }
+      return entries;
+    }
+
+    const output: Record<string, unknown> = {};
+    for (const key of Object.keys(object)) {
+      let child: unknown;
+      try {
+        child = (object as Record<string, unknown>)[key];
+      } catch {
+        continue;
+      }
+      const projected = projectCloneableTransportValue(child, active);
+      if (projected !== OMIT_TRANSPORT_VALUE) output[key] = projected;
+    }
+    return output;
+  } finally {
+    active.delete(object);
+  }
+}
+
+function uncloneableTransportResponse(response: TransportResponse): TransportResponse {
+  return {
+    jsonrpc: '2.0',
+    version: response.version,
+    id: response.id,
+    correlationId: response.correlationId,
+    ...(response.runId === undefined ? {} : { runId: response.runId }),
+    error: {
+      code: 'transport-response-not-cloneable',
+      hint: 'The Runtime returned a value that could not be cloned across the MessagePort.',
+      retryable: true,
+      recoveryActions: ['transport.reconnect', 'transport.describe'],
+    },
+  };
+}
+
+function postTransportResponse(port: TransportMessagePort, response: TransportResponse): void {
+  try {
+    port.postMessage(response);
+    return;
+  } catch {
+    const projected = projectCloneableTransportValue(response);
+    if (projected !== OMIT_TRANSPORT_VALUE) {
+      try {
+        port.postMessage(projected);
+        return;
+      } catch {
+        // Fall through to a plain protocol error so the pending request can
+        // resolve instead of leaving the carrier with an uncaught exception.
+      }
+    }
+    try {
+      port.postMessage(uncloneableTransportResponse(response));
+    } catch {
+      // A disposed or broken port has no delivery path left to recover.
+    }
+  }
+}
+
 /** Serve the canonical product transport over an already-authenticated port. */
 export function createMessagePortCarrier(
   port: TransportMessagePort,
@@ -80,7 +211,7 @@ export function createMessagePortCarrier(
       return;
     }
     void service.handle(parsed.data).then((response) => {
-      if (!disposed) port.postMessage(response);
+      if (!disposed) postTransportResponse(port, response);
     });
   };
 

@@ -218,6 +218,13 @@ describe('useNumberDraft', () => {
     expect(committed).toBeCloseTo(10, 5);
   });
 
+  it('formats long float noise for display using field step', () => {
+    act(() => {
+      root.render(<NumberField value={1.23456789} fs={{ step: 0.1 } as FieldSchema} onCommit={() => {}} />);
+    });
+    expect(input().value).toBe('1.235');
+  });
+
   it('remounting under a fresh key (entity/field switch) does not leak the previous draft', () => {
     let committedA: number | null = null;
     let committedB: number | null = null;

@@ -37,6 +37,37 @@ describe('MessagePort product transport', () => {
     carrier.dispose();
   });
 
+  test('projects non-cloneable Runtime tokens before crossing the MessagePort', async () => {
+    const channel = new MessageChannel();
+    const componentToken = {
+      name: 'Transform',
+      schema: { position: 'vec3' },
+      toSchemaJSON() {
+        return JSON.stringify(this.schema);
+      },
+    };
+    const carrier = createMessagePortCarrier(channel.port1, createTransportService({
+      query: () => ({ component: componentToken }),
+    }));
+    const client = createMessagePortTransportClient(channel.port2);
+
+    const response = await client.request(request('clone-fallback', {
+      method: 'query',
+      params: { kind: 'inspector.selection' },
+    }));
+
+    expect(response.result).toEqual({
+      component: {
+        name: 'Transform',
+        schema: { position: 'vec3' },
+      },
+    });
+    expect((response.result as { component: Record<string, unknown> }).component.toSchemaJSON).toBeUndefined();
+
+    client.dispose();
+    carrier.dispose();
+  });
+
   test('rejects duplicate in-flight ids instead of cross-wiring responses', async () => {
     const channel = new MessageChannel();
     const client = createMessagePortTransportClient(channel.port1, { defaultTimeoutMs: 20 });

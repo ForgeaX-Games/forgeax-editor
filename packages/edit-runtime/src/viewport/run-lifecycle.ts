@@ -1,12 +1,13 @@
 // run-lifecycle.ts — ▶ Play / ■ Stop for the editor: play=level-load, stop=drop,
-// no restore concept.
+// with one renderer-owner restore guard shared by every teardown path.
 //
 // feat-20260707-editor-world-fork-ssot-level-load-play-activeworld M2.
 //
 // Proposition (P1 progressive disclosure): ▶ Play forks a FRESH play world and
 // drives it on its own frame loop while the edit world sits frozen; ■ Stop drops
-// that world whole and thaws the edit world. There is no snapshot, no restore, no
-// undo — the edit world was never touched, so there is nothing to put back.
+// that world whole and thaws the edit world. There is no snapshot or gameplay
+// undo — the edit world was never touched. Renderer-owner admission is restored
+// by its separate identity-bound lease.
 //
 // ── The whole model in one paragraph ──
 // play = editorApp.pause() (edit world zero tick, AC-07) → assemblePlayWorld
@@ -33,7 +34,9 @@
 // deleted (AC-05): a fresh-world-per-play model has nothing to undo. The scene
 // re-bind callback is gone too (M3 removes its only remaining consumer). The dead
 // vocabulary is scrubbed from this source so a grep for those concepts over
-// edit-runtime returns nothing (AC-05 discoverability sweep).
+// edit-runtime returns nothing (AC-05 discoverability sweep). Renderer-owner
+// admission is the one bounded exception: it restores a renderer submission
+// mode, never gameplay or scene state.
 //
 // Dependency-injected (Pipeline Isolation): host-boot wires the real editorApp /
 // gateway / assemble; the headless test wires fakes and drives the whole
@@ -47,7 +50,16 @@
 //   requirements section 8 (progressive-disclosure header — proposition first)
 
 import type { PlayAssembly } from './play-assemble';
-import { FrameEnd, Update, type World } from '@forgeax/engine-ecs';
+import { Update, type World } from '@forgeax/engine-ecs';
+import type {
+  RemoteGameplayDescriptors,
+  RemoteGameplayRequest,
+  RemoteGameplayResult,
+} from '@forgeax/editor-core';
+import {
+  getRendererOwnerAdmissionLease,
+  type RendererOwnerAdmissionLease,
+} from './renderer-owner-admission';
 
 export interface LiveWorldPublisherGraph {
   bindWorld(world: unknown): number;
@@ -55,36 +67,41 @@ export interface LiveWorldPublisherGraph {
   publish(options?: { readonly world?: unknown; readonly worldGeneration?: number }): unknown;
 }
 
-export interface LiveWorldFrameEndWorld {
-  addSystem: (schedule: typeof FrameEnd, descriptor: { name: string; queries: readonly []; fn: () => void }) => unknown;
-  removeSystem: (schedule: typeof FrameEnd, name: string) => unknown;
-}
-
 export interface LiveWorldFrameEndPublisher {
-  bind(world: LiveWorldFrameEndWorld): void;
+  bind(world: unknown): void;
   publishFrameEnd(): void;
-  unbind(world: LiveWorldFrameEndWorld): void;
+  unbind(world: unknown): void;
 }
 
-export function createLiveWorldFrameEndPublisher(graph: LiveWorldPublisherGraph): LiveWorldFrameEndPublisher {
-  let activeWorld: LiveWorldFrameEndWorld | null = null;
+export function createLiveWorldFrameEndPublisher(
+  graph: LiveWorldPublisherGraph,
+  subscribeFrameEnd: (listener: () => void) => () => void,
+): LiveWorldFrameEndPublisher {
+  let activeWorld: unknown = null;
+  let unsubscribeFrameEnd: (() => void) | null = null;
   let generation = 0;
-  const systemName = 'editor-runtime-ui-publisher';
   return {
     bind(world) {
       if (activeWorld === world) return;
       if (activeWorld !== null) {
+        unsubscribeFrameEnd?.();
+        unsubscribeFrameEnd = null;
         try { graph.unbindWorld(activeWorld); } catch { /* preserve the new bind */ }
       }
       generation = graph.bindWorld(world);
-      world.addSystem(FrameEnd, { name: systemName, queries: [], fn: () => graph.publish({ world, worldGeneration: generation }) });
+      unsubscribeFrameEnd = subscribeFrameEnd(() => {
+        if (activeWorld === world) graph.publish({ world, worldGeneration: generation });
+      });
       activeWorld = world;
     },
     publishFrameEnd() {
       if (activeWorld !== null) graph.publish({ world: activeWorld, worldGeneration: generation });
     },
     unbind(world) {
-      try { world.removeSystem(FrameEnd, systemName); } catch { /* cleanup continues */ }
+      if (activeWorld === world) {
+        unsubscribeFrameEnd?.();
+        unsubscribeFrameEnd = null;
+      }
       try { graph.unbindWorld(world); } catch { /* adjacent teardown cannot block unbind */ }
       if (activeWorld === world) activeWorld = null;
     },
@@ -119,6 +136,8 @@ export interface RemotePlayCarrier {
   pause(): void;
   resume(): void;
   state(): 'edit' | 'entering-play' | 'play' | 'stopping';
+  gameplayDescriptors(): RemoteGameplayDescriptors;
+  gameplay(request: RemoteGameplayRequest): Promise<RemoteGameplayResult>;
 }
 
 /** Optional OperationRun projection supplied by the product host. */
@@ -183,7 +202,10 @@ export interface RunLifecycleDeps {
   readonly onPlayStarted?: (playWorld: unknown) => void;
   readonly onRemotePlayStarted?: () => void;
   /** Called after a failed assembly has thawed the edit App and recorded its error. */
-  readonly onPlayFailed?: () => void;
+  /** 反馈卡片需要真实失败原因来归一化 code,故这里带上 error。 */
+  readonly onPlayFailed?: (error?: unknown) => void;
+  /** One renderer-owned submission lease shared by finally, Stop, and unmount. */
+  readonly rendererOwnerAdmission?: RendererOwnerAdmissionLease;
 }
 
 /** The ▶/■ pair + a play-world accessor (GC-reachability assertions in tests). */
@@ -211,6 +233,7 @@ export interface RunLifecycle {
  * (idempotent) if not playing — so a stray second ■ does nothing (AC-05).
  */
 export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
+  const rendererOwnerAdmission = deps.rendererOwnerAdmission ?? getRendererOwnerAdmissionLease();
   // The single play slot. Non-null exactly while a play run is active. Dropping
   // it on ■ (active = null) releases the lifecycle's only reference to the play
   // world/app so they become GC-able (AC-05).
@@ -230,24 +253,27 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
 
   function stopAssembly(assembly: PlayAssembly, label: string): void {
     try {
-      assembly.detachBeforeStop?.();
-    } catch (err) {
-      console.warn(`[editor] ${label} detachBeforeStop() threw:`, err);
-    }
-    try { assembly.clearGameProjection?.(); } catch (err) {
-      console.warn(`[editor] ${label} clearGameProjection() threw:`, err);
-    }
-    try {
-      const stopR = assembly.playApp.stop();
-      if (!stopR.ok) console.warn(`[editor] ${label} playApp.stop() failed:`, stopR.error);
-    } catch (err) {
-      console.warn(`[editor] ${label} playApp.stop() threw:`, err);
-    }
-
-    try {
-      assembly.detach();
-    } catch (err) {
-      console.warn(`[editor] ${label} detach() threw:`, err);
+      try {
+        assembly.detachBeforeStop?.();
+      } catch (err) {
+        console.warn(`[editor] ${label} detachBeforeStop() threw:`, err);
+      }
+      try { assembly.clearGameProjection?.(); } catch (err) {
+        console.warn(`[editor] ${label} clearGameProjection() threw:`, err);
+      }
+      try {
+        const stopR = assembly.playApp.stop();
+        if (!stopR.ok) console.warn(`[editor] ${label} playApp.stop() failed:`, stopR.error);
+      } catch (err) {
+        console.warn(`[editor] ${label} playApp.stop() threw:`, err);
+      }
+      try {
+        assembly.detach();
+      } catch (err) {
+        console.warn(`[editor] ${label} detach() threw:`, err);
+      }
+    } finally {
+      rendererOwnerAdmission?.restoreOnce('stop');
     }
   }
 
@@ -264,7 +290,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       deps.runProjection?.failed(playRunId, { code, hint, retryable: true, recoveryActions: ['operation.retry'] });
       playRunId = null;
     }
-    deps.onPlayFailed?.();
+    deps.onPlayFailed?.({ code, hint });
   }
 
   async function playSimulation(): Promise<void> {
@@ -341,9 +367,20 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       reportPlayFailure(res.error);
       return;
     }
+    if (deps.editWorld !== undefined && res.value.playWorld === deps.editWorld) {
+      const error = {
+        code: 'play-world-not-fresh',
+        hint: 'Play requires a transient World distinct from the frozen Edit World.',
+      };
+      console.error('[editor] ▶ Play rejected: assembly reused the Edit World');
+      stopAssembly(res.value, '▶ Play freshness rejection');
+      resumeEditorIfLive();
+      reportPlayFailure(error);
+      return;
+    }
     active = res.value;
 
-    deps.publisher?.bind(active.playWorld as LiveWorldFrameEndWorld);
+    deps.publisher?.bind(active.playWorld);
 
     // Start the play App's frame loop — now the single live rAF driving the
     // play world (D-2). The shared renderer draws the play world per-frame (D-1).
@@ -353,8 +390,8 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       const failedAssembly = active;
       active = null;
       stopAssembly(failedAssembly, '▶ Play start failure');
-      deps.publisher?.unbind(failedAssembly.playWorld as LiveWorldFrameEndWorld);
-      if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);
+      deps.publisher?.unbind(failedAssembly.playWorld);
+      if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld);
       resumeEditorIfLive();
       reportPlayFailure(startR.error ?? { code: 'play-renderer-failed', hint: 'The Play renderer could not start.' });
       return;
@@ -395,6 +432,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     if (remoteActive && deps.remoteCarrier !== undefined) {
       remoteActive = false;
       await deps.remoteCarrier.stop();
+      rendererOwnerAdmission?.restoreOnce('stop');
       deps.gateway.exitPlay();
       playRunId = null;
       deps.onPlayFailed?.();
@@ -403,6 +441,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     if (starting) {
       generation++;
       starting = false;
+      rendererOwnerAdmission?.restoreOnce('stop');
       try { deps.gateway.exitPlay(); } catch { /* best effort while canceling start */ }
       if (playRunId !== null) {
         deps.runProjection?.cancelled(playRunId);
@@ -422,8 +461,8 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // renderer.onError, so nothing pins the play world (AC-05 GC). Assemble-form
     // App owns the loop but not the shared renderer.
     stopAssembly(assembly, '■ Stop');
-    deps.publisher?.unbind(assembly.playWorld as LiveWorldFrameEndWorld);
-    if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);
+    deps.publisher?.unbind(assembly.playWorld);
+    if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld);
 
     // D-3: pointer back to the edit world (clears selection + emits so panels
     // re-read the edit world's hierarchy).
@@ -449,8 +488,8 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     active = null;
     if (assembly !== null) {
       stopAssembly(assembly, 'run-lifecycle dispose');
-      deps.publisher?.unbind(assembly.playWorld as LiveWorldFrameEndWorld);
-      if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld as LiveWorldFrameEndWorld);
+      deps.publisher?.unbind(assembly.playWorld);
+      if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld);
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
     } else if (wasStarting) {
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
@@ -461,6 +500,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       void deps.remoteCarrier.stop();
       try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
     }
+    rendererOwnerAdmission?.clearForDispose();
     playRunId = null;
     editorPaused = false;
     if (wasPlaying) deps.onPlayFailed?.();

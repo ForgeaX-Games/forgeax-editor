@@ -15,6 +15,13 @@ interface NativePickResponse {
   files?: unknown;
 }
 
+let nativePickerAvailability: 'unknown' | 'available' | 'unavailable' = 'unknown';
+
+/** True after a host definitively lacks `/api/fs/pick-files`. */
+export function isNativeImportPickerCachedUnavailable(): boolean {
+  return nativePickerAvailability === 'unavailable';
+}
+
 function decodeBase64(data: string): ArrayBuffer {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
@@ -32,17 +39,27 @@ function decodeBase64(data: string): ArrayBuffer {
  * ContentBrowser for hosts that do not expose this local endpoint.
  */
 export async function pickNativeImportFiles(initialDir: string): Promise<NativeImportPickResult> {
+  if (nativePickerAvailability === 'unavailable') {
+    return { kind: 'unavailable' };
+  }
   try {
     const response = await fetch('/api/fs/pick-files', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ initialDir, multiple: true }),
     });
-    if (!response.ok) return { kind: 'unavailable' };
+    if (!response.ok) {
+      nativePickerAvailability = 'unavailable';
+      return { kind: 'unavailable' };
+    }
     const body = await response.json() as NativePickResponse;
     if (body.cancelled === true) return { kind: 'cancelled' };
-    if (body.ok !== true || !Array.isArray(body.files)) return { kind: 'unavailable' };
+    if (body.ok !== true || !Array.isArray(body.files)) {
+      nativePickerAvailability = 'unavailable';
+      return { kind: 'unavailable' };
+    }
 
+    nativePickerAvailability = 'available';
     const files: File[] = [];
     for (const candidate of body.files) {
       if (candidate === null || typeof candidate !== 'object') continue;
@@ -58,6 +75,12 @@ export async function pickNativeImportFiles(initialDir: string): Promise<NativeI
     }
     return { kind: 'selected', files };
   } catch {
+    nativePickerAvailability = 'unavailable';
     return { kind: 'unavailable' };
   }
+}
+
+/** Test hook: reset cached native picker availability between cases. */
+export function resetNativeImportPickerAvailabilityForTests(): void {
+  nativePickerAvailability = 'unknown';
 }

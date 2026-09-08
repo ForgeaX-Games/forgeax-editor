@@ -42,7 +42,7 @@ export const DIAGNOSTICS_DEDUPE = Object.freeze({
   scanDiagnostics: 'file+severity+code+message+suggestion',
   assetErrors: 'op+path+hint',
   operationRuns: 'runId',
-  runtimeFacts: 'providerId+id',
+  runtimeFacts: 'providerId+dedupeKey|id',
 });
 
 export type DiagnosticsDedupe = typeof DIAGNOSTICS_DEDUPE;
@@ -85,10 +85,14 @@ export interface DiagnosticsOperationRunSource {
  */
 export interface RuntimeDiagnosticFact {
   readonly id: string;
+  /** Stable owner-provided identity for latest-wins dedupe. */
+  readonly dedupeKey?: string;
   readonly severity: DiagnosticsSeverity;
   readonly code: string;
   readonly title: string;
   readonly message: string;
+  readonly expected?: unknown;
+  readonly actual?: unknown;
   readonly path?: string;
   readonly requestId?: string;
   readonly assetGuid?: string;
@@ -182,6 +186,9 @@ export interface DiagnosticsQueryItem {
   readonly code: string;
   readonly title: string;
   readonly message: string;
+  readonly dedupeKey?: string;
+  readonly expected?: unknown;
+  readonly actual?: unknown;
   readonly path?: string;
   readonly runId?: string;
   readonly requestId?: string;
@@ -427,6 +434,9 @@ function runtimeQueryItems(snapshot: DiagnosticsSnapshot): DiagnosticsQueryItem[
     code: fact.code,
     title: fact.title,
     message: fact.message,
+    ...(fact.dedupeKey === undefined ? {} : { dedupeKey: fact.dedupeKey }),
+    ...(fact.expected === undefined ? {} : { expected: fact.expected }),
+    ...(fact.actual === undefined ? {} : { actual: fact.actual }),
     ...(fact.path === undefined ? {} : { path: fact.path }),
     ...(fact.requestId === undefined ? {} : { requestId: fact.requestId }),
     ...(fact.assetGuid === undefined ? {} : { assetGuid: fact.assetGuid }),
@@ -447,6 +457,7 @@ function queryText(item: DiagnosticsQueryItem): readonly string[] {
   return [
     item.source,
     item.code,
+    item.dedupeKey,
     item.title,
     item.message,
     item.path,
@@ -537,7 +548,7 @@ export function createDiagnosticsReadModel(
             return [];
           }
         }),
-        (fact) => `${fact.providerId}:${fact.id}`,
+        (fact) => `${fact.providerId}:${fact.dedupeKey ?? fact.id}`,
         retention.runtimeFacts,
       );
       const revisionParts = [

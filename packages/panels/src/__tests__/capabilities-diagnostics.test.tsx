@@ -26,7 +26,7 @@ function snapshot(): DiagnosticsSnapshot {
         scanDiagnostics: 'file+severity+code+message+suggestion',
         assetErrors: 'op+path+hint',
         operationRuns: 'runId',
-        runtimeFacts: 'providerId+id',
+        runtimeFacts: 'providerId+dedupeKey|id',
       },
     },
   };

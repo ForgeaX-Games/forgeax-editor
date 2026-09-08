@@ -31,6 +31,15 @@ type OpenPhase = {
 	readonly phase: string;
 };
 
+type PhaseInput = OpenPhase | OpenPhase["source"];
+
+function normalizePhase(input: PhaseInput, phaseName?: string): OpenPhase | undefined {
+	if (typeof input === "string") {
+		return phaseName === undefined ? undefined : { source: input, phase: phaseName };
+	}
+	return input;
+}
+
 export interface FramePhaseProfilerOptions {
 	/** Production observer invoked from the same profiler phase owner. */
 	readonly onPhaseEnd?: (phase: OpenPhase) => void;
@@ -87,10 +96,11 @@ function observerSession(
 			openPhases.length = 0;
 			return ok(undefined);
 		},
-		beginPhase(input) {
-			if (frameId !== undefined) {
-				openPhases.push(input);
-				mark(performanceApi, `forgeax.${timingSource(input.source)}.phase.${frameId}.${input.phase}.begin`);
+		beginPhase(input: PhaseInput, phaseName?: string) {
+			const phase = normalizePhase(input, phaseName);
+			if (frameId !== undefined && phase !== undefined) {
+				openPhases.push(phase);
+				mark(performanceApi, `forgeax.${timingSource(phase.source)}.phase.${frameId}.${phase.phase}.begin`);
 			}
 			return ok(undefined);
 		},
@@ -147,12 +157,15 @@ function decorateSession(
 			}
 			return result;
 		},
-		beginPhase(input) {
-			const result = raw.beginPhase(input);
-			if (result.ok) {
-				openPhases.push(input);
+		beginPhase(input: PhaseInput, phaseName?: string) {
+			const result = typeof input === "string"
+				? raw.beginPhase(input, phaseName ?? "")
+				: raw.beginPhase(input);
+			const phase = normalizePhase(input, phaseName);
+			if (result.ok && phase !== undefined) {
+				openPhases.push(phase);
 				if (frameId !== undefined) {
-					mark(performanceApi, `forgeax.${timingSource(input.source)}.phase.${frameId}.${input.phase}.begin`);
+					mark(performanceApi, `forgeax.${timingSource(phase.source)}.phase.${frameId}.${phase.phase}.begin`);
 				}
 			}
 			return result;

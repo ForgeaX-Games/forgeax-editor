@@ -1,7 +1,7 @@
 // @forgeax/editor — top-level package root entry.
 //
 // This is the single bare-specifier entry that external consumers (e.g. the
-// standalone-editor-demo, future host-sdk surface composition) reach via
+// standalone-editor-demo, future product surface composition) reach via
 // `import editor from '@forgeax/editor'`. Per plan-strategy §2 D-5 the
 // entry must be **zero-transitive**: it imports only `defineApp` from
 // `@forgeax/interface/app-kit` and the EDITOR_PANELS literal from

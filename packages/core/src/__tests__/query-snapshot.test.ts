@@ -23,12 +23,17 @@ import { createEditSession } from '../session/document';
 import type { EditorOp, EditSession, EntityId } from '../types';
 import { querySnapshot } from '../io/query-snapshot';
 import type { QuerySnapshotResult, QuerySnapshotRow } from '../io/query-snapshot';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  const world = createCoreTestWorld();
+  for (const component of [MeshFilter, PointLight, Skylight, Camera, DirectionalLight]) {
+    world.components.register(component);
+  }
+  session.world = world;
   return session;
 }
 

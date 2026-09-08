@@ -1,22 +1,34 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname, join, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readdirSync, lstatSync, unlinkSync, symlinkSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import {
   engineVitePreset,
   ENGINE_EXECUTION_ISOLATION_HEADERS,
-  discoverGameMaterialPackages,
   resolveGameEngineEntry as resolveSharedGameEngineEntry,
   type EngineVitePreset,
-} from '../../scripts/vite/engine-vite-preset';
+} from '../../scripts/vite/engine-vite-preset.ts';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
-import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots';
-import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy';
-import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller';
-import { setupSingleGameRootFarm } from './src/active-game-mount';
+import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots.ts';
+import { PLAY_RUNTIME_STATIC_WATCH_IGNORES } from './src/watch-policy.ts';
+import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller.ts';
+import { setupSingleGameRootFarm } from './src/active-game-mount.ts';
+import {
+  resolveExternalRootFarmRuntimeRoot,
+  setupExternalRootFarm,
+} from './src/external-root-farm.ts';
+import {
+  resolveDdcBuildCacheRoot,
+  resolveDdcRootPolicy,
+} from '../../scripts/vite/ddc-root-policy.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Packaged Vite loads its immutable config from the app resource directory but
+// runs with a writable, project-owned cwd. Every mutable farm must live in that
+// workspace; attempting to recreate it next to the bundled config fails with
+// EROFS on a mounted DMG.
+const runtimeWorkspaceRoot = resolveExternalRootFarmRuntimeRoot(here);
 const PLAY_PACKAGE_ROOT = resolve(here, 'node_modules');
 
 // Keep the public Play test seam while making the actual resolver shared. Play
@@ -25,6 +37,31 @@ const PLAY_PACKAGE_ROOT = resolve(here, 'node_modules');
 export function resolveGameEngineEntry(id: string): string | null {
   return resolveSharedGameEngineEntry(id, { packageRoots: [PLAY_PACKAGE_ROOT] });
 }
+
+export function resolvePlayEngineEntry(id: string): string | null {
+  const entry = resolveGameEngineEntry(id);
+  if (!entry) return null;
+  try {
+    return realpathSync(entry);
+  } catch {
+    return entry;
+  }
+}
+
+// Play's Vite root is the Engine submodule itself. `resolve.dedupe` therefore
+// starts bare @forgeax imports at packages/engine/node_modules, where
+// transitive workspace packages such as engine-plugin are not hoisted. If that
+// lookup falls through the parent checkout, Play can load a stale Engine dist
+// from the primary checkout and split the runtime realm. Reuse the same
+// worktree-owned export resolver used for game source imports for every Engine
+// package import in this host.
+const engineWorktreeResolve = {
+  name: 'forgeax:play-engine-worktree-resolve',
+  enforce: 'pre' as const,
+  resolveId(id: string): string | null {
+    return id.startsWith('@forgeax/engine-') ? resolvePlayEngineEntry(id) : null;
+  },
+};
 
 // The active game mount is host-injected for parallel dev stacks. The default
 // remains `host-games`; the mount contains only the exact active game, never a
@@ -62,11 +99,37 @@ const INITIAL_GAME_DIR = process.env.FORGEAX_GAME_DIR
   : '';
 const INITIAL_GAME_ID = process.env.FORGEAX_GAME_ID
   ?? (INITIAL_GAME_DIR ? basename(INITIAL_GAME_DIR) : '');
+const PLAY_RUNTIME_CACHE_ROOT = process.env.FORGEAX_VITE_CACHE_ROOT
+  ? resolve(process.env.FORGEAX_VITE_CACHE_ROOT, 'play-runtime')
+  : resolve(here, '.vite');
+// A dynamic Play host has no project root at config time, but the Pack plugin
+// still needs an explicit host-owned build cache before its first bind. The
+// runtime controller supplies the game-local projectDdcRoot atomically later.
+const PLAY_RUNTIME_DDC_BUILD_CACHE_ROOT = resolveDdcBuildCacheRoot(
+  resolve(PLAY_RUNTIME_CACHE_ROOT, 'ddc', 'build'),
+);
+const PLAY_RUNTIME_DDC_PROJECT_ROOT = resolve(PLAY_RUNTIME_CACHE_ROOT, 'ddc', 'unbound');
+const PLAY_RUNTIME_DDC_OPTIONS = INITIAL_GAME_DIR
+  ? resolveDdcRootPolicy(INITIAL_GAME_DIR, {
+    buildCacheRoot: PLAY_RUNTIME_DDC_BUILD_CACHE_ROOT,
+  })
+  : {
+    buildCacheRoot: PLAY_RUNTIME_DDC_BUILD_CACHE_ROOT,
+    // The dynamic host must complete its unbound startup with an isolated
+    // placeholder. The first authoritative bind replaces this with the
+    // selected game's canonical project-local root.
+    projectDdcRoot: PLAY_RUNTIME_DDC_PROJECT_ROOT,
+  };
 const RUNTIME_SCOPE_SECRET = process.env.FORGEAX_RUNTIME_SCOPE_SECRET;
 const INITIAL_SCOPE_ID = process.env.FORGEAX_RUNTIME_SCOPE_ID ?? INITIAL_GAME_ID;
-const INITIAL_GENERATION = Number(process.env.FORGEAX_RUNTIME_GENERATION ?? 1);
-const GAMES_URL_PREFIX = process.env.FORGEAX_GAMES_URL_PREFIX
-  ?? (INITIAL_GAME_DIR ? HOST_GAMES_FARM : '');
+// Generation is allocated by the Engine DDC owner. A Play host without an
+// injected generation stays unbound until its first authoritative bind.
+const INITIAL_GENERATION = Number(process.env.FORGEAX_RUNTIME_GENERATION ?? Number.NaN);
+// The dynamic host starts unbound, then creates the active-game mount during
+// the first runtime-scope bind. Its browser URL contract must still point at
+// that future mount; baking an empty prefix at startup makes every later game
+// entry resolve as /preview/<game>/main.ts instead of /preview/host-games/....
+const GAMES_URL_PREFIX = HOST_GAMES_FARM;
 const GAME_API_PORT = process.env.FORGEAX_GAME_API_PORT;
 const STATIC_GAME_DIR = process.env.FORGEAX_STATIC_GAME_DIR
   ? resolve(process.env.FORGEAX_STATIC_GAME_DIR)
@@ -115,28 +178,12 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
 // Git on Windows without core.symlinks=true checks out symlinks as plain text
 // files containing the target path, which breaks the Vite dev server — so we
 // (re)create a real symlink/junction on demand.
-function setupExternalRootFarm(linkName: string, targetPath: string): void {
-  const linkPath = resolve(here, linkName);
-  if (existsSync(linkPath)) {
-    const stat = lstatSync(linkPath);
-    if (!stat.isSymbolicLink() && stat.isFile()) {
-      // It's the text file checked out by Git on Windows. Remove it.
-      try { unlinkSync(linkPath); } catch {}
-    } else {
-      // Already a valid symlink or junction, leave it alone.
-      return;
-    }
-  }
-  // Create a proper symlink/junction
-  try {
-    symlinkSync(targetPath, linkPath, 'junction');
-  } catch (e) {
-    console.warn(`[forgeax] failed to create ${linkName} junction:`, e);
-  }
+function ensureExternalRootFarms(): void {
+  setupExternalRootFarm(runtimeWorkspaceRoot, 'shared-assets', SHARED_BASE);
+  setupExternalRootFarm(runtimeWorkspaceRoot, 'engine-assets', ENGINE_ASSETS_BASE);
 }
 
-setupExternalRootFarm('shared-assets', SHARED_BASE);
-setupExternalRootFarm('engine-assets', ENGINE_ASSETS_BASE);
+ensureExternalRootFarms();
 
 // Rewrite resolved roots to paths the scanner can publish under the Vite root:
 // local game roots use host-games/<slug>, while shared roots use the single
@@ -148,13 +195,13 @@ setupExternalRootFarm('engine-assets', ENGINE_ASSETS_BASE);
 // Pack v2 scenes fall back to an incorrectly addressed import request. The
 // browser-visible URL must use the same host-games mount as the game entry.
 function farmGamePath(root: ResolvedRoot, gameDir: string, slug: string): string {
-  if (root.shared && root.sub !== undefined) return resolve(here, 'shared-assets', root.sub);
+  if (root.shared && root.sub !== undefined) return resolve(runtimeWorkspaceRoot, 'shared-assets', root.sub);
   const rel = relative(gameDir, root.abs);
-  return resolve(here, HOST_GAMES_FARM, slug, rel);
+  return resolve(runtimeWorkspaceRoot, HOST_GAMES_FARM, slug, rel);
 }
 
 function engineTemplateUiFarmPath(): string {
-  return resolve(here, 'engine-template-ui');
+  return resolve(runtimeWorkspaceRoot, 'engine-template-ui');
 }
 
 // The default game template references these engine-authored audio clips by
@@ -164,8 +211,8 @@ function engineTemplateUiFarmPath(): string {
 // for every game while ensuring new default games have working audio.
 function templateAudioRoots(): string[] {
   return [
-    resolve(here, 'engine-assets', 'sfx'),
-    resolve(here, 'engine-assets', 'collectathon-audio'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'sfx'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'collectathon-audio'),
   ].filter(existsSync);
 }
 
@@ -180,13 +227,13 @@ function templateGameDefaultRuntimeRoots(gameDir: string): string[] {
     return [];
   }
   return [
-    resolve(here, 'engine-assets', 'vendor', 'fbx-test'),
-    resolve(here, 'engine-assets', 'khronos-gltf-samples', 'BoxTextured'),
-    resolve(here, 'engine-assets', 'demo-assets', 'hello-sprite', 'wood-container.jpg.meta.json'),
-    resolve(here, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.ttf.meta.json'),
-    resolve(here, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.atlas.png.meta.json'),
-    resolve(here, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.font.pack.json'),
-    resolve(here, 'engine-assets', 'demo-assets', 'hello-sprite-atlas'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'vendor', 'fbx-test'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'khronos-gltf-samples', 'BoxTextured'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'demo-assets', 'hello-sprite', 'wood-container.jpg.meta.json'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.ttf.meta.json'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.atlas.png.meta.json'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.font.pack.json'),
+    resolve(runtimeWorkspaceRoot, 'engine-assets', 'demo-assets', 'hello-sprite-atlas'),
   ].filter(existsSync);
 }
 
@@ -197,7 +244,7 @@ const viteRoot = here;
 let mountedGameLink: string | undefined;
 if (INITIAL_GAME_DIR && /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID)) {
   mountedGameLink = setupSingleGameRootFarm({
-    farmRoot: resolve(here, HOST_GAMES_FARM),
+    farmRoot: resolve(runtimeWorkspaceRoot, HOST_GAMES_FARM),
     gameDir: INITIAL_GAME_DIR,
     gameId: INITIAL_GAME_ID,
   });
@@ -262,10 +309,20 @@ function forgeaxRuntimeIdentity() {
 let activeGameDir = INITIAL_GAME_DIR;
 let activeGameId = INITIAL_GAME_ID;
 
+// Shader publication compares the authored pack's resolved source path with
+// Vite's transform id. Play mounts the active game below this Vite root, so
+// discover through that same farm namespace instead of handing the shader
+// plugin a physical temp/game path that only looks equivalent after realpath.
+function activeGameFarmDir(): string | null {
+  if (!activeGameDir || !activeGameId) return null;
+  return resolve(runtimeWorkspaceRoot, HOST_GAMES_FARM, activeGameId);
+}
+
 // The Pack producer receives one exact game root plus explicit product roots.
 // Shared roots are host-owned inputs in this realm; sibling game directories
 // are never discovered here.
 function singleGamePackRoots(gameDir: string, gameId: string): string[] {
+  ensureExternalRootFarms();
   const seen = new Set<string>();
   const roots: string[] = [];
   const push = (root: string): void => {
@@ -302,6 +359,16 @@ function collectPluginFiles(root: string, out: string[]): void {
       out.push(abs);
     }
   }
+}
+
+/**
+ * Static Play bundles only the asset-resident Engine realm. Build/host realm
+ * plugins are Node-side ToolClient producers and must never become browser
+ * dependencies (for example, a build plugin may import `node:module`). Keep
+ * this boundary identical to the dynamic game-plugin manifest below.
+ */
+function collectStaticRuntimePluginFiles(gameDir: string, out: string[]): void {
+  collectPluginFiles(join(gameDir, 'assets'), out);
 }
 
 // Plugin modules are project-runtime inputs, not authored asset rows. The
@@ -353,7 +420,7 @@ function collectStaticGameFiles(root: string, current = root, out: string[] = []
  */
 function forgeaxStaticGame() {
   const staticPluginFiles: string[] = [];
-  if (STATIC_BUILD) collectPluginFiles(STATIC_GAME_DIR, staticPluginFiles);
+  if (STATIC_BUILD) collectStaticRuntimePluginFiles(STATIC_GAME_DIR, staticPluginFiles);
   staticPluginFiles.sort();
   return {
     name: 'forgeax:static-game',
@@ -446,11 +513,12 @@ const resolveActivePackRoots = (): string[] =>
   singleGamePackRoots(activeGameDir, activeGameId);
 const resolveActiveCatalogRoots = (gameDir: string, gameId: string) => resolveGameCatalogRoots(gameDir, {
   sharedBase: SHARED_BASE,
-  catalogPrefixFor: (root) => relative(here, farmGamePath(root, gameDir, gameId)).replace(/\\/g, '/'),
+  catalogPrefixFor: (root) => relative(runtimeWorkspaceRoot, farmGamePath(root, gameDir, gameId)).replace(/\\/g, '/'),
 });
 const enginePreset = engineVitePreset({
   base: '/preview/',
   gameDirAbs: INITIAL_GAME_DIR || null,
+  ddc: PLAY_RUNTIME_DDC_OPTIONS,
   gameSource: {
     gameDirProvider: () => activeGameDir || null,
     staticGameDir: STATIC_GAME_DIR,
@@ -461,8 +529,6 @@ const enginePreset = engineVitePreset({
     rootsProvider: resolveActivePackRoots,
     cleanOrphanMetas: false,
   },
-  materialPackagesProvider: () =>
-    activeGameDir ? discoverGameMaterialPackages(activeGameDir) : [],
 });
 const playPackPlugin = enginePreset.pack;
 if (!playPackPlugin) throw new Error('Play Runtime must own a Pack producer');
@@ -473,8 +539,11 @@ const runtimeScopeController = createRuntimeScopeController({
   secret: RUNTIME_SCOPE_SECRET,
   initial: initialScopeCommand,
   prepareGameMount: (gameDir, gameId) => {
+    // Desktop workspace materialization can race a project bind. Reassert the
+    // immutable asset mounts at the bind boundary, where Pack requires them.
+    ensureExternalRootFarms();
     mountedGameLink = setupSingleGameRootFarm({
-      farmRoot: resolve(here, HOST_GAMES_FARM),
+      farmRoot: resolve(runtimeWorkspaceRoot, HOST_GAMES_FARM),
       gameDir,
       gameId,
       previousMount: mountedGameLink,
@@ -484,6 +553,7 @@ const runtimeScopeController = createRuntimeScopeController({
   },
   resolveRoots: (gameDir, gameId) => singleGamePackRoots(gameDir, gameId),
   resolveCatalogRoots: resolveActiveCatalogRoots,
+  resolveProjectDdcRoot: (gameDir) => resolveDdcRootPolicy(gameDir).projectDdcRoot,
 });
 export default defineConfig({
   root: viteRoot,
@@ -491,9 +561,7 @@ export default defineConfig({
   // The interface studio is at :18920 and proxies /preview → :15173/preview, so
   // engine's deps don't collide with interface's own /node_modules deps.
   base: '/preview/',
-  cacheDir: process.env.FORGEAX_VITE_CACHE_ROOT
-    ? resolve(process.env.FORGEAX_VITE_CACHE_ROOT, 'play-runtime')
-    : resolve(here, '.vite'),
+  cacheDir: PLAY_RUNTIME_CACHE_ROOT,
   publicDir: resolve(here, 'public'),
   // Inject the host-owned URL-space games prefix so the client builds game URLs
   // without a baked layout literal. '' → game served directly under base.
@@ -503,6 +571,7 @@ export default defineConfig({
     __FORGEAX_STATIC_GAME_ID__: JSON.stringify(STATIC_GAME_ID),
   },
   plugins: [
+    engineWorktreeResolve,
     forgeaxStaticGame() as never,
     forgeaxRuntimeIdentity() as never,
     ...enginePreset.plugins,

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { createElement, type ReactNode } from 'react';
 import type { AppExtension, AppHost, ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
 import type {
   ActivityRegistration,
@@ -18,11 +18,13 @@ import {
   getSceneFile,
   getSceneList,
   hasPendingDiskSave,
+  isMaterialStagingDirty,
   isMiStagingDirty,
   isInputMapStagingDirty,
   onSceneListChange,
   registerActivePageSaveHandler,
   subscribeAssetsChanged,
+  subscribeMaterialStaging,
   subscribeMiStaging,
   subscribeInputMapStaging,
   type SelectedAsset,
@@ -32,11 +34,19 @@ import {
   DEFAULT_ASSET_EDITOR_DOCK_LAYOUT,
   DEFAULT_EDITOR_DOCK_LAYOUT,
   DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT,
+  DEFAULT_TEXTURE_EDITOR_DOCK_LAYOUT,
   DEFAULT_MESH_EDITOR_DOCK_LAYOUT,
   DEFAULT_MI_EDITOR_DOCK_LAYOUT,
   DEFAULT_INPUT_MAP_EDITOR_DOCK_LAYOUT,
   DEFAULT_VFX_EDITOR_DOCK_LAYOUT,
+  DEFAULT_OPERATIONS_PAGE_DOCK_LAYOUT,
 } from './default-dock-layout';
+import {
+  createMaterialPageController,
+  invokeMaterialPageSave,
+  resolveProjectMaterialRevision,
+  trySaveDirtyMaterialStaging,
+} from './page-controllers/material-page-controller';
 import {
   createMaterialInstancePageController,
   getMiPageController,
@@ -45,20 +55,48 @@ import {
   createInputMapPageController,
   getInputMapPageController,
 } from './page-controllers/input-map-page-controller';
+import { applyToolClientRunEvent, createToolClientProjection, type ToolClientRunEvent } from './runtime/tool-client-events';
+import { createAuthoringOperationsProjection, type AuthoringOperationsProjection } from './runtime/tool-client-operations';
+import type { AuthoringToolClientTransport } from './runtime/tool-client-transport';
+import { OperationsPage, installOperationsObserverSource } from '@forgeax/editor-panels';
 
 const OWNER = '@forgeax/editor';
+export const EDITOR_OPERATIONS_OBSERVER_CAPABILITY = 'operations-observer' as const;
 const pageId = (id: string) => `${OWNER}#page/${id}` as PageTypeRegistration['id'];
 const panelId = (id: string) => `${OWNER}#panel/${id}` as PanelTypeRegistration['id'];
 const activityId = (id: string) => `${OWNER}#activity/${id}` as ActivityRegistration['id'];
 const editorId = (id: string) => `${OWNER}#resource-editor/${id}` as ResourceEditorRegistration['id'];
 
+/**
+ * UI pages receive authoring capabilities from the host ToolClient. This
+ * factory only projects the typed transport; it does not execute an operation
+ * or retain a Project/RunJournal/registry in the page realm.
+ */
+export function createPageAuthoringOperationsProjection(
+  transport?: AuthoringToolClientTransport,
+): AuthoringOperationsProjection {
+  return createAuthoringOperationsProjection(transport);
+}
+
 const LEVEL_PAGE = pageId('level');
 const ASSET_PAGE = pageId('asset');
 const MESH_PAGE = pageId('mesh');
+const TEXTURE_PAGE = pageId('texture');
 const MATERIAL_PAGE = pageId('material');
 const MATERIAL_INSTANCE_PAGE = pageId('material-instance');
 const INPUT_MAP_PAGE = pageId('input-map');
 const VFX_PAGE = pageId('vfx');
+const OPERATIONS_PAGE = pageId('operations');
+
+/** Public carrier location owned by the editor page contribution. */
+export const EDITOR_LEVEL_PAGE_ID = LEVEL_PAGE;
+export const EDITOR_VIEWPORT_PANEL_ID = 'ep:viewport' as const;
+export const EDITOR_PAGE_CARRIER_DESCRIPTOR = Object.freeze({
+  pageTypeId: EDITOR_LEVEL_PAGE_ID,
+  viewportPanelId: EDITOR_VIEWPORT_PANEL_ID,
+  visible: true as const,
+  gameplay: true as const,
+});
 
 // `info` / `checkpoints` / `events` are interface-owned footer chrome that
 // default into the merged bottom EDGE group (see default-dock-layout.ts
@@ -74,12 +112,14 @@ const VFX_PAGE = pageId('vfx');
 // of which page is active. It is deliberately absent from every default dock
 // layout: the panel opens on demand (gear / Window menu), never on boot.
 const LEVEL_PANELS = ['ep:hierarchy', 'ep:inspector', 'viewport', 'info', 'checkpoints', 'events', 'ep:assets', 'ep:history', 'ep:capabilities', 'ep:settings'];
-const ASSET_PANELS = ['ep:asset-properties', 'ep:asset-overview', 'ep:settings'];
+const ASSET_PANELS = ['ep:asset-properties', 'ep:settings'];
 const MESH_PANELS = ['ep:mesh-preview', ...ASSET_PANELS, 'ep:mesh-slots'];
+const TEXTURE_PANELS = ['ep:texture-preview', ...ASSET_PANELS];
 const MATERIAL_PANELS = ['ep:mat-preview', ...ASSET_PANELS];
 const MATERIAL_INSTANCE_PANELS = ['ep:mi-preview', 'ep:mi-properties', 'ep:settings'];
 const INPUT_MAP_PANELS = ['ep:input-map-properties', 'ep:settings'];
-const VFX_PANELS = ['ep:vfx-system', 'ep:vfx-preview', 'ep:vfx-timeline', 'ep:vfx-details', 'ep:vfx-diagnostics', 'ep:asset-overview', 'ep:settings'];
+const VFX_PANELS = ['ep:vfx-system', 'ep:vfx-preview', 'ep:vfx-timeline', 'ep:vfx-details', 'ep:vfx-diagnostics', 'ep:settings'];
+const OPERATIONS_PANELS = ['ep:operations-page'];
 
 function placements(ids: readonly string[]): PagePanelPlacement[] {
   return ids.map((id) => ({ id, panelTypeId: panelId(id.replace(/^ep:/u, '')) }));
@@ -278,25 +318,46 @@ export function createEditorPageExtension(
   const allPanelIds = [...new Set([
     ...LEVEL_PANELS,
     ...MESH_PANELS,
+    ...TEXTURE_PANELS,
     ...MATERIAL_PANELS,
     ...MATERIAL_INSTANCE_PANELS,
     ...INPUT_MAP_PANELS,
     ...VFX_PANELS,
+    ...OPERATIONS_PANELS,
   ])];
   return {
     id: OWNER,
     version: '2.0.0',
     requires: ['pages'],
+    // `host.extend` is guarded by the manifest. Without this declaration the
+    // observer setup is rejected even though the capability is otherwise
+    // disposable and owner-scoped.
+    provides: [EDITOR_OPERATIONS_OBSERVER_CAPABILITY],
     contributes: {
       panelTypes: allPanelIds.map((id): PanelTypeRegistration => ({
         id: panelId(id.replace(/^ep:/u, '')),
-        runtime: { kind: 'inline', render: () => renderPanel(id.replace(/^ep:/u, '')) },
+        runtime: {
+          kind: 'inline',
+          render: () => id === 'ep:operations-page' ? createElement(OperationsPage) : renderPanel(id.replace(/^ep:/u, '')),
+        },
       })),
       pages: [
         page(LEVEL_PAGE, 'Level', 'singleton', DEFAULT_EDITOR_DOCK_LAYOUT, LEVEL_PANELS, levelController),
         page(ASSET_PAGE, 'Asset', 'resource', DEFAULT_ASSET_EDITOR_DOCK_LAYOUT, ASSET_PANELS, fileController),
         page(MESH_PAGE, 'Mesh', 'resource', DEFAULT_MESH_EDITOR_DOCK_LAYOUT, MESH_PANELS, fileController, 2),
-        page(MATERIAL_PAGE, 'Material', 'resource', DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT, MATERIAL_PANELS, fileController, 2),
+        page(TEXTURE_PAGE, 'Texture', 'resource', DEFAULT_TEXTURE_EDITOR_DOCK_LAYOUT, TEXTURE_PANELS, fileController, 1),
+        {
+          ...page(
+            MATERIAL_PAGE,
+            'Material',
+            'resource',
+            DEFAULT_MATERIAL_EDITOR_DOCK_LAYOUT,
+            MATERIAL_PANELS,
+            undefined,
+            2,
+          ),
+          createController: createMaterialPageController,
+        },
         {
           ...page(
             MATERIAL_INSTANCE_PAGE,
@@ -318,18 +379,33 @@ export function createEditorPageExtension(
           createController: createInputMapPageController,
         },
         page(VFX_PAGE, 'VFX', 'resource', DEFAULT_VFX_EDITOR_DOCK_LAYOUT, VFX_PANELS, fileController),
+        page(OPERATIONS_PAGE, 'AI Operations', 'singleton', DEFAULT_OPERATIONS_PAGE_DOCK_LAYOUT, OPERATIONS_PANELS),
       ],
       activities: [{
         id: activityId('editor'),
         title: 'Editor',
-        titleI18n: { zh: '编辑器', en: 'Editor', ja: 'エディター' },
+        titleI18n: { zh: '\u7f16\u8f91\u5668', en: 'Editor', ja: '\u30a8\u30c7\u30a3\u30bf\u30fc' },
         category: 'builtin',
         sourceLayer: 'builtin',
         order: 0,
         pageTypeId: LEVEL_PAGE,
+      }, {
+        id: activityId('operations'),
+        title: 'AI Operations',
+        category: 'builtin',
+        sourceLayer: 'builtin',
+        order: 1,
+        pageTypeId: OPERATIONS_PAGE,
       }],
       resourceEditors: [
         { id: editorId('mesh'), selector: { kinds: ['mesh'] }, pageTypeId: MESH_PAGE, priority: 'default', sourceLayer: 'builtin' },
+        {
+          id: editorId('texture'),
+          selector: { kinds: ['texture', 'image'] },
+          pageTypeId: TEXTURE_PAGE,
+          priority: 'default',
+          sourceLayer: 'builtin',
+        },
         { id: editorId('material'), selector: { kinds: ['material'] }, pageTypeId: MATERIAL_PAGE, priority: 'default', sourceLayer: 'builtin' },
         {
           id: editorId('material-instance'),
@@ -368,6 +444,17 @@ export function createEditorPageExtension(
     },
     setup(ctx) {
       hostRef = ctx.host;
+      const toolClientProjection = createToolClientProjection();
+      // Host transport may feed POD events into this observer. It exposes no
+      // Gateway executor, World, registry, cancel, retry, or Project writer.
+      const hostExtensions = ctx.host as typeof ctx.host & {
+        extend?: (capability: string, value: unknown) => void;
+      };
+      hostExtensions.extend?.(EDITOR_OPERATIONS_OBSERVER_CAPABILITY, {
+        projection: toolClientProjection,
+        ingest: (event: ToolClientRunEvent) => applyToolClientRunEvent(toolClientProjection, event),
+      });
+      const releaseOperationsObserver = installOperationsObserverSource(toolClientProjection);
       // useActiveEditorAsset is backed by useSyncExternalStore. Keep the
       // derived Input Map asset identity stable until the page snapshot or its
       // staging metadata actually changes.
@@ -429,6 +516,10 @@ export function createEditorPageExtension(
       });
       const resetDirtyProbe = registerPageDirtyProbe({
         isDirty: (page) => {
+          if (page.typeId === MATERIAL_PAGE) {
+            const guid = page.resource?.canonicalId;
+            return typeof guid === 'string' && isMaterialStagingDirty(guid);
+          }
           if (page.typeId === MATERIAL_INSTANCE_PAGE) {
             const guid = page.resource?.canonicalId;
             return typeof guid === 'string' && isMiStagingDirty(guid);
@@ -440,9 +531,11 @@ export function createEditorPageExtension(
           return false;
         },
         subscribe: (listener) => {
+          const unsubMat = subscribeMaterialStaging(listener);
           const unsubMi = subscribeMiStaging(listener);
           const unsubIm = subscribeInputMapStaging(listener);
           return () => {
+            unsubMat();
             unsubMi();
             unsubIm();
           };
@@ -450,9 +543,38 @@ export function createEditorPageExtension(
       });
       const resetActiveSave = registerActivePageSaveHandler(() => {
         const snapshot = ctx.host.pages.getSnapshot();
+
+        const materialRevision = (instance: { resource?: { metadata?: { asset?: unknown }; canonicalId?: string } }) => {
+          const asset = instance.resource?.metadata?.asset;
+          return resolveProjectMaterialRevision(
+            asset && typeof asset === 'object' && 'revision' in asset
+              ? (asset as { revision?: unknown }).revision
+              : undefined,
+          );
+        };
+
+        // Dirty material pages win over scene save even when Level is the focused tab.
+        for (const instance of snapshot.instances) {
+          if (instance.typeId !== MATERIAL_PAGE) continue;
+          const guid = instance.resource?.canonicalId;
+          if (typeof guid !== 'string' || !isMaterialStagingDirty(guid)) continue;
+          return invokeMaterialPageSave(instance.encodedKey, guid, materialRevision(instance));
+        }
+
+        // Staging can outlive a missing page tab / controller map entry.
+        if (trySaveDirtyMaterialStaging()) return true;
+
         if (!snapshot.activeKey) return false;
         const instance = snapshot.instances.find((candidate) => candidate.encodedKey === snapshot.activeKey);
         if (!instance) return false;
+        if (instance.typeId === MATERIAL_PAGE) {
+          const guid = instance.resource?.canonicalId;
+          return invokeMaterialPageSave(
+            snapshot.activeKey,
+            typeof guid === 'string' ? guid : undefined,
+            materialRevision(instance),
+          );
+        }
         if (instance.typeId === MATERIAL_INSTANCE_PAGE) {
           const controller = getMiPageController(snapshot.activeKey);
           if (!controller?.save) return false;
@@ -486,6 +608,7 @@ export function createEditorPageExtension(
       void ctx.host.pages.open({ typeId: LEVEL_PAGE });
       return () => {
         unsubscribeAssetLifecycle();
+        releaseOperationsObserver();
         resetActiveSave();
         resetDirtyProbe();
         resetNavigation();

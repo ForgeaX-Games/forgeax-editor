@@ -1,19 +1,19 @@
-/** shortcut-forwarder —— MIRROR of `@forgeax/host-sdk/src/shortcut-forwarder.ts`.
+/** Shortcut forwarding protocol shared with the Interface host receiver.
  *
- *  ⚠ 权威在 studio 的 `@forgeax/host-sdk`(跨仓无法直接 import,editor 是独立 submodule)。
- *  改动请先改权威、再同步本文件。本副本经 `@forgeax/editor-core/shortcut-forwarder` 导出,供
- *  edit-runtime 使用(它在 DAG 下游、可 import editor-core)。play-runtime 经 VAG 协议与 core
- *  通信,禁止运行时 import editor-core,故它另 vendor 一份本地副本(见 play-runtime/src/shortcut-forwarder.ts)。
+ *  Editor Core owns the editor-family source. This module is exported through
+ *  `@forgeax/editor-core/shortcut-forwarder` for Edit Runtime. Play Runtime
+ *  cannot import Editor Core across the VAG boundary, so its zero-dependency
+ *  copy must remain byte-for-byte behaviorally aligned with this file.
  *
  *  让全局快捷键(⌘K 命令面板 / Ctrl+Shift+* 布局键 / Esc)在 iframe 内也生效:studio 顶层的
  *  命令面板 + useGlobalShortcuts 拿不到跨 iframe 的按键,故各 iframe 内装本转发器,白名单命中
- *  → postMessage 给 parent;studio host 校验 origin 后在顶层重放。editor interface 是中间帧,
- *  转发器自带 relay,把 runtime 子帧的按键逐层上抛到 studio。
+ *  → postMessage 给 parent;产品 host 校验 origin 后在顶层重放。Interface 是中间帧,
+ *  转发器自带 relay,把 Runtime 子帧的按键逐层上抛到产品 host。
  *
  *  浏览器专用,零依赖。只传可序列化数据。
  */
 
-/** postMessage 信封 type;与 studio host 侧接收器共用。 */
+/** postMessage 信封 type;与 Interface host 侧接收器共用。 */
 export const FORGEAX_FORWARD_KEY = 'FORGEAX_FORWARD_KEY';
 
 /** iframe → parent 转发的按键载荷(可序列化)。 */

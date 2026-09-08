@@ -27,7 +27,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { Camera, MeshFilter, MeshRenderer, Materials, perspective } from '@forgeax/engine-render';
-import { Name, Transform, scenePlugin as transformPlugin } from '@forgeax/engine-scene';
+import { Name, Transform, registerPropagateTransforms } from '@forgeax/engine-scene';
 // engine #650 (Tier-2 decomposition) moved builtin handles into
 // @forgeax/engine-assets-runtime.
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -35,14 +35,14 @@ import { Disabled, World, type EntityHandle } from '@forgeax/engine-ecs';
 import { WorldManager } from '../index';
 
 // NOTE: entComponents (editor helper) treats a Name-less entity as stale (Name is
-// its liveness probe) and returns {} — the editor camera + gizmo carry NO Name, so
+// its liveness probe) and returns {} — the editor camera + chrome carry NO Name, so
 // entComponents cannot introspect them. Probe components directly via world.get.
 const has = (world: World, h: EntityHandle, token: unknown): boolean =>
   world.get(h, token as Parameters<World['get']>[1]).ok;
 
 /** Enumerate EVERY live entity handle through the public Query API. Unlike
  *  worldEntityHandles (a Name-query walk), this surfaces Name-less entities too —
- *  the editor camera + gizmo carry no Name, so a Name walk would miss them. */
+ *  the editor camera + chrome carry no Name, so a Name walk would miss them. */
 function allEntityHandles(world: World): EntityHandle[] {
   const out: EntityHandle[] = [];
   for (const row of world.query({}).unwrap()) out.push(row.entity);
@@ -54,7 +54,7 @@ function allEntityHandles(world: World): EntityHandle[] {
  *  the "sceneWorld has zero editor entities" assertion is non-vacuous. */
 function makeSceneWorld(): World {
   const scene = new World();
-  transformPlugin().build(scene);
+  registerPropagateTransforms(scene);
   scene.spawn(
     { component: Name, data: { value: 'AuthoredCube' } },
     { component: Transform, data: { pos: [0, 0, 0] } },
@@ -65,7 +65,7 @@ function makeSceneWorld(): World {
 }
 
 describe('w16 — AC-01 editorWorld / sceneWorld purity (bidirectional, non-vacuous)', () => {
-  it('editorWorld carries the editor camera + gizmo; sceneWorld carries neither', () => {
+  it('editorWorld carries the editor camera + chrome; sceneWorld carries neither', () => {
     const sceneWorld = makeSceneWorld();
     const wm = new WorldManager(() => sceneWorld);
     const editorWorld = wm.editorWorld;

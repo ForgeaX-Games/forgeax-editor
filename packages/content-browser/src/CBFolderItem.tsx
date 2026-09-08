@@ -1,7 +1,14 @@
-import { memo, useCallback, type CSSProperties, type MouseEvent } from 'react';
+import { memo, useCallback, useMemo, type CSSProperties, type MouseEvent } from 'react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ContentBrowserIcon, FILE_FAMILY_COLORS } from './content-browser-icons';
 import { CBInlineRename } from './CBInlineRename';
+import {
+  dropRejectFallback,
+  useDragSource,
+  useFolderDropZone,
+  type CBDragPayload,
+  type CBDropTarget,
+} from './dnd';
 import type { CBFolder } from './types';
 
 interface Props {
@@ -17,11 +24,17 @@ interface Props {
   onToggleFavorite: (item: CBFolder) => void;
   onClickIndex: (index: number, e: MouseEvent) => void;
   onFocusItem: (item: CBFolder) => void;
+  /** Build the internal move payload for a drag starting on this folder. */
+  getDragPayload?: (item: CBFolder) => CBDragPayload | null;
+  /** Execute a move dropped onto this folder (validated + dispatched upstream). */
+  onMoveDrop?: (payload: CBDragPayload, target: CBDropTarget) => void;
   renaming?: boolean;
   renameValidate?: (value: string) => string | null;
   onRenameCommit?: (item: CBFolder, value: string) => void;
   onRenameCancel?: () => void;
 }
+
+const NOOP_MOVE = (_p: CBDragPayload, _t: CBDropTarget) => {};
 
 function CBFolderItemImpl({
   folder,
@@ -35,6 +48,8 @@ function CBFolderItemImpl({
   onToggleFavorite,
   onClickIndex,
   onFocusItem,
+  getDragPayload,
+  onMoveDrop,
   renaming = false,
   renameValidate,
   onRenameCommit,
@@ -52,18 +67,32 @@ function CBFolderItemImpl({
     onClickIndex(index, e);
   }, [onSelect, onClickIndex, folder, index]);
 
+  // The folder card is BOTH a move source (drag it into another folder) and a
+  // move target (drop files/folders into it). The drop-zone verdict drives the
+  // accept/reject styling + the "why not" title (point 3).
+  const buildPayload = useCallback(() => getDragPayload?.(folder) ?? null, [getDragPayload, folder]);
+  const dragSource = useDragSource(buildPayload);
+  const dropTarget = useMemo<CBDropTarget>(() => ({ kind: 'folder-tile', path: folder.path }), [folder.path]);
+  const { isOver, verdict, dropProps } = useFolderDropZone(dropTarget, onMoveDrop ?? NOOP_MOVE);
+  const dropClass = isOver && verdict
+    ? verdict.ok ? ' cb-drop-ok' : ' cb-drop-reject'
+    : '';
+  const rejectTitle = isOver && verdict && !verdict.ok ? dropRejectFallback(verdict.reason) : undefined;
+
   return (
     <div
-      className={`cb-grid-item cb-fe-card cb-grid-folder${selected ? ' sel' : ''}`}
+      className={`cb-grid-item cb-fe-card cb-grid-folder${selected ? ' sel' : ''}${dropClass}`}
       style={{ '--cb-type-color': FILE_FAMILY_COLORS.dir } as CSSProperties}
       data-testid="cb-folder-item"
       data-folder-path={folder.path}
       tabIndex={tabIndex}
       onFocus={() => onFocusItem(folder)}
+      {...dragSource}
+      {...dropProps}
       onClick={handleClick}
       onDoubleClick={() => onActivate(folder)}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e, folder); }}
-      title={`${folder.name} (${folder.childCount})`}
+      title={rejectTitle ?? `${folder.name} (${folder.childCount})`}
     >
       <span
         className={`cb-card-fav${fav ? ' on' : ''}`}

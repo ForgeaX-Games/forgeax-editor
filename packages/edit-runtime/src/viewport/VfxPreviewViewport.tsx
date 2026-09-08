@@ -29,7 +29,12 @@ import {
   dispatchViewportRuntimeOperation,
   useActiveEditorAsset,
 } from '@forgeax/editor-core';
-import { loadDocumentAssetPayload } from '@forgeax/editor-panels';
+import {
+  loadDocumentAssetPayload,
+  resetVfxEmitterMask,
+  resolveEnabledVfxEmitters,
+  subscribeVfxEmitterMask,
+} from '@forgeax/editor-panels';
 import { createParticleCameraSource } from './vfx-runtime-bridge';
 import { createViewport, type Viewport } from './viewport';
 import {
@@ -45,11 +50,18 @@ import {
   type PreviewExecutorLeaseIdentity,
   type PreviewExecutorResult,
 } from '../runtime/preview-executor-lease';
+import { createVfxPreviewPrimitive, previewSnapshot } from '@forgeax/engine-preview';
 import {
   VFX_PREVIEW_LEASE_KIND,
   VFX_PREVIEW_OPERATION_IDS,
 } from './vfx-preview-operations';
 import { createPreviewBundlerOptions } from './preview-bundler-options';
+import { createInteractivePreviewSession } from '../preview-world/interactive-session-isolation';
+import {
+  setVfxPreviewToolbarHandlers,
+  setVfxPreviewToolbarState,
+  useVfxPreviewToolbarRegistration,
+} from './vfx-preview-toolbar';
 import './vfx-preview.css';
 
 async function copyDependency(target: AssetRegistry, guid: string): Promise<void> {
@@ -117,7 +129,6 @@ export function VfxPreviewViewport(): ReactElement {
   const [playing, setPlaying] = useState(true);
   const [inspect, setInspect] = useState<VfxRuntimeHostInspectSnapshot>();
   const [errorHint, setErrorHint] = useState<string>();
-  const [enabledEmitterIds, setEnabledEmitterIds] = useState<readonly string[]>([]);
   const [boundsVisible, setBoundsVisible] = useState(false);
   const [phaseDraft, setPhaseDraft] = useState(0);
   const [maxPhaseTick, setMaxPhaseTick] = useState(300);
@@ -156,20 +167,36 @@ export function VfxPreviewViewport(): ReactElement {
     container.appendChild(canvas);
     setStatus('booting');
     setErrorHint(undefined);
-    const previewBundlerOptions = createPreviewBundlerOptions();
-
-    const create = (rhi?: unknown) => createApp(canvas, {
-      features: [vfxHost.feature],
-      pointerLockAllowed: () => false,
-      ...(rhi === undefined ? {} : { rhi: rhi as never }),
-    }, previewBundlerOptions);
 
     void (async () => {
+      const previewBundlerOptions = await createPreviewBundlerOptions();
+
+      const create = (rhi?: unknown) => createApp(canvas, {
+        features: [vfxHost.feature],
+        pointerLockAllowed: () => false,
+        ...(rhi === undefined ? {} : { rhi: rhi as never }),
+      }, previewBundlerOptions);
+
       const loadedEffect = await loadDocumentAssetPayload(asset.guid);
       if (!isVfxGpuEffectAsset(loadedEffect)) {
         throw new Error(`VFX asset ${asset.guid} is not a cooked GPU effect`);
       }
       const effect = loadedEffect;
+      const primitive = createVfxPreviewPrimitive({
+        subjectGuid: asset.guid,
+        snapshot: previewSnapshot(asset.guid),
+        binding: { guid: asset.guid, effectDigest: effect.programFingerprint },
+        simulation: { seed: 1337, deltaSeconds: 1 / 60, frames: 8 },
+      });
+      const interactiveSession = createInteractivePreviewSession({
+        domain: 'vfx',
+        subjectGuid: asset.guid,
+        sessionId: `editor-interactive:${asset.guid}`,
+      });
+      container.dataset.previewOperationId = primitive.operationId;
+      container.dataset.previewSource = primitive.source;
+      container.dataset.previewSubject = primitive.subject.guid;
+      container.dataset.previewSessionId = interactiveSession.sessionId;
       let created = await create();
       if (!created.ok) {
         const rhiNull = await import('@forgeax/engine-rhi-null');
@@ -296,7 +323,6 @@ export function VfxPreviewViewport(): ReactElement {
           }
           previewRuntime.enabledEmitterIds = Object.freeze([...nextEnabledEmitterIds]);
           previewRuntime.enabledEmitterIdSet = new Set(previewRuntime.enabledEmitterIds);
-          setEnabledEmitterIds(previewRuntime.enabledEmitterIds);
           if (appPaused) currentApp.stepFrame(0).unwrap();
         },
         frameBounds() {
@@ -481,7 +507,6 @@ export function VfxPreviewViewport(): ReactElement {
       resizeObserver = new ResizeObserver(syncSize);
       resizeObserver.observe(container);
       app.start();
-      setEnabledEmitterIds(emitterIds);
       const loopSeconds = Math.max(
         5,
         ...effect.program.emitters.map((emitter) => emitter.schedule.loopDuration ?? 0),
@@ -512,7 +537,7 @@ export function VfxPreviewViewport(): ReactElement {
       if (inspectTimer !== null) clearInterval(inspectTimer);
       resizeObserver?.disconnect();
       try { viewport?.dispose(); } catch { /* disposed */ }
-      if (app) vfxHost.detachWorld({ world: app.world });
+      if (app) void vfxHost.detachWorld({ world: app.world });
       if (app && appPaused) {
         try { app.resume(); } catch { /* stopping */ }
         appPaused = false;
@@ -520,7 +545,6 @@ export function VfxPreviewViewport(): ReactElement {
       try { app?.stop(); } catch { /* stopped */ }
       runtimeRef.current = null;
       setInspect(undefined);
-      setEnabledEmitterIds([]);
       setBoundsVisible(false);
       if (canvas.parentElement === container) container.removeChild(canvas);
     };
@@ -556,17 +580,6 @@ export function VfxPreviewViewport(): ReactElement {
     VFX_PREVIEW_OPERATION_IDS.setEmitterMask,
     { emitterIds: [...next] },
   );
-  const toggleEmitter = (emitterId: string) => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    const enabled = new Set(enabledEmitterIds);
-    if (enabled.has(emitterId) && enabled.size === 1) {
-      setEmitterMask(runtime.emitterIds);
-      return;
-    }
-    if (enabled.has(emitterId)) setEmitterMask([emitterId]);
-    else setEmitterMask([...enabled, emitterId]);
-  };
   const seek = (phaseTick: number) => {
     runPreview(VFX_PREVIEW_OPERATION_IDS.seek, { phaseTick });
   };
@@ -575,52 +588,51 @@ export function VfxPreviewViewport(): ReactElement {
     && leaseSnapshot.connected
     && leaseSnapshot.lease?.identity.leaseId === runtimeRef.current.lease.leaseId;
 
+  // Emitter visibility now lives as per-emitter eye toggles in the System Outline
+  // tree (panels/vfx-emitter-mask). Reset the shared intent whenever a fresh
+  // effect boots, then mirror any tree toggle into the Runtime-owned mask. The
+  // ref keeps the subscription reading the latest dispatch closure without
+  // re-subscribing on every render.
+  const applyEmitterMaskRef = useRef<() => void>(() => {});
+  applyEmitterMaskRef.current = () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    setEmitterMask(resolveEnabledVfxEmitters(runtime.lease.assetGuid, runtime.emitterIds));
+  };
+  useEffect(() => {
+    if (asset?.guid) resetVfxEmitterMask(asset.guid);
+  }, [asset?.guid]);
+  useEffect(() => subscribeVfxEmitterMask(() => applyEmitterMaskRef.current()), []);
+
+  // The toolbar lives in the panel header (unified `.fx-panel-action` chrome via
+  // panelControls), not on the canvas. Feed it the live transport state and the
+  // dispatch-backed handlers; the header only decides WHERE it renders.
+  useVfxPreviewToolbarRegistration('vfx-preview');
+  useEffect(() => {
+    setVfxPreviewToolbarState({
+      ready: status === 'ready',
+      playing,
+      seeking,
+      leaseConnected,
+      boundsVisible,
+      phaseDraft: Math.min(maxPhaseTick, phaseDraft),
+      maxPhaseTick,
+      inspectText: seeking ? `Seeking phase ${phaseDraft}…` : inspectLabel(inspect),
+    });
+  }, [status, playing, seeking, leaseConnected, boundsVisible, phaseDraft, maxPhaseTick, inspect]);
+  useEffect(() => {
+    setVfxPreviewToolbarHandlers({
+      togglePlay: () => setPlayState(!playing),
+      reset,
+      frameBounds,
+      toggleBounds: () => changeBoundsVisibility(!boundsVisible),
+      setPhaseDraft,
+      seek,
+    });
+    return () => setVfxPreviewToolbarHandlers(null);
+  }, [playing, boundsVisible]);
+
   return <div className="vfx-preview" data-testid="vfx-preview-viewport">
-    <div className="vfx-preview-toolbar">
-      <button type="button" disabled={status !== 'ready' || seeking || !leaseConnected} onClick={() => setPlayState(!playing)}>
-        {playing ? 'Pause' : 'Play'}
-      </button>
-      <button type="button" disabled={status !== 'ready' || seeking || !leaseConnected} onClick={reset}>Reset</button>
-      <button type="button" disabled={status !== 'ready' || seeking || !leaseConnected} onClick={frameBounds}>Frame</button>
-      <button
-        type="button"
-        className={boundsVisible ? 'active' : ''}
-        aria-pressed={boundsVisible}
-        disabled={status !== 'ready' || seeking || !leaseConnected}
-        onClick={() => changeBoundsVisibility(!boundsVisible)}
-      >Bounds</button>
-      <label className="vfx-preview-phase">
-        <span>Phase</span>
-        <input
-          type="range"
-          min={0}
-          max={maxPhaseTick}
-          step={1}
-          value={Math.min(maxPhaseTick, phaseDraft)}
-          disabled={status !== 'ready' || seeking || !leaseConnected}
-          onChange={(event) => setPhaseDraft(Number(event.currentTarget.value))}
-          onPointerUp={(event) => seek(Number(event.currentTarget.value))}
-          onKeyUp={(event) => seek(Number(event.currentTarget.value))}
-        />
-        <output>{phaseDraft}</output>
-      </label>
-      <div className="vfx-preview-emitter-mask" aria-label="Preview emitter mask">
-        <button
-          type="button"
-          disabled={status !== 'ready' || seeking || !leaseConnected}
-          onClick={() => setEmitterMask(runtimeRef.current?.emitterIds ?? [])}
-        >All</button>
-        {runtimeRef.current?.emitterIds.map((emitterId) => <button
-          type="button"
-          key={emitterId}
-          className={enabledEmitterIds.includes(emitterId) ? 'active' : ''}
-          disabled={status !== 'ready' || seeking || !leaseConnected}
-          onClick={() => toggleEmitter(emitterId)}
-          title="Click to isolate; click the isolated emitter again to show all"
-        >{emitterId}</button>)}
-      </div>
-      <span className="vfx-preview-inspect">{seeking ? `Seeking phase ${phaseDraft}…` : inspectLabel(inspect)}</span>
-    </div>
     <div className="vfx-preview-host" ref={hostRef}>
       {status === 'booting' && <div className="vfx-preview-status">Booting isolated VFX runtime…</div>}
       {status === 'error' && <div className="vfx-preview-status" data-testid="vfx-preview-error">Preview unavailable{errorHint ? `: ${errorHint}` : ''}</div>}

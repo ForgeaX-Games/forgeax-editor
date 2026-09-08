@@ -59,6 +59,27 @@ describe("createFramePhaseProfiler", () => {
 		]);
 	});
 
+	it("accepts the Engine recorder source-and-phase overload", () => {
+		const marks: string[] = [];
+		Object.defineProperty(globalThis, "performance", {
+			configurable: true,
+			value: { mark: (name: string) => marks.push(name) },
+		});
+		diagnosticGlobal.__forgeaxFramePhaseDiagnostics = { enabled: true };
+
+		const session = createFramePhaseProfiler()?.activeSession();
+		expect(session).toBeDefined();
+		session?.beginFrame(8);
+		expect(session?.beginPhase("app", "frame-total").ok).toBe(true);
+		session?.endPhase();
+		session?.endFrame();
+
+		expect(marks).toEqual([
+			"forgeax.frame.phase.8.frame-total.begin",
+			"forgeax.frame.phase.8.frame-total.end",
+		]);
+	});
+
 	it("keeps CPU capture available through an explicit capability opt-in", async () => {
 		const profiler = createFramePhaseProfiler({ enableCpuCapture: true });
 		expect(profiler).toBeDefined();

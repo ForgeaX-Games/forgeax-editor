@@ -32,11 +32,7 @@
 
 import { Name, ChildOf, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import {
-  getRegisteredComponents,
-  Disabled,
-  Entity,
-} from '@forgeax/engine-ecs';
+import { Disabled, Entity } from '@forgeax/engine-ecs';
 import type { Component, World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
 import {
@@ -370,7 +366,7 @@ export function entComponent(
   }
   const bad = checkHandle(world, handle, opts?.binding, opts?.pair);
   if (bad !== null) return { ok: false, error: bad };
-  const token = resolveReadToken(compName);
+  const token = resolveReadToken(world, compName);
   if (token !== undefined) {
     const r = world.get(handle, token as Parameters<typeof world.get>[1]);
     if (r.ok) return { ok: true, value: r.value as Record<string, unknown> };
@@ -388,7 +384,7 @@ export function entComponent(
   };
 }
 
-/** Component dict by walking the engine component registry against the world.
+/** Component dict by walking the World-local engine component catalog.
  *  Returns {} for a stale/invalid handle (entExists is the stale probe for
  *  callers that must distinguish). M3: reads the passed world (activeWorld), no
  *  legacy map. w27: when `opts` is supplied, an invalid pair (wrong world / stale
@@ -401,7 +397,7 @@ export function entComponents(
   if (!hasWorld(world)) return {};
   if (checkHandle(world, handle, opts?.binding, opts?.pair) !== null) return {};
   const out: Record<string, unknown> = {};
-  for (const [name, token] of getRegisteredComponents()) {
+  for (const [name, token] of world.components.entries()) {
     const r = world.get(handle, token as Parameters<typeof world.get>[1]);
     if (r.ok) out[name] = r.value;
   }
@@ -428,7 +424,7 @@ export function worldComponentNames(world: World): Map<EntityHandle, string[]> {
   const map = new Map<EntityHandle, string[]>();
   if (!hasWorld(world)) return map;
   type EntityColumn = { self?: { length: number; [i: number]: number } };
-  for (const [name, token] of getRegisteredComponents()) {
+  for (const [name, token] of world.components.entries()) {
     // `Entity` is in the query `with` so the row-handle column populates (same
     // convention as worldEntityHandles). Disabled entities are included via the
     // same union walk — the Hierarchy type column must see them.
@@ -455,7 +451,7 @@ export function entComponentsPresent(
   const out: Record<string, unknown> = {};
   if (!hasWorld(world)) return out;
   for (const name of names) {
-    const token = resolveReadToken(name);
+    const token = resolveReadToken(world, name);
     if (token === undefined) continue;
     const r = world.get(handle, token as Parameters<typeof world.get>[1]);
     if (r.ok) out[name] = r.value;
@@ -463,19 +459,8 @@ export function entComponentsPresent(
   return out;
 }
 
-// ── Component token resolution (known tokens fast-path + registry) ──────────
+// ── Component token resolution ──────────────────────────────────────────────
 
-const _readTokenCache = new Map<string, unknown>();
-(function seed() {
-  _readTokenCache.set('Name', Name);
-  _readTokenCache.set('Transform', Transform);
-  _readTokenCache.set('ChildOf', ChildOf);
-})();
-
-function resolveReadToken(name: string): unknown {
-  const cached = _readTokenCache.get(name);
-  if (cached !== undefined || _readTokenCache.has(name)) return cached;
-  const tok = getRegisteredComponents().get(name);
-  _readTokenCache.set(name, tok);
-  return tok;
+function resolveReadToken(world: World, name: string): unknown {
+  return world.components.resolve(name);
 }

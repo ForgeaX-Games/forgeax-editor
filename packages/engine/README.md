@@ -17,6 +17,18 @@
 
 > **AI-first TypeScript game engine, built to surpass Three.js.**
 
+### Material owner contract
+
+One `MaterialAsset` subject flows through types, Pack cook/publication,
+shader-compiler reflection, and the read-only runtime/render projection.
+Runtime bool/value data, real module-slot composition, and a closed compiler
+context are the contract; material macros and feature defines are rejected.
+Layered identity is `materialContractDigest`, `sourceClosureDigest`,
+`layoutIdentity`, `programIdentity`, `cookIdentity`, and
+`materialPublicationIdentity`. Recovery compares `current` with `generation`,
+repairs the first producer divergence, cold-cooks the same GUID, and verifies
+receipt, artifact, and actual WASM provenance.
+
 The primary user of this engine is not a human developer — it is an **AI agent**. Every API is a machine-readable contract: schema-typed, `Result`-returning, self-describing. Whenever AI-friendly and human-friendly conflict, **AI wins**. See the [AI User Charter](.claude/skills/forgeax-closed-loop/agents/ai-user-charter.md).
 
 ---
@@ -24,7 +36,7 @@ The primary user of this engine is not a human developer — it is an **AI agent
 ## ✨ Why forgeax
 
 - 🤖 **AI-first, not AI-retrofitted** — every surface is a machine-readable contract (schema / manifest / typed union). An agent calls it correctly without reading a tutorial.
-- 🧊 **Native WebGPU, twice over** — a single spec-aligned RHI with **two independent backends**: browser-native WebGPU *and* a Rust `wgpu 29` core compiled to WebAssembly.
+- 🧊 **WebGPU first, WebGL2 compatible** — one spec-aligned RHI selects browser-native WebGPU first, then can run the same renderer through Rust `wgpu 29` compiled to WebAssembly with its downlevel WebGL2 backend.
 - 🦀 **Rust + WASM shader core** — merged `wgpu 29 + naga 29 + naga_oil 0.22` wasm-bindgen crate in **one ~1.17 MB gzip artefact**.
 - 🧩 **Declarative RenderGraph** — resources + passes as data; the graph owns lifetime and barrier insertion. No hand-written `beginRenderPass` bookkeeping.
 - 🎬 **Scriptable Render Pipelines (SRP)** — register a named pipeline, drive it with config; the engine's own forward pipeline is written in the *same public vocabulary* it exposes to you (true dogfood).
@@ -99,10 +111,16 @@ A **spec-aligned, math-free interface** shaped after `@webgpu/types`, exposing 1
 | Backend | Path | Runs on |
 |---|---|---|
 | `rhi-webgpu` | thin shim over the browser's `GPUDevice` | native WebGPU browsers |
-| `rhi-wgpu` | TS shell over the Rust `wgpu 29` WASM core | anywhere WASM runs |
+| `rhi-wgpu` | TS shell over the Rust `wgpu 29` WASM core | WASM hosts, including the browser WebGL2 downlevel lane |
 | `rhi-null` | headless no-op | structural unit tests (zero GPU/DOM) |
 
 Every call returns `Result<T, RhiError>`; capabilities are queried via `device.caps`, never assumed.
+
+An `adapter-unavailable` result describes only the browser-native WebGPU channel. It is not, by
+itself, proof that the user's machine cannot run ForgeaX: Runtime may continue through the
+wgpu/WebGL2 lane. Diagnose the final structured `.code`, `.hint`, and nested backend causes; asset,
+shader, permission-policy, and application startup errors must not be relabelled as unsupported
+WebGPU.
 </details>
 
 <details>
@@ -181,7 +199,7 @@ Record → replay → inspect, driven first by an AI subagent (exposed over `WS:
 | **Tooling** | `rhi-debug` · `debug-draw` · `remote` · `console` · `vite-plugin-*` | Frame debugger, live inspector, Vite integration |
 
 > [!NOTE]
-> Public packages share the `@forgeax/engine-` prefix; bare `@forgeax/engine` is a placeholder — install **`@forgeax/engine-runtime`**. Each `packages/<pkg>/README.md` is the SSOT for its API, error codes, and capability gates.
+> Install **`@forgeax/engine`**. Its root is the runtime entry and focused capabilities use `@forgeax/engine/<package-directory>`; the underlying `@forgeax/engine-*` packages remain the physical owner units. Each `packages/<pkg>/README.md` is the SSOT for its API, error codes, and capability gates.
 > `animation` uses one animation-target model for ordinary `Transform` entities and skin joints.
 
 ## Layout

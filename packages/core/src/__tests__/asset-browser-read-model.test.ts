@@ -45,6 +45,24 @@ function makeModel(options: {
 }
 
 describe('AssetBrowserSnapshot read model (M2)', () => {
+  it('uses the catalog display name before any asset payload is loaded', async () => {
+    const { model, calls } = makeModel({
+      treeValue: { type: 'dir', name: 'assets', path: '/game/assets', children: [] },
+      rows: [{
+        guid: 'GUID-MESH',
+        kind: 'mesh',
+        name: 'Mesh',
+        packageUrl: 'catalog/assets/BoxTextured.glb.pack.json',
+        sourcePath: 'catalog/assets/BoxTextured.glb',
+      }],
+    });
+
+    const snapshot = await model.refresh();
+
+    expect(snapshot.assets[0]?.name).toBe('Mesh');
+    expect(calls).toEqual(['GET /api/files/tree?root=%2Fgame&optional=1']);
+  });
+
   it('deduplicates catalog GUIDs and keeps sidecar-only GUIDs out of assets', async () => {
     const { model } = makeModel({ rows: [
       { guid: 'GUID-CATALOG', kind: 'mesh', packageUrl: 'catalog/assets/Fox.glb.pack.json', sourcePath: 'catalog/assets/Fox.glb' },

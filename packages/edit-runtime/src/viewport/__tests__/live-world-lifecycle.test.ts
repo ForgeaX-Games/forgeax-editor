@@ -1,35 +1,29 @@
 import { describe, expect, it } from 'bun:test';
-import { FrameEnd } from '@forgeax/engine-ecs';
 import { createRuntimeUiGraph } from '@forgeax/editor-core';
 import { createLiveWorldFrameEndPublisher } from '../run-lifecycle';
 
 describe('live world FrameEnd publisher lifecycle', () => {
-  it('registers one publisher for the active World and publishes only at FrameEnd', () => {
+  it('subscribes one renderer-owned publisher for the active World and publishes only at frame end', () => {
     const calls: string[] = [];
     const graph = {
       bindWorld: (world: unknown) => { calls.push(`bind:${String(world)}`); return 4; },
       unbindWorld: (world: unknown) => { calls.push(`unbind:${String(world)}`); return true; },
       publish: () => { calls.push('publish'); return 'published' as const; },
     };
-    const systems: string[] = [];
-    const world = {
-      addSystem: (schedule: typeof FrameEnd, descriptor: { name: string; fn: () => void }) => {
-        systems.push(`${schedule.name}:${descriptor.name}`);
-        return { ok: true as const };
-      },
-      removeSystem: (schedule: typeof FrameEnd, name: string) => {
-        systems.push(`remove:${schedule.name}:${name}`);
-        return { ok: true as const };
-      },
-    };
-    const publisher = createLiveWorldFrameEndPublisher(graph);
+    let frameEnd: (() => void) | undefined;
+    let unsubscribeCalls = 0;
+    const world = {};
+    const publisher = createLiveWorldFrameEndPublisher(graph, (listener) => {
+      frameEnd = listener;
+      return () => { unsubscribeCalls += 1; };
+    });
     publisher.bind(world);
-    expect(systems).toEqual(['FrameEnd:editor-runtime-ui-publisher']);
-    publisher.publishFrameEnd();
+    expect(calls).toEqual(['bind:[object Object]']);
+    frameEnd?.();
     expect(calls).toEqual(['bind:[object Object]', 'publish']);
     publisher.unbind(world);
     expect(calls).toEqual(['bind:[object Object]', 'publish', 'unbind:[object Object]']);
-    expect(systems).toContain('remove:FrameEnd:editor-runtime-ui-publisher');
+    expect(unsubscribeCalls).toBe(1);
   });
 
   it('keeps cleanup running when an adjacent teardown operation throws', () => {
@@ -37,34 +31,23 @@ describe('live world FrameEnd publisher lifecycle', () => {
       bindWorld: () => 1,
       unbindWorld: () => { throw new Error('teardown'); },
       publish: () => 'published' as const,
-    });
-    expect(() => publisher.unbind({
-      addSystem: () => ({ ok: true }),
-      removeSystem: () => { throw new Error('teardown'); },
-    })).not.toThrow();
+    }, () => () => {});
+    expect(() => publisher.unbind({})).not.toThrow();
   });
 
   it('returns publisher, listener, cache, and snapshot bytes to baseline for ten cycles', () => {
     const graph = createRuntimeUiGraph();
     let frameEndA: (() => void) | undefined;
     let frameEndB: (() => void) | undefined;
-    const worldA = {
-      value: 1,
-      addSystem: (_schedule: typeof FrameEnd, descriptor: { name: string; fn: () => void }) => {
-        frameEndA = descriptor.fn;
-        return { ok: true as const };
-      },
-      removeSystem: () => { throw new Error('adjacent teardown'); },
-    };
-    const worldB = {
-      value: 2,
-      addSystem: (_schedule: typeof FrameEnd, descriptor: { name: string; fn: () => void }) => {
-        frameEndB = descriptor.fn;
-        return { ok: true as const };
-      },
-      removeSystem: () => ({ ok: true as const }),
-    };
-    const publisher = createLiveWorldFrameEndPublisher(graph);
+    const worldA = { value: 1 };
+    const worldB = { value: 2 };
+    let subscriptionCount = 0;
+    const publisher = createLiveWorldFrameEndPublisher(graph, (listener) => {
+      subscriptionCount += 1;
+      if (subscriptionCount % 3 === 1 || subscriptionCount % 3 === 0) frameEndA = listener;
+      else frameEndB = listener;
+      return () => {};
+    });
     const selector = (key: string) => ({
       key,
       schema: { kind: 'primitive' as const },

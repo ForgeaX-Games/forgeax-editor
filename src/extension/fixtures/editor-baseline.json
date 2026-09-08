@@ -1,0 +1,8 @@
+{
+  "id": "forgeax.editor.edit",
+  "version": "1.0.0",
+  "kind": "editor",
+  "contributions": ["editor.edit"],
+  "capabilities": ["engine.preview.create", "editor.iframe.handshake"],
+  "permissions": ["project:read", "project:write"]
+}

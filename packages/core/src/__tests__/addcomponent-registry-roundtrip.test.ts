@@ -16,14 +16,18 @@
 //   north-star §6: all ops through gateway.dispatch
 
 import { describe, expect, it } from 'bun:test';
-import { World, getRegisteredComponents, defineComponent } from '@forgeax/engine-ecs';
+import { World, type Component } from '@forgeax/engine-ecs';
 import { Name, Transform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight, Camera, Skylight, SkyboxBackground, Layer, SortKey, PointLightShadow } from '@forgeax/engine-render';
 import { SpriteRegionOverride, GlyphText } from '@forgeax/engine-render/authoring';
 import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { EntityHandle } from '../scene/scene-types';
 import { applyCommand, createEditSession } from '../session/document';
-import { listComponentSchemas, defaultComponentData, getComponentSchema } from '../scene/schema';
+import {
+  listComponentSchemas as listComponentSchemasForWorld,
+  defaultComponentData as defaultComponentDataForWorld,
+  getComponentSchema as getComponentSchemaForWorld,
+} from '../scene/schema';
 import type { EditorOp, EditSession } from '../types';
 
 // Ensure engine components are registered (defineComponent side-effect).
@@ -33,6 +37,37 @@ void SpriteRegionOverride;
 void Skylight; void SkyboxBackground; void AnimationPlayer;
 void GlyphText; void Layer; void SortKey; void PointLightShadow;
 
+const TEST_COMPONENTS: readonly Component[] = [
+  Name, Transform, MeshFilter, MeshRenderer, DirectionalLight, PointLight, SpotLight,
+  Camera, SpriteRegionOverride, Skylight, SkyboxBackground, AnimationPlayer, GlyphText,
+  Layer, SortKey, PointLightShadow,
+];
+
+/** Build the World-local catalog used by this contract suite. */
+function testWorld(): World {
+  const world = new World();
+  for (const component of TEST_COMPONENTS) world.components.register(component);
+  return world;
+}
+
+const schemaWorld = testWorld();
+
+function listComponentSchemas() {
+  return listComponentSchemasForWorld(schemaWorld);
+}
+
+function defaultComponentData(name: string) {
+  return defaultComponentDataForWorld(name, schemaWorld);
+}
+
+function getComponentSchema(name: string) {
+  return getComponentSchemaForWorld(name, schemaWorld);
+}
+
+function componentsInTestWorld(): ReadonlyMap<string, Component> {
+  return schemaWorld.components.entries();
+}
+
 // Physics components may leak from other test files (defineComponent is global).
 // Mark them as external so the Schema-completeness test doesn't expect engine
 // registration in this test context.
@@ -40,7 +75,7 @@ const EXTERNAL_PACKAGE_COMPONENTS = new Set(['Collider', 'RigidBody', 'Character
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = testWorld();
   return session;
 }
 
@@ -58,7 +93,7 @@ describe('REGISTRY component schema completeness', () => {
   // or registered by other test files are not importable in this test context.
 
   it('every REGISTRY component name (except external-package ones) has a matching engine defineComponent registration', () => {
-    const engineComponents = getRegisteredComponents();
+    const engineComponents = componentsInTestWorld();
     const missing: string[] = [];
     for (const cs of listComponentSchemas()) {
       if (EXTERNAL_PACKAGE_COMPONENTS.has(cs.name)) continue;
@@ -98,7 +133,7 @@ describe('addComponent roundtrip: every REGISTRY component addable with defaultC
   // registration may be replaced by another test module, so their package owns
   // integration coverage; this core-only registry contract stays stable.
   const SKIP = new Set(['Transform', ...EXTERNAL_PACKAGE_COMPONENTS]);
-  const engineComponents = getRegisteredComponents();
+  const engineComponents = componentsInTestWorld();
 
   for (const cs of listComponentSchemas()) {
     if (SKIP.has(cs.name)) continue;
@@ -139,7 +174,7 @@ describe('addComponent roundtrip: every REGISTRY component addable with defaultC
         value,
       } as EditorOp);
 
-      const token = getRegisteredComponents().get(cs.name);
+      const token = componentsInTestWorld().get(cs.name);
       expect(token).toBeDefined();
       const readResult = session.world.get(eH, token! as Parameters<typeof session.world.get>[1]);
       expect(readResult.ok).toBe(true);
@@ -149,7 +184,7 @@ describe('addComponent roundtrip: every REGISTRY component addable with defaultC
   it('Transform is already on entity after spawn (no explicit add needed)', () => {
     const session = createSession();
     const eH = spawnEntity(session, 'Test_Transform');
-    const token = getRegisteredComponents().get('Transform');
+    const token = componentsInTestWorld().get('Transform');
     expect(token).toBeDefined();
     const r = session.world.get(eH, token! as Parameters<typeof session.world.get>[1]);
     expect(r.ok).toBe(true);
@@ -162,7 +197,7 @@ describe('addComponent + removeComponent roundtrip', () => {
   // Keep this iteration deterministic when another test module has registered
   // external physics components into the global ECS component registry.
   const SKIP = new Set(['Transform', ...EXTERNAL_PACKAGE_COMPONENTS]);
-  const engineComponents = getRegisteredComponents();
+  const engineComponents = componentsInTestWorld();
 
   for (const cs of listComponentSchemas()) {
     if (SKIP.has(cs.name)) continue;
@@ -188,7 +223,7 @@ describe('addComponent + removeComponent roundtrip', () => {
       } as EditorOp);
       expect(removeR.ok).toBe(true);
 
-      const token = getRegisteredComponents().get(cs.name);
+      const token = componentsInTestWorld().get(cs.name);
       const readResult = session.world.get(eH, token! as Parameters<typeof session.world.get>[1]);
       expect(readResult.ok).toBe(false);
     });

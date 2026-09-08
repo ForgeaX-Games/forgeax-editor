@@ -65,7 +65,12 @@ export function readLocalTransform(world: World, handle: EntityHandle): EditorTr
  *  matrix column-major [12..14]; rotation + scale stay local for now — see the
  *  header for why). Falls back to the local read if the world matrix is missing. */
 export function readWorldTransform(world: World, handle: EntityHandle): EditorTransform | undefined {
-  const r = entComponent(world, handle, 'Transform');
+  // Transform is a statically owned engine token. Read it directly rather than
+  // resolving the string through the World catalog: a live entity may exist in
+  // a small/headless World before the composition plugins have admitted every
+  // editor vocabulary token. The direct component read is also the liveness
+  // check for unnamed scene/GLB members (the same rule as worldPositionToLocal).
+  const r = world.get(handle, Transform);
   if (!r.ok) return undefined;
   const t = r.value as Record<string, unknown>;
   const w = t.world as ArrayLike<number> | undefined;

@@ -6,28 +6,23 @@
 // exists on a mesh page and can never leak into the Level page).
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  dispatchActiveEditorOperation,
-  gateway,
   panelBridge,
   queryViewportRuntimeProjection,
   subscribeViewportRuntimeClient,
   useActiveEditorAsset,
   type SelectedAsset,
 } from '@forgeax/editor-core';
-import { prompt as promptDialog } from '@forgeax/editor-ui';
 import { PREVIEW_COMPONENTS } from './asset-inspector';
+import { InspectorSection } from './asset-inspector/InspectorSection';
 import InputMapEditor from './asset-inspector/InputMapEditor';
+import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from './AssetPicker';
 import { getMaterialInstancePreview } from './mi-preview-slot';
 import { getMeshPreview } from './mesh-preview-slot';
+import { getTexturePreview } from './texture-preview-slot';
+import { MeshAuthoringError, saveMeshMaterialSlotDefault } from './mesh-material-slot-authoring';
+import { readRuntimeAssetCatalog, type RuntimeAssetCatalogRow } from './runtime-asset-catalog';
 import './inspector.css';
 import './mi-preview.css';
-
-const KIND_BADGE: Record<string, string> = {
-  mesh: '◫', texture: '🖼', 'cube-texture': '🧊g', sampler: '⚙',
-  material: '🎨', 'material-instance': '🎛', scene: '🗺', shader: '📜', skeleton: '🦴',
-  skin: '🩻', 'animation-clip': '🎬', audio: '🔊', font: '🔤',
-  'render-pipeline': '🔧', tileset: '🧱', 'particle-effect': '✨', 'input-map': '🎮',
-};
 
 interface RuntimeAssetPayloadProjection {
   readonly guid: string;
@@ -85,69 +80,21 @@ export function useDocumentAsset(): SelectedAsset | null {
   }, [asset, version]);
 }
 
-function EmptyAssetPage(): ReactElement {
-  return <div className="field muted">No asset document is active.</div>;
+function useRuntimeAssetCatalog(): readonly RuntimeAssetCatalogRow[] {
+  const [rows, setRows] = useState<readonly RuntimeAssetCatalogRow[]>([]);
+  const refresh = useCallback(() => {
+    void readRuntimeAssetCatalog().then(setRows).catch(() => setRows([]));
+  }, []);
+  useEffect(() => {
+    refresh();
+    return panelBridge.on('assetsChanged', refresh);
+  }, [refresh]);
+  useEffect(() => subscribeViewportRuntimeClient(refresh), [refresh]);
+  return rows;
 }
 
-/** Identity and lifecycle actions shared by every asset editor page. */
-export function AssetOverviewPanel(): ReactElement {
-  const asset = useDocumentAsset();
-
-  const handleRename = useCallback(() => {
-    if (!asset) return;
-    void (async () => {
-      const newName = await promptDialog({
-        title: 'Rename Asset',
-        label: 'New name',
-        defaultValue: asset.name,
-        confirmText: 'Rename',
-        cancelText: 'Cancel',
-      });
-      if (newName && newName !== asset.name) {
-        void dispatchActiveEditorOperation({ kind: 'renameAsset', packPath: asset.packPath, guid: asset.guid, newName, oldName: asset.name }, 'human');
-      }
-    })();
-  }, [asset]);
-
-  const handleDuplicate = useCallback(() => {
-    if (asset) void dispatchActiveEditorOperation({ kind: 'duplicateAsset', packPath: asset.packPath, guid: asset.guid }, 'human');
-  }, [asset]);
-
-  const handleDelete = useCallback(() => {
-    if (asset) void dispatchActiveEditorOperation({ kind: 'destroyAsset', guid: asset.guid }, 'human');
-  }, [asset]);
-
-  const handleShowInCB = useCallback(() => {
-    if (!asset) return;
-    const dir = asset.packPath.substring(0, asset.packPath.lastIndexOf('/')) || 'assets';
-    // Content Browser navigation is disposable shell chrome, not authored
-    // Runtime state. Keep it local until a multi-window navigation owner exists.
-    gateway.dispatch({ kind: 'setCBPath', path: dir }, 'human');
-  }, [asset]);
-
-  return (
-    <div className="panel" data-testid="panel-asset-overview" data-subject-id={asset?.guid}>
-      {!asset ? <EmptyAssetPage /> : (
-        <>
-          <div className="asset-inspector-header">
-            <h3>
-              <span className="asset-inspector-badge">{KIND_BADGE[asset.kind] ?? '📦'}</span>
-              {' '}{asset.name}
-              <span className="asset-inspector-kind">{asset.kind}</span>
-            </h3>
-            <div className="field muted" style={{ fontSize: '0.85em', wordBreak: 'break-all' }}>{asset.guid}</div>
-            <div className="field muted" style={{ fontSize: '0.85em', wordBreak: 'break-all' }}>{asset.packPath}</div>
-          </div>
-          <div className="asset-inspector-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
-            <button className="action-btn" data-testid="asset-rename" onClick={handleRename} title="Rename">🖉 Rename</button>
-            <button className="action-btn" data-testid="asset-duplicate" onClick={handleDuplicate} title="Duplicate">📋 Duplicate</button>
-            <button className="action-btn" data-testid="asset-delete" onClick={handleDelete} title="Delete">🗑 Delete</button>
-            <button className="action-btn" data-testid="asset-show-cb" onClick={handleShowInCB} title="Show in Content Browser">📂 Show in CB</button>
-          </div>
-        </>
-      )}
-    </div>
-  );
+function EmptyAssetPage(): ReactElement {
+  return <div className="field muted">No asset document is active.</div>;
 }
 
 /** Kind-specific property editor (material parameters, mesh facts, texture
@@ -174,11 +121,21 @@ export function AssetPropertiesPanel(): ReactElement {
   );
 }
 
-interface MeshSlot {
-  materialIndex?: unknown;
-  indexCount?: unknown;
-  vertexCount?: unknown;
-  topology?: unknown;
+interface MeshMaterialSlotProjection {
+  readonly slotName?: unknown;
+  readonly sourceKey?: unknown;
+  readonly defaultMaterial?: unknown;
+}
+
+interface MeshSubmeshProjection {
+  readonly materialSlot?: unknown;
+}
+
+function formatAssetGuid(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (!(value instanceof Uint8Array) || value.length !== 16) return undefined;
+  const hex = [...value].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 /** Material Instance 3D preview panel (M5 — viewport injected by edit-runtime/host). */
@@ -233,6 +190,23 @@ export function MeshPreviewPanel(): ReactElement {
   );
 }
 
+/** Texture GPU preview panel — UE-style orthographic texture editor viewport. */
+export function TexturePreviewPanel(): ReactElement {
+  const asset = useDocumentAsset();
+  const Preview = getTexturePreview();
+  return (
+    <div className="panel" data-testid="panel-texture-preview" data-subject-id={asset?.guid}>
+      {asset?.kind !== 'texture' && asset?.kind !== 'image' ? <EmptyAssetPage /> : Preview ? (
+        <Preview />
+      ) : (
+        <div className="field muted">
+          Texture preview viewport is not registered by the host.
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Material Instance properties panel (M3: MaterialInstanceEditor). */
 export function MaterialInstancePropertiesPanel(): ReactElement {
   const asset = useDocumentAsset();
@@ -264,30 +238,137 @@ export function InputMapPropertiesPanel(): ReactElement {
  * format. Assignment belongs to the native scene MeshRenderer contract. */
 export function MeshSlotsPanel(): ReactElement {
   const asset = useDocumentAsset();
-  const slots = asset?.kind === 'mesh' && Array.isArray(asset.payload.submeshes)
-    ? asset.payload.submeshes as MeshSlot[]
+  const [pickerSlot, setPickerSlot] = useState<{ index: number; anchor: AssetPickerAnchor } | null>(null);
+  const [savingSlot, setSavingSlot] = useState<number | null>(null);
+  const [error, setError] = useState<MeshAuthoringError | null>(null);
+  const slots = asset?.kind === 'mesh' && Array.isArray(asset.payload.materialSlots)
+    ? asset.payload.materialSlots as MeshMaterialSlotProjection[]
     : [];
+  const submeshes = asset?.kind === 'mesh' && Array.isArray(asset.payload.submeshes)
+    ? asset.payload.submeshes as MeshSubmeshProjection[]
+    : [];
+  const catalog = useRuntimeAssetCatalog();
+  const meshRow = asset === null ? undefined : catalog.find((row) => row.guid.toLowerCase() === asset.guid.toLowerCase());
+  const writable = meshRow?.sourceKey !== undefined
+    && meshRow.sourceOverrides?.[meshRow.sourceKey] !== undefined
+    && meshRow.sourceOverrideDescriptors?.some((descriptor) => (
+      descriptor.sourceKey === meshRow.sourceKey
+      && descriptor.semantic === 'mesh-material-slot-defaults'
+    )) === true;
+  const materialName = (guid: string | undefined): string => {
+    if (guid === undefined) return 'Engine default material';
+    const row = catalog.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
+    return row?.name?.trim() || guid;
+  };
+  const saveSlot = async (index: number, materialGuid?: string | null): Promise<void> => {
+    const slot = slots[index];
+    if (!asset || slot === undefined) return;
+    setSavingSlot(index);
+    setError(null);
+    try {
+      await saveMeshMaterialSlotDefault({
+        meshGuid: asset.guid,
+        slotName: typeof slot.slotName === 'string' && slot.slotName.length > 0 ? slot.slotName : `Slot ${index}`,
+        ...(typeof slot.sourceKey === 'string' && slot.sourceKey.length > 0 ? { slotSourceKey: slot.sourceKey } : {}),
+        ...(materialGuid === undefined ? {} : { materialGuid }),
+      });
+    } catch (cause) {
+      setError(cause instanceof MeshAuthoringError ? cause : new MeshAuthoringError({
+        code: 'mesh-authoring-unhandled',
+        expected: 'the Mesh authoring operation to complete',
+        hint: cause instanceof Error ? cause.message : String(cause),
+        retryable: true,
+        recoveryActions: ['authoring.retry'],
+      }));
+    } finally {
+      setSavingSlot(null);
+    }
+  };
 
   return (
-    <div className="panel" data-testid="panel-mesh-slots" data-subject-id={asset?.guid}>
+    <div className="panel fx-inspector" data-testid="panel-mesh-slots" data-subject-id={asset?.guid}>
       {asset?.kind !== 'mesh' ? <EmptyAssetPage /> : (
         <>
-          <div className="compname">Material Slots</div>
-          {slots.length === 0 ? (
-            <div className="field muted">No submesh slots in this mesh.</div>
-          ) : slots.map((slot, index) => (
-            <div className="f-row" data-testid={`mesh-slot-${index}`} key={index}>
-              <span className="f-name">Slot {index}</span>
-              <span className="f-val">
-                {typeof slot.materialIndex === 'number' ? `Source material ${slot.materialIndex}` : 'Unassigned'}
-                <span className="field muted" style={{ marginLeft: 8 }}>
-                  {typeof slot.indexCount === 'number' ? `${slot.indexCount} indices` : ''}
-                  {typeof slot.vertexCount === 'number' ? ` · ${slot.vertexCount} vertices` : ''}
-                  {typeof slot.topology === 'string' ? ` · ${slot.topology}` : ''}
-                </span>
-              </span>
-            </div>
-          ))}
+          {!writable && <div className="bespoke-hint">This Mesh has no writable imported source metadata.</div>}
+          {error && <div className="bespoke-hint" data-testid="mesh-slot-save-error" data-error-code={error.code} style={{ color: 'var(--color-text-danger, #e66)' }}>
+            {error.hint}
+            {error.recoveryActions !== undefined && error.recoveryActions.length > 0 ? ` (${error.recoveryActions.join(', ')})` : ''}
+          </div>}
+          <InspectorSection id="slots" title="Slots" dim="type">
+            {slots.length === 0 ? (
+              <div className="bespoke-hint">No material slots in this mesh.</div>
+            ) : slots.map((slot, index) => {
+              const slotName = typeof slot.slotName === 'string' && slot.slotName.length > 0 ? slot.slotName : `Slot ${index}`;
+              const guid = formatAssetGuid(slot.defaultMaterial);
+              const bound = guid !== undefined;
+              const matName = materialName(guid);
+              const sectionCount = submeshes.filter((submesh) => submesh.materialSlot === index).length;
+              const busy = savingSlot === index;
+              return (
+                <div className="f-row mesh-slot-row" data-testid={`mesh-slot-${index}`} key={index}>
+                  <span className="f-name" title={slotName}>{slotName}</span>
+                  <span className="f-val">
+                    <span
+                      className="asset-f"
+                      role="button"
+                      tabIndex={writable ? 0 : -1}
+                      aria-disabled={!writable || savingSlot !== null}
+                      data-testid={`mesh-slot-material-${index}`}
+                      title={writable ? 'Click to assign a material' : 'Imported source metadata is read-only'}
+                      onClick={(event) => {
+                        if (!writable || savingSlot !== null) return;
+                        const rect = anchorFromElement(event.currentTarget);
+                        if (rect) setPickerSlot({ index, anchor: rect });
+                      }}
+                      onKeyDown={(e) => {
+                        if ((e.key === 'Enter' || e.key === ' ') && writable && savingSlot === null) {
+                          e.preventDefault();
+                          const rect = anchorFromElement(e.currentTarget);
+                          if (rect) setPickerSlot({ index, anchor: rect });
+                        }
+                      }}
+                    >
+                      <span className={`ab${bound ? '' : ' empty'}`} />
+                      <span className={`an${bound ? '' : ' empty'}`} title={matName}>{busy ? 'Saving…' : matName}</span>
+                    </span>
+                    {writable && (
+                      <span className="mesh-slot-actions">
+                        <button
+                          type="button"
+                          className="fbtn"
+                          data-testid={`mesh-slot-engine-default-${index}`}
+                          disabled={savingSlot !== null}
+                          title="Author an explicit neutral Engine material for this slot"
+                          onClick={() => { void saveSlot(index, null); }}
+                        >Engine Default</button>
+                        <button
+                          type="button"
+                          className="fbtn"
+                          data-testid={`mesh-slot-follow-source-${index}`}
+                          disabled={savingSlot !== null}
+                          title="Remove the authored override and follow the imported source material"
+                          onClick={() => { void saveSlot(index); }}
+                        >Follow Source</button>
+                      </span>
+                    )}
+                    <span className="mesh-slot-sections">
+                      {typeof slot.sourceKey === 'string' && slot.sourceKey.length > 0 ? `${slot.sourceKey} · ` : ''}
+                      {`${sectionCount} section${sectionCount === 1 ? '' : 's'}`}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </InspectorSection>
+          {pickerSlot !== null && slots[pickerSlot.index] !== undefined && (
+            <AssetPicker
+              assetType="MaterialAsset"
+              anchor={pickerSlot.anchor}
+              currentGuid={formatAssetGuid(slots[pickerSlot.index]?.defaultMaterial) ?? null}
+              onPick={(guid) => { void saveSlot(pickerSlot.index, guid); }}
+              onClose={() => setPickerSlot(null)}
+            />
+          )}
         </>
       )}
     </div>

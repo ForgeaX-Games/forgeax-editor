@@ -46,6 +46,7 @@ import { createEditSession } from '../session/document';
 import { EngineFacade } from '../io/engine-facade';
 import { activeSpan, type EngineInterfaceName, type SideEffectHint } from '../io/trace';
 import type { EditorOp, EditSession } from '../types';
+import { createCoreTestWorld } from './fixtures/world';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ const VALID_INTERFACES: ReadonlySet<string> = new Set<EngineInterfaceName>([
 
 function createSession(): EditSession {
   const session = createEditSession();
-  session.world = new World();
+  session.world = createCoreTestWorld();
   return session;
 }
 
@@ -250,7 +251,7 @@ describe('boundary — dedup + graceful defaults (w5, RED)', () => {
     // scaffolding) must not throw and must not fabricate a span — the _recordLeaf
     // `if (span)` guard also guards the sideEffects fill.
     expect(activeSpan()).toBeNull();
-    const facade = new EngineFacade(new World());
+    const facade = new EngineFacade(createCoreTestWorld());
     expect(() => facade.spawn()).not.toThrow();
     expect(activeSpan()).toBeNull();
   });

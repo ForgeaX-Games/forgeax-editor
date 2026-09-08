@@ -233,22 +233,67 @@ function revisionText(revision: unknown): string | undefined {
   return typeof digest === 'string' ? digest : undefined;
 }
 
+function catalogEntryRevision(entry: unknown): string | undefined {
+  if (!entry || typeof entry !== 'object') return undefined;
+  const row = entry as {
+    readonly revision?: unknown;
+    readonly sourceOverrides?: unknown;
+    readonly refs?: unknown;
+    readonly packageUrl?: unknown;
+  };
+  const revision = revisionText(row.revision);
+  if (row.sourceOverrides === undefined) return revision;
+  return `catalog-projection:${JSON.stringify({
+    revision,
+    sourceOverrides: row.sourceOverrides,
+    refs: row.refs,
+    packageUrl: row.packageUrl,
+  })}`;
+}
+
 function catalogCurrent(guid: string): SourcePublicationCurrent | false {
   const snapshot = gateway.doc.registry?.catalogSnapshot?.();
   if (snapshot?.stale === true) {
     return false;
   }
   const entry = snapshot?.entries.find((candidate) => candidate.guid.toLowerCase() === guid.toLowerCase());
-  const revision = revisionText(entry?.revision);
+  const revision = catalogEntryRevision(entry);
   if (entry === undefined || revision === undefined) return false;
   return { identity: entry.guid, revision };
 }
 
+/**
+ * Mesh material-slot authoring is executed by the host ToolClient, followed by
+ * a normal `reimportAsset` publication probe.  The probe must adopt only this
+ * producer-declared mesh-default payload into an already-shared live Mesh;
+ * general reimports intentionally keep the old live identity until their
+ * owning replacement path handles geometry/topology.
+ */
+function shouldAdoptLiveMeshMaterialSlots(op: EditorOp, guid: string): boolean {
+  const kind = (op as { readonly kind?: unknown }).kind;
+  if (kind === 'saveAssetSourceOverride') return true;
+  if (kind !== 'reimportAsset') return false;
+  const sourceKey = (op as { readonly scope?: { readonly sourceKey?: unknown } }).scope?.sourceKey;
+  if (typeof sourceKey !== 'string') return false;
+  const snapshot = gateway.doc.registry?.catalogSnapshot?.();
+  const entry = snapshot?.entries.find((candidate) => candidate.guid.toLowerCase() === guid.toLowerCase());
+  if (entry?.kind !== 'mesh') return false;
+  const descriptorDeclaresMeshDefaults = entry.sourceOverrideDescriptors?.some((descriptor) => (
+    descriptor.sourceKey === sourceKey && descriptor.semantic === 'mesh-material-slot-defaults'
+  )) === true;
+  const authoredOverride = entry.sourceOverrides?.[sourceKey];
+  const overridePublishesMeshDefaults = authoredOverride !== undefined
+    && authoredOverride.materialSlotDefaultOverrides !== undefined;
+  return descriptorDeclaresMeshDefaults || overridePublishesMeshDefaults;
+}
+
 /** Prove the runtime consumer can freshly resolve the GUID before reporting current. */
 export async function readRuntimeConsumedCurrent(
-  registry: Pick<AssetRegistry, 'invalidate' | 'parseGuid' | 'loadByGuid' | 'catalogSnapshot'>,
+  registry: Pick<AssetRegistry, 'lookup' | 'invalidate' | 'parseGuid' | 'loadByGuid' | 'adoptReloadedMeshMaterialSlots' | 'catalogSnapshot'>,
   guid: string,
+  adoptLiveMeshMaterialSlots = false,
 ): Promise<SourcePublicationCurrent | false> {
+  const previousPayload = registry.lookup(guid);
   registry.invalidate(guid);
   let parsed: ReturnType<AssetRegistry['parseGuid']> | undefined;
   try {
@@ -263,10 +308,14 @@ export async function readRuntimeConsumedCurrent(
   const loaded = await registry.loadByGuid(parsed);
   if (loaded !== null && typeof loaded === 'object' && 'ok' in loaded
     && (loaded as { readonly ok: boolean }).ok !== true) return false;
+  if (adoptLiveMeshMaterialSlots && previousPayload?.kind === 'mesh') {
+    const adopted = registry.adoptReloadedMeshMaterialSlots(guid, previousPayload);
+    if (!adopted.ok) return false;
+  }
   const snapshot = registry.catalogSnapshot();
   if (snapshot === undefined || snapshot.stale) return false;
   const entry = snapshot.entries.find((candidate) => candidate.guid.toLowerCase() === guid.toLowerCase());
-  const revision = revisionText(entry?.revision);
+  const revision = catalogEntryRevision(entry);
   return entry === undefined || revision === undefined ? false : { identity: entry.guid, revision };
 }
 
@@ -287,24 +336,34 @@ export async function observeSourcePublication(input: { readonly op: EditorOp; r
 export function installSourcePublicationObserver(): () => void {
   const registry = gateway.doc.registry;
   const observer = createSourcePublicationObserver({
-    timeoutMs: 1500,
+    timeoutMs: 5000,
     probes: {
       catalog: async (target) => {
         // The producer cook and the served pack-index are separate async
         // boundaries. Refresh the live registry here so a successful barrier
         // proves the newly published Catalog projection, while a stalled
         // pack-index produces the structured observation-timeout path.
+        await registry?.reconcileCatalog?.();
         await registry?.refreshCatalog?.();
         const snapshot = registry?.catalogSnapshot?.();
         if (snapshot?.stale === true) return false;
         const entry = snapshot?.entries.find((candidate) => candidate.guid.toLowerCase() === target.guid.toLowerCase());
-        const revision = revisionText(entry?.revision);
+        const revision = catalogEntryRevision(entry);
         if (entry === undefined || revision === undefined) return false;
         return { identity: entry.guid, revision };
       },
-      preview: async (target) => registry === undefined ? false : readRuntimeConsumedCurrent(registry, target.guid),
-      runtime: async (target) => registry === undefined ? false : readRuntimeConsumedCurrent(registry, target.guid),
+      preview: async (target) => registry === undefined ? false : readRuntimeConsumedCurrent(
+        registry,
+        target.guid,
+        target.adoptLiveMeshMaterialSlots === true,
+      ),
+      runtime: async (target) => registry === undefined ? false : readRuntimeConsumedCurrent(
+        registry,
+        target.guid,
+        target.adoptLiveMeshMaterialSlots === true,
+      ),
       reconcile: async () => {
+        await registry?.reconcileCatalog?.();
         await registry?.refreshCatalog?.();
         gateway.reconcileOperationRuns();
       },
@@ -320,6 +379,7 @@ export function installSourcePublicationObserver(): () => void {
       const guid = source.guid;
       const expectedRevision = source.expectedRevision;
       const requestId = source.requestId;
+      await gateway.doc.registry?.reconcileCatalog?.();
       await gateway.doc.registry?.refreshCatalog?.();
       const consumed = catalogCurrent(guid);
       const current = consumed === false ? { identity: guid, revision: expectedRevision } : consumed;
@@ -329,6 +389,7 @@ export function installSourcePublicationObserver(): () => void {
         desiredRevision: current.revision,
         current,
         ...(consumed === false ? {} : { lastKnownGood: consumed }),
+        ...(shouldAdoptLiveMeshMaterialSlots(op, guid) ? { adoptLiveMeshMaterialSlots: true } : {}),
       };
       const result = await observer.observe(target, signal);
       if (result.status === 'succeeded') return;
@@ -514,10 +575,29 @@ export function paintDiagnosticMessage(container: HTMLElement, err: unknown): vo
     }
   }
   if (detail) {
+    if (typeof detail.shaderLabel === 'string') {
+      lines.push('', `shader: ${detail.shaderLabel}`);
+    }
     dumpInner('webgpu (Channel 2)', detail.webgpuError);
     dumpInner('wgpu (Channel 3 fallback)', detail.wgpuError);
+    const compilerMessages = detail.compilerMessages;
+    if (Array.isArray(compilerMessages)) {
+      for (const compilerMessage of compilerMessages) {
+        if (!compilerMessage || typeof compilerMessage !== 'object') continue;
+        const message = compilerMessage as Record<string, unknown>;
+        lines.push(
+          '',
+          `── WGSL ${String(message.type ?? 'message')} at ${String(message.lineNum ?? '?')}:${String(message.linePos ?? '?')} ──`,
+          String(message.message ?? 'Unknown shader compiler error'),
+        );
+      }
+    }
   }
-  const hasInner = !!(detail && (detail.webgpuError || detail.wgpuError));
+  const hasInner = !!(detail && (
+    detail.webgpuError
+    || detail.wgpuError
+    || (Array.isArray(detail.compilerMessages) && detail.compilerMessages.length > 0)
+  ));
   if (!hasInner) {
     lines.push('', 'Likely causes:', '  • No GPU adapter (headless VM without GPU)', '  • Insecure context (WebGPU needs HTTPS or localhost)', '  • iframe permissions policy blocking WebGPU');
   }

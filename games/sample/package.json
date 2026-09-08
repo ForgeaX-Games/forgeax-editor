@@ -5,7 +5,9 @@
   "type": "module",
   "license": "Apache-2.0",
   "description": "Simple sample game for the forgeax editor — a builtin-mesh vignette (assets/scene.pack.json, GUID-discoverable via forge.json.defaultScene) + a movable Player. Mirrors packages/engine/templates/game-default, trimmed to the essentials.",
-  "scripts": {},
+  "scripts": {
+    "test:scriptable-pack": "vitest run --config vitest.config.ts"
+  },
   "forgeax": {
     "assets": {
       "roots": [
