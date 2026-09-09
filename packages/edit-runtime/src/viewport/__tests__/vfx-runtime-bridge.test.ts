@@ -50,9 +50,10 @@ describe('Edit VFX runtime bridge', () => {
     expect(featureList).not.toContain('vfxBridge.host.feature');
 
     const capabilityCheck = source.indexOf('supportsVfxRenderFeature(renderer.inspect().capabilities)');
-    const install = source.indexOf('renderer.installRenderFeature(vfxBridge.host.feature)');
+    const install = source.indexOf('renderFeaturePlugin(vfxBridge.host.feature)');
     expect(capabilityCheck).toBeGreaterThan(-1);
     expect(install).toBeGreaterThan(capabilityCheck);
+    expect(source).not.toContain('renderer.installRenderFeature');
   });
 
   it('keeps one host feature and one engine-owned diagnostics source across repeated mounts', async () => {

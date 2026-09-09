@@ -45,7 +45,7 @@ import {
 } from '@forgeax/engine-render';
 import { setActiveCamera } from '@forgeax/engine-render/authoring';
 import { Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
-import { createApp } from '@forgeax/engine-app';
+import { createApp, renderFeaturePlugin } from '@forgeax/engine-app';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { skinningPlugin } from '@forgeax/engine-skinning';
 import {
@@ -1080,12 +1080,8 @@ async function bootViewport(
   let vfxRenderFeatureEnabled = false;
   if (supportsVfxRenderFeature(renderer.inspect().capabilities)) {
     try {
-      const installed = await renderer.installRenderFeature(vfxBridge.host.feature);
-      if (installed.ok) {
-        vfxRenderFeatureEnabled = true;
-      } else {
-        console.warn('[editor] VFX render feature disabled:', installed.error);
-      }
+      await editorApp.pluginContext.plugin(renderFeaturePlugin(vfxBridge.host.feature));
+      vfxRenderFeatureEnabled = true;
     } catch (error) {
       console.warn('[editor] VFX render feature installation failed:', error);
     }
@@ -1511,7 +1507,8 @@ async function bootViewport(
     session = await initHostSession({
       app: editorApp as never,
       world: world as never,
-      renderer: renderer as never,
+      // drag-spawn-resolve reads renderer.assets.loadByGuid; createApp keeps assets on editorApp.
+      renderer: { ...renderer, assets } as never,
       cameraEntity: cameraEntity as unknown as number,
       viewport,
       viewportContainer: container,

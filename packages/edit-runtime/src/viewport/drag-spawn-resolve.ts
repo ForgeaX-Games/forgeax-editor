@@ -198,7 +198,29 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       console.error('[drag-spawn-resolve:material]', { guid, code: 'bad-guid', hint: 'AssetGuid.parse failed' });
       return undefined;
     }
-    const res = await renderer.assets.loadByGuid(parsed.value);
+    const loadByGuid = renderer.assets?.loadByGuid;
+    if (typeof loadByGuid !== 'function') {
+      failedMat.add(guid);
+      const hint = 'renderer.assets.loadByGuid is not available';
+      console.error('[drag-spawn-resolve:material]', { guid, code: 'no-assets', hint });
+      broadcastAssetsError({ op: 'placeAsset', hint });
+      return undefined;
+    }
+    const readiness = await awaitAuthoredMaterialReady(guid);
+    if (!readiness.ok) {
+      failedMat.add(guid);
+      console.error('[drag-spawn-resolve:material]', {
+        guid,
+        code: 'catalog-not-ready',
+        hint: readiness.hint ?? readiness.stage,
+      });
+      broadcastAssetsError({
+        op: 'placeAsset',
+        hint: readiness.hint ?? `Material catalog not ready (${readiness.stage})`,
+      });
+      return undefined;
+    }
+    const res = await loadByGuid.call(renderer.assets, parsed.value);
     console.info(`[placement-diag] resolver.material.load ${JSON.stringify({
       guid,
       ok: res.ok,
@@ -287,7 +309,20 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       })}`);
     }
     if (meshGuid !== null) resolveMesh(entity, meshGuid);
-    if (matGuids !== null) void resolveMaterials(entity, matGuids);
+    if (matGuids !== null) {
+      void resolveMaterials(entity, matGuids).catch((err: unknown) => {
+        console.error('[drag-spawn-resolve:material]', {
+          entity,
+          guids: matGuids,
+          code: 'resolve-threw',
+          hint: err instanceof Error ? err.message : String(err),
+        });
+        broadcastAssetsError({
+          op: 'placeAsset',
+          hint: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
 
     // ── TEXTURE branch: createMaterial + bindAssetRef (reuses engine refs chain) ──
     if (texMarker !== null) void resolveTexture(bus, renderer, entity, texMarker.guid, texMarker.name, spawnTransform(lastCommand));
