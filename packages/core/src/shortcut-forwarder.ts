@@ -40,7 +40,9 @@ function isForwardable(e: KeyboardEvent): boolean {
   if (!mod) return false;
   if (e.shiftKey) return true; // Ctrl/⌘ + Shift + *(F/B/C/D/Enter/1/2/3)
   const k = e.key.toLowerCase();
-  return k === 'k' || k === 'h' || k === ',' || k === '/' || e.code === 'Comma' || e.code === 'Slash';
+  // Mod+S must reach the host contextual save binding from nested editor iframes.
+  return k === 'k' || k === 'h' || k === 's' || k === ',' || k === '/'
+    || e.code === 'Comma' || e.code === 'Slash' || e.code === 'KeyS';
 }
 
 function postUp(msg: ForwardedKey): void {

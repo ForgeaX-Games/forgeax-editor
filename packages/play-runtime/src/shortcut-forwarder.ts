@@ -31,8 +31,8 @@ function isComposing(e: KeyboardEvent): boolean {
   return e.isComposing || e.keyCode === 229 || e.key === 'Process';
 }
 
-/** 白名单:镜像 studio interface `global-shortcuts.ts` + CommandPalette 的 ⌘K。
- *  只转这些,普通输入 & 编辑键(Ctrl+C/V/X/A/Z…)不转,不干扰 iframe 内的编辑。 */
+/** 白名单:镜像 studio interface `global-shortcuts.ts` + CommandPalette 的 ⌘K / 文档保存 Mod+S。
+ *  只转这些,普通输入 & 其它编辑键(Ctrl+C/V/X/A/Z…)不转,不干扰 iframe 内的编辑。 */
 function isForwardable(e: KeyboardEvent): boolean {
   if (isComposing(e)) return false;
   if (e.key === 'Escape' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) return true;
@@ -40,7 +40,8 @@ function isForwardable(e: KeyboardEvent): boolean {
   if (!mod) return false;
   if (e.shiftKey) return true; // Ctrl/⌘ + Shift + *(F/B/C/D/Enter/1/2/3)
   const k = e.key.toLowerCase();
-  return k === 'k' || k === 'h' || k === ',' || k === '/' || e.code === 'Comma' || e.code === 'Slash';
+  return k === 'k' || k === 'h' || k === 's' || k === ',' || k === '/'
+    || e.code === 'Comma' || e.code === 'Slash' || e.code === 'KeyS';
 }
 
 function postUp(msg: ForwardedKey): void {

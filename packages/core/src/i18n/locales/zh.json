@@ -1,4 +1,17 @@
 {
+  "editorKeyboard": {
+    "duplicateSelection": "复制选中项",
+    "hideSelected": "隐藏选中实体(UE 对标 · 编辑器临时隐藏,不影响游戏)",
+    "hideUnselected": "隐藏未选中实体(孤立选择)",
+    "showAllHidden": "显示所有隐藏实体",
+    "toggleViewportGameView": "切换视口 Game View",
+    "undo": "撤销",
+    "redo": "重做",
+    "save": "保存",
+    "viewportNavigation": "视口导航与 Gizmo 模式",
+    "shieldGameInput": "编辑器接管时屏蔽游戏输入",
+    "closeOverlay": "关闭当前浮层 · 浏览器全屏 → 游戏全屏 → Settings → Dashboard 依次撤回"
+  },
   "editor": {
     "sceneBadge": {
       "mainScene": "主场景",

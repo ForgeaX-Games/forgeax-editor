@@ -1,4 +1,17 @@
 {
+  "editorKeyboard": {
+    "duplicateSelection": "Duplicate selection",
+    "hideSelected": "Hide selected entities (UE parity · editor-only, never affects the game)",
+    "hideUnselected": "Hide unselected entities (isolate selection)",
+    "showAllHidden": "Show all hidden entities",
+    "toggleViewportGameView": "Toggle viewport Game View",
+    "undo": "Undo",
+    "redo": "Redo",
+    "save": "Save",
+    "viewportNavigation": "Viewport navigation and gizmo mode",
+    "shieldGameInput": "Shield game input while editor-owned",
+    "closeOverlay": "Close current overlay · browser fullscreen → game fullscreen → Settings → Dashboard in order"
+  },
   "editor": {
     "sceneBadge": {
       "mainScene": "Main scene",

@@ -77,7 +77,10 @@ import { dispatchAction, registerAction } from '@forgeax/interface/lib/action-re
 // keyboard-router deps builder is now shared (edit-runtime SSOT) so studio + this
 // standalone host produce the SAME dep object — no divergence (the old inline copy
 // here was silently missing from studio, killing its G/Esc keyboard path).
-import { buildKeyboardRouterDeps } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
+import {
+  buildKeyboardRouterDeps,
+  createEditorKeyboardExtension,
+} from '@forgeax/editor-edit-runtime/keyboard-router-deps';
 import { projectViewportRuntimeOps } from '@forgeax/editor-edit-runtime/gateway-action-projection';
 import { setPathResolver, trySaveActivePage } from '@forgeax/editor-core';
 import { isDockPanelVisible } from '@forgeax/app-shell/dock';
@@ -320,6 +323,7 @@ const standaloneEditorIntegrationExtension: AppExtension = {
  *  overrides prop stays referentially stable. */
 const STANDALONE_OVERRIDES = {
   extensions: [
+    createEditorKeyboardExtension(makeKeyboardRouterDeps()),
     createEditorPanelsExtension({ SceneEditor: StandaloneSceneEditor }),
     createEditorPanelContributionsExtension(),
     createEditorPageExtension(renderEditorPanel),

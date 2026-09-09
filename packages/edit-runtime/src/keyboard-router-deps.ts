@@ -1,23 +1,9 @@
-// Shared keyboard-router deps builder (keyboard-router convergence, M4).
-//
-// The interface submodule's global-shortcuts router is editor-AGNOSTIC (its lint
-// forbids importing @forgeax/editor), so every editor host injects the editor-side
-// callbacks it still needs via `registerKeyboardRouterDeps(...)`. Contextual
-// F2/Delete/Mod+A ownership has moved to focused widget scopes; this bridge now
-// carries only the not-yet-migrated edit/viewport shortcuts.
-//
-// This builder is the SSOT for that dep object. BOTH hosts call it:
-//   - editor standalone (apps/standalone/main.tsx)
-//   - studio (packages/studio/src/panels/editorRenderers.tsx)
-// Previously it lived only in apps/standalone/main.tsx; studio's editorRenderers.tsx
-// (which "mirrors" standalone) silently omitted it, so in the studio host the G /
-// Esc display-toggle keyboard path was dead. Extracting here removes that
-// divergence without requiring operation controls inside the game view.
-//
-// NOTE: this module deliberately does NOT import @forgeax/interface — it returns a
-// structurally-typed object and each host casts it to interface's KeyboardRouterDeps
-// at the registerKeyboardRouterDeps call site (where interface is already imported).
-// That keeps edit-runtime free of an upward dependency on the L1 framework.
+// Editor callback contract for createEditorKeyboardExtension. Hosts supply one
+// instance per application; the extension owns commands and keyboard policy,
+// while these callbacks retain the existing Gateway and viewport write paths.
+// Contextual F2/Delete/Mod+A remain owned by focused widget contributions.
+
+export { createEditorKeyboardExtension } from './editor-keyboard-extension';
 
 import {
   gateway,
@@ -41,22 +27,14 @@ import type { InputTarget } from './viewport/viewport-camera';
 import { createHumanSaveRequest } from './save-operation-projection';
 import { trySaveDirtyMaterialStaging } from './page-controllers/material-page-controller';
 
-/** Minimal asset shape the router hands back for delete/dup/rename. */
+/** Asset identity needed by the Editor duplicate shortcut. */
 export interface RouterAsset {
   guid: string;
   name: string;
   packPath: string;
 }
 
-/**
- * Structural mirror of interface's `KeyboardRouterDeps` (global-shortcuts.ts).
- * Declared locally so this module needs NO @forgeax/interface import (keeps
- * edit-runtime off the L1 framework). Hosts cast the returned object to the real
- * interface type at their registerKeyboardRouterDeps call site — the field set is
- * verified identical across the editor + studio interface pins. An explicit type
- * is also required here to avoid TS2742 (inferred type would leak an editor-core
- * internal path).
- */
+/** Editor-owned inputs; no product shell types or module-global dependency slot. */
 export interface KeyboardRouterDepsShape {
   dispatch: (op: { kind: string; [k: string]: unknown }, origin?: string) => void;
   getEntitySelection: () => number[];
@@ -64,9 +42,6 @@ export interface KeyboardRouterDepsShape {
   getLastSelectionDomain: () => 'entity' | 'asset' | 'folder' | null;
   isPlayMode: () => boolean;
   getDisplay: () => 'scene' | 'game';
-  // Real editor value is 'editor' | 'game' (interface's KeyboardRouterDeps types
-  // this loosely as 'scene' | 'game', but the router only tests === 'game', so the
-  // other label is irrelevant). Honest type here; the host `as` cast bridges it.
   getInputTarget: () => InputTarget;
   deleteEntities: (ids: number[]) => void;
   duplicateEntities: (ids: number[]) => void;
@@ -82,22 +57,35 @@ export interface KeyboardRouterDepsShape {
   handleViewportKeyDown: (event: KeyboardEvent) => void;
 }
 
-/**
- * Build the editor-side keyboard-router deps. The return value is structurally
- * compatible with interface's `KeyboardRouterDeps`; cast at the call site.
- */
+/** Build the Gateway-backed callbacks shared by standalone and embedded hosts. */
 export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
-  const runtimeSelection = () => getViewportRuntimeClientSnapshot().status === 'ready'
-    ? getViewportRuntimeSelectionSnapshot()
-    : null;
+  const readLiveEntitySelection = (): number[] =>
+    Array.from(getSelectionList()) as unknown as number[];
   return {
     dispatch: (op: { kind: string; [k: string]: unknown }, origin?: string) =>
       gateway.dispatch(op as never, (origin ?? 'human') as never),
-    getEntitySelection: () => runtimeSelection()?.entityIds.slice()
-      ?? Array.from(getSelectionList()) as unknown as number[],
-    getAssetSelection: () => runtimeSelection()?.assets.map((asset) => ({ ...asset }))
-      ?? getAssetSelectionList(),
-    getLastSelectionDomain: () => runtimeSelection()?.lastDomain ?? getLastSelectionDomain(),
+    getEntitySelection: () => {
+      const live = readLiveEntitySelection();
+      // Viewport picks update the Runtime selection store immediately; the shell
+      // snapshot refreshes only after dispatchActiveEditorOperation selection ops.
+      if (live.length > 0) return live;
+      if (getViewportRuntimeClientSnapshot().status !== 'ready') return live;
+      return getViewportRuntimeSelectionSnapshot().entityIds.slice() as number[];
+    },
+    getAssetSelection: () => {
+      const liveAssets = getAssetSelectionList();
+      if (liveAssets.length > 0) {
+        return liveAssets.map((asset) => ({ ...asset }));
+      }
+      if (getViewportRuntimeClientSnapshot().status !== 'ready') return liveAssets;
+      return getViewportRuntimeSelectionSnapshot().assets.map((asset) => ({ ...asset }));
+    },
+    getLastSelectionDomain: () => {
+      if (readLiveEntitySelection().length > 0) return 'entity';
+      if (getAssetSelectionList().length > 0) return 'asset';
+      if (getViewportRuntimeClientSnapshot().status !== 'ready') return getLastSelectionDomain();
+      return getViewportRuntimeSelectionSnapshot().lastDomain ?? getLastSelectionDomain();
+    },
     // Play owns a fresh transient world; gateway.mode still reflects the
     // persistent edit document during that session. The viewport quadrant is the
     // authoritative lifecycle state used by the keyboard router.
@@ -161,19 +149,5 @@ export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
       gateway.dispatch(createHumanSaveRequest(), 'human');
     },
     handleViewportKeyDown: routeViewportKeydown,
-  };
-}
-
-export function createEditorKeyboardExtension(_deps: KeyboardRouterDepsShape): {
-  readonly id: string;
-  readonly version: string;
-  setup(): () => void;
-} {
-  return {
-    id: 'editor.keyboard-router',
-    version: '1.0.0',
-    setup() {
-      return () => {};
-    },
   };
 }

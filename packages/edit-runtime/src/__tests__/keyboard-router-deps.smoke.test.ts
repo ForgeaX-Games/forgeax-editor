@@ -95,9 +95,10 @@ describe('buildKeyboardRouterDeps — remaining legacy router bridge', () => {
 });
 
 describe('createEditorKeyboardExtension — IDE assembly hook', () => {
-  it('exports a no-op AppExtension the Studio host can register', () => {
+  it('exports the main-aligned keyboard extension factory', () => {
     const extension = createEditorKeyboardExtension(buildKeyboardRouterDeps());
-    expect(extension.id).toBe('editor.keyboard-router');
-    expect(typeof extension.setup()).toBe('function');
+    expect(extension.id).toBe('editor-keyboard');
+    expect(extension.requires).toContain('keybindings');
+    expect(extension.requires).toContain('commands');
   });
 });
