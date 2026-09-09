@@ -464,6 +464,12 @@ export function createViewport({
   };
   const getOverlayVertexData = (): Float32Array => {
     if (previewOnly) return new Float32Array(0);
+    // #931 moved gizmo visuals to a per-frame overlay stream. Recompute placement
+    // here so world pivots/orientation track propagateTransforms even when the
+    // selected entity's authored local Transform JSON is unchanged (e.g. a
+    // parent rotated and moved this child in world space).
+    gizmoPool.update();
+    paramGizmo.update();
     const vertices: GizmoOverlayVertex[] = [
       ...gizmoPool.getOverlayVertices(),
       ...paramGizmo.getOverlayVertices(),

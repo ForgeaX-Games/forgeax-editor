@@ -1,3 +1,4 @@
+import type { PlayDispatchResult } from './play-operation';
 // ViewportComponent — the in-process engine viewport surface (plan-strategy
 // REPLAN D8; q2 viewport boundary; AC-04 single-realm).
 //
@@ -558,7 +559,7 @@ function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): v
 }
 
 interface BootFns {
-  playSimulation: (policy?: PlayDirtyPolicy, origin?: CommandOrigin) => DispatchResult;
+  playSimulation: (policy?: PlayDirtyPolicy, origin?: CommandOrigin) => PlayDispatchResult;
   stopSimulation: () => void;
 }
 

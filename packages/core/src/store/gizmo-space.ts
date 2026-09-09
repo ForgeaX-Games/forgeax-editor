@@ -3,7 +3,8 @@ import type { EditorOp } from '../types';
 import { registerApplier } from '../io/appliers';
 
 export type GizmoSpace = 'world' | 'local';
-let gizmoSpace: GizmoSpace = 'local';
+/** UE level-viewport default: world-aligned manipulation axes unless toggled local. */
+let gizmoSpace: GizmoSpace = 'world';
 const spaceListeners = new Set<() => void>();
 export function getGizmoSpace(): GizmoSpace { return gizmoSpace; }
 

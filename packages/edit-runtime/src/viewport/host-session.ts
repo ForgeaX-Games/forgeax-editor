@@ -1,3 +1,4 @@
+import { createPlayOperation, type PlayDispatchResult } from './play-operation';
 // viewport/host-session — the DI unit for the editor's APPLICATION SESSION that
 // runs ON TOP of an already-booted world: the physics gate
 // (resolveEditPhysics), the boot-timing tail (initHostSession: scene-load /
@@ -244,7 +245,7 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
 
 export interface HostSession {
   /** ▶ Play — apply the explicit dirty-scene policy, then assemble a transient play world. */
-  playSimulation(policy?: PlayDirtyPolicy, origin?: CommandOrigin): DispatchResult;
+  playSimulation(policy?: PlayDirtyPolicy, origin?: CommandOrigin): PlayDispatchResult;
   /** ■ Stop — freeze + restore the pre-▶ snapshot. */
   stopSimulation(): void;
   /** Capture from the active RHI carrier; remote Play never falls back to paused Edit. */
@@ -272,6 +273,8 @@ export interface HostSession {
  * an inert world; production passes the real gateway singleton.
  */
 export interface HostGateway {
+  readonly playPhase: 'edit' | 'starting' | 'play' | 'failed';
+  readonly lastPlayError: import('@forgeax/editor-core').CommandError | null;
   /** The live active world (edit world, or play world during ▶). Read by the
    *  scene-load emptiness probe + the mesh-stats publisher. */
   readonly activeWorld: unknown;
@@ -630,49 +633,15 @@ export function createHostSession(deps: HostSessionDeps): {
         return cataloged.ok ? (cataloged.value ?? parsed) : null;
       } catch { return null; }
     };
-    const playSimulation = (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human'): DispatchResult => {
-      if (runLifecycle === null) return { ok: true };
-      const dirty = hasPendingDiskSave();
-      if (dirty && policy === 'cancel') {
-        return {
-          ok: false,
-          error: {
-            code: 'play-cancelled-dirty',
-            hint: 'Play cancelled because the authored scene has unsaved edits; choose last-saved or save-then-play.',
-          },
-        };
-      }
-      if (dirty && policy === 'save-then-play') {
-        invalidateNextPlaySceneAsset = true;
-        gateway.beginPlayAttempt();
-        const requestId = globalThis.crypto.randomUUID();
-        const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId }, origin);
-        if (!accepted.ok) {
-          invalidateNextPlaySceneAsset = false;
-          const error = { code: 'play-save-failed' as const, hint: 'Save Then Play could not start the canonical save operation.' };
-          gateway.failPlayAttempt(error);
-          ctx.onPlayFailed(error);
-          return { ok: false, error };
-        }
-        void (async () => {
-          const terminal = await gateway.waitOperationRun?.(requestId);
-          if (!terminal?.ok || terminal.value?.status !== 'succeeded') {
-            invalidateNextPlaySceneAsset = false;
-            const saveError = terminal?.value?.error;
-            const hint = saveError?.hint ?? 'Save Then Play stopped because the canonical save did not succeed.';
-            const error = { code: 'play-save-failed' as const, hint };
-            gateway.failPlayAttempt(error);
-            ctx.onPlayFailed(error);
-            return;
-          }
-          void runLifecycle.playSimulation();
-        })();
-        return { ok: true };
-      }
-      void runLifecycle.playSimulation();
-      return { ok: true };
-    };
-    const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); runLifecycle?.stopSimulation(); };
+    const playOperation = createPlayOperation({
+      gateway,
+      lifecycle: () => runLifecycle,
+      hasPendingDiskSave,
+      invalidateScene: (value) => { invalidateNextPlaySceneAsset = value; },
+      onFailure: (error) => ctx.onPlayFailed(error),
+    });
+    const playSimulation = playOperation.play;
+    const stopSimulation = (): void => { emitBoot('scene ▸ stop requested'); playOperation.stop(); };
 
     // Read forge.json once per ▶ Play so entry and default SceneAsset fallback
     // come from the same GameProject read. The host-selected GUID, when present,
@@ -1043,6 +1012,7 @@ export function createHostSession(deps: HostSessionDeps): {
     const disposeSaveBeacons = installSaveBeaconListeners(() => flushPendingSaveBeacon());
 
     const dispose = (options: { flushPendingSave?: boolean } = {}): void => {
+      playOperation.stop();
       runLifecycle?.dispose();
       try { liveWorldPublisher.unbind(ctx.world as never); } catch { /* best effort */ }
       // Flush any pending save one last time before tearing the session down so a

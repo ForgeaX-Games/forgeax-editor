@@ -1717,6 +1717,8 @@ export class EditGateway {
     const applier = applierFor(kind, domain);
     if (!applier) return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applier not found for "${kind}"` } };
 
+    // Play is also invoked by UI controls without a caller-supplied request ID.
+    if (kind === 'play' && requestIdOf(cmd) === undefined) cmd = { ...cmd, requestId: globalThis.crypto.randomUUID() } as EditorOp;
     const operationRunContract = this.listOps().find((descriptor) => descriptor.id === kind)?.operationRun;
     const requestId = operationRunContract === undefined
       ? undefined

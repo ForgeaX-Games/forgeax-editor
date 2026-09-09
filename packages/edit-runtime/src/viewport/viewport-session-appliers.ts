@@ -1,3 +1,4 @@
+import type { PlayDispatchResult } from './play-operation';
 // viewport-session-appliers — the edit-runtime registration seam for viewport
 // lifecycle/control operations (M3).
 //
@@ -12,7 +13,7 @@ import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, resto
 import { captureCpuProfile } from './frame-phase-profiler';
 
 export interface ViewportSessionApplierDeps {
-  readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => DispatchResult;
+  readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => PlayDispatchResult;
   readonly stop: () => void;
   readonly setDisplay: (display: 'scene' | 'game') => void;
   readonly grantGameControl: () => void;
@@ -251,10 +252,20 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       // world — restore preview-touched runtime fields first so the simulation
       // (and any save-then-play) starts from authored values.
       if (ctx?.engine) restoreAllAnimationPreviews(ctx.engine);
-      return deps.play(dirtyPolicy, ctx?.origin ?? 'human');
+      const started = deps.play(dirtyPolicy, ctx?.origin ?? 'human');
+      if (!started.ok || !started.completion) return started;
+      ctx?.operationRun?.registerCancelHandler?.(() => { started.cancel?.(); return { ok: true }; });
+      const requestId = (op as { requestId?: string }).requestId;
+      return { ok: true, completion: started.completion.then((result) => {
+        if (!result.ok && result.error.code === 'play-cancelled' && requestId) {
+          deps.gateway?.cancelOperationRun(requestId);
+        }
+        return result;
+      }) };
     }, 'Play', {
       type: 'object',
       properties: {
+        requestId: { type: 'string' },
         dirtyPolicy: { type: 'string', enum: ['last-saved', 'save-then-play', 'cancel'] },
       },
     });

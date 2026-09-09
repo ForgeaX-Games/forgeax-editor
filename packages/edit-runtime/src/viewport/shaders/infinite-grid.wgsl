@@ -24,7 +24,9 @@ struct View {
 struct GridVertexOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) @interpolate(flat) plane : u32,
-  @location(1) @interpolate(linear) ndc : vec2<f32>,
+  // clip.w is always 1, so perspective interpolation preserves screen NDC
+  // without requiring the noperspective qualifier unsupported by WebGL2.
+  @location(1) @interpolate(perspective) ndc : vec2<f32>,
 }
 
 struct GridFragmentOut {

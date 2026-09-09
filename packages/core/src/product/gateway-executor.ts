@@ -8,6 +8,7 @@ import {
   CapabilityRegistry,
   createEditorProduct,
   type CapabilityDescriptor,
+  type CapabilityExecutor,
   type CapabilityRegistration,
   type EditorProduct,
   type OperationRun,
@@ -193,6 +194,7 @@ async function executeGatewayCommand(
   source: GatewayCapabilitySource,
   descriptor: GatewayOpDescriptor,
   input: unknown,
+  signal?: AbortSignal,
 ): Promise<GatewayDispatchResult> {
   const args = input !== null && typeof input === 'object'
     ? input as Record<string, unknown>
@@ -239,7 +241,12 @@ async function executeGatewayCommand(
       recoveryActions: ['run.wait', 'editor.discover'],
     } };
   }
-  const completed = await source.operationRuns.wait(accepted.requestId);
+  const cancel = () => { if (accepted.cancellable) source.operationRuns?.cancel(accepted.requestId!); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
+  let completed: OperationRunReadResult;
+  try { completed = await source.operationRuns.wait(accepted.requestId); }
+  finally { signal?.removeEventListener('abort', cancel); }
   if (!completed.ok) return { ok: false, error: completed.error };
   if (completed.value.status !== 'succeeded') {
     return { ok: false, error: completed.value.error ?? {
@@ -297,7 +304,7 @@ function registrationFor(
     }),
     recoveryActions: descriptor.recoveryActions ?? ['editor.discover'],
     ...(hasExecutor
-      ? { executor: { execute: (input: unknown) => executeGatewayCommand(source, descriptor, input) } }
+      ? { executor: { execute: (input: unknown, context?: Parameters<CapabilityExecutor['execute']>[1]) => executeGatewayCommand(source, descriptor, input, context?.signal) } }
       : {}),
   };
   return registration;

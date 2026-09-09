@@ -1179,9 +1179,18 @@ const builtinOps: ReadonlyArray<{
   { id: 'loadDocFromDisk', domain: 'session', argsSchema: null, title: 'Load from Disk' },
   {
     id: 'play', domain: 'session', title: 'Play',
+    operationRun: {
+      acceptedStatuses: ['accepted', 'running'],
+      terminalStatuses: ['succeeded', 'failed', 'cancelled'],
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      retry: { requiresNewRequestId: true },
+      retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
+      cancellable: true,
+    },
     argsSchema: {
       type: 'object',
       properties: {
+        requestId: { type: 'string' },
         dirtyPolicy: {
           type: 'string',
           enum: ['last-saved', 'save-then-play', 'cancel'],

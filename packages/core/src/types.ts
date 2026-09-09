@@ -261,7 +261,7 @@ export type BuiltinEditorOp =
   // unregistered → dispatch returns UNKNOWN_OP (not silently swallowed). The
   // optional policy keeps direct runtime callers on the historical Last Saved
   // default; UI and AI callers should provide it explicitly.
-  | { kind: 'play'; dirtyPolicy?: PlayDirtyPolicy }
+  | { kind: 'play'; dirtyPolicy?: PlayDirtyPolicy; requestId?: string }
   | { kind: 'stop' }
   | { kind: 'setDisplay'; display: 'scene' | 'game' }
   // scan pipeline ops (north-star §6/§8) — SESSION-domain, ledger-only, no undo
@@ -431,6 +431,8 @@ export interface CommandError extends CommandErrorContext {
     | 'play-save-failed'
     // Play was explicitly cancelled because the authored scene was dirty.
     | 'play-cancelled-dirty'
+    | 'play-cancelled'
+    | 'play-unavailable'
     // Scene switching must not silently flush authored edits. Callers either
     // choose save/discard explicitly or branch on this structured refusal.
     | 'scene-switch-invalid'

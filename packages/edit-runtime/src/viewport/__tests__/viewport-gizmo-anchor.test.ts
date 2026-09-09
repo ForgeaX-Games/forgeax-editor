@@ -154,6 +154,23 @@ describe('gizmo pool anchor + view scale', () => {
     expectVecClose(lines[0]!.from, [0, 0, 0]);
     expectVecClose(lines[0]!.to, [0, 1.3, 0]);
   });
+
+  it('world space keeps overlay axes world-aligned when the anchor is rotated', () => {
+    const { draw, lines } = makeDebugDraw();
+    const quat: [number, number, number, number] = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+    const pool = createGizmoPool({
+      getAnchor: () => ({ center: [0, 0, 0], quat }),
+      getGizmoMode: () => 'scale',
+      getGizmoSpace: () => 'world',
+      isAuxVisible: () => true,
+      getViewScale: () => 10,
+    });
+    pool.update();
+    pool.drawOverlay(draw);
+    expect(lines).toHaveLength(3);
+    expectVecClose(lines[0]!.from, [0, 0, 0]);
+    expectVecClose(lines[0]!.to, [1.3, 0, 0]);
+  });
 });
 
 describe('buildDragGroup (multi-selection translate drag)', () => {

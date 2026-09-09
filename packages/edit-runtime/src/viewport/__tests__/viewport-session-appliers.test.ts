@@ -56,7 +56,7 @@ describe('viewport session applier registrar (M3)', () => {
   it('registers viewport operations and routes calls to runtime deps', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));
-    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toEqual({ ok: true });
+    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
     expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'prompt' } as never)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'stop' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'setDisplay', display: 'game' })).toEqual({ ok: true });

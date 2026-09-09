@@ -68,7 +68,7 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
     expect(gw.appliedCount()).toBe(undoBefore);
   });
 
-  it('(b) registered test-double: dispatch play(origin=ai) → applier called + ledger + undo unchanged', () => {
+  it('(b) registered test-double: dispatch play(origin=ai) → applier called + ledger + undo unchanged', async () => {
     let called = 0;
     const unreg = registerSessionApplier('play', () => { called++; return { ok: true }; });
     cleanups.push(unreg);
@@ -78,7 +78,8 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
     const r = gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
     expect(r.ok).toBe(true);
     expect(called).toBe(1);
-    // session tier: ledger grows, undo does not
+    if (r.ok && r.result?.operationRun?.requestId) await gw.waitOperationRun(r.result.operationRun.requestId);
+    // session tier: ledger grows after terminal success, undo does not
     expect(gw.ledger.length).toBe(ledgerBefore + 1);
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
     expect(gw.appliedCount()).toBe(undoBefore);
@@ -113,7 +114,7 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
     expect(code).toBe('OP_ID_CONFLICT');
   });
 
-  it('(e) repeated same session op grows ledger each time, undo never (boundary #6)', () => {
+  it('(e) repeated same session op grows ledger each time, undo never (boundary #6)', async () => {
     const unreg = registerSessionApplier('play', () => ({ ok: true }));
     cleanups.push(unreg);
     const ledgerBefore = gw.ledger.length;
@@ -121,6 +122,7 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
     gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
     gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
     gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
+    await Promise.resolve();
     expect(gw.ledger.length).toBe(ledgerBefore + 3);
     expect(gw.appliedCount()).toBe(undoBefore);
   });
