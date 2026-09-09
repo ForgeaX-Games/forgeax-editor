@@ -244,7 +244,13 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
     });
 
     register('play', (op, ctx) => {
-      const dirtyPolicy = (op as { dirtyPolicy?: unknown }).dirtyPolicy ?? 'last-saved';
+      const origin = ctx?.origin ?? 'human';
+      // AI authoring commonly edits the live document immediately before Play.
+      // Running the historical last-saved default would silently boot an older
+      // template scene. Human toolbar/shortcut Play keeps its existing policy,
+      // while callers can still choose any policy explicitly.
+      const dirtyPolicy = (op as { dirtyPolicy?: unknown }).dirtyPolicy
+        ?? (origin === 'ai' ? 'save-then-play' : 'last-saved');
       if (dirtyPolicy !== 'last-saved' && dirtyPolicy !== 'save-then-play' && dirtyPolicy !== 'cancel') {
         return invalidArgs('dirtyPolicy must be "last-saved", "save-then-play", or "cancel"');
       }
@@ -252,7 +258,7 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       // world — restore preview-touched runtime fields first so the simulation
       // (and any save-then-play) starts from authored values.
       if (ctx?.engine) restoreAllAnimationPreviews(ctx.engine);
-      const started = deps.play(dirtyPolicy, ctx?.origin ?? 'human');
+      const started = deps.play(dirtyPolicy, origin);
       if (!started.ok || !started.completion) return started;
       ctx?.operationRun?.registerCancelHandler?.(() => { started.cancel?.(); return { ok: true }; });
       const requestId = (op as { requestId?: string }).requestId;

@@ -23,6 +23,13 @@ describe('Play runtime follows engine preview startup', () => {
     expect(executionBootstrap).toContain('await assets.refreshCatalog()');
   });
 
+  test('uses the editor-selected sceneGuid before forge.json defaultScene', () => {
+    expect(main).toContain("const requestedSceneGuid = qp.get('sceneGuid')");
+    expect(main).toContain('const playSceneGuid = resolvePlaySceneGuid(');
+    expect(main).toContain('const requiredScene = playSceneGuid');
+    expect(main).toContain('if (playSceneGuid !== undefined)');
+  });
+
   test('activates Cordis game plugins through engine loadGame / gameHost', () => {
     expect(main).toContain('resolvePlayGameActivation');
     expect(main).toContain('activatePlayGame');

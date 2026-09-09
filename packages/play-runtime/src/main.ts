@@ -65,6 +65,7 @@ import { createPlayGameplayProjection } from './gameplay-projection';
 import { importFirstGameEntry } from './game-entry-loader';
 import { refreshPlayCatalogUntilReady } from './play-catalog-ready';
 import { activatePlayGame, resolvePlayGameActivation } from './play-game-activation';
+import { resolvePlaySceneGuid } from './play-scene-selection';
 import { loadRuntimeBinding as fetchRuntimeBinding } from './runtime-binding-loader';
 import { bootstrap as staticGameBootstrap } from 'virtual:forgeax-static-game-entry';
 import { modules as staticGamePluginModules, importModule as importStaticGamePlugin } from 'virtual:forgeax-static-game-plugins';
@@ -119,6 +120,7 @@ declare const __FORGEAX_STATIC_GAME_ID__: string;
 
 const qp = new URLSearchParams(location.search);
 const rawGameId = qp.get('game') ?? qp.get('slug');
+const requestedSceneGuid = qp.get('sceneGuid');
 const requestedGameId = rawGameId ?? (__FORGEAX_STATIC_BUILD__ ? __FORGEAX_STATIC_GAME_ID__ : null);
 const requestedGameIdValidated = requestedGameId && GAME_ID_RE.test(requestedGameId)
   ? requestedGameId
@@ -318,6 +320,10 @@ if (gpResult?.ok) {
     else if (p === '2d' || p === 'rapier-2d') physics = 'rapier-2d';
   }
 }
+const playSceneGuid = resolvePlaySceneGuid(
+  requestedSceneGuid,
+  gpResult?.ok ? gpResult.value.defaultScene : undefined,
+);
 
 async function loadGamePluginManifestModules(
   id: string,
@@ -512,9 +518,7 @@ if (runtimeBinding !== undefined) {
   assets.configureRuntimeBinding(runtimeBinding);
 }
 {
-  const requiredScene = gpResult?.ok && typeof gpResult.value.defaultScene === 'string'
-    ? gpResult.value.defaultScene
-    : undefined;
+  const requiredScene = playSceneGuid;
   const catalogReady = await refreshPlayCatalogUntilReady(assets, {
     ...(requiredScene === undefined ? {} : { requiredGuid: requiredScene }),
   });
@@ -684,8 +688,8 @@ let defaultScene: SceneAsset | undefined;
 // graceful skip. A declared defaultScene that fails to load is a boot failure;
 // Cordis games (game-3d) require defaultSceneRoot and would otherwise hang on
 // the Loading overlay after throwing past hideLoadingOverlay.
-if (gpResult?.ok && typeof gpResult.value.defaultScene === 'string' && gpResult.value.defaultScene.length > 0) {
-  const defaultSceneGuidStr = gpResult.value.defaultScene;
+if (playSceneGuid !== undefined) {
+  const defaultSceneGuidStr = playSceneGuid;
   const parsed = AssetGuid.parse(defaultSceneGuidStr);
   if (!parsed.ok) {
     const error = new Error(`[engine] defaultScene GUID malformed: ${defaultSceneGuidStr}`);

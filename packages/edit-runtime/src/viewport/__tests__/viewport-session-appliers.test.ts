@@ -57,6 +57,8 @@ describe('viewport session applier registrar (M3)', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));
     expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
+    expect(gateway.dispatch({ kind: 'play' }, 'ai')).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
+    expect(gateway.dispatch({ kind: 'play' }, 'human')).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
     expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'prompt' } as never)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'stop' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'setDisplay', display: 'game' })).toEqual({ ok: true });
@@ -70,7 +72,17 @@ describe('viewport session applier registrar (M3)', () => {
     expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'assignAssetToEntity', entity: -1, asset: { guid: 'x', kind: 'mesh', name: 'x' }, requestId: 'assign-invalid' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
-    expect(d.calls).toEqual(['play:last-saved', 'stop', 'display:game', 'grant', 'release', 'replay:42', 'removeSystem']);
+    expect(d.calls).toEqual([
+      'play:last-saved',
+      'play:save-then-play',
+      'play:last-saved',
+      'stop',
+      'display:game',
+      'grant',
+      'release',
+      'replay:42',
+      'removeSystem',
+    ]);
   });
 
   it('captures through the gateway and exposes the recorder result via OperationRun', async () => {
