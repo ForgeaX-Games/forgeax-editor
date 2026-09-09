@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  assertPackRebindFailureContract,
   isTargetNativePackage,
   normalizePortableFileModes,
   PACKAGED_VITE_HELPERS,
@@ -94,6 +95,15 @@ describe('desktop Engine runtime producer', () => {
       'scripts/vite/engine-vite-preset.ts',
       'scripts/vite/ddc-root-policy.ts',
     ]);
+  });
+
+  test('fails closed when Pack would return a restored binding as candidate success', () => {
+    expect(() => assertPackRebindFailureContract(
+      'return restoredSession?.runtimeScope() ?? binding;',
+    )).toThrow('does not propagate a failed candidate rebind');
+    expect(() => assertPackRebindFailureContract(
+      'throw failedRebindFailure;',
+    )).not.toThrow();
   });
 
   test('normalizes transported common artifact files to portable non-executable modes', () => {

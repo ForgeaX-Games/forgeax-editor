@@ -25,6 +25,12 @@ import { resolveOverrides, type MaterialCatalogLookup } from './material-instanc
 const stagedByGuid = new Map<string, Record<string, unknown>>();
 const listeners = new Set<(guid: string) => void>();
 
+function omitNullishValues(values: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== undefined && value !== null),
+  );
+}
+
 /**
  * Flat value map for the Material page 3D preview. Mirrors the properties
  * panel: catalog inheritance → live staging buffer → transient drag overlay.
@@ -43,11 +49,12 @@ export function resolveMaterialPreviewDisplayValues(
       ...(staging.staging.textureGuids ?? {}),
     }
     : {};
-  return {
+  const fromOverlay = getMaterialPreviewParams(guid);
+  return omitNullishValues({
     ...fromCatalog,
     ...fromStaging,
-    ...getMaterialPreviewParams(guid),
-  };
+    ...fromOverlay,
+  });
 }
 
 function notify(guid: string): void {
@@ -58,8 +65,17 @@ function notify(guid: string): void {
 export function setMaterialPreviewParam(guid: string, key: string, value: unknown): void {
   const id = guid.toLowerCase();
   const entry = stagedByGuid.get(id) ?? {};
-  entry[key] = value;
-  stagedByGuid.set(id, entry);
+  if (value === undefined || value === null) {
+    delete entry[key];
+    if (Object.keys(entry).length === 0) {
+      stagedByGuid.delete(id);
+    } else {
+      stagedByGuid.set(id, entry);
+    }
+  } else {
+    entry[key] = value;
+    stagedByGuid.set(id, entry);
+  }
   notify(id);
 }
 

@@ -11,12 +11,20 @@ interface RuntimeScopeCommand {
   readonly gameDir: string;
 }
 
+export interface RuntimeScopeMountTransition {
+  commit(): void | Promise<void>;
+  rollback(): void | Promise<void>;
+}
+
 export interface RuntimeScopeControllerOptions {
   readonly pack: ForgeaXPackPlugin;
   readonly base: string;
   readonly secret?: string;
   readonly initial?: RuntimeScopeCommand;
-  readonly prepareGameMount?: (gameDir: string, gameId: string) => void | Promise<void>;
+  readonly prepareGameMount?: (
+    gameDir: string,
+    gameId: string,
+  ) => void | RuntimeScopeMountTransition | Promise<void | RuntimeScopeMountTransition>;
   readonly resolveRoots: (gameDir: string, gameId: string) => readonly string[];
   readonly resolveProjectDdcRoot: (gameDir: string, gameId: string) => string;
   readonly resolveCatalogRoots: (gameDir: string, gameId: string) => readonly RuntimeCatalogRoot[];
@@ -176,30 +184,46 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           { code: 'runtime-generation-stale' },
         );
       }
-      await options.prepareGameMount?.(command.gameDir, command.gameId);
-      const roots = options.resolveRoots(command.gameDir, command.gameId);
-      const projectDdcRoot = options.resolveProjectDdcRoot(command.gameDir, command.gameId);
-      const catalogRoots = options.resolveCatalogRoots(command.gameDir, command.gameId);
-      const binding = await options.pack.rebind(
-        makeBinding(command, options.base, catalogRoots),
-        roots,
-        projectDdcRoot,
-      );
-      if (
-        binding.gameId !== command.gameId
-        || binding.scopeId !== command.scopeId
-        || binding.generation !== command.generation
-      ) {
-        throw Object.assign(
-          new Error('runtime rebind returned a binding for a different game generation'),
-          { code: 'runtime-binding-mismatch' },
+      const mountTransition = await options.prepareGameMount?.(command.gameDir, command.gameId);
+      try {
+        const roots = options.resolveRoots(command.gameDir, command.gameId);
+        const projectDdcRoot = options.resolveProjectDdcRoot(command.gameDir, command.gameId);
+        const catalogRoots = options.resolveCatalogRoots(command.gameDir, command.gameId);
+        const binding = await options.pack.rebind(
+          makeBinding(command, options.base, catalogRoots),
+          roots,
+          projectDdcRoot,
         );
+        if (
+          binding.gameId !== command.gameId
+          || binding.scopeId !== command.scopeId
+          || binding.generation !== command.generation
+        ) {
+          throw Object.assign(
+            new Error('runtime rebind returned a binding for a different game generation'),
+            { code: 'runtime-binding-mismatch' },
+          );
+        }
+        if (!isReadyBinding(binding)) {
+          throw new Error(`runtime generation ${command.generation} did not become ready (${binding.status})`);
+        }
+        await mountTransition?.commit();
+        committed = { identity, binding };
+        return binding;
+      } catch (error) {
+        try {
+          await mountTransition?.rollback();
+        } catch (rollbackError) {
+          throw Object.assign(
+            new AggregateError(
+              [error, rollbackError],
+              'runtime game mount rollback failed after bind failure',
+            ),
+            { code: 'runtime-mount-rollback-failed' },
+          );
+        }
+        throw error;
       }
-      if (!isReadyBinding(binding)) {
-        throw new Error(`runtime generation ${command.generation} did not become ready (${binding.status})`);
-      }
-      committed = { identity, binding };
-      return binding;
     });
     serial = run.then(() => undefined, () => undefined);
     inFlight.set(identity, run);

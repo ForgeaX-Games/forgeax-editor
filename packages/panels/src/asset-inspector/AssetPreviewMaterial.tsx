@@ -10,6 +10,7 @@ import {
   materialColorToHex,
   openMaterialStaging,
   patchMaterialStagingParam,
+  clearMaterialPreviewParams,
   resetMaterialStagingParam,
   resolveMaterialParamSchema,
   resolveOverrides,
@@ -426,10 +427,18 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
     if (asset?.guid) setMaterialPreviewParam(asset.guid, name, value);
   }, [asset?.guid]);
 
+  const resetDefaultForRow = useCallback((row: MaterialParamRow): unknown => {
+    if (row.defaultValue !== undefined) return row.defaultValue;
+    if (row.kind === 'color') return [1, 1, 1, 1];
+    if (row.kind === 'bool') return false;
+    if (row.kind === 'scalar') return row.slider ? 0 : 0;
+    return undefined;
+  }, []);
+
   const resetParam = useCallback((name: string, defaultValue?: unknown) => {
     if (!asset?.guid) return;
     resetMaterialStagingParam(asset.guid, name, defaultValue);
-    setMaterialPreviewParam(asset.guid, name, undefined);
+    clearMaterialPreviewParams(asset.guid, [name]);
   }, [asset?.guid]);
 
   const handleAssignTexture = useCallback((key: string, textureGuid: string) => {
@@ -441,7 +450,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const handleClearTexture = useCallback((key: string) => {
     if (!asset?.guid) return;
     patchMaterialStagingParam(asset.guid, { [key]: undefined }, { [key]: null });
-    setMaterialPreviewParam(asset.guid, key, undefined);
+    clearMaterialPreviewParams(asset.guid, [key]);
   }, [asset?.guid]);
 
   // Filter and group rows
@@ -574,7 +583,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
                         disabled={!row.overridden}
                         tabIndex={row.overridden ? undefined : -1}
                         aria-hidden={row.overridden ? undefined : true}
-                        onClick={() => resetParam(row.name, row.defaultValue)}
+                        onClick={() => resetParam(row.name, resetDefaultForRow(row))}
                       >
                         <ForgeaxIcon name="reset" size={12} />
                       </button>

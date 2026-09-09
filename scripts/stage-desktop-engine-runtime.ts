@@ -12,6 +12,7 @@ const EXCLUDES = new Set(['.git', '.forgeax-harness', 'node_modules', 'target', 
 const NATIVE_PACKAGE = /^(?:esbuild|rollup|sharp|fsevents)$|^@(?:esbuild|rollup|img)\//i;
 const NATIVE_FILE = /\.(?:dll|dylib|exe|node|so)(?:\.[0-9]+)*$|(?:aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc)/i;
 const ENGINE_WASM_PACKAGES = new Set(['@forgeax/engine-wgpu-wasm', '@forgeax/engine-fbx', '@forgeax/engine-codec']);
+const ALWAYS_REBUILD_WORKSPACE_RUNTIME = new Set(['@forgeax/engine-vite-plugin-pack']);
 
 /** Editor-owned Vite config helpers that must travel with the packaged Engine root. */
 export const PACKAGED_VITE_HELPERS = [
@@ -136,14 +137,20 @@ export function isTargetNativePackage(name: string, source: string): boolean {
   return walk(source, '');
 }
 
-function buildWorkspaceRuntime(source: string, manifest: PackageJson): void {
+function buildWorkspaceRuntime(source: string, manifest: PackageJson, force = false): void {
   const main = manifest.main;
   if (!main?.startsWith('./dist/')) return;
   const output = join(source, main);
-  if (existsSync(output)) return;
+  if (existsSync(output) && !force) return;
   if (!manifest.scripts?.build) fail(`runtime workspace has no build command: ${manifest.name ?? source}`);
   run(['run', 'build'], source);
   if (!existsSync(output)) fail(`runtime workspace build did not create ${main}: ${manifest.name ?? source}`);
+}
+
+export function assertPackRebindFailureContract(source: string): void {
+  if (!source.includes('throw failedRebindFailure')) {
+    fail('Pack runtime does not propagate a failed candidate rebind after restoring the committed binding');
+  }
 }
 
 function stageDependencyClosure(output: string, scope: 'common' | 'target'): void {
@@ -169,7 +176,9 @@ function stageDependencyClosure(output: string, scope: 'common' | 'target'): voi
     for (const child of Object.keys(manifest.devDependencies ?? {})) if (workspaces.has(child)) visit(child, source, true);
     const native = isTargetNativePackage(name, source);
     if ((scope === 'target') === native) {
-      if (!native && workspaces.get(name) === source) buildWorkspaceRuntime(source, manifest);
+      if (!native && workspaces.get(name) === source) {
+        buildWorkspaceRuntime(source, manifest, ALWAYS_REBUILD_WORKSPACE_RUNTIME.has(name));
+      }
       const target = join(destination, name);
       mkdirSync(dirname(target), { recursive: true });
       copyTree(source, target, !native && ENGINE_WASM_PACKAGES.has(name));
@@ -245,6 +254,12 @@ export function stageEditorDesktopEngineRuntime(output: string, scope: 'common' 
     cpSync(join(EDITOR_ROOT, 'apps/standalone/template-catalog.ts'), catalog, { force: false, errorOnExist: true });
   }
   stageDependencyClosure(destination, scope);
+  if (scope === 'common') {
+    assertPackRebindFailureContract(readFileSync(
+      join(destination, 'engine/node_modules/@forgeax/engine-vite-plugin-pack/dist/index.mjs'),
+      'utf8',
+    ));
+  }
   if (scope === 'common') normalizePortableFileModes(destination);
 }
 

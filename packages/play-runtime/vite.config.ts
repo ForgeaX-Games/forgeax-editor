@@ -6,14 +6,13 @@ import {
   engineVitePreset,
   ENGINE_EXECUTION_ISOLATION_HEADERS,
   resolveGameEngineEntry as resolveSharedGameEngineEntry,
-  type EngineVitePreset,
 } from '../../scripts/vite/engine-vite-preset.ts';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
 import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots.ts';
 import { PLAY_RUNTIME_STATIC_WATCH_IGNORES, PLAY_VITE_HMR_PATH } from './src/watch-policy.ts';
 import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller.ts';
-import { setupSingleGameRootFarm } from './src/active-game-mount.ts';
+import { setupSingleGameRootFarm, stageSingleGameRootFarm } from './src/active-game-mount.ts';
 import {
   resolveExternalRootFarmRuntimeRoot,
   setupExternalRootFarm,
@@ -318,6 +317,8 @@ function forgeaxRuntimeIdentity() {
 
 let activeGameDir = INITIAL_GAME_DIR;
 let activeGameId = INITIAL_GAME_ID;
+let committedGameDir = INITIAL_GAME_DIR;
+let committedGameId = INITIAL_GAME_ID;
 
 // Shader publication compares the authored pack's resolved source path with
 // Vite's transform id. Play mounts the active game below this Vite root, so
@@ -477,7 +478,7 @@ function forgeaxStaticGame() {
   };
 }
 
-export function forgeaxGamePluginIndex(pack: NonNullable<EngineVitePreset['pack']>) {
+export function forgeaxGamePluginIndex() {
   const ROUTE_RE = /^\/game-plugins\/([a-z0-9][a-z0-9-]{1,40})\.json$/;
   return {
     name: 'forgeax:game-plugin-index',
@@ -485,15 +486,14 @@ export function forgeaxGamePluginIndex(pack: NonNullable<EngineVitePreset['pack'
       server.middlewares.use((req: { url?: string }, res: { statusCode: number; setHeader(k: string, v: string): void; end(data: string): void }, next: () => void) => {
         const match = req.url?.match(ROUTE_RE);
         if (!match || match[1] === undefined) { next(); return; }
-        const binding = pack.runtimeBinding();
-        if (binding === undefined || binding.gameId !== match[1] || activeGameId !== match[1]) {
+        if (committedGameId !== match[1]) {
           res.statusCode = 404;
           res.end(JSON.stringify({ error: 'runtime-scope-not-found' }));
           return;
         }
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ modules: gamePluginModules(activeGameDir, match[1]) }));
+        res.end(JSON.stringify({ modules: gamePluginModules(committedGameDir, match[1]) }));
       });
     },
   };
@@ -552,14 +552,34 @@ const runtimeScopeController = createRuntimeScopeController({
     // Desktop workspace materialization can race a project bind. Reassert the
     // immutable asset mounts at the bind boundary, where Pack requires them.
     ensureExternalRootFarms();
-    mountedGameLink = setupSingleGameRootFarm({
+    const previousMount = mountedGameLink;
+    const previousGameDir = activeGameDir;
+    const previousGameId = activeGameId;
+    const transition = stageSingleGameRootFarm({
       farmRoot: resolve(runtimeWorkspaceRoot, HOST_GAMES_FARM),
       gameDir,
       gameId,
-      previousMount: mountedGameLink,
+      previousMount,
     });
     activeGameDir = resolve(gameDir);
     activeGameId = gameId;
+    return {
+      commit() {
+        transition.commit();
+        mountedGameLink = transition.mountPath;
+        committedGameDir = activeGameDir;
+        committedGameId = activeGameId;
+      },
+      rollback() {
+        try {
+          transition.rollback();
+        } finally {
+          mountedGameLink = previousMount;
+          activeGameDir = previousGameDir;
+          activeGameId = previousGameId;
+        }
+      },
+    };
   },
   resolveRoots: (gameDir, gameId) => singleGamePackRoots(gameDir, gameId),
   resolveCatalogRoots: resolveActiveCatalogRoots,
@@ -585,7 +605,7 @@ export default defineConfig({
     forgeaxStaticGame() as never,
     forgeaxRuntimeIdentity() as never,
     ...enginePreset.plugins,
-    forgeaxGamePluginIndex(playPackPlugin) as never,
+    forgeaxGamePluginIndex() as never,
     runtimeScopeController as never,
   ],
   optimizeDeps: enginePreset.optimizeDeps,

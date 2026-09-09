@@ -65,6 +65,53 @@ describe('material-preview-staging', () => {
     clearMaterialPreviewParams(other);
   });
 
+  it('setMaterialPreviewParam(undefined) removes the overlay key instead of storing undefined', () => {
+    setMaterialPreviewParam(GUID, 'baseColor', [1, 0, 0, 1]);
+    setMaterialPreviewParam(GUID, 'baseColor', undefined);
+    expect(getMaterialPreviewParams(GUID)).toEqual({});
+  });
+
+  it('resolveMaterialPreviewDisplayValues omits nullish keys after reset-style overlay clear', () => {
+    const guid = 'eeeeeeee-0000-4000-8000-000000000005';
+    openMaterialStaging({
+      guid,
+      packPath: 'materials/test.mat.json',
+      name: 'Test',
+      payload: { values: { baseColor: [0.2, 0.3, 0.4, 1], metallic: 0.1 } },
+    });
+    const lookup = () => ({
+      guid,
+      kind: 'material',
+      payload: { values: { baseColor: [0.2, 0.3, 0.4, 1], metallic: 0.1 } },
+    });
+    setMaterialPreviewParam(guid, 'baseColor', [1, 0, 0, 1]);
+    setMaterialPreviewParam(guid, 'metallic', undefined);
+    const resolved = resolveMaterialPreviewDisplayValues(guid, lookup);
+    expect(resolved.baseColor).toEqual([1, 0, 0, 1]);
+    expect(resolved.metallic).toBe(0.1);
+    expect('metallic' in getMaterialPreviewParams(guid)).toBe(false);
+    clearMaterialPreviewParams(guid);
+  });
+
+  it('resolveMaterialPreviewDisplayValues ignores cleared overlay keys', () => {
+    const guid = 'dddddddd-0000-4000-8000-000000000004';
+    openMaterialStaging({
+      guid,
+      packPath: 'materials/test.mat.json',
+      name: 'Test',
+      payload: { values: { baseColor: [0.2, 0.3, 0.4, 1] } },
+    });
+    const lookup = () => ({
+      guid,
+      kind: 'material',
+      payload: { values: { baseColor: [0.2, 0.3, 0.4, 1] } },
+    });
+    setMaterialPreviewParam(guid, 'baseColor', [1, 0, 0, 1]);
+    clearMaterialPreviewParams(guid, ['baseColor']);
+    expect(resolveMaterialPreviewDisplayValues(guid, lookup).baseColor).toEqual([0.2, 0.3, 0.4, 1]);
+    clearMaterialPreviewParams(guid);
+  });
+
   it('resolveMaterialPreviewDisplayValues prefers live staging over catalog', () => {
     const guid = 'cccccccc-0000-4000-8000-000000000003';
     openMaterialStaging({

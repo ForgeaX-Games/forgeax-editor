@@ -198,6 +198,7 @@ export function assembleMaterialPreviewWorld(facade: EngineFacade): MaterialPrev
         if (!(key in values) && !(key in baselineValues)) delete merged[key];
       }
       for (const [key, val] of Object.entries(values)) {
+        if (val === undefined || val === null) continue;
         merged[key] = Array.isArray(val) ? [...val] : val;
       }
       // Mint a fresh sharedRef so the render extract's cross-frame material

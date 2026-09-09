@@ -17,7 +17,7 @@ import { resolveExternalRootFarmRuntimeRoot, setupExternalRootFarm } from '../ex
 describe('external root farm', () => {
   test('repairs the immutable asset farms at the authoritative project-bind boundary', () => {
     const config = readFileSync(new URL('../../vite.config.ts', import.meta.url), 'utf8');
-    expect(config).toMatch(/prepareGameMount:[\s\S]*?ensureExternalRootFarms\(\);[\s\S]*?setupSingleGameRootFarm/);
+    expect(config).toMatch(/prepareGameMount:[\s\S]*?ensureExternalRootFarms\(\);[\s\S]*?stageSingleGameRootFarm/);
     expect(config).toMatch(/setupExternalRootFarm\(runtimeWorkspaceRoot, 'shared-assets'/);
     expect(config).toMatch(/setupExternalRootFarm\(runtimeWorkspaceRoot, 'engine-assets'/);
     expect(config).toMatch(/relative\(runtimeWorkspaceRoot, farmGamePath/);

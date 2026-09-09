@@ -436,6 +436,65 @@ describe('runtime scope controller', () => {
     }
   });
 
+  test('commits the candidate mount only for an exact binding and rolls it back on mismatch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'forgeax-runtime-scope-mount-'));
+    try {
+      let current: RuntimeAssetBinding | undefined;
+      const mountEvents: string[] = [];
+      const pack = {
+        name: 'test-pack',
+        runtimeBinding: () => current,
+        rebind: async (binding: RuntimeAssetBinding) => {
+          if (binding.generation === 10) return current;
+          current = { ...binding, status: 'ready', authority: 'authoritative' };
+          return current;
+        },
+      } as unknown as ForgeaXPackPlugin;
+      let middleware: Middleware | undefined;
+      createRuntimeScopeController({
+        pack,
+        base: '/preview',
+        secret: 'test-secret',
+        prepareGameMount: (_gameDir, gameId) => {
+          mountEvents.push(`stage:${gameId}`);
+          return {
+            commit: () => { mountEvents.push(`commit:${gameId}`); },
+            rollback: () => { mountEvents.push(`rollback:${gameId}`); },
+          };
+        },
+        resolveRoots: () => [],
+        resolveCatalogRoots: () => [],
+        resolveProjectDdcRoot: projectDdcRoot,
+      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; } } });
+
+      const invoke = async (generation: number) => {
+        const result = response();
+        await middleware?.(
+          request('/__pack/control/bind', 'POST', JSON.stringify(command(root, generation)), {
+            'x-forgeax-runtime-secret': 'test-secret',
+          }),
+          result,
+          () => {},
+        );
+        return result;
+      };
+
+      expect((await invoke(9)).statusCode).toBe(200);
+      const failed = await invoke(10);
+      expect(failed.statusCode).toBe(409);
+      expect(JSON.parse(failed.body)).toMatchObject({ code: 'runtime-binding-mismatch' });
+      expect(mountEvents).toEqual([
+        'stage:fps',
+        'commit:fps',
+        'stage:fps',
+        'rollback:fps',
+      ]);
+      expect(current).toMatchObject({ generation: 9, status: 'ready' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('keeps the last ready binding across a failed candidate and rejects stale recovery work', async () => {
     const root = mkdtempSync(join(tmpdir(), 'forgeax-runtime-scope-recovery-'));
     try {

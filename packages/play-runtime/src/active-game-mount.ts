@@ -15,12 +15,34 @@ export type ActiveGameMountRequest = {
   previousMount?: string;
 };
 
+export type ActiveGameMountTransition = {
+  readonly mountPath: string;
+  commit(): void;
+  rollback(): void;
+};
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function removeGeneratedMount(path: string): void {
+  try {
+    const entry = lstatSync(path);
+    if (!entry.isSymbolicLink()) {
+      throw new Error(`refusing to remove non-symlink active game mount: ${path}`);
+    }
+    unlinkSync(path);
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+}
+
 function ensureFarmDirectory(mountRoot: string, targetPath: string): void {
   let existing;
   try {
     existing = lstatSync(mountRoot);
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+    if (isMissing(error)) {
       mkdirSync(mountRoot, { recursive: true });
       return;
     }
@@ -50,16 +72,17 @@ function ensureFarmDirectory(mountRoot: string, targetPath: string): void {
 }
 
 /**
- * Mount exactly one physical game directory below the Play Runtime Vite root.
- * The returned path is the generated child symlink and can be retained by the
- * runtime-scope controller as its previous mount on the next rebind.
+ * Stage the candidate game beside the currently committed mount. The old mount
+ * remains readable while Pack attempts its transactional rebind. Only commit
+ * removes it; rollback removes the candidate and restores any replaced stale
+ * candidate link.
  */
-export function setupSingleGameRootFarm({
+export function stageSingleGameRootFarm({
   farmRoot,
   gameDir,
   gameId,
   previousMount,
-}: ActiveGameMountRequest): string {
+}: ActiveGameMountRequest): ActiveGameMountTransition {
   const targetPath = resolve(gameDir);
   const mountRoot = resolve(farmRoot);
   if (!existsSync(targetPath)) {
@@ -67,30 +90,74 @@ export function setupSingleGameRootFarm({
   }
   ensureFarmDirectory(mountRoot, targetPath);
   const linkPath = resolve(mountRoot, gameId);
-  if (previousMount !== undefined && previousMount !== linkPath) {
-    try {
-      if (lstatSync(previousMount).isSymbolicLink()) unlinkSync(previousMount);
-    } catch { /* the previous exact mount may already be gone */ }
-  }
+  let replacedTarget: string | undefined;
+  let createdCandidate = false;
   try {
     const existing = lstatSync(linkPath);
     if (!existing.isSymbolicLink()) {
       throw new Error(`refusing to replace non-symlink active game mount: ${linkPath}`);
     }
     if (realpathSync(linkPath) === realpathSync(targetPath)) {
-      return linkPath;
+      return createTransition(linkPath, previousMount, false, undefined);
     }
+    replacedTarget = realpathSync(linkPath);
     unlinkSync(linkPath);
   } catch (error) {
-    if (error instanceof Error && !error.message.includes('ENOENT')) throw error;
+    if (!isMissing(error)) throw error;
   }
   // Remove a broken generated junction before recreating the exact active-game mount.
   try {
     const stale = lstatSync(linkPath);
     if (stale.isSymbolicLink()) unlinkSync(linkPath);
-  } catch {
-    // No existing mount.
+  } catch (error) {
+    if (!isMissing(error)) throw error;
   }
   symlinkSync(targetPath, linkPath, 'junction');
-  return linkPath;
+  createdCandidate = true;
+  return createTransition(linkPath, previousMount, createdCandidate, replacedTarget);
+}
+
+function createTransition(
+  linkPath: string,
+  previousMount: string | undefined,
+  createdCandidate: boolean,
+  replacedTarget: string | undefined,
+): ActiveGameMountTransition {
+  let settled = false;
+  return {
+    mountPath: linkPath,
+    commit() {
+      if (settled) return;
+      // The candidate Pack binding is already committed at this point. Old
+      // mount cleanup must not turn that success into a cross-layer rollback;
+      // retaining an extra generated mount is safer than splitting Pack from
+      // the mount/controller authority.
+      settled = true;
+      if (previousMount !== undefined && previousMount !== linkPath) {
+        try {
+          removeGeneratedMount(previousMount);
+        } catch (error) {
+          console.warn('[forgeax] failed to clean previous active-game mount:', error);
+        }
+      }
+    },
+    rollback() {
+      if (settled) return;
+      if (createdCandidate) removeGeneratedMount(linkPath);
+      if (replacedTarget !== undefined) {
+        symlinkSync(replacedTarget, linkPath, 'junction');
+      }
+      settled = true;
+    },
+  };
+}
+
+/**
+ * Immediate setup used only during process boot, before a previous committed
+ * runtime exists. Runtime game switches must use stageSingleGameRootFarm.
+ */
+export function setupSingleGameRootFarm(request: ActiveGameMountRequest): string {
+  const transition = stageSingleGameRootFarm(request);
+  transition.commit();
+  return transition.mountPath;
 }
