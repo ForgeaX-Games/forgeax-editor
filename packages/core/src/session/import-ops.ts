@@ -25,10 +25,11 @@
 //   AGENTS.md Invariant 7 (one door) + Design principle 4 (registry razor).
 //   Mirrors pack-ops.ts createDirectory (session applier) + createAsset (assetIO gate).
 
-import { assetIO, type AssetIoResult } from '../io/asset-io-facade';
+import { assetIO, type AssetIoResult, type TriggerCookStats } from '../io/asset-io-facade';
 import { getImportFormat } from '../scan/ext-importer-map';
 import { cookGltfMeta } from '../assets/gltf-cook';
 import { cookFbxMeta } from '../assets/fbx-cook';
+import { storagePathToCatalogSourceKey } from '../assets/catalog-storage-path';
 import { generateAssetGuid } from './pack-ops';
 import { awaitPostAssetWriteCatalogSync } from './authored-asset-write';
 import { registerApplier } from '../io/appliers';
@@ -43,7 +44,123 @@ import { createRuntimeReadiness, type RuntimeReadiness, type RuntimeRevision } f
 
 /** Terminal status of a single-file import (shared with the content-browser UI). */
 export type ImportFileStatus = 'pending' | 'uploading' | 'sidecar' | 'cooking' | 'done' | 'cancelled' | 'error';
-export type ImportProgressStage = Extract<ImportFileStatus, 'uploading' | 'sidecar' | 'cooking'>;
+export type ImportProgressStage =
+  | 'uploading'
+  | 'sourceCook'
+  | 'sidecar'
+  | 'engineCookWait'
+  | 'engineCook'
+  | 'indexing';
+
+/** Shared import progress scale — engine cook occupies the long middle. */
+const IMPORT_FRACTION = {
+  upload: 0.06,
+  sourceCook: 0.18,
+  sidecar: 0.24,
+  engineCookWait: 0.28,
+  engineCookStart: 0.32,
+  engineCookEnd: 0.82,
+  indexStart: 0.84,
+  indexEnd: 0.98,
+  done: 1,
+} as const;
+
+interface ImportProgressReporter {
+  report(progress: ImportProgressEvent, detail?: Record<string, unknown>): void;
+}
+
+function createImportProgressReporter(
+  onProgress: ((progress: ImportProgressEvent) => void) | undefined,
+): ImportProgressReporter {
+  let peakFraction = 0;
+  return {
+    report(progress, detail) {
+      const monotonicFraction = Math.max(peakFraction, progress.fraction);
+      peakFraction = monotonicFraction;
+      const monotonic = { stage: progress.stage, fraction: monotonicFraction };
+      onProgress?.(monotonic);
+      if (detail?.pulse === true) return;
+    },
+  };
+}
+
+function reportImportProgress(
+  onProgress: ((progress: ImportProgressEvent) => void) | undefined,
+  progress: ImportProgressEvent,
+  detail?: Record<string, unknown>,
+): void {
+  createImportProgressReporter(onProgress).report(progress, detail);
+}
+
+interface EngineCookTriggerSpec {
+  readonly cookAnchorGuid: string;
+  readonly destPath: string;
+  readonly sourceName: string;
+  readonly metaPath: string;
+  readonly importer: string;
+  readonly subAssetCount: number;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ImportProgressEvent) => void;
+}
+
+/** POST play-engine import/rebuild and wait for the scoped production route to finish. */
+async function awaitEngineCookTrigger(spec: EngineCookTriggerSpec): Promise<AssetIoResult<TriggerCookStats>> {
+  const catalogSourceKey = storagePathToCatalogSourceKey(
+    spec.metaPath,
+    assetIO.getRuntimeBinding()?.catalogRoots ?? [],
+  );
+  const progressReporter = createImportProgressReporter(spec.onProgress);
+  progressReporter.report({
+    stage: 'engineCook',
+    fraction: IMPORT_FRACTION.engineCookStart,
+  });
+  let pulseFraction: number = IMPORT_FRACTION.engineCookStart;
+  let waitingCatalog = false;
+  const pulseTimer = setInterval(() => {
+    if (waitingCatalog) return;
+    pulseFraction = Math.min(pulseFraction + 0.006, IMPORT_FRACTION.engineCookEnd - 0.01);
+    progressReporter.report({
+      stage: 'engineCook',
+      fraction: pulseFraction,
+    }, { pulse: true });
+  }, 2000);
+  let result: Awaited<ReturnType<typeof assetIO.triggerCook>>;
+  try {
+    result = await assetIO.triggerCook(
+      spec.cookAnchorGuid,
+      spec.signal,
+      'rebuild',
+      catalogSourceKey ?? undefined,
+      (cookProgress) => {
+        if (cookProgress.phase === 'wait-catalog') {
+          waitingCatalog = true;
+          progressReporter.report({
+            stage: 'engineCookWait',
+            fraction: Math.min(
+              IMPORT_FRACTION.engineCookWait + cookProgress.attempt * 0.008,
+              IMPORT_FRACTION.engineCookStart - 0.01,
+            ),
+          }, { attempt: cookProgress.attempt, reason: 'catalog-not-ready' });
+          return;
+        }
+        waitingCatalog = false;
+        progressReporter.report({
+          stage: 'engineCook',
+          fraction: Math.max(pulseFraction, IMPORT_FRACTION.engineCookStart),
+        }, { attempt: cookProgress.attempt, phase: 'engine-active' });
+      },
+    );
+  } finally {
+    clearInterval(pulseTimer);
+  }
+  if (result.ok) {
+    progressReporter.report({
+      stage: 'engineCook',
+      fraction: IMPORT_FRACTION.engineCookEnd,
+    }, { phase: 'engine-cook-complete' });
+  }
+  return result;
+}
 
 export interface ImportProgressEvent {
   readonly stage: ImportProgressStage;
@@ -242,10 +359,41 @@ function cancelledImport(filename: string, path: string, hint: string): ImportFi
   };
 }
 
-/** glTF/FBX imports publish a disk sidecar; sub-assets cook lazily on first use. */
-function isSourcePackageImport(sourceName: string): boolean {
-  const ext = sourceName.slice(sourceName.lastIndexOf('.')).toLowerCase();
-  return ext === '.glb' || ext === '.gltf' || ext === '.fbx';
+function producedCatalogEntries(result: ImportFileResult): readonly ImportSubAsset[] {
+  if (result.subAssets !== undefined && result.subAssets.length > 0) {
+    return result.subAssets;
+  }
+  if (result.guid !== undefined) {
+    return [{ guid: result.guid, kind: 'asset' }];
+  }
+  return [];
+}
+
+/** Wait for pack-index visibility while advancing the import progress bar. */
+async function awaitProducedCatalogSync(
+  entries: readonly ImportSubAsset[],
+  onProgress?: (progress: ImportProgressEvent) => void,
+): Promise<void> {
+  if (entries.length === 0) {
+    reportImportProgress(onProgress, { stage: 'indexing', fraction: IMPORT_FRACTION.done });
+    return;
+  }
+  reportImportProgress(onProgress, { stage: 'indexing', fraction: IMPORT_FRACTION.indexStart });
+  let completed = 0;
+  for (const entry of entries) {
+    try {
+      await awaitPostAssetWriteCatalogSync(entry.guid);
+    } catch (err) {
+      const hint = err instanceof Error ? err.message : String(err);
+      throw err;
+    }
+    completed += 1;
+    const span = IMPORT_FRACTION.indexEnd - IMPORT_FRACTION.indexStart;
+    reportImportProgress(onProgress, {
+      stage: 'indexing',
+      fraction: IMPORT_FRACTION.indexStart + (completed / entries.length) * span,
+    }, { catalogIndex: completed + 1, catalogTotal: entries.length });
+  }
 }
 
 function subAssetsFromMetaJson(metaJson: string): readonly ImportSubAsset[] {
@@ -535,6 +683,8 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
   const dependencyFiles = sourceFiles ?? [];
   let sourceTransaction: ImportSourceTransaction | undefined;
   let importCommitted = false;
+  /** May switch from `import` to `reimport` when the user re-selects bytes for an existing asset. */
+  let effectiveMode = mode;
 
   try {
     // 1. Upload bytes (human drag-drop path) unless they are already on disk.
@@ -546,7 +696,7 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       if (base64 === undefined) {
         return failedImport(sourceName, destPath, 'IMPORT_SOURCE_BYTES_MISSING', 'No source bytes to upload', { retryable: false });
       }
-      onProgress?.({ stage: 'uploading', fraction: 0.2 });
+      reportImportProgress(onProgress, { stage: 'uploading', fraction: IMPORT_FRACTION.upload });
       const prepared = await prepareImportSourceTransaction({
         destPath,
         base64,
@@ -557,23 +707,45 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         signal,
       });
       if (!prepared.ok) {
-        return failedImport(sourceName, prepared.failure.path, prepared.failure.code, prepared.failure.hint, {
-          retryable: prepared.failure.retryable,
-        });
+        if (prepared.failure.code === 'IMPORT_SOURCE_TARGET_CONFLICT') {
+          const priorMeta = existingImportMeta(await assetIO.readExistingMeta(metaPath));
+          if (priorMeta !== undefined && priorMeta.subAssets.length > 0) {
+            const replaced = await assetIO.uploadSourceBytes(destPath, base64, signal);
+            if (!replaced.ok) {
+              return failedImport(
+                sourceName,
+                destPath,
+                replaced.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_UPLOAD_FAILED',
+                replaced.error.hint,
+                { retryable: replaced.error.kind === 'network' },
+              );
+            }
+            effectiveMode = 'reimport';
+          } else {
+            return failedImport(sourceName, prepared.failure.path, prepared.failure.code, prepared.failure.hint, {
+              retryable: prepared.failure.retryable,
+            });
+          }
+        } else {
+          return failedImport(sourceName, prepared.failure.path, prepared.failure.code, prepared.failure.hint, {
+            retryable: prepared.failure.retryable,
+          });
+        }
+      } else {
+        sourceTransaction = prepared.transaction;
       }
-      sourceTransaction = prepared.transaction;
     }
 
     // UI packages keep the sidecar beside the source stem (`hud.meta.json`),
     // while the older external importers use `<source>.meta.json`.
-    if (mode === 'reimport' || format.importer === 'gltf' || format.importer === 'fbx') {
+    if (effectiveMode === 'reimport' || format.importer === 'gltf' || format.importer === 'fbx') {
       setCancellationPolicy({
         cancellable: true,
         hint: 'Import can be cancelled while reading and cooking the source; no sidecar write has started.',
       });
     }
     let existing: ExistingImportMeta | undefined;
-    if (mode === 'reimport') {
+    if (effectiveMode === 'reimport') {
       existing = existingImportMeta(await assetIO.readExistingMeta(metaPath));
       if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
       if (existing === undefined) {
@@ -604,7 +776,7 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         cancellable: true,
         hint: 'Import can be cancelled while reading and cooking the source; no sidecar write has started.',
       });
-      onProgress?.({ stage: 'cooking', fraction: 0.55 });
+      reportImportProgress(onProgress, { stage: 'sourceCook', fraction: IMPORT_FRACTION.sourceCook });
       const sourceBytes = base64 !== undefined
         ? { ok: true as const, value: base64ToArrayBuffer(base64) }
         : await assetIO.readSourceBytes(destPath, signal);
@@ -654,7 +826,7 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         cancellable: false,
         hint: 'Import is writing the metadata sidecar; cancellation is unavailable until the write completes.',
       });
-      onProgress?.({ stage: 'sidecar', fraction: 1 });
+      reportImportProgress(onProgress, { stage: 'sidecar', fraction: IMPORT_FRACTION.sidecar });
       const wrote = sourceTransaction === undefined
         ? await assetIO.writeMetaSidecar(metaPath, cooked.metaJson, signal)
         : await sourceTransaction.writeMeta(cooked.metaJson, signal);
@@ -676,8 +848,33 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
           });
         }
       }
+      const subAssets = subAssetsFromMetaJson(cooked.metaJson);
+      const cookAnchorGuid = subAssets[0]?.guid ?? guid;
+      setCancellationPolicy({
+        cancellable: false,
+        hint: 'Import is triggering the engine cook; cancellation is unavailable after the sidecar write.',
+      });
+      const engineCooked = await awaitEngineCookTrigger({
+        cookAnchorGuid,
+        destPath,
+        sourceName,
+        metaPath,
+        importer: format.importer,
+        subAssetCount: subAssets.length,
+        signal,
+        onProgress,
+      });
+      if (!engineCooked.ok) {
+        return failedImport(
+          sourceName,
+          destPath,
+          engineCooked.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_COOK_TRIGGER_FAILED',
+          engineCooked.error.hint,
+          { guid: cookAnchorGuid },
+        );
+      }
       importCommitted = true;
-      return { filename: sourceName, status: 'done', guid, subAssets: subAssetsFromMetaJson(cooked.metaJson) };
+      return { filename: sourceName, status: 'done', guid, subAssets };
     }
 
     // 3. Other importers (image/audio/font/pack): write a simple sidecar + cook.
@@ -708,7 +905,10 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       cancellable: false,
       hint: 'Import is writing the metadata sidecar; cancellation is unavailable until the write completes.',
     });
-    onProgress?.({ stage: 'sidecar', fraction: format.importer === 'audio' ? 1 : 0.5 });
+    reportImportProgress(onProgress, {
+      stage: 'sidecar',
+      fraction: format.importer === 'audio' ? IMPORT_FRACTION.done : IMPORT_FRACTION.sidecar,
+    });
     const wrote = sourceTransaction === undefined
       ? await assetIO.writeMetaSidecar(metaPath, JSON.stringify(meta, null, 2) + '\n', signal)
       : await sourceTransaction.writeMeta(JSON.stringify(meta, null, 2) + '\n', signal);
@@ -738,14 +938,22 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         cancellable: false,
         hint: 'Import is triggering the engine cook; cancellation is unavailable after the sidecar write.',
       });
-      onProgress?.({ stage: 'cooking', fraction: 1 });
-      const cooked = await assetIO.triggerCook(guid, signal);
-      if (!cooked.ok) {
+      const engineCooked = await awaitEngineCookTrigger({
+        cookAnchorGuid: guid,
+        destPath,
+        sourceName,
+        metaPath,
+        importer: format.importer,
+        subAssetCount: subAssets.length,
+        signal,
+        onProgress,
+      });
+      if (!engineCooked.ok) {
         return failedImport(
           sourceName,
           destPath,
-          cooked.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_COOK_TRIGGER_FAILED',
-          cooked.error.hint,
+          engineCooked.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_COOK_TRIGGER_FAILED',
+          engineCooked.error.hint,
           { guid },
         );
       }
@@ -872,6 +1080,9 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
       cancellation.abort();
       return { ok: true as const };
     });
+    const runProgress = createImportProgressReporter(
+      (event) => ctx?.operationRun?.reportProgress({ ...event }),
+    );
     const completion = executeAssetImport({
       destPath: resolved,
       sourceName: name,
@@ -885,31 +1096,16 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
       onCancellationPolicy: (policy) => {
         cancellationPolicy = policy;
       },
-      onProgress: (progress) => ctx?.operationRun?.reportProgress({ ...progress }),
+      onProgress: (progress) => runProgress.report(progress),
     })
       .then(async (result) => {
         if (result.status === 'done') {
-          // Source-package imports (glTF/FBX) land as disk sidecars first. Their
-          // sub-assets materialize lazily through the engine import transport,
-          // so waiting for every pack-index row here races the watcher and marks
-          // a successful import as failed while the files are already on disk.
-          if (isSourcePackageImport(name)) {
-            broadcastAssetsChanged('directory-only', 'local-op');
-            return { ok: true as const, result };
-          }
-
-          // Cooked importers (image/font/…) must observe every produced GUID in
-          // the served catalog before the run claims terminal success.
-          const producedGuids = result.subAssets?.map((subAsset) => subAsset.guid) ?? [];
-          const catalogGuids = Array.from(new Set(
-            producedGuids.length > 0
-              ? producedGuids
-              : result.guid !== undefined
-                ? [result.guid]
-                : [],
-          ));
+          const catalogEntries = producedCatalogEntries(result);
+          const reportRunProgress = (progress: ImportProgressEvent): void => {
+            runProgress.report(progress);
+          };
           try {
-            await Promise.all(catalogGuids.map((catalogGuid) => awaitPostAssetWriteCatalogSync(catalogGuid)));
+            await awaitProducedCatalogSync(catalogEntries, reportRunProgress);
           } catch (err) {
             const hint = err instanceof Error ? err.message : String(err);
             return {
@@ -923,6 +1119,7 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
               },
             };
           }
+          reportRunProgress({ stage: 'indexing', fraction: IMPORT_FRACTION.done });
           broadcastAssetsChanged();
           return { ok: true as const, result };
         }

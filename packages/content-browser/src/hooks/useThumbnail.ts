@@ -31,10 +31,11 @@ export function getThumbnailData(asset: CBAsset): ThumbnailData {
   return deriveThumbnail({
     kind: asset.kind,
     payload: realPayload(asset.guid, asset.payload),
+    thumbnailUrl: asset.thumbnailUrl,
     packPath: asset.packPath,
   });
 }
 
 export function useThumbnail(asset: CBAsset): ThumbnailData {
-  return useMemo(() => getThumbnailData(asset), [asset.guid, asset.kind]);
+  return useMemo(() => getThumbnailData(asset), [asset]);
 }

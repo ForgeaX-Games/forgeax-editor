@@ -49,7 +49,7 @@ describe('AssetIOFacade runtime scope', () => {
 
     expect(result.ok).toBe(true);
     expect(calls).toEqual([{
-      url: '/preview/__pack/scopes/studio-fps/7/import/asset-guid',
+      url: '/preview/__pack/scopes/studio-fps/7/import/asset-guid?import-mode=rebuild',
       init: {
         method: 'POST',
         headers: { 'x-forgeax-import-mode': 'rebuild' },
@@ -73,7 +73,7 @@ describe('AssetIOFacade runtime scope', () => {
     expect(calls[0]?.init?.headers).toEqual({ 'x-forgeax-import-mode': 'cold-cook' });
   });
 
-  it('retries meta-not-found until the sidecar is indexed', async () => {
+  it('retries meta-not-found for cold-cook until the sidecar is indexed', async () => {
     let attempts = 0;
     globalThis.fetch = (async () => {
       attempts += 1;
@@ -88,14 +88,33 @@ describe('AssetIOFacade runtime scope', () => {
 
     const facade = new AssetIOFacade();
     facade.setRuntimeBinding(binding());
-    const result = await facade.triggerCook('asset-guid');
+    const result = await facade.triggerCook('asset-guid', undefined, 'cold-cook');
 
     expect(result.ok).toBe(true);
     expect(attempts).toBe(3);
   });
 
+  it('does not retry meta-not-found under rebuild mode', async () => {
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts += 1;
+      return new Response(JSON.stringify({
+        error: 'meta-not-found',
+        hint: 'no source declares this GUID',
+      }), { status: 404, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const facade = new AssetIOFacade();
+    facade.setRuntimeBinding(binding());
+    const result = await facade.triggerCook('asset-guid', undefined, 'rebuild');
+
+    expect(result.ok).toBe(false);
+    expect(attempts).toBe(1);
+  });
+
   it('classifies transient cook trigger failures', () => {
-    expect(isRetryableCookTriggerFailure(404, { error: 'meta-not-found' })).toBe(true);
+    expect(isRetryableCookTriggerFailure(404, { error: 'meta-not-found' }, 'cold-cook')).toBe(true);
+    expect(isRetryableCookTriggerFailure(404, { error: 'meta-not-found' }, 'rebuild')).toBe(false);
     expect(isRetryableCookTriggerFailure(422, { code: 'stale-generation' })).toBe(true);
     expect(isRetryableCookTriggerFailure(422, { code: 'import-failed', error: 'import-failed' })).toBe(false);
   });

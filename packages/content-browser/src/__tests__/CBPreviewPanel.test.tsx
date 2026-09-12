@@ -1,8 +1,10 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { CBPreviewPanel, type CBPreviewPanelProps } from '../CBPreviewPanel';
+import { registryEntryToCBAsset } from '../content-browser-format';
 import type { CBAsset, CBFile, CBFolder } from '../types';
 
 try { GlobalRegistrator.register(); } catch { /* another content-browser DOM test already registered it */ }
@@ -40,6 +42,13 @@ const asset: CBAsset = {
   type: 'asset', guid: '22222222-2222-4222-8222-222222222222', kind: 'material', name: 'Metal',
   payload: {}, packPath: 'assets/materials.pack.json', packIndex: 0, refs: [],
 };
+const catalogImage = registryEntryToCBAsset({
+  guid: '55555555-5555-4555-8555-555555555555',
+  kind: 'texture',
+  name: 'Catalog Logo',
+  packageUrl: '/__forgeax-ddc/catalog-logo.pack.json',
+  sourcePath: 'assets/catalog logo.png.meta.json',
+}, 0);
 
 let container: HTMLDivElement;
 let root: Root;
@@ -107,5 +116,23 @@ describe('Content Browser preview panel', () => {
     renderPreview(asset);
     expect(container.textContent).toContain('Metal');
     expect(container.textContent).toContain('assets/materials.pack.json');
+  });
+
+  it('renders a cataloged image asset from its source URL without cooked payload.source', () => {
+    expect(catalogImage.payload.source).toBeUndefined();
+
+    const markup = renderToStaticMarkup(
+      <CBPreviewPanel
+        previewItem={catalogImage}
+        foldersInPath={[folder]}
+        diskFiles={[]}
+        gameSlug="demo"
+        onClose={() => {}}
+        onDrag={() => {}}
+        onDragEnd={() => {}}
+      />,
+    );
+    expect(markup.match(/<img /g)).toHaveLength(2);
+    expect(markup.match(/src="\/api\/files\/raw\?path=assets%2Fcatalog%20logo\.png"/g)).toHaveLength(2);
   });
 });

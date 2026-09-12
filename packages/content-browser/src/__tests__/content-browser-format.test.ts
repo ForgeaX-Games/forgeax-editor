@@ -331,6 +331,42 @@ describe('registryEntryToCBAsset', () => {
     expect(projected.packPath.endsWith('.meta.json')).toBe(false);
   });
 
+  test('derives a browser image URL from a catalog image sidecar source', () => {
+    const projected = registryEntryToCBAsset({
+      guid: 'logo-texture-guid',
+      kind: 'texture',
+      name: 'Logo',
+      packageUrl: '/__forgeax-ddc/logo-texture.pack.json',
+      sourcePath: 'assets/ui/logo image.png.meta.json',
+    }, 0);
+
+    expect(projected.packPath).toBe('assets/ui/logo image.png.meta.json');
+    expect(projected.thumbnailUrl).toBe('/api/files/raw?path=assets%2Fui%2Flogo%20image.png');
+  });
+
+  test('resolves a catalog image URL through the active host game path exactly once', () => {
+    setPathResolver((rel) => (rel === '' ? 'sample' : `sample/${rel}`));
+    try {
+      const relative = registryEntryToCBAsset({
+        guid: 'relative-logo-guid',
+        kind: 'texture',
+        packageUrl: '/__forgeax-ddc/relative-logo.pack.json',
+        sourcePath: 'assets/ui/logo.png',
+      }, 0);
+      const resolved = registryEntryToCBAsset({
+        guid: 'resolved-logo-guid',
+        kind: 'texture',
+        packageUrl: '/__forgeax-ddc/resolved-logo.pack.json',
+        sourcePath: 'sample/assets/ui/logo.png',
+      }, 1);
+
+      expect(relative.thumbnailUrl).toBe('/api/files/raw?path=sample%2Fassets%2Fui%2Flogo.png');
+      expect(resolved.thumbnailUrl).toBe('/api/files/raw?path=sample%2Fassets%2Fui%2Flogo.png');
+    } finally {
+      setPathResolver(null);
+    }
+  });
+
   test('falls back to the packageUrl and derives a short name when the entry is minimal', () => {
     const entry: RegistryCatalogEntry = {
       guid: 'deadbeef-cafe-7000-8000-000000000000',

@@ -13,6 +13,9 @@
  *   2. Dispatch one importAsset request to Runtime.
  *   3. Runtime uploads, cooks, writes the sidecar, and publishes one terminal run.
  *
+ * Progress while running (release / Shell+Transport only): see
+ * `import-run-progress-transport-poll.ts` — **temporary poll**, not main's subscribe.
+ *
  * The startup scan does NOT use this file — it runs while the gateway is scan-locked
  * and calls `executeAssetImport` directly through the shared import executor.
  */
@@ -20,12 +23,9 @@
 import {
   broadcastAssetsChanged,
   createImportFailure,
-  dispatchActiveEditorOperation,
-  getViewportRuntimeOperationRun,
   resolveFbxImportDependencies,
   resolveGamePath,
   retryViewportRuntimeOperationRun,
-  waitViewportRuntimeOperationRun,
   type ImportFailureCode,
   type FbxDependencyCandidate,
   type ImportFileResult,
@@ -33,6 +33,12 @@ import {
   isImportable,
   logImport,
 } from '@forgeax/editor-core';
+import {
+  applyImportRunProgressProjection,
+  createAcceptedImportRunPlaceholder,
+  dispatchImportAssetWithTransportPoll,
+  waitForImportRunViaTransportPoll,
+} from './import-run-progress-transport-poll';
 
 // Re-export the core result type so existing consumers keep importing it from here.
 export type { ImportFileResult, ImportFileStatus } from '@forgeax/editor-core';
@@ -44,6 +50,9 @@ export interface ImportProgress {
   results: ImportFileResult[];
   currentRequestId?: string;
   currentRun?: OperationRun;
+  /** Release poll workaround — monotonic fraction; main uses subscribe instead. */
+  liveFraction?: number;
+  liveStage?: string;
   runs: ImportRunRecord[];
   actionError?: string;
 }
@@ -63,36 +72,6 @@ export function isRetryableImportRun(run: OperationRun): boolean {
 }
 
 export type ImportProgressCallback = (progress: ImportProgress) => void;
-
-async function waitForImportRunWithProgress(
-  requestId: string,
-  onRunUpdate: (run: OperationRun) => void,
-): Promise<OperationRun> {
-  let latestRun: OperationRun | undefined;
-  const publishLatest = (): void => {
-    if (latestRun !== undefined) onRunUpdate(latestRun);
-  };
-
-  const poll = setInterval(() => {
-    void getViewportRuntimeOperationRun(requestId).then((response) => {
-      if (response.error !== undefined || response.result === undefined) return;
-      latestRun = response.result as OperationRun;
-      publishLatest();
-    });
-  }, 100);
-
-  try {
-    const terminalResponse = await waitViewportRuntimeOperationRun(requestId);
-    if (terminalResponse.error !== undefined) {
-      throw new Error(terminalResponse.error.hint ?? terminalResponse.error.code);
-    }
-    latestRun = terminalResponse.result as OperationRun;
-    publishLatest();
-    return latestRun;
-  } finally {
-    clearInterval(poll);
-  }
-}
 
 function refreshImportedAssets(onReload?: () => void): void {
   onReload?.();
@@ -296,7 +275,7 @@ export async function retryImportRun(
   }
   onRun?.(requestId, accepted);
   try {
-    const terminal = await waitForImportRunWithProgress(requestId, (run) => onRun?.(requestId, run));
+    const terminal = await waitForImportRunViaTransportPoll(requestId, (run) => onRun?.(requestId, run));
     onRun?.(requestId, terminal);
     return {
       ok: true,
@@ -464,44 +443,56 @@ async function importPreparedUnits(
         // Pass game-relative paths. Runtime owns resolveGamePath and every write.
         logImport('pipeline.file.dispatching', { filename: file.name, gameRelPath });
         const requestId = crypto.randomUUID();
-        const r = await dispatchActiveEditorOperation(
-          {
-            kind: 'importAsset',
-            destPath: gameRelPath,
-            sourceName: file.name,
-            base64,
-            ...(companionSources === undefined ? {} : { companionSources }),
-            ...(sourceFiles === undefined ? {} : { sourceFiles }),
-            skipUpload: false,
-            requestId,
-          },
-          'human',
-        );
-        logImport('pipeline.file.dispatchResult', { filename: file.name, ok: r.ok, error: (r as { error?: { code?: string } }).error?.code });
-        if (!r.ok) {
-          result = { filename: file.name, status: 'error', error: r.error?.code ?? 'import dispatch rejected' };
-        } else {
-          const acceptedRun = r.result?.operationRun;
-          if (acceptedRun === undefined) {
-            result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', 'Import was accepted without an OperationRun', false);
+        progress.currentRequestId = requestId;
+        progress.liveFraction = 0;
+        progress.liveStage = 'accepted';
+        publishProgress();
+
+        const runRecord: ImportRunRecord = {
+          filename: file.name,
+          path: uploadPath,
+          requestId,
+          run: createAcceptedImportRunPlaceholder(requestId),
+        };
+        progress.runs.push(runRecord);
+
+        const onRunUpdate = (run: OperationRun): void => {
+          runRecord.run = run;
+          applyImportRunProgressProjection(progress, run);
+          publishProgress();
+        };
+
+        try {
+          const { dispatch: r, terminal: terminalRun } = await dispatchImportAssetWithTransportPoll(
+            {
+              kind: 'importAsset',
+              destPath: gameRelPath,
+              sourceName: file.name,
+              base64,
+              ...(companionSources === undefined ? {} : { companionSources }),
+              ...(sourceFiles === undefined ? {} : { sourceFiles }),
+              skipUpload: false,
+              requestId,
+            },
+            onRunUpdate,
+          );
+          logImport('pipeline.file.dispatchResult', {
+            filename: file.name,
+            ok: r.ok,
+            error: (r as { error?: { code?: string } }).error?.code,
+          });
+          if (!r.ok) {
+            const errorCode = r.error?.code ?? 'IMPORT_EXECUTION_FAILED';
+            const errorHint = r.error?.hint ?? 'import dispatch rejected';
+            result = { filename: file.name, status: 'error', error: errorCode };
+            progress.actionError = errorHint;
           } else {
-            progress.currentRequestId = requestId;
-            progress.currentRun = acceptedRun;
-            progress.runs.push({ filename: file.name, path: uploadPath, requestId, run: acceptedRun });
-            publishProgress();
-            try {
-              const terminal = await waitForImportRunWithProgress(requestId, (run) => {
-                const record = progress.runs.find(entry => entry.requestId === requestId);
-                if (record) record.run = run;
-                progress.currentRun = run;
-                publishProgress();
-              });
-              result = importRunToResult(file.name, uploadPath, terminal);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', msg, false);
-            }
+            onRunUpdate(terminalRun);
+            result = importRunToResult(file.name, uploadPath, terminalRun);
           }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          result = failureResult(file.name, uploadPath, 'IMPORT_EXECUTION_FAILED', msg, false);
         }
       }
     } catch (err) {

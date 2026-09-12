@@ -20,8 +20,10 @@ export interface AssetThumbnailInput {
   kind: string;
   /** Free-form serialized asset payload (baseColor, width/height, source, …). */
   payload?: Record<string, unknown> | undefined;
+  /** Explicit preview URL supplied by the catalog/read model. */
+  thumbnailUrl?: string | undefined;
   /** Path to the owning `.pack.json`; lets texture/image kinds resolve a real
-   *  image URL. Omit → glyph fallback. */
+   *  image URL from legacy payload.source. Omit → glyph fallback. */
   packPath?: string | undefined;
 }
 
@@ -97,6 +99,7 @@ function sceneBadge(payload: Record<string, unknown>): string | undefined {
 }
 
 function resolveImageUrl(asset: AssetThumbnailInput): string | undefined {
+  if (asset.thumbnailUrl) return asset.thumbnailUrl;
   const source = asset.payload?.source as string | undefined;
   if (!source || !asset.packPath) return undefined;
   const packDir = asset.packPath.replace(/[^/]+$/, '');
@@ -161,9 +164,9 @@ export interface AssetThumbnailProps extends AssetThumbnailInput {
 }
 
 /** Compact self-styled preview square: image / material sphere / kind glyph. */
-export function AssetThumbnail({ kind, payload, packPath, size = 16, fit = 'cover', title, className, style }: AssetThumbnailProps) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const thumb = getThumbnailData({ kind, payload, packPath });
+export function AssetThumbnail({ kind, payload, thumbnailUrl, packPath, size = 16, fit = 'cover', title, className, style }: AssetThumbnailProps) {
+  const [failedImageUrl, setFailedImageUrl] = useState<string>();
+  const thumb = getThumbnailData({ kind, payload, thumbnailUrl, packPath });
   const box: CSSProperties = {
     width: size, height: size, minWidth: size, flex: '0 0 auto',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -172,13 +175,13 @@ export function AssetThumbnail({ kind, payload, packPath, size = 16, fit = 'cove
     fontSize: Math.round(size * 0.6), lineHeight: 1,
     ...style,
   };
-  if (thumb.type === 'image' && thumb.imageUrl && !imgFailed) {
+  if (thumb.type === 'image' && thumb.imageUrl && failedImageUrl !== thumb.imageUrl) {
     // Checkerboard backdrop so transparent textures read clearly (esp. under
     // `contain`, where the box is not fully covered).
     const checker = 'repeating-conic-gradient(rgba(255,255,255,0.09) 0% 25%, rgba(0,0,0,0.18) 0% 50%) 50% / 12px 12px';
     return (
       <span className={className} style={{ ...box, background: checker }} title={title}>
-        <img src={thumb.imageUrl} alt="" onError={() => setImgFailed(true)} style={{ width: '100%', height: '100%', objectFit: fit }} />
+        <img src={thumb.imageUrl} alt="" onError={() => setFailedImageUrl(thumb.imageUrl)} style={{ width: '100%', height: '100%', objectFit: fit }} />
       </span>
     );
   }

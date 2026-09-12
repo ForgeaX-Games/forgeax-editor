@@ -458,6 +458,7 @@
           "discard": "放弃改动",
           "save": "保存并切换"
         },
+        "sceneCreatedOpened": "已打开空场景「{{name}}」，可以开始编辑。",
         "saveAllDialog": {
           "title": "保存内容",
           "body": "选择要保存的内容",
@@ -517,6 +518,15 @@
       "importProgress": {
         "running": "正在导入 {{current}}/{{total}}：{{name}}",
         "phase": "正在导入 {{current}}/{{total}}：{{name}} · {{stage}} {{percent}}%",
+        "stages": {
+          "uploading": "上传",
+          "sourceCook": "浏览器解析",
+          "sidecar": "写入元数据",
+          "engineCookWait": "等待引擎目录",
+          "engineCook": "引擎烘焙",
+          "indexing": "索引子资源",
+          "cooking": "处理中"
+        },
         "complete": "导入完成：{{done}}/{{total}} 成功",
         "failed": "导入失败：{{name}}",
         "cancelled": "已取消导入：{{name}}",

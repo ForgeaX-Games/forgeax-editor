@@ -47,7 +47,7 @@ function FileAssetList({ file }: { file: CBFile }): ReactNode {
     <div className="cb-preview-asset-list">
       {file.assets.map(asset => (
         <div className="cb-preview-asset-row" key={asset.guid}>
-          <AssetThumbnail kind={asset.kind} payload={realPayload(asset.guid, asset.payload)} packPath={asset.packPath} size={30} />
+          <AssetThumbnail kind={asset.kind} payload={realPayload(asset.guid, asset.payload)} thumbnailUrl={asset.thumbnailUrl} packPath={asset.packPath} size={30} />
           <div>
             <div>{assetRowName(file.assets, asset)}</div>
             <div className="kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
@@ -183,11 +183,11 @@ export function CBPreviewPanel({
     ) : (
       <>
         <div className="cb-preview-media cb-preview-asset-hero">
-          <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} packPath={previewItem.packPath} size={168} fit="contain" />
+          <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} thumbnailUrl={previewItem.thumbnailUrl} packPath={previewItem.packPath} size={168} fit="contain" />
         </div>
         <div className="cb-preview-asset-list">
           <div className="cb-preview-asset-row">
-            <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} packPath={previewItem.packPath} size={30} />
+            <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} thumbnailUrl={previewItem.thumbnailUrl} packPath={previewItem.packPath} size={30} />
             <div>
               <div>{previewItem.name}</div>
               <div className="kind">{previewItem.packPath}</div>

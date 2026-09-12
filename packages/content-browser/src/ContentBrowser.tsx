@@ -407,12 +407,26 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const currentImportRun = importProgress?.currentRun;
   const currentImportIsActive = currentImportRun?.status === 'accepted' || currentImportRun?.status === 'running';
+  const cancellableImportStages = new Set([
+    'sourceCook',
+    'cooking',
+    'engineCookWait',
+    'engineCook',
+  ]);
   const currentImportCanCancel = currentImportIsActive === true
     && currentImportRun.cancellable
-    && currentImportRun.progress.stage === 'cooking'
+    && cancellableImportStages.has(currentImportRun.progress.stage)
     && currentImportRun.progress.fraction < 1;
   const retryableImportRuns = importProgress?.runs.filter((record) => isRetryableImportRun(record.run)) ?? [];
-  const importProgressFillClass = currentImportRun?.status === 'failed' || currentImportRun?.status === 'cancelled'
+  const importResultErrors = importProgress?.results.filter(
+    (result) => result.status === 'error' || result.status === 'cancelled',
+  ) ?? [];
+  const importFinishedWithErrors = importProgress !== null
+    && importProgress.completed >= importProgress.total
+    && importResultErrors.length > 0;
+  const importRunFailed = currentImportRun?.status === 'failed' || currentImportRun?.status === 'cancelled';
+  const importFailed = importRunFailed || importFinishedWithErrors;
+  const importProgressFillClass = importFailed
     ? 'cb-import-progress-fill cb-import-progress-fill--failed'
     : currentImportRun?.status === 'succeeded'
       || (importProgress !== null
@@ -420,10 +434,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         && importProgress.results.every(result => result.status === 'done'))
       ? 'cb-import-progress-fill cb-import-progress-fill--complete'
       : 'cb-import-progress-fill';
-  const importProgressFraction = currentImportRun?.status === 'failed' || currentImportRun?.status === 'cancelled'
-    ? Math.max(currentImportRun.progress.fraction, 0.05)
-    : currentImportRun?.progress.fraction
-      ?? (importProgress ? importProgress.completed / Math.max(importProgress.total, 1) : 0);
+  // release: liveFraction from import-run-progress-transport-poll (temporary; main uses subscribe).
+  const importProgressFraction = importFailed
+    ? Math.max(importProgress?.liveFraction ?? currentImportRun?.progress.fraction ?? 0.08, 0.05)
+    : importProgress?.liveFraction
+      ?? currentImportRun?.progress.fraction
+      ?? (importProgress && importProgress.completed < importProgress.total
+        ? importProgress.completed / Math.max(importProgress.total, 1)
+        : 0);
   const [dragOver, setDragOver] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
@@ -832,8 +850,12 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // (gateway-only door, M3), which is no longer exported from the barrel.
   const requestSceneSwitch = useCallback(async (id: string) => {
     const result = await dispatchActiveEditorOperation({ kind: 'switchSceneFile', id, requestId: crypto.randomUUID() }, 'human');
-    if (!result.ok && result.error.code === 'scene-switch-dirty') {
-      setPendingSceneSwitch(id);
+    if (!result.ok) {
+      if (result.error.code === 'scene-switch-dirty') {
+        setPendingSceneSwitch(id);
+        return;
+      }
+      toast.error('switchSceneFile', { description: result.error.hint });
     }
   }, []);
 
@@ -841,7 +863,10 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     const id = pendingSceneSwitch;
     setPendingSceneSwitch(null);
     if (id !== null && dirtyPolicy !== 'cancel') {
-      void dispatchActiveEditorOperation({ kind: 'switchSceneFile', id, dirtyPolicy, requestId: crypto.randomUUID() }, 'human');
+      void dispatchActiveEditorOperation({ kind: 'switchSceneFile', id, dirtyPolicy, requestId: crypto.randomUUID() }, 'human')
+        .then((result) => {
+          if (!result.ok) toast.error('switchSceneFile', { description: result.error.hint });
+        });
     }
   }, [pendingSceneSwitch]);
 
@@ -1057,7 +1082,14 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       if (spec.kind === 'scene') {
         const requestId = crypto.randomUUID();
         const result = await dispatchActiveEditorOperation({ kind: 'createSceneFile', id: name, duplicateCurrent: false, requestId }, 'human');
-        if (!result.ok) console.warn('[content-browser] create scene dispatch rejected', result.error);
+        if (!result.ok) {
+          console.warn('[content-browser] create scene dispatch rejected', result.error);
+          toast.error('createSceneFile', { description: result.error.hint });
+          return;
+        }
+        toast.success(t('editor.contentBrowser.actions.createAsset', { label: labelForAssetKind('scene', t) }), {
+          description: t('editor.contentBrowser.dialogs.sceneCreatedOpened', { name }),
+        });
         return;
       }
       // packPath must stay GAME-RELATIVE — appliers call resolveGamePath themselves.
@@ -1894,16 +1926,18 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       {importProgress && (
         <div className="cb-import-progress">
           <span className="cb-import-progress-text">
-            {currentImportRun?.status === 'failed'
-              ? t('editor.contentBrowser.importProgress.failed', { name: importProgress.current })
-              : currentImportRun?.status === 'cancelled'
-              ? t('editor.contentBrowser.importProgress.cancelled', { name: importProgress.current })
+            {importFailed
+              ? t('editor.contentBrowser.importProgress.failed', {
+                  name: importResultErrors[0]?.filename ?? importProgress.current,
+                })
               : currentImportRun?.status === 'accepted' || currentImportRun?.status === 'running'
               ? t('editor.contentBrowser.importProgress.phase', {
                   current: importProgress.completed + 1,
                   total: importProgress.total,
                   name: importProgress.current,
-                  stage: currentImportRun.progress.stage,
+                  stage: t(`editor.contentBrowser.importProgress.stages.${currentImportRun.progress.stage}`, {
+                    defaultValue: currentImportRun.progress.stage,
+                  }),
                   percent: Math.round(currentImportRun.progress.fraction * 100),
                 })
               : importProgress.completed < importProgress.total

@@ -12,6 +12,7 @@ import { getActiveRuntimeUiGraph } from '../io/runtime-ui-diagnostics';
 import { broadcastAssetsChanged } from './assets-changed';
 import { gateway } from './gateway';
 import { resolveGamePath } from '../util/path-resolver';
+import { refreshAuthoritativeSceneReadModel } from '../io/scene-read-model-client';
 import {
   dispatchViewportRuntimeOperation,
   getViewportRuntimeClientSnapshot,
@@ -32,13 +33,25 @@ const SELECTION_OPERATIONS = new Set([
   'setFolderSelection',
 ]);
 
+const SCENE_MANIFEST_OPERATIONS = new Set([
+  'switchSceneFile',
+  'createSceneFile',
+  'deleteScene',
+  'setDefaultScene',
+]);
+
 async function refreshSelectionAfterSuccess(kind: string, result: DispatchResult): Promise<DispatchResult> {
-  if (!result.ok || !SELECTION_OPERATIONS.has(kind)) return result;
-  try {
-    await refreshViewportRuntimeSelectionSnapshot();
-  } catch {
-    // The operation already succeeded at the authority. A missing disposable
-    // projection must fail later reads closed, not rewrite that fact as failure.
+  if (!result.ok) return result;
+  if (SELECTION_OPERATIONS.has(kind)) {
+    try {
+      await refreshViewportRuntimeSelectionSnapshot();
+    } catch {
+      // The operation already succeeded at the authority. A missing disposable
+      // projection must fail later reads closed, not rewrite that fact as failure.
+    }
+  }
+  if (SCENE_MANIFEST_OPERATIONS.has(kind)) {
+    await refreshAuthoritativeSceneReadModel();
   }
   return result;
 }

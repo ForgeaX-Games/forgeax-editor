@@ -70,6 +70,26 @@ export function catalogStoragePath(locator: CatalogStorageLocator): string | nul
  * null when the row has no writable storage OR its sourcePath matches no
  * declared root (caller keeps the catalog-space fallback).
  */
+/**
+ * Map a host storage sidecar path (`.forgeax/games/<slug>/assets/.../*.meta.json`)
+ * into the producer catalog coordinate space (`host-games/<slug>/assets/...`).
+ */
+export function storagePathToCatalogSourceKey(
+  storagePath: string,
+  roots: readonly CatalogRootProjection[],
+): string | null {
+  const normalized = normalizeCatalogPath(storagePath);
+  for (const { root, catalogPrefix } of roots) {
+    const rootNeedle = `/${normalizeCatalogPath(root)}/`;
+    const index = normalized.indexOf(rootNeedle);
+    if (index === -1) continue;
+    const relativeToRoot = normalized.slice(index + rootNeedle.length);
+    const prefix = normalizeCatalogPath(catalogPrefix).replace(/\/+$/, '');
+    return prefix.length === 0 ? relativeToRoot : `${prefix}/${relativeToRoot}`;
+  }
+  return null;
+}
+
 export function catalogGameStoragePath(
   locator: CatalogStorageLocator,
   roots: readonly CatalogRootProjection[],

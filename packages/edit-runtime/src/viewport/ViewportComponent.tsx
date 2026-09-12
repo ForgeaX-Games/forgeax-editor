@@ -1,3 +1,5 @@
+import { getLocale } from '@forgeax/editor-core/i18n';
+import { installPlayFailureNotice } from './play-failure-notice';
 import type { PlayDispatchResult } from './play-operation';
 // ViewportComponent — the in-process engine viewport surface (plan-strategy
 // REPLAN D8; q2 viewport boundary; AC-04 single-realm).
@@ -1502,6 +1504,9 @@ async function bootViewport(
   _syncDisplayMode(getViewportQuadrant().display);
   registerTeardown(onViewportQuadrantChange((q) => _syncDisplayMode(q.display)));
 
+  const playFailureNotice = installPlayFailureNotice(container, getLocale);
+  registerTeardown(() => playFailureNotice.dispose());
+
   // ── run the application session tail on this world (host-boot, D8) ──────────
   try {
     session = await initHostSession({
@@ -1552,6 +1557,7 @@ async function bootViewport(
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
       onPlayStarted: (playWorld) => {
+        playFailureNotice.clear();
         remotePlayFpsActive = false;
         // The lifecycle has already atomically moved gateway.activeWorld to the
         // play world. Publish the matching UI state only now, never during async
@@ -1567,6 +1573,7 @@ async function bootViewport(
         refreshVisibilityTarget();
       },
       onRemotePlayStarted: () => {
+        playFailureNotice.clear();
         remotePlayFpsActive = true;
         setFps(0);
         vfxBridge.notifyDiagnosticsChanged();
@@ -1580,6 +1587,7 @@ async function bootViewport(
         setFps(fps);
       },
       onPlayFailed: (error) => {
+        if (error !== undefined) playFailureNotice.show(error);
         remotePlayFpsActive = false;
         // Degrade back to a coherent edit viewport if fresh-world assembly fails.
         vfxBridge.notifyDiagnosticsChanged();

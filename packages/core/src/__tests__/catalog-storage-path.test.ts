@@ -3,6 +3,7 @@ import {
   catalogStoragePath,
   catalogGameStoragePath,
   projectCatalogPathToRoots,
+  storagePathToCatalogSourceKey,
 } from '../assets/catalog-storage-path';
 
 describe('catalogStoragePath', () => {
@@ -50,6 +51,21 @@ describe('projectCatalogPathToRoots', () => {
 
   it('returns null when no declared root prefix matches (no silent pass-through)', () => {
     expect(projectCatalogPathToRoots('unrelated/x.glb', roots)).toBeNull();
+  });
+});
+
+describe('storagePathToCatalogSourceKey', () => {
+  const roots = [{ root: 'assets', catalogPrefix: 'host-games/game-test-347/assets' }] as const;
+
+  it('maps host storage sidecars into catalog scan coordinates', () => {
+    expect(storagePathToCatalogSourceKey(
+      '.forgeax/games/game-test-347/assets/test-import-4/model.glb.meta.json',
+      roots,
+    )).toBe('host-games/game-test-347/assets/test-import-4/model.glb.meta.json');
+  });
+
+  it('returns null when no declared root matches the storage path', () => {
+    expect(storagePathToCatalogSourceKey('elsewhere/model.glb.meta.json', roots)).toBeNull();
   });
 });
 

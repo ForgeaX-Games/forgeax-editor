@@ -76,7 +76,12 @@ import { normalizePackForRuntime, stableGuid, validatePackShell } from '../scene
 import { fetchWithTimeout } from '../io/net';
 import { resolveGamePath } from '../util/path-resolver';
 import { assetIO } from '../io/asset-io-facade';
-import { createDiskIo } from './persistence/disk-io';
+import { createDiskIo, type DocLoadFailure } from './persistence/disk-io';
+import {
+  catalogAuthoredPackContents,
+  scenePackRefsAreAllInline,
+} from '../scene/catalog-authored-pack-contents';
+import { bindLocalSceneReadModelSource } from '../io/scene-read-model-client';
 import { generateAssetGuid } from '../io/asset-io-primitives';
 import { createSceneList } from './persistence/scene-list';
 import { createPlayConfig } from './persistence/play-config';
@@ -321,6 +326,10 @@ const sceneList = createSceneList({
   replaceDoc: (doc) => diskIo.replaceDoc(doc),
 });
 gateway.registerSceneReadProvider(sceneList.getSceneReadModel);
+bindLocalSceneReadModelSource({
+  subscribe: sceneList.onSceneListChange,
+  getSnapshot: sceneList.getSceneReadModel,
+});
 gateway.registerSceneAuthoringSessionProvider(getSceneAuthoringSession);
 
 // ── Session applier: setSceneId (M2 D-1) ──────────────────────────────────────
@@ -366,7 +375,7 @@ export const getSceneList = sceneList.getSceneList;
 export const onSceneListChange = sceneList.onSceneListChange;
 export const useSceneList = sceneList.useSceneList;
 export const useSceneFile = sceneList.useSceneFile;
-export const useSceneReadModel = sceneList.useSceneReadModel;
+export { useAuthoritativeSceneReadModel as useSceneReadModel } from '../io/scene-read-model-client';
 export const initSceneList = sceneList.initSceneList;
 
 // Session op: switchSceneFile carries an id and caller-minted request id, so its
@@ -843,6 +852,54 @@ async function deleteCreatedSceneFile(path: string): Promise<{ attempted: true; 
   }
 }
 
+function seedNewScenePackCatalog(packContent: string): void {
+  const reg = gateway.doc.registry;
+  if (reg === undefined) return;
+  try {
+    const parsed = JSON.parse(packContent) as {
+      assets?: ReadonlyArray<{ kind?: string; guid?: string; refs?: readonly string[] }>;
+    };
+    const sceneEntry = parsed.assets?.find((asset) => asset.kind === 'scene');
+    const catalogScenes =
+      sceneEntry === undefined || scenePackRefsAreAllInline(parsed, sceneEntry);
+    catalogAuthoredPackContents(reg, parsed, { catalogScenes });
+  } catch {
+    // doLoadDocFromDisk re-seeds from disk; pack-index catches up async.
+  }
+}
+
+function summarizeDocLoadFailure(failure: DocLoadFailure): string {
+  const detail = failure.detail;
+  if (detail !== undefined && detail !== null && typeof detail === 'object' && 'code' in detail) {
+    const code = (detail as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
+  if (typeof detail === 'string' && detail.length > 0) return detail;
+  return failure.phase;
+}
+
+function formatCreateSceneNavigateHint(
+  slug: string,
+  input: {
+    readonly outgoingDirty: boolean;
+    readonly navigated: boolean;
+    readonly loadedTarget: boolean;
+    readonly expectedGuid: string;
+    readonly loadFailure: DocLoadFailure | null;
+  },
+): string {
+  if (input.outgoingDirty && !input.navigated) {
+    return `Scene ${slug} was written but could not be opened: the current scene has unsaved edits. Save or discard, then retry or double-click the new scene pack.`;
+  }
+  if (input.loadFailure !== null) {
+    return `Scene ${slug} was written but load failed (${input.loadFailure.phase}: ${summarizeDocLoadFailure(input.loadFailure)}).`;
+  }
+  if (input.navigated && !input.loadedTarget) {
+    return `Scene ${slug} switch completed but the active scene GUID did not match (expected ${input.expectedGuid}, got ${ctx.currentSceneGuid ?? 'null'}).`;
+  }
+  return `Scene ${slug} was written but could not be opened; the file and scene-list entry were rolled back.`;
+}
+
 /** Create a canonical empty scene or serialize the live scene with a fresh GUID.
  * The returned effect is the only thing the Gateway binds to the OperationRun. */
 async function doCreateSceneFile(
@@ -892,40 +949,26 @@ async function doCreateSceneFile(
     packContent = JSON.stringify(emptyPack.value, null, 2) + '\n';
   }
 
-  try {
-    const write = await fetch('/api/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: newPath, content: packContent }),
-    });
-    if (!write.ok) {
-      return { ok: false, error: { code: 'scene-create-write-failed', hint: `Could not write ${newPackPath} (HTTP ${write.status}).`, current: { requestId, sceneId: slug, path: newPath, phase: 'file-write' }, retryable: true, recoveryActions: ['operation.retry'] } };
-    }
-  } catch (error) {
-    return { ok: false, error: { code: 'scene-create-write-failed', hint: `Could not write ${newPackPath}: ${error instanceof Error ? error.message : String(error)}`, current: { requestId, sceneId: slug, path: newPath, phase: 'file-write' }, retryable: true, recoveryActions: ['operation.retry'] } };
-  }
-
-  try {
-    // The engine registry cannot load a newly-written GUID until the host's
-    // pack-index watcher has published it. This is the same owner seam used by
-    // createMaterial/import; navigation must wait for it or it would report a
-    // successful scene switch while leaving the previous world visible.
-    await awaitPostAssetWriteCatalogSync(newSceneGuid);
-  } catch (error) {
-    const cleanup = await deleteCreatedSceneFile(newPath);
+  const write = await assetIO.createAuthoredPackIfAbsent(newPath, packContent);
+  if (!write.ok) {
+    const code = write.reason === 'collision' ? 'scene-create-invalid' : 'scene-create-write-failed';
     return {
       ok: false,
       error: {
-        code: cleanup.ok ? 'scene-create-write-failed' : 'scene-create-rollback-failed',
-        hint: cleanup.ok
-          ? `Scene ${slug} was written but its catalog entry did not become visible; the file was rolled back.`
-          : `Scene ${slug} was written but its catalog entry did not become visible, and cleanup failed.`,
-        current: { requestId, sceneId: slug, sceneGuid: newSceneGuid, path: newPath, phase: 'catalog-sync', cleanup, cause: error instanceof Error ? error.message : String(error) },
-        retryable: cleanup.ok,
-        recoveryActions: cleanup.ok ? ['operation.retry'] : ['scene.create.inspect', 'scene.create.cleanup'],
+        code,
+        hint: write.hint,
+        current: { requestId, sceneId: slug, path: newPath, phase: 'file-write', reason: write.reason },
+        retryable: write.reason !== 'collision',
+        recoveryActions: write.reason === 'collision' ? ['editor.discover'] : ['operation.retry'],
       },
     };
   }
+
+  broadcastAssetsChanged('pack-changed', 'local-op');
+  seedNewScenePackCatalog(packContent);
+  void awaitPostAssetWriteCatalogSync(newSceneGuid)
+    .then(() => broadcastAssetsChanged())
+    .catch(() => broadcastAssetsChanged());
 
   const previousSceneFile = ctx.currentSceneFile;
   const previousSceneGuid = ctx.currentSceneGuid;
@@ -934,14 +977,55 @@ async function doCreateSceneFile(
   const previousPreviewState = ctx.previewState;
   const listIndex = ctx.sceneList.length;
   ctx.sceneList.push({ id: slug, name: slug, pack: newPackPath, guid: newSceneGuid });
+  sceneList.notifySceneListChanged();
+
   setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION);
   ctx.previewState = null;
+  const outgoingDirty = ctx.isDirty;
   let navigated = false;
   try {
-    navigated = await sceneList.doSwitchSceneFile(slug);
-  } catch {
-    navigated = false;
+    navigated = await sceneList.doSwitchSceneFile(slug, outgoingDirty ? 'save' : undefined);
+  } catch (error) {
+    const loadFailure = diskIo.consumeLastDocLoadFailure();
+    const cleanup = await deleteCreatedSceneFile(newPath);
+    ctx.sceneList.splice(listIndex, 1);
+    ctx.currentSceneFile = previousSceneFile;
+    ctx.currentSceneGuid = previousSceneGuid;
+    ctx.currentSceneEntities = previousSceneEntities;
+    ctx.previewState = previousPreviewState;
+    setAuthoringSession(previousAuthoringSession);
+    sceneList.notifySceneListChanged();
+    try {
+      const key = `forgeax:editor:sceneFile:${ctx.currentSceneId}`;
+      if (previousSceneFile === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, previousSceneFile);
+    } catch { /* unavailable */ }
+    const cause = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      error: {
+        code: cleanup.ok ? 'scene-create-navigate-failed' : 'scene-create-rollback-failed',
+        hint: cleanup.ok
+          ? `Scene ${slug} was written but navigation threw (${cause}). The file and scene-list entry were rolled back.`
+          : `Scene ${slug} was written but navigation threw (${cause}), and cleanup failed.`,
+        current: {
+          requestId,
+          sceneId: slug,
+          sceneGuid: newSceneGuid,
+          path: newPath,
+          phase: 'navigate',
+          outgoingDirty,
+          navigated: false,
+          loadFailure,
+          cleanup,
+          cause,
+        },
+        retryable: cleanup.ok,
+        recoveryActions: cleanup.ok ? ['operation.retry', 'switchSceneFile'] : ['scene.create.inspect', 'scene.create.cleanup'],
+      },
+    };
   }
+  const loadFailure = diskIo.consumeLastDocLoadFailure();
   const loadedTarget = navigated && ctx.currentSceneGuid === newSceneGuid;
   if (loadedTarget) {
     return { ok: true, result: { requestId, sceneId: slug, sceneGuid: newSceneGuid, pack: newPackPath, duplicateCurrent } };
@@ -963,11 +1047,30 @@ async function doCreateSceneFile(
     if (previousSceneFile === null) localStorage.removeItem(key);
     else localStorage.setItem(key, previousSceneFile);
   } catch { /* unavailable */ }
-  const current = { requestId, sceneId: slug, sceneGuid: newSceneGuid, path: newPath, phase: 'navigate', navigated, loadedTarget, cleanup };
+  const navigateHint = formatCreateSceneNavigateHint(slug, {
+    outgoingDirty,
+    navigated,
+    loadedTarget,
+    expectedGuid: newSceneGuid,
+    loadFailure,
+  });
+  const current = {
+    requestId,
+    sceneId: slug,
+    sceneGuid: newSceneGuid,
+    path: newPath,
+    packPath: newPackPath,
+    phase: 'navigate',
+    outgoingDirty,
+    navigated,
+    loadedTarget,
+    loadFailure,
+    cleanup,
+  };
   if (!cleanup.ok) {
-    return { ok: false, error: { code: 'scene-create-rollback-failed', hint: `Scene ${slug} was written but could not be opened, and cleanup of ${newPackPath} failed.`, current, retryable: false, recoveryActions: ['scene.create.inspect', 'scene.create.cleanup'] } };
+    return { ok: false, error: { code: 'scene-create-rollback-failed', hint: `${navigateHint} Cleanup of ${newPackPath} also failed.`, current, retryable: false, recoveryActions: ['scene.create.inspect', 'scene.create.cleanup'] } };
   }
-  return { ok: false, error: { code: 'scene-create-navigate-failed', hint: `Scene ${slug} was written but could not be opened; the file and scene-list entry were rolled back.`, current, retryable: true, recoveryActions: ['operation.retry'] } };
+  return { ok: false, error: { code: 'scene-create-navigate-failed', hint: `${navigateHint} The file and scene-list entry were rolled back.`, current, retryable: true, recoveryActions: ['operation.retry', 'switchSceneFile'] } };
 }
 
 // Session op (M2 D-1): createSceneFile is request-correlated and returns its

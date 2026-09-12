@@ -12,7 +12,7 @@ import {
   type CatalogProjection,
   type CatalogSubject,
 } from '@forgeax/engine-types';
-import { catalogStoragePath, resolveGamePath } from '@forgeax/editor-core';
+import { catalogStoragePath, resolveGamePath, resolveGamePathOnce } from '@forgeax/editor-core';
 import type { CBAsset, CBFileFamily, CBViewItem } from './types';
 
 // ── Internal types shared between ContentBrowser + its child components ─────
@@ -387,6 +387,15 @@ export function fileSpecificMenuItems(
 
 // ── Registry catalog entry → CBAsset ────────────────────────────────────────
 
+const BROWSER_IMAGE_SOURCE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i;
+
+function catalogImageThumbnailUrl(entry: RegistryCatalogEntry): string | undefined {
+  if (entry.kind !== 'texture' && entry.kind !== 'image') return undefined;
+  const sourcePath = entry.sourcePath?.replace(/\.meta\.json$/i, '');
+  if (!sourcePath || !BROWSER_IMAGE_SOURCE.test(sourcePath)) return undefined;
+  return `/api/files/raw?path=${encodeURIComponent(resolveGamePathOnce(sourcePath))}`;
+}
+
 export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): CBAsset {
   // packPath is the CRUD target on disk — NOT the runtime load URL. For an
   // internal `.pack.json` or ScriptablePack `.pack.ts` asset the CRUD target is
@@ -406,6 +415,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
   // `.pack.ts` source remains a pack CRUD target; an imported source uses its
   // `.meta.json` sidecar.
   const packPath = catalogStoragePath(e) ?? e.packageUrl;
+  const thumbnailUrl = catalogImageThumbnailUrl(e);
   const lastKnownGood = e.lastKnownGood ?? e.projection?.lastKnownGood;
   return {
     type: 'asset',
@@ -414,6 +424,7 @@ export function registryEntryToCBAsset(e: RegistryCatalogEntry, index: number): 
     name: e.name ?? e.guid.slice(0, 8),
     payload: {},
     packPath,
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
     ...(e.sourcePath ? { sourcePath: e.sourcePath } : {}),
     ...(e.sourceKey ? { sourceKey: e.sourceKey } : {}),
     ...(e.subject ? { subject: e.subject } : {}),

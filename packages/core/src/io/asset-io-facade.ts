@@ -78,6 +78,20 @@ export type AssetIoResult<T = void> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: AssetIoError };
 
+/** Cook trigger retry + server phase breakdown (browser-visible via import.engineCook.done). */
+export interface TriggerCookStats {
+  readonly attempts: number;
+  readonly retryWaitMs: number;
+  readonly serverTrace?: Record<string, unknown>;
+}
+
+export type TriggerCookProgressPhase = 'wait-catalog' | 'engine-active';
+
+export interface TriggerCookProgress {
+  readonly attempt: number;
+  readonly phase: TriggerCookProgressPhase;
+}
+
 export type CreateAuthoredPackResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: 'collision' | 'write-failed'; readonly hint: string };
@@ -205,12 +219,17 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
 export function isRetryableCookTriggerFailure(
   status: number,
   body: { readonly error?: string; readonly hint?: string; readonly reason?: string; readonly code?: string },
+  mode: 'rebuild' | 'cold-cook' = 'rebuild',
 ): boolean {
   const error = body.error ?? '';
   const hint = body.hint ?? body.reason ?? '';
   const code = body.code ?? '';
-  if (status === 404 && (error === 'meta-not-found' || hint.includes('no source declares this GUID'))) {
-    return true;
+  // Rebuild mode must not 404 on fresh sidecars; repeated meta-not-found means stale engine dist.
+  if (
+    status === 404
+    && (error === 'meta-not-found' || hint.includes('no source declares this GUID'))
+  ) {
+    return mode === 'cold-cook';
   }
   if (status === 409 && error.startsWith('runtime-scope')) return true;
   if (status === 410 && error.startsWith('runtime-scope-generation')) return true;
@@ -755,40 +774,83 @@ export class AssetIOFacade {
     guid: string,
     signal?: AbortSignal,
     mode: 'rebuild' | 'cold-cook' = 'rebuild',
-  ): Promise<AssetIoResult> {
+    catalogSourceKey?: string,
+    onCookProgress?: (progress: TriggerCookProgress) => void,
+  ): Promise<AssetIoResult<TriggerCookStats>> {
     recordAssetLeaf('assetIO.triggerCook');
-    console.info('[import-diag] triggerCook', { guid });
+    console.info('[import-diag] triggerCook', { guid, mode, catalogSourceKey });
     const importUrlBase = this.runtimeBinding?.importUrlBase;
     if (importUrlBase === undefined) {
       const hint = 'asset cook refused: no active runtime asset binding';
       console.warn('[import-diag] triggerCook FAILED', { guid, reason: hint });
       return { ok: false, error: { kind: 'network', hint } };
     }
-    const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}`;
-    const maxAttempts = 16;
-    const baseDelayMs = 100;
+    const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}?import-mode=${encodeURIComponent(mode)}`;
+    const maxAttempts = 24;
+    const baseDelayMs = 150;
+    let retryWaitMs = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (isAbortSignalActive(signal)) {
         return { ok: false, error: { kind: 'network', hint: 'triggerCook aborted before cook completed' } };
       }
       try {
+        if (attempt > 0) {
+          onCookProgress?.({ attempt, phase: 'wait-catalog' });
+        } else {
+          onCookProgress?.({ attempt, phase: 'engine-active' });
+        }
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'x-forgeax-import-mode': mode },
+          headers: {
+            'x-forgeax-import-mode': mode,
+            ...(catalogSourceKey === undefined || catalogSourceKey.length === 0
+              ? {}
+              : { 'x-forgeax-import-source-key': catalogSourceKey }),
+          },
           signal,
         });
-        console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: res.ok, attempt });
-        if (res.ok) return { ok: true, value: undefined };
+        if (res.ok) {
+          let serverTrace: Record<string, unknown> | undefined;
+          const serverTraceHeader = res.headers.get('x-forgeax-import-engine-trace');
+          if (serverTraceHeader !== null && serverTraceHeader.length > 0) {
+            try {
+              serverTrace = JSON.parse(serverTraceHeader) as Record<string, unknown>;
+            } catch {
+              // Ignore malformed trace header; cook still succeeded.
+            }
+          }
+          const stats: TriggerCookStats = {
+            attempts: attempt + 1,
+            retryWaitMs,
+            ...(serverTrace === undefined ? {} : { serverTrace }),
+          };
+          console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: true, attempt });
+          return { ok: true, value: stats };
+        }
 
         const body = await res.json().catch(() => ({})) as {
           error?: string;
           reason?: string;
           hint?: string;
           code?: string;
+          detail?: { readonly reason?: string; readonly loadError?: string };
         };
-        const reason = body.reason ?? body.hint ?? body.error ?? `cook failed (${res.status})`;
-        if (isRetryableCookTriggerFailure(res.status, body) && attempt < maxAttempts - 1) {
-          await new Promise<void>((resolve) => { setTimeout(resolve, baseDelayMs * (attempt + 1)); });
+        const detailReason = body.detail?.reason ?? body.detail?.loadError;
+        console.info('[import-diag] triggerCook response', {
+          guid,
+          status: res.status,
+          ok: false,
+          attempt,
+          error: body.error,
+          code: body.code,
+          hint: body.hint ?? body.reason ?? detailReason,
+          mode,
+        });
+        const reason = detailReason ?? body.reason ?? body.hint ?? body.error ?? `cook failed (${res.status})`;
+        if (isRetryableCookTriggerFailure(res.status, body, mode) && attempt < maxAttempts - 1) {
+          const delayMs = baseDelayMs * (attempt + 1);
+          retryWaitMs += delayMs;
+          await new Promise<void>((resolve) => { setTimeout(resolve, delayMs); });
           continue;
         }
         console.warn('[import-diag] triggerCook FAILED', { guid, reason, body, attempt });

@@ -104,7 +104,37 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
     // triggerCook (image importer goes through the simple sidecar + cook path)
     expect(urls.some((u) => u.includes('/__pack/scopes/test-scope/1/import/'))).toBe(true);
-    expect(phases).toEqual(['uploading', 'sidecar', 'cooking']);
+    expect(phases[0]).toBe('uploading');
+    expect(phases).toContain('sidecar');
+    expect(phases).toContain('engineCook');
+    expect(phases.at(-1)).toBe('engineCook');
+  });
+
+  it('glTF import: upload → sidecar → engine cook trigger (same as image path)', async () => {
+    const fixturePath = new URL(
+      '../../../engine/forgeax-engine-assets/khronos-gltf-samples/BoxTextured/BoxTextured.glb',
+      import.meta.url,
+    );
+    const fixture = Bun.file(fixturePath);
+    if (!(await fixture.exists())) return;
+
+    const bytes = await fixture.arrayBuffer();
+    const phases: string[] = [];
+    const r = await executeAssetImport({
+      destPath: '/games/demo/assets/BoxTextured.glb',
+      sourceName: 'BoxTextured.glb',
+      base64: btoa(String.fromCharCode(...new Uint8Array(bytes))),
+      onProgress: (progress) => phases.push(progress.stage),
+    });
+    expect(r.status).toBe('done');
+    expect(r.guid).toBeDefined();
+
+    const urls = calls.map((c) => c.url);
+    expect(urls.some((u) => u.includes('/api/files/upload'))).toBe(true);
+    expect(urls.some((u) => u.includes('/__pack/scopes/test-scope/1/import/'))).toBe(true);
+    expect(phases.some((stage) => stage === 'sourceCook')).toBe(true);
+    expect(phases.some((stage) => stage === 'engineCook')).toBe(true);
+    expect(phases.indexOf('sidecar')).toBeGreaterThan(phases.indexOf('sourceCook'));
   });
 
   it('skipUpload path does not re-upload bytes (startup-scan / AI contract)', async () => {
@@ -176,6 +206,38 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     });
     expect(calls.some((call) => call.url.includes('/api/files/upload'))).toBe(false);
     expect(calls.some((call) => call.url === '/api/files')).toBe(false);
+  });
+
+  it('overwrites an existing sourced asset and reimports when metadata sidecar is present', async () => {
+    const metaPath = '/games/demo/assets/model.glb.meta.json';
+    const metaContent = JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'gltf',
+      source: 'model.glb',
+      subAssets: [{ guid: 'guid-existing-glb-root', kind: 'mesh', sourceIndex: 0 }],
+    });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
+      const method = opts?.method ?? 'GET';
+      calls.push({ url: String(url), method });
+      if (String(url).includes('optional=1')) {
+        const pathMatch = /path=([^&]+)/.exec(String(url));
+        const pathParam = pathMatch ? decodeURIComponent(pathMatch[1]!) : '';
+        if (pathParam === metaPath) {
+          return Promise.resolve(new Response(JSON.stringify({ exists: true, content: metaContent }), { status: 200 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify({ exists: true }), { status: 200 }));
+      }
+      return Promise.resolve(new Response('', { status: 200 }));
+    }) as unknown as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/model.glb',
+      sourceName: 'model.glb',
+      base64: btoa('not-a-glb'),
+    });
+    expect(result.errorDetail?.code).not.toBe('IMPORT_SOURCE_TARGET_CONFLICT');
+    expect(calls.some((call) => call.url.includes('/api/files/upload'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/api/files/rename'))).toBe(false);
   });
 
   it('rolls back staged and promoted files when the atomic promotion fails', async () => {
@@ -376,7 +438,7 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       ok: true,
       value: { status: 'succeeded', progress: { stage: 'succeeded', fraction: 1 } },
     });
-    expect(observed).toEqual(['sidecar', 'cooking', 'succeeded']);
+    expect(observed).toEqual(['sidecar', 'engineCook', 'indexing', 'succeeded']);
   });
 
   it('publishes a structured terminal failure instead of resolving success', async () => {
@@ -600,6 +662,7 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       registerPostAssetWriteCatalogSync(null);
     }
   });
+
 });
 
 describe('importAsset terminal error taxonomy', () => {

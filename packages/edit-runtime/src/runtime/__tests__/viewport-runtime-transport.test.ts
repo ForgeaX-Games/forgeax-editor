@@ -853,6 +853,28 @@ describe('viewport runtime transport', () => {
     });
   });
 
+  test('projects the Runtime scene read model for shell scene switcher UI', () => {
+    const graph = { stats: () => ({ status: 'bound' }) } as any;
+    const model = {
+      gameId: 'game-a',
+      currentScene: { id: 'first-scene', guid: 'guid-a' },
+      defaultScene: { id: 'scene', guid: 'guid-default' },
+      scenes: [
+        { id: 'scene', name: 'scene', pack: 'assets/scene.pack.json', guid: 'guid-default', isCurrent: false, isDefault: true },
+        { id: 'first-scene', name: 'first-scene', pack: 'assets/scenes/first-scene.pack.json', guid: 'guid-a', isCurrent: true, isDefault: false },
+      ],
+    };
+    const gateway = {
+      buildQueryFn: () => () => ({ ok: true, rows: [] }),
+      sceneReadModel: () => model,
+    } as any;
+    const query = createViewportProjectionQuery({ runtime, graph, gateway });
+    expect(query({ kind: 'scene.readModel' })).toMatchObject({
+      status: 'ready',
+      value: model,
+    });
+  });
+
   test('projects the Runtime asset binding for bounded preview worlds', () => {
     const graph = { stats: () => ({ status: 'bound' }) } as any;
     const gateway = { buildQueryFn: () => () => ({ ok: true, rows: [] }) } as any;

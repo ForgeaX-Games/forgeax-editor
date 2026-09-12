@@ -608,6 +608,7 @@ type ProjectionQuery =
   | { readonly kind: 'hierarchy.structure' }
   | { readonly kind: 'inspector.selection' }
   | { readonly kind: 'selection.current' }
+  | { readonly kind: 'scene.readModel' }
   | { readonly kind: 'assets.catalog'; readonly compatibleWith?: string }
   | { readonly kind: 'assets.runtime-binding' }
   | { readonly kind: 'assets.payload'; readonly guid: string }
@@ -628,6 +629,7 @@ function parseProjectionQuery(value: unknown): ProjectionQuery | null {
   if (value.kind === 'hierarchy.structure') return { kind: value.kind };
   if (value.kind === 'inspector.selection') return { kind: value.kind };
   if (value.kind === 'selection.current') return { kind: value.kind };
+  if (value.kind === 'scene.readModel') return { kind: value.kind };
   if (value.kind === 'assets.catalog') {
     return {
       kind: value.kind,
@@ -747,7 +749,7 @@ export function createViewportProjectionQuery(
     if (query === null) return {
         ...base,
         status: 'faulted',
-        error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list.'),
+        error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, scene.readModel, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list.'),
       };
     // Play/Stop chrome reads viewport.status from Gateway/quadrant, not from the
     // selector graph. Gating it on graph bind left the toolbar disabled whenever
@@ -839,6 +841,11 @@ export function createViewportProjectionQuery(
         paths: getPathSelectionList().map(({ path, kind }) => ({ path, kind })),
         lastDomain: getLastSelectionDomain(),
       },
+    };
+    if (query.kind === 'scene.readModel') return {
+      ...base,
+      status: 'ready',
+      value: options.gateway.sceneReadModel(),
     };
     if (query.kind === 'assets.catalog') {
       const entries = options.readAssetCatalog?.(query.compatibleWith) ?? [];

@@ -813,6 +813,7 @@ export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 export {
   setPathResolver,
   resolveGamePath,
+  resolveGamePathOnce,
   hasPathResolver,
   EditorPathResolverError,
 } from './util/path-resolver';

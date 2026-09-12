@@ -1,3 +1,4 @@
+import { runtimeFailure } from './runtime-failure';
 import {
   createApp,
   renderFeaturePlugin,
@@ -939,16 +940,7 @@ playApp.onError((err) => {
   // transporting it to the host alone would make a failed renderer look like
   // a healthy Preview page.
   console.error('[engine] runtime error:', err);
-  const code = typeof err.code === 'string' ? err.code : 'renderer-error';
-  const detail = err as unknown as { hint?: unknown; message?: unknown };
-  carrierFailure = {
-    code,
-    stage: code === 'device-lost' ? 'device-lost' : 'uncaptured-error',
-    retryable: code !== 'device-lost',
-    hint: typeof detail.hint === 'string' ? detail.hint : 'Inspect the renderer error, then stop and ensure again.',
-    at: new Date().toISOString(),
-    message: typeof detail.message === 'string' ? detail.message : undefined,
-  };
+  carrierFailure = runtimeFailure(err);
   const failure = carrierFailure;
   if (!failure) return;
   try {
@@ -957,7 +949,7 @@ playApp.onError((err) => {
   } catch (error) {
     console.warn('[play] VAG carrier message dropped', error);
   }
-  if (err.code === 'device-lost' && !deviceLostSent) {
+  if (failure.code === 'device-lost' && !deviceLostSent) {
     deviceLostSent = true;
     sendVagMessage(window.parent, VagDeviceLostSchema, {});
   }

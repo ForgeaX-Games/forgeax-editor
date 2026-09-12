@@ -458,6 +458,7 @@
           "discard": "Discard",
           "save": "Save and switch"
         },
+        "sceneCreatedOpened": "Empty scene \"{{name}}\" is now open for editing.",
         "saveAllDialog": {
           "title": "Save Content",
           "body": "Select content to save",
@@ -517,6 +518,15 @@
       "importProgress": {
         "running": "Importing {{current}}/{{total}}: {{name}}",
         "phase": "Importing {{current}}/{{total}}: {{name}} · {{stage}} {{percent}}%",
+        "stages": {
+          "uploading": "Uploading",
+          "sourceCook": "Parsing in browser",
+          "sidecar": "Writing metadata",
+          "engineCookWait": "Waiting for engine catalog",
+          "engineCook": "Engine cooking",
+          "indexing": "Indexing sub-assets",
+          "cooking": "Processing"
+        },
         "complete": "Import complete: {{done}}/{{total}} succeeded",
         "failed": "Import failed: {{name}}",
         "cancelled": "Import cancelled: {{name}}",

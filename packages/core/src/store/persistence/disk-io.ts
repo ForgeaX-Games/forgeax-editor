@@ -60,6 +60,14 @@ import {
 import { createEngineFacade } from '../../io/engine-facade';
 import { normalizeMaterialPackEntries } from '../../io/material-pack-refs';
 import { normalizeMaterialInstancePackEntries } from '../../assets/material-instance-schema';
+import { stripInlinePackMountPublicationFences, stripSceneAssetMountPublicationFences } from '../../scene/strip-inline-mount-publication-fences';
+/** Structured last failure from doLoadDocFromDisk / loadSceneByGuid (consumed by createSceneFile). */
+export type DocLoadFailure = {
+  readonly phase: string;
+  readonly packPath?: string;
+  readonly sceneGuid?: string;
+  readonly detail?: unknown;
+};
 
 const SCENE_READINESS_RETRY_LIMIT = 3;
 
@@ -241,13 +249,19 @@ export interface DiskIoDeps {
   readonly saveDocToDiskViaDispatch?: () => void;
 }
 
+/** Controls whether catalog-derived mount publication fences are persisted. */
+export interface SerializePackOptions {
+  /** When false (beacon/unload), strip inline mount fences before write. */
+  readonly persistPublicationFences?: boolean;
+}
+
 /** The high-side-effect surface createDiskIo returns. disk-watch consumes
  *  worldToPack / scenePath / loadSceneByGuid off the composed instance (via the
  *  scene-persistence re-exports); the rest are the public save/load/switch impls
  *  the composition root wraps + re-exports. */
 export interface DiskIo {
   scenePath(): string | null;
-  worldToPack(doc: EditSession, sceneGuid?: string): string | null;
+  worldToPack(doc: EditSession, sceneGuid?: string, options?: SerializePackOptions): string | null;
   stripDisabledMarker(asset: unknown): unknown;
   inlineAssetCount(pack: unknown): number;
   loadSceneByGuid(sceneGuid: string): Promise<boolean>;
@@ -262,6 +276,7 @@ export interface DiskIo {
     | { ok: false; error: { code: string; hint: string; detail?: unknown } }
   >;
   doLoadDocFromDisk(): Promise<boolean>;
+  consumeLastDocLoadFailure(): DocLoadFailure | null;
   doSaveDocToDisk(options?: SaveDocToDiskOptions): Promise<SaveDocToDiskResult>;
   flushPendingSaveBeacon(): void;
   replaceDoc(doc: EditSession): void;
@@ -469,6 +484,16 @@ interface DetailedDiskIo {
 export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
   const { ctx, gateway } = deps;
 
+  let lastDocLoadFailure: DocLoadFailure | null = null;
+  function recordDocLoadFailure(failure: DocLoadFailure): void {
+    lastDocLoadFailure = failure;
+  }
+  function consumeLastDocLoadFailure(): DocLoadFailure | null {
+    const failure = lastDocLoadFailure;
+    lastDocLoadFailure = null;
+    return failure;
+  }
+
   // ── path helpers ────────────────────────────────────────────────────────────
   /** @internal-store — disk-watch READS this to filter ws events to THIS game's
    *  scene file (D-6 seam). */
@@ -551,9 +576,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
   /** @internal-store — serializes the live world into the on-disk pack bytes;
    *  used by serializedPack (the save path). disk-watch no longer re-serialises
    *  here: it recognises a self-save echo via ctx.lastSelfSave instead. */
-  function worldToPack(doc: EditSession, sceneGuid?: string): string | null {
+  function worldToPack(doc: EditSession, sceneGuid?: string, options?: SerializePackOptions): string | null {
     const w: WorldType = doc.world;
     const reg: AssetRegistry | undefined = doc.registry;
+    const persistPublicationFences = options?.persistPublicationFences !== false;
     if (!w || !reg) {
       console.warn('[editor-core] worldToPack: world or registry missing');
       return null;
@@ -575,7 +601,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     }
     // Strip only the engine-internal Disabled marker. Visibility is authored
     // data and must remain in the SceneAsset so Edit and Play agree.
-    const strippedAsset = attachPublicationFences(stripDisabledMarker(assetR.value) as SceneAsset, reg, w);
+    const collectedAsset = stripDisabledMarker(assetR.value) as SceneAsset;
+    const strippedAsset = persistPublicationFences
+      ? attachPublicationFences(collectedAsset, reg, w)
+      : collectedAsset;
     const packR = serializeSceneAssetToPack(strippedAsset, w.components.entries(), sceneGuid);
     if (!packR.ok) {
       console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
@@ -606,6 +635,9 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     // editor-owned persistence boundary; the engine runtime remains strict on
     // Pack v2 and does not need a legacy fallback.
     normalizePackForRuntime(packObj);
+    if (!persistPublicationFences) {
+      stripInlinePackMountPublicationFences(packObj);
+    }
     console.info(
       `[editor-core][diag] worldToPack: sceneGuid=${sceneGuid}, rootHandles=${rootHandles.length}, assets before append=${preAppendCount}, after=${postAppendCount}, orphanMerged=${orphanMerged}`,
     );
@@ -623,8 +655,8 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
    *  by the disk watcher to recognise its own echo). Returns null on serialize
    *  FAILURE — callers MUST treat null as "do not write" (the 0-byte clobber
    *  guard, AGENTS.md #2). */
-  function serializedPack(): string | null {
-    return worldToPack(gateway.doc, sceneGuidForSave());
+  function serializedPack(options?: SerializePackOptions): string | null {
+    return worldToPack(gateway.doc, sceneGuidForSave(), options);
   }
 
   // ── scene-load: canonical engine loadByGuid -> instantiateFlat (engine SSOT) ──
@@ -716,19 +748,26 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
    *
    *  `loadByGuid` remains before any world mutation, so a missing/corrupt pack
    *  leaves the current scene intact. */
-  async function loadSceneByGuid(sceneGuid: string): Promise<boolean> {
+  async function loadSceneByGuid(sceneGuid: string, packPath?: string): Promise<boolean> {
     const w: WorldType = gateway.doc.world;
     const reg: AssetRegistry | undefined = gateway.doc.registry;
-    if (!w || !reg) return false;
+    if (!w || !reg) {
+      recordDocLoadFailure({ phase: 'world-or-registry-unavailable', sceneGuid, packPath });
+      return false;
+    }
     let stagedRoots: EntityHandle[] = [];
     try {
       const { AssetGuid } = await import('@forgeax/engine-pack/guid');
       const parsed = AssetGuid.parse(sceneGuid);
-      if (!parsed.ok) return false;
+      if (!parsed.ok) {
+        recordDocLoadFailure({ phase: 'invalid-scene-guid', sceneGuid, packPath });
+        return false;
+      }
       // Fetch + parse before touching the current world. A load failure leaves
       // the current scene intact.
       const loadRes = await loadSceneWithReadinessRetry(reg, parsed.value);
       if (!loadRes.ok) {
+        recordDocLoadFailure({ phase: 'load-by-guid', sceneGuid, packPath, detail: loadRes.error });
         reportPackRoundtripBoundary({
           phase: 'load-or-instantiate',
           sceneGuid,
@@ -738,10 +777,15 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
         console.warn(`[editor-core] scene asset load failed guid=${sceneGuid}: ${JSON.stringify(loadRes.error)}`);
         return false;
       }
-      const sceneAsset = normalizeAndCatalogSceneAsset(reg, sceneGuid, loadRes.value as SceneAsset);
+      const sceneAsset = normalizeAndCatalogSceneAsset(
+        reg,
+        sceneGuid,
+        stripSceneAssetMountPublicationFences(normalizeAnimationPlayerSceneAsset(loadRes.value as SceneAsset)),
+      );
       const sceneHandle = w.allocSharedRef('SceneAsset', sceneAsset);
       const instRes = reg.instantiateFlat(sceneHandle, w);
       if (!instRes.ok) {
+        recordDocLoadFailure({ phase: 'instantiate-flat', sceneGuid, packPath, detail: instRes.error });
         reportPackRoundtripBoundary({
           phase: 'load-or-instantiate',
           sceneGuid,
@@ -755,6 +799,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       const bindingFailures = bindAllSceneAnimationTargets(w, { mutation: createEngineFacade(w, reg) }, stagedRoots)
         .flatMap((entry) => entry.failures);
       if (bindingFailures.length > 0) {
+        recordDocLoadFailure({ phase: 'animation-binding', sceneGuid, packPath, detail: bindingFailures });
         console.warn('[editor-core] scene animation binding failed:', bindingFailures);
         const rollback = teardownStagedRoots(stagedRoots);
         if (!rollback.ok) console.error('[editor-core] scene load rollback left staged roots:', rollback.failures);
@@ -776,6 +821,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
         const rollback = teardownStagedRoots(stagedRoots);
         if (!rollback.ok) console.error('[editor-core] scene load exception rollback left staged roots:', rollback.failures);
       }
+      recordDocLoadFailure({
+        phase: 'exception',
+        sceneGuid,
+        packPath,
+        detail: error instanceof Error ? error.message : String(error),
+      });
       console.warn(
         `[editor-core] scene load threw guid=${sceneGuid}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
       );
@@ -992,6 +1043,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
    *  valid doc was loaded. Uses engine-native world.instantiateScene via
    *  loadSceneByGuid (AC-09). */
   async function doLoadDocFromDisk(): Promise<boolean> {
+    lastDocLoadFailure = null;
     const p = scenePath();
     if (!p) {
       // A declared defaultScene can be a generated/imported catalog output whose
@@ -1000,7 +1052,10 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       // to: open the authoritative catalog asset directly and keep scenePath()
       // null so persistence remains fail-closed.
       const catalogSceneGuid = ctx.defaultSceneGuid;
-      if (catalogSceneGuid === null) return false;
+      if (catalogSceneGuid === null) {
+        recordDocLoadFailure({ phase: 'no-pack-path', detail: { defaultSceneGuid: null } });
+        return false;
+      }
       const loaded = await loadSceneByGuid(catalogSceneGuid);
       if (!loaded) return false;
       ctx.currentSceneGuid = catalogSceneGuid;
@@ -1028,21 +1083,29 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     ctx.loadedEntityFloor = null;
     try {
       const r = await deps.fetchWithTimeout(`/api/files?path=${encodeURIComponent(p)}`);
-      if (r.ok) {
+      if (!r.ok) {
+        recordDocLoadFailure({ phase: 'fetch-failed', packPath: p, detail: { status: r.status } });
+      } else {
         const j = (await r.json()) as { content?: string };
-        if (j.content) {
+        if (!j.content) {
+          recordDocLoadFailure({ phase: 'empty-pack-content', packPath: p });
+        } else {
           const parsed = JSON.parse(j.content);
-          if (isScenePack(parsed)) {
+          if (!isScenePack(parsed)) {
+            recordDocLoadFailure({ phase: 'not-scene-pack', packPath: p });
+          } else {
             // Repair legacy material payloads before the engine reads the scene.
             // This is deliberately persisted through the asset gate so a
             // refresh cannot reintroduce the same malformed refs/metallic shape.
             const materialRefs = normalizeMaterialPackEntries(parsed as unknown as Record<string, unknown>);
             if (!materialRefs.ok) {
+              recordDocLoadFailure({ phase: 'material-migration-refused', packPath: p, detail: materialRefs.error });
               console.error('[editor-core][diag] doLoadDocFromDisk: unsafe material migration refused:', materialRefs.error);
               return false;
             }
             const miRefs = normalizeMaterialInstancePackEntries(parsed as unknown as Record<string, unknown>);
             if (!miRefs.ok) {
+              recordDocLoadFailure({ phase: 'material-instance-migration-refused', packPath: p, detail: miRefs.error });
               console.error('[editor-core][diag] doLoadDocFromDisk: unsafe material-instance migration refused:', miRefs.error);
               return false;
             }
@@ -1132,9 +1195,13 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
               loadedInline.map((a, i) => `  [${i}] ${a.guid} (${a.kind})`).join('\n'),
             );
             const sceneAssetEntry = parsed.assets.find((a: { kind?: string; guid?: string }) => a.kind === 'scene') as { guid?: string } | undefined;
+            // Boot / scene switch: never pre-catalog pack bodies here.
+            // registry.catalog() short-circuits loadByGuid (scene refs skip recursive
+            // fetch; materials skip the loader → mesh-renderer-material-override-invalid).
+            // createSceneFile seeds via seedNewScenePackCatalog when pack-index lags.
             // Load via the engine's canonical loadByGuid -> instantiate path.
             if (sceneAssetEntry?.guid) {
-              const ok = await loadSceneByGuid(sceneAssetEntry.guid);
+              const ok = await loadSceneByGuid(sceneAssetEntry.guid, p);
               if (ok) {
                 // Publish the identity only after the engine has actually
                 // materialised the target scene. A failed load must not leave
@@ -1145,13 +1212,21 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
                 deps.notifyDocChanged();
                 return true;
               }
+            } else {
+              recordDocLoadFailure({ phase: 'missing-scene-guid', packPath: p });
             }
             ctx.currentSceneGuid = null;
             // GUID missing or engine load failed → fall through to seed.
           }
         }
       }
-    } catch { /* fall through to seed */ }
+    } catch (error) {
+      recordDocLoadFailure({
+        phase: 'exception',
+        packPath: p,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
     finally {
       if (!committed) {
         ctx.currentSceneGuid = previousLoadState.currentSceneGuid;
@@ -1444,7 +1519,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     if (!ctx.isDirty) return; // nothing dirty
     const p = scenePath();
     if (!p) return;
-    const content = serializedPack();
+    const content = serializedPack({ persistPublicationFences: false });
     if (content === null) {
       console.error('[editor-core] flushPendingSaveBeacon: serialize failed — skipping beacon to protect on-disk scene');
       return;
@@ -1519,6 +1594,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     instantiateSceneRefUnderWorldDetailed,
     resolveAssetRefToHandle,
     doLoadDocFromDisk,
+    consumeLastDocLoadFailure,
     doSaveDocToDisk,
     flushPendingSaveBeacon,
     replaceDoc,

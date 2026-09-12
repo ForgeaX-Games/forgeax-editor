@@ -9,6 +9,7 @@ import type { PlayDispatchResult } from './play-operation';
 
 import type { Profiler } from '@forgeax/engine-profiler';
 import type { World } from '@forgeax/engine-ecs';
+import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, restoreAllAnimationPreviews, type DispatchResult, type EditGateway, type PlayDirtyPolicy, type SessionApplier } from '@forgeax/editor-core';
 import { captureCpuProfile } from './frame-phase-profiler';
 
@@ -211,9 +212,41 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       const completion = (async () => {
         const entity = request.entity as number;
         const asset = request.asset as { guid: string; kind: string; name: string };
-        if (asset.kind === 'material') return bind('MeshRenderer', 'materials', 'MaterialAsset', asset.guid);
+        const ensureRenderableMesh = (fallbackHandle: number) => {
+          // Empty entities commonly retain MeshFilter{assetHandle:0} ("None").
+          // Material/texture assignment must repair that sentinel, not merely
+          // add MeshRenderer, otherwise there is no geometry to draw.
+          const meshFilter = entComponent(deps.activeWorld(), entity as never, 'MeshFilter');
+          if (!meshFilter.ok) {
+            return deps.gateway!.dispatch({
+              kind: 'addComponent', entity, component: 'MeshFilter', value: { assetHandle: fallbackHandle },
+            }, origin);
+          }
+          const rawHandle = meshFilter.value.assetHandle;
+          const assetHandle = typeof rawHandle === 'number'
+            ? rawHandle
+            : rawHandle !== null && typeof rawHandle === 'object' && 'raw' in rawHandle
+              ? Number((rawHandle as { raw: unknown }).raw)
+              : 0;
+          return Number.isFinite(assetHandle) && assetHandle > 0
+            ? { ok: true as const }
+            : deps.gateway!.dispatch({
+                kind: 'setComponent', entity, component: 'MeshFilter', patch: { assetHandle: fallbackHandle },
+              }, origin);
+        };
+
+        if (asset.kind === 'material') {
+          const row = deps.gateway!.assetCatalog().find((entry) => entry.guid === asset.guid);
+          const textureBacked = (row?.refs ?? []).some((guid) =>
+            deps.gateway!.assetCatalog().some((entry) => entry.guid === guid && entry.kind === 'texture'));
+          const mesh = ensureRenderableMesh(textureBacked ? HANDLE_QUAD : HANDLE_CUBE);
+          if (!mesh.ok) return mesh;
+          return bind('MeshRenderer', 'materials', 'MaterialAsset', asset.guid);
+        }
         if (asset.kind === 'mesh') return bind('MeshFilter', 'assetHandle', 'MeshAsset', asset.guid);
 
+        const mesh = ensureRenderableMesh(HANDLE_QUAD);
+        if (!mesh.ok) return mesh;
         if (!entComponent(deps.activeWorld(), entity as never, 'MeshRenderer').ok) {
           const added = deps.gateway!.dispatch({
             kind: 'addComponent', entity, component: 'MeshRenderer', value: { materials: [] },
