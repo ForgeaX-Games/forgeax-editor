@@ -557,3 +557,17 @@ test('run list, event cursor, cancel, and retry are public operations', async ()
   expect(cancelled.result).toMatchObject({ status: 'cancelled' });
   resolve?.();
 });
+
+
+test('reopen dispatches the existing document reload operation through the host', async () => {
+  const calls: string[] = [];
+  const service = createTransportService({ dispatch: async (operationId) => {
+    calls.push(operationId);
+    if (operationId !== 'loadDocFromDisk') throw new Error('operation not registered');
+    return { loaded: true };
+  } });
+  const response = await service.handle(request('reopen', 'reopen', auth));
+  expect(response.error).toBeUndefined();
+  expect(response.result).toMatchObject({ status: 'succeeded' });
+  expect(calls).toEqual(['loadDocFromDisk']);
+});

@@ -50,7 +50,8 @@ export async function resolvePlayGameActivation(
   const loaded = await loadGame(slug, async () => module as { default?: unknown });
   if (loaded.ok) {
     if (typeof loaded.value === 'function') {
-      return { kind: 'legacy', entry: loaded.value as BootstrapEntry };
+      const legacy = normalizeLegacyGameEntry(module);
+      if (legacy !== null) return { kind: 'legacy', entry: legacy };
     }
     return { kind: 'plugin', plugin: loaded.value };
   }

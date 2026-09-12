@@ -1,3 +1,4 @@
+import { handleProjectValidation } from '../../scripts/host/project-validation';
 // game-backend.ts — the standalone editor's REUSED platform-io backend (R3).
 //
 // WHY A SEPARATE BUN PROCESS — BY DESIGN (not a workaround)
@@ -28,12 +29,10 @@
 import { createFilesRouter, createPrefsRouter, createVersionControlRouter, singleGameFileBackend } from '@forgeax/platform-io';
 import { createToolClient, type ToolClient } from '@forgeax/engine-devkit';
 import type { ToolDescriptor } from '@forgeax/engine-tool-runtime';
-import { createScriptablePackAuthoringGateway } from '@forgeax/engine-pack/source';
-import { createFileSystemScriptablePackAuthoringPort, loadScriptablePack } from '@forgeax/engine-pack/source-node';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { createSourceAuthoringHandler } from '../../scripts/host/source-authoring';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
 import { GAME_TEMPLATE_SLUG_RE, listGameTemplates } from './template-catalog';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
@@ -47,53 +46,7 @@ const instanceRootAbs = resolve(gameDir);
 const gameSlug = basename(instanceRootAbs);
 const engineTemplatesRoot = resolve(import.meta.dir, '../../packages/engine/templates');
 
-const authoredTextExtensions = new Set(['.json', '.ts', '.tsx', '.js', '.jsx', '.md']);
-
-async function authoredFiles(root: string): Promise<string[]> {
-  const files: string[] = [];
-  const visit = async (directory: string): Promise<void> => {
-    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
-      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.forgeax') continue;
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) await visit(path);
-      else if (entry.isFile() && authoredTextExtensions.has(entry.name.slice(entry.name.lastIndexOf('.')))) files.push(path);
-    }
-  };
-  await visit(root);
-  return files;
-}
-
-async function sourceIncomingRefs(sourcePath: string, sourceKey?: string): Promise<readonly string[]> {
-  if (sourceKey === undefined) return [];
-  const loaded = await loadScriptablePack(resolve(gameDir, sourcePath), { metadataOnly: true });
-  if (!loaded.ok) return [];
-  const output = loaded.value.assets[sourceKey];
-  if (output === undefined) return [];
-  const guid = AssetGuid.format(output.guid);
-  const sourceAbs = resolve(gameDir, sourcePath);
-  const references: string[] = [];
-  for (const path of await authoredFiles(gameDir)) {
-    if (path === sourceAbs) continue;
-    const contents = await readFile(path, 'utf8').catch(() => '');
-    if (contents.includes(guid)) references.push(relative(gameDir, path).replace(/\\/g, '/'));
-  }
-  return references.sort();
-}
-
-const sourceAuthoring = createScriptablePackAuthoringGateway(
-  createFileSystemScriptablePackAuthoringPort({
-    gameRoot: gameDir,
-    incomingRefs: sourceIncomingRefs,
-    // Source mutation writes already notify both standalone producer watchers.
-    // Explicit rebuild has no content write, so publish the same source event
-    // without adding a second cooker in the API process.
-    rebuild: async (sourcePath) => {
-      const now = new Date();
-      await utimes(resolve(gameDir, sourcePath), now, now);
-      return { ok: true, value: undefined };
-    },
-  }),
-);
+const sourceAuthoringHandler = createSourceAuthoringHandler(gameDir);
 
 // The standalone host is only the physical transport for the Engine ToolClient.
 // Project Entries provide the producer contributions; this process never creates
@@ -549,60 +502,10 @@ const server = Bun.serve({
       return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     if (url.pathname === '/api/assets/source/execute' && req.method === 'POST') {
-      let operation: Parameters<typeof sourceAuthoring.execute>[0];
-      try {
-        operation = await req.json() as typeof operation;
-      } catch {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: {
-            code: 'pack-source-operation-invalid',
-            hint: 'Source authoring operation body must be valid JSON.',
-            retryable: false,
-            recoveryActions: ['inspect-operation-schema'],
-          },
-        }), { status: 400, headers: { 'content-type': 'application/json' } });
-      }
-      const result = await sourceAuthoring.execute(operation);
-      return new Response(JSON.stringify(result), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return sourceAuthoringHandler(req);
     }
     if (url.pathname === '/api/validation/project' && req.method === 'POST') {
-      let options: { maxBytes?: number; maxEntities?: number } = {};
-      try {
-        const body = await req.clone().json() as Record<string, unknown>;
-        options = {
-          ...(typeof body.maxBytes === 'number' ? { maxBytes: body.maxBytes } : {}),
-          ...(typeof body.maxEntities === 'number' ? { maxEntities: body.maxEntities } : {}),
-        };
-      } catch {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: { code: 'INVALID_ARGS', hint: 'project validation options must be a JSON object' },
-        }), { status: 400, headers: { 'content-type': 'application/json' } });
-      }
-      try {
-        // The existing validator is the producer-owned J5 fact source. Keep it
-        // in the Bun host because it reads the confined game filesystem.
-        const { validateGameProject } = await import('../scripts/game-validation.mjs');
-        const result = await validateGameProject(gameDir, options);
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      } catch (error) {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: {
-            code: 'project-validation-unavailable',
-            hint: error instanceof Error ? error.message : String(error),
-            retryable: true,
-            recoveryActions: ['run.retry', 'editor.discover'],
-          },
-        }), { status: 503, headers: { 'content-type': 'application/json' } });
-      }
+      return handleProjectValidation(gameDir, req);
     }
 
     for (const { prefix, router, isFiles } of PREFIXES) {

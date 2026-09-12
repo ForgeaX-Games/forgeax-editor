@@ -660,7 +660,7 @@ describe('viewport runtime transport', () => {
       sourceClosure: ['materials/example.material.json'],
       artifactDigest: 'sha256:artifact',
       parameterContract: { parameters: [], values: {} },
-      record: { receipt: { inputDigest: 'sha256:source' } },
+      record: { receipt: { identity: { cookIdentity: 'sha256:source' } } },
       artifact: {},
     } as any;
     const binding = createMaterialPublicationBinding(

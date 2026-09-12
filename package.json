@@ -65,7 +65,8 @@
     "./viewport-runtime": "./packages/edit-runtime/src/runtime/viewport-runtime-broadcast.ts",
     "./version-control": "./packages/edit-runtime/src/public/version-control.ts",
     "./visual-source": "./packages/edit-runtime/src/viewport/visual-source.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./source-authoring-host": "./scripts/host/source-authoring.ts"
   },
   "workspaces": [
     "packages/*",
@@ -129,6 +130,7 @@
     "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-project": "workspace:*",
     "@forgeax/engine-devkit": "workspace:*",
     "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-tool-runtime": "workspace:*",
@@ -166,7 +168,8 @@
     "tailwindcss-animate": "1.0.7",
     "typescript": "^5.6.3",
     "vite": "^8.0.0",
-    "yaml": "^2.4.2"
+    "yaml": "^2.4.2",
+    "@webgpu/types": "^0.1.70"
   },
   "overrides": {
     "react": "19.2.6",

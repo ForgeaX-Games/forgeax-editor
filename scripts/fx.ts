@@ -2326,7 +2326,6 @@ function runFreshCloneStep(
 }
 
 function verifyFreshFrozenInstall(profile: CiProfile): CiFailure | undefined {
-  const branch = gitOut(['branch', '--show-current']);
   const head = gitOut(['rev-parse', 'HEAD']);
   if (!head) {
     return {
@@ -2366,40 +2365,37 @@ function verifyFreshFrozenInstall(profile: CiProfile): CiFailure | undefined {
       profile,
       'clone',
       'git',
-      ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), origin, cloneDir],
+      ['clone', '--no-checkout', origin, cloneDir],
       ROOT,
       'the editor repository and recursive submodules can be cloned',
     );
     if (cloneFailure) return cloneFailure;
-    if (!branch) {
-      // Studio consumes editor as a detached gitlink. Re-check out that exact
-      // commit in the clean clone, then realign nested pins before frozen Bun
-      // validates the same source tree Studio will ship.
-      const checkoutFailure = runFreshCloneStep(
-        profile,
-        'exact-checkout',
-        'git',
-        ['checkout', '--detach', head],
-        cloneDir,
-        'the exact editor commit can be checked out in the clean clone',
-      );
-      if (checkoutFailure) return checkoutFailure;
-      const submoduleFailure = runFreshCloneStep(
-        profile,
-        'submodule-checkout',
-        'git',
-        ['submodule', 'update', '--init', '--recursive'],
-        cloneDir,
-        'recursive submodules can be materialized for the exact editor commit',
-      );
-      if (submoduleFailure) return submoduleFailure;
-    }
+    // Validate the candidate SHA for both branch and detached consumers;
+    // a branch name alone may still point at an older remote candidate.
+    const checkoutFailure = runFreshCloneStep(
+      profile,
+      'exact-checkout',
+      'git',
+      ['checkout', '--detach', head],
+      cloneDir,
+      'the exact editor commit can be checked out in the clean clone',
+    );
+    if (checkoutFailure) return checkoutFailure;
+    const submoduleFailure = runFreshCloneStep(
+      profile,
+      'submodule-checkout',
+      'git',
+      ['submodule', 'update', '--init', '--recursive'],
+      cloneDir,
+      'recursive submodules can be materialized for the exact editor commit',
+    );
+    if (submoduleFailure) return submoduleFailure;
     return runFreshCloneStep(
       profile,
       'frozen-install',
       'npx',
-      ['--yes', 'bun@1.3.14', 'install', '--frozen-lockfile', '--ignore-scripts'],
-      cloneDir,
+      ['--yes', 'bun@1.3.14', 'install', '--cwd', cloneDir, '--frozen-lockfile', '--ignore-scripts'],
+      tempRoot,
       'Bun 1.3.14 frozen install succeeds in a fresh clone',
     );
   } finally {

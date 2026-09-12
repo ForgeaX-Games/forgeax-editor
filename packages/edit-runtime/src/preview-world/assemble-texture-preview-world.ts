@@ -16,7 +16,7 @@ import {
   TONEMAP_NONE,
 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import type { TexturePreviewPrimitive } from '@forgeax/engine-preview';
 import type { EngineFacade } from '@forgeax/editor-core';
 import type { TexturePreviewViewState } from './texture-preview-view-state';
@@ -60,7 +60,7 @@ export interface TexturePreviewAssembly {
   readonly materialHandle: unknown;
   readonly dimensions: TexturePreviewDimensions;
   readonly enginePrimitive?: TexturePreviewPrimitive;
-  replaceTexture(texture: TextureAsset, textureHandle: unknown, view: TexturePreviewViewState): void;
+  replaceTexture(texture: TextureAsset, textureHandle: Handle<'TextureAsset', 'shared'>, view: TexturePreviewViewState): void;
   applyViewState(view: TexturePreviewViewState): void;
   applyOrthoView(ortho: TexturePreviewOrthoView): void;
   resetOrthoView(): void;
@@ -103,7 +103,7 @@ export function assembleTexturePreviewWorld(facade: EngineFacade): TexturePrevie
   let orthoView: TexturePreviewOrthoView = { ...DEFAULT_TEXTURE_ORTHO_VIEW };
   let viewState: TexturePreviewViewState | undefined;
   let enginePrimitive: TexturePreviewPrimitive | undefined;
-  let boundTextureHandle: unknown;
+  let boundTextureHandle: Handle<'TextureAsset', 'shared'> | undefined;
   let activeMaterialHandle = materialHandle;
   let activeTexture: TextureAsset | undefined;
 

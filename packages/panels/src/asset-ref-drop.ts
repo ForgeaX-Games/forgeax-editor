@@ -29,7 +29,7 @@ export function resolveAssetDropVerdict(
 ): AssetDropVerdict {
   if (!drag?.guid) return 'none';
   if (acceptKinds) {
-    return acceptKinds.has(drag.kind) ? 'accept' : 'reject';
+    return drag.kind !== undefined && acceptKinds.has(drag.kind) ? 'accept' : 'reject';
   }
   return isGuidCompatibleWithAssetType(drag.guid, assetType) ? 'accept' : 'reject';
 }

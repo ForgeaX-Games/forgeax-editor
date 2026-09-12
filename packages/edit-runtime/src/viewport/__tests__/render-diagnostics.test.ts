@@ -126,7 +126,7 @@ describe('material publication diagnostics projection', () => {
       sourceClosure: ['materials/example.pack.json', 'materials/example.wgsl'],
       artifactDigest: 'sha256:artifact',
       parameterContract: { parameters: [{ name: 'baseColor', type: 'color' }], values: {} },
-      record: { receipt: { inputDigest: 'sha256:source' } },
+      record: { receipt: { identity: { cookIdentity: 'sha256:source' } } },
       artifact: {},
     } as unknown as MaterialReady;
     const error = {

@@ -82,6 +82,8 @@ function makeFakeGateway(): {
   const dispatchCalls: unknown[] = [];
   let subscribers = 0;
   const gateway: HostGateway = {
+    playPhase: 'edit',
+    lastPlayError: null,
     get activeWorld() { return {} as never; },
     dispatch(op: unknown): { ok: boolean } {
       dispatchCalls.push(op);

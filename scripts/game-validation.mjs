@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadGameProjectSync } from '../packages/engine/packages/engine-project/dist/index.mjs';
+import { loadGameProjectSync } from '@forgeax/engine-project';
 import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
@@ -195,7 +195,7 @@ export async function validateGameProject(gameDir, options = {}) {
     gameDir,
     blocking,
     warnings,
-    stats: { bytes, entities, packs: packFiles.length, sidecars: sidecarFiles.length },
+    stats: { bytes, entities, packs: packFiles.length + scriptablePackFiles.length, sidecars: sidecarFiles.length },
   };
 }
 

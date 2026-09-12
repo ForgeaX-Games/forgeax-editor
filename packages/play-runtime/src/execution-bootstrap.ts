@@ -118,14 +118,14 @@ export function projectRuntimeDiagnostics(
         diagnostics(): readonly unknown[];
       }>('VfxGpuRuntime')
     : null;
-  const feature = context.renderer.renderFeatureDiagnostics().find(
+  const renderer = context.renderer.inspect();
+  const feature = renderer.featureDiagnostics.find(
     (diagnostic) => diagnostic.identity === 'forgeax.vfx-render.gpu-particles',
   );
-  const featurePass = context.renderer.perFramePassNames.find((name) => (
+  const featurePass = renderer.perFramePassNames.find((name) => (
     name.startsWith('forgeax.vfx-render.gpu-particles::gpu.')
     && /\.draw(?:\.(?:regular|depth-sampled))?$/u.test(name)
   ));
-  const renderer = context.renderer;
   const render = renderer.renderScene === undefined
     ? undefined
     : {

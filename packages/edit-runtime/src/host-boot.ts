@@ -115,27 +115,36 @@ gateway.registerDirtyReadProvider(hasPendingDiskSave);
 // producer of validation facts. Core owns the public Gateway operation and
 // normalizes its result, while this composition root binds the standalone (or
 // Studio-provided) same-origin validation endpoint.
-registerProjectValidationProvider({
-  validate: async (options) => {
-    const response = await fetch('/api/validation/project', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(options),
-    });
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: {
-          code: 'project-validation-unavailable',
-          hint: `The active host could not run project validation (HTTP ${response.status}).`,
-          retryable: true,
-          recoveryActions: ['run.retry', 'editor.discover'],
+function bindProjectValidation(binding?: RuntimeAssetBinding): void {
+  registerProjectValidationProvider({
+    validate: async (options) => {
+      const response = await fetch(binding?.catalogUrl.replace(/\/__pack\/scopes\/.*$/, '/api/validation/project') ?? '/api/validation/project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(binding ? {
+            'x-forgeax-game-id': binding.gameId,
+            'x-forgeax-scope-id': binding.scopeId,
+            'x-forgeax-generation': String(binding.generation),
+          } : {}),
         },
-      };
-    }
-    return response.json();
-  },
+        body: JSON.stringify(options),
+      });
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: {
+            code: 'project-validation-unavailable',
+            hint: `The active host could not run project validation (HTTP ${response.status}).`,
+            retryable: true,
+            recoveryActions: ['run.retry', 'editor.discover'],
+          },
+        };
+      }
+      return response.json();
+    },
 });
+}
 
 // Human Capabilities diagnostics are a projection of the same terminal run
 // result exposed to AI callers; no second validation state is retained here.
@@ -182,6 +191,7 @@ export interface HostGameSession {
  * Idempotent-safe to await once per document; call before ViewportComponent mounts.
  */
 export async function configureHostSession(session: HostGameSession = { slug: null }): Promise<void> {
+  bindProjectValidation(session.runtimeBinding);
   const slug = (session.slug ?? '').trim();
   // M3 (AC-03): setSceneId is a session op — dispatch through the one gateway door.
   gateway.dispatch({ kind: 'setSceneId', id: session.slug });

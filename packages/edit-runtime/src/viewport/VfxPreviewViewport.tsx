@@ -206,7 +206,7 @@ export function VfxPreviewViewport(): ReactElement {
       if (cancelled) { created.value.stop(); return; }
       app = created.value;
       previewWorld = app.world;
-      const assets = app.renderer.assets;
+      const assets = app.assets;
       if (assets === undefined) throw new Error('VFX preview renderer has no AssetRegistry');
       await installEffectDependencies(assets, effect);
       const attached = await vfxHost.attachWorld({ world: app.world, assets });

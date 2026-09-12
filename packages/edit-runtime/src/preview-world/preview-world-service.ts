@@ -49,6 +49,7 @@ export type MeshPreviewStateListener = (snapshot: MeshPreviewSnapshot) => void;
 
 export interface PreviewWorldServiceDependencies {
   readonly createApp: typeof createApp;
+  readonly createPreviewBundlerOptions: typeof createPreviewBundlerOptions;
   readonly createEngineFacade: typeof createEngineFacade;
   readonly getViewportRuntimeClientSnapshot: typeof getViewportRuntimeClientSnapshot;
   readonly queryViewportRuntimeProjection: typeof queryViewportRuntimeProjection;
@@ -70,6 +71,7 @@ export interface PreviewWorldServiceDependencies {
 
 const DEFAULT_DEPENDENCIES: PreviewWorldServiceDependencies = {
   createApp,
+  createPreviewBundlerOptions,
   createEngineFacade,
   getViewportRuntimeClientSnapshot,
   queryViewportRuntimeProjection,
@@ -312,7 +314,7 @@ export class PreviewWorldService {
     // headless tests and hosts that do not expose a load-capable registry.
     let runtimePayload: MeshAsset | undefined;
     const parsed = AssetGuid.parse(asset.guid);
-    const previewAssets = this.app?.renderer?.assets;
+    const previewAssets = this.app?.assets;
     if (parsed.ok && previewAssets !== undefined) {
       if (this.loadedSubject?.guid.toLowerCase() === asset.guid.toLowerCase()
         && this.loadedSubject.revision !== revision) {
@@ -462,7 +464,7 @@ export class PreviewWorldService {
     this.emit({ status: 'loading', assetGuid: asset.guid });
 
     const parsed = AssetGuid.parse(asset.guid);
-    const previewAssets = this.app.renderer?.assets;
+    const previewAssets = this.app.assets;
     if (!parsed.ok || previewAssets === undefined) {
       this.emit({
         status: 'failed',
@@ -592,9 +594,8 @@ export class PreviewWorldService {
       });
       return;
     }
-    const previewBundlerOptions = await createPreviewBundlerOptions(runtimeBinding);
-
     try {
+      const previewBundlerOptions = await this.dependencies.createPreviewBundlerOptions(runtimeBinding);
       let abandonPrimary = false;
       const primary = this.dependencies.createApp(
         canvas,
@@ -651,9 +652,9 @@ export class PreviewWorldService {
         // still needs the same authority-bearing scope to configure its pack
         // index. Keep both halves on the active Runtime binding so Preview
         // loadByGuid resolves the same catalog as Edit and Play.
-        this.app.renderer?.assets.configureRuntimeBinding(runtimeBinding);
+        this.app.assets?.configureRuntimeBinding(runtimeBinding);
       }
-      const facade = this.dependencies.createEngineFacade(this.app.world as never, this.app.renderer?.assets);
+      const facade = this.dependencies.createEngineFacade(this.app.world as never, this.app.assets);
       this.facade = facade;
       this.assembly = this.dependencies.assembleMeshPreviewWorld(facade);
       // P1.1: Bounds wireframe overlay. Reads the assembly's current subject

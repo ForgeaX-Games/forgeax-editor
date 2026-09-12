@@ -143,7 +143,6 @@ import { installColliderDebugOverlay } from './collider-debug-overlay';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 import { captureGameplayViewport } from './gameplay-capture';
 import {
-  EDIT_VIEWPORT_MAX_PIXEL_RATIO,
   resolveEditViewportPixelRatio,
 } from './edit-viewport-resolution';
 // M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
@@ -942,7 +941,6 @@ async function bootViewport(
     pointerLockAllowed: () => false,
     drawSource: worldManager.createDrawSource(),
     profiler,
-    maxCanvasPixelRatio: EDIT_VIEWPORT_MAX_PIXEL_RATIO,
   }, {
     shaderManifestUrl,
     ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
@@ -970,7 +968,6 @@ async function bootViewport(
         pointerLockAllowed: () => false,
         drawSource: worldManager.createDrawSource(),
         profiler,
-        maxCanvasPixelRatio: EDIT_VIEWPORT_MAX_PIXEL_RATIO,
         rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
       }, {
         shaderManifestUrl,
@@ -1198,7 +1195,12 @@ async function bootViewport(
   gateway.doc.registry = assets;
   registerTeardown(installCatalogReconcileProvider(assets));
   registerTeardown(installSourcePublicationObserver());
-  const sourceTransport = createSourceAuthoringTransport();
+  const sourceTransport = createSourceAuthoringTransport({
+    gameId: gameSession.runtimeBinding?.gameId,
+    scopeId: gameSession.runtimeBinding?.scopeId,
+    generation: gameSession.runtimeBinding?.generation,
+    endpoint: gameSession.runtimeBinding?.catalogUrl.replace(/\/__pack\/scopes\/.*$/, "/api/assets/source/execute"),
+  });
   registerTeardown(installSourceAuthoringOps(createSourceAuthoringRuntime({
     preflightSource: sourceTransport.preflightSource,
     structuredOperations: sourceTransport.operations,

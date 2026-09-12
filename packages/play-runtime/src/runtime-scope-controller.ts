@@ -1,8 +1,10 @@
+import { handleProjectValidation } from '../../../scripts/host/project-validation';
+import { createSourceAuthoringHandler } from '../../../scripts/host/source-authoring';
 import { resolve } from 'node:path';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import type { RuntimeAssetBinding, RuntimeCatalogRoot } from '@forgeax/engine-types';
 import { runtimeScopePath } from '@forgeax/engine-types';
-import type { ForgeaXPackPlugin } from '@forgeax/engine-vite-plugin-pack';
+import type { PluginPack } from '@forgeax/engine-vite-plugin-pack';
 
 interface RuntimeScopeCommand {
   readonly gameId: string;
@@ -17,7 +19,7 @@ export interface RuntimeScopeMountTransition {
 }
 
 export interface RuntimeScopeControllerOptions {
-  readonly pack: ForgeaXPackPlugin;
+  readonly pack: PluginPack;
   readonly base: string;
   readonly secret?: string;
   readonly initial?: RuntimeScopeCommand;
@@ -167,7 +169,7 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
   let serial = Promise.resolve();
   let initialBind: Promise<RuntimeAssetBinding | undefined> | undefined;
   let initialBindError: unknown;
-  let committed: { readonly identity: string; readonly binding: RuntimeAssetBinding } | undefined;
+  let committed: { readonly identity: string; readonly binding: RuntimeAssetBinding; readonly gameDir: string } | undefined;
   const inFlight = new Map<string, Promise<RuntimeAssetBinding>>();
   const rebind = (command: RuntimeScopeCommand): Promise<RuntimeAssetBinding> => {
     const identity = commandIdentity(command);
@@ -208,7 +210,7 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           throw new Error(`runtime generation ${command.generation} did not become ready (${binding.status})`);
         }
         await mountTransition?.commit();
-        committed = { identity, binding };
+        committed = { identity, gameDir: command.gameDir, binding };
         return binding;
       } catch (error) {
         try {
@@ -239,6 +241,34 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
     configureServer(server: ViteServerLike) {
       server.middlewares.use(async (req, res, next) => {
         const url = (req.url ?? '').split('?')[0];
+        const validationRequest = url === '/api/validation/project' || url === basePath(options.base, '/api/validation/project');
+        if ((validationRequest || url === '/api/assets/source/execute' || url === basePath(options.base, '/api/assets/source/execute')) && req.method === 'POST') {
+          // Queue with binding transitions; a stale viewport must never operate
+          // on the directory of the next game, even during an async body read.
+          const body = await readBody(req);
+          const operation = serial.then(async () => {
+            const scope = committed;
+            if (!scope || readHeader(req, 'x-forgeax-game-id') !== scope.binding.gameId
+              || readHeader(req, 'x-forgeax-scope-id') !== scope.binding.scopeId
+              || readHeader(req, 'x-forgeax-generation') !== String(scope.binding.generation)) {
+              respond(res, 409, { ok: false, error: {
+                code: validationRequest ? 'project-validation-scope-stale' : 'source-authoring-scope-stale', retryable: false,
+                hint: 'Reopen the current game before accessing its project sources.',
+              } });
+              return;
+            }
+            const request = new Request('http://editor-host' + url, { method: 'POST', body });
+            const response = validationRequest
+              ? await handleProjectValidation(scope.gameDir, request)
+              : await createSourceAuthoringHandler(scope.gameDir)(request);
+            respond(res, response.status, await response.json());
+          });
+          serial = operation.catch(() => undefined);
+          try { await operation; } catch {
+            respond(res, 500, { ok: false, error: { code: validationRequest ? 'project-validation-unavailable' : 'source-authoring-host-failed', retryable: false } });
+          }
+          return;
+        }
         if (url === '/__pack/runtime-binding.json' && req.method !== 'POST') {
           // The Vite server can accept browser traffic before the first pack
           // scan has published its binding. Keep the probe attached to that

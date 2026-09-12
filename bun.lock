@@ -14,6 +14,7 @@
         "@forgeax/engine-devkit": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-project": "workspace:*",
         "@forgeax/engine-tool-runtime": "workspace:*",
         "@forgeax/engine-vfx": "workspace:*",
         "@forgeax/interface": "workspace:*",
@@ -41,6 +42,7 @@
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "@vitejs/plugin-react": "^6.0.3",
+        "@webgpu/types": "^0.1.70",
         "autoprefixer": "10.5.4",
         "dependency-cruiser": "^17.4.3",
         "react": "19.2.6",
@@ -186,6 +188,7 @@
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "@vitejs/plugin-react": "^6.0.3",
+        "@webgpu/types": "^0.1.70",
         "typescript": "^5.6.3",
         "vite": "^8.0.0",
       },
@@ -1048,6 +1051,7 @@
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
     },
     "packages/engine/packages/state": {
@@ -1237,9 +1241,9 @@
       "name": "@forgeax/interface",
       "version": "0.3.7",
       "dependencies": {
-        "@forgeax/app-shell": "0.84.0",
+        "@forgeax/app-shell": "0.65.1",
         "@forgeax/extension-host": "0.3.2",
-        "@forgeax/extension-platform": "0.5.0",
+        "@forgeax/extension-platform": "0.4.0",
         "@forgeax/toolkit": "0.1.2",
         "@forgeax/types": "^0.1.3",
         "@google/model-viewer": "^4.2.0",
@@ -1835,7 +1839,7 @@
 
     "@forgeax/extension-host": ["@forgeax/extension-host@0.3.2", "https://registry.npmjs.org/@forgeax/extension-host/-/extension-host-0.3.2.tgz", { "dependencies": { "ajv": "^8.17.1", "zod": "^3.25.0" }, "peerDependencies": { "fastify": "^5.0.0", "hono": "^4.0.0", "react": "^19.0.0", "vite": "^6.0.0" }, "optionalPeers": ["fastify", "hono", "react", "vite"] }, "sha512-KaSVlu8JQjrzZhAkcqInZK3Dk3k7t6DZK+y09uC9mJzmBY3xAibQg/LqSGwTUt604k9P8OqbSdnXtD543CiIGg=="],
 
-    "@forgeax/extension-platform": ["@forgeax/extension-platform@0.5.0", "https://registry.npmjs.org/@forgeax/extension-platform/-/extension-platform-0.5.0.tgz", { "dependencies": { "@forgeax/toolkit": "0.1.2", "@forgeax/types": "^0.3.0", "zod": "^3.25.0" } }, "sha512-Ls90DM8PV2LNR+7TPaOTIMBY/t9m+OxHiyex6zKAyNSwb4MGJn+5vXTsN5EC1eYxlp7ECu287colZQVwimpRhg=="],
+    "@forgeax/extension-platform": ["@forgeax/extension-platform@0.4.0", "https://registry.npmjs.org/@forgeax/extension-platform/-/extension-platform-0.4.0.tgz", { "dependencies": { "@forgeax/toolkit": "0.1.2", "@forgeax/types": "^0.3.0", "zod": "^3.25.0" } }, "sha512-hv4gtIheRgpj5n5PcNArM6qNnhhr6oFDq8dnPhSFc+bn2rF/GSG1ufxE4nAmf+Xggp5L5k282omKgBpDPXh/dw=="],
 
     "@forgeax/interface": ["@forgeax/interface@workspace:packages/interface"],
 
@@ -3296,8 +3300,6 @@
     "@forgeax/engine-vite-plugin-shader/@types/node": ["@types/node@20.19.42", "https://registry.npmmirror.com/@types/node/-/node-20.19.42.tgz", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-5L7SUaFC1RyDraj2yRhyBzHTobyXHmohD100CChNtyPyleoq37Mqab5Gn8XEKI04dfN/oqPdpHk38MgcQWHbZg=="],
 
     "@forgeax/extension-platform/@forgeax/types": ["@forgeax/types@0.3.0", "https://registry.npmjs.org/@forgeax/types/-/types-0.3.0.tgz", { "dependencies": { "zod": "^3.25.0", "zod-to-json-schema": "^3.25.0" } }, "sha512-jAZe0amoEvSlggFY5GSmwc9gC6jz3N+eRQSsCzwnkzYCiJMe5+ypvMxGu4AIN6JIoaUhUDnK2UofHn5f83PJVA=="],
-
-    "@forgeax/interface/@forgeax/app-shell": ["@forgeax/app-shell@0.84.0", "https://registry.npmjs.org/@forgeax/app-shell/-/app-shell-0.84.0.tgz", { "dependencies": { "@forgeax/extension-contracts": "^0.1.0" }, "peerDependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" } }, "sha512-OUsofBoGMI6bm+qoWdSsSAkUtJoMuHQ8EHDmsHrD1F2+gCw4r5VqoWJIctKMDCltMO5HBRXdVZgJQZMUqtZcVg=="],
 
     "@forgeax/interface/@forgeax/types": ["@forgeax/types@0.1.3", "https://registry.npmjs.org/@forgeax/types/-/types-0.1.3.tgz", { "dependencies": { "zod": "^3.25.0", "zod-to-json-schema": "^3.25.0" } }, "sha512-scZrimhGBO3mwgFwvyQ+pJD68/WwAgCzeSY+ulwVk2nQTukYMMa+wGNlQ7+c9dFcQLG2EBjtvN21MYAJqnX8nQ=="],
 

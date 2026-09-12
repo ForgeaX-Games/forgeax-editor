@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
-import type { ForgeaXPackPlugin } from '@forgeax/engine-vite-plugin-pack';
+import type { PluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { createRuntimeScopeController, type RuntimeScopeCommand } from '../runtime-scope-controller';
 
 type Middleware = (req: FakeRequest, res: FakeResponse, next: () => void) => unknown;
@@ -68,6 +68,68 @@ function projectDdcRoot(gameDir: string): string {
 }
 
 describe('runtime scope controller', () => {
+  test('authors only the bound project and rejects stale viewport operations after rebinding', async () => {
+    const first = realpathSync.native(mkdtempSync(join(tmpdir(), 'source-first-')));
+    const second = realpathSync.native(mkdtempSync(join(tmpdir(), 'source-second-')));
+    try {
+      let current: RuntimeAssetBinding | undefined;
+      const pack = {
+        runtimeBinding: () => current,
+        rebind: async (binding: RuntimeAssetBinding) => {
+          current = { ...binding, status: 'ready', authority: 'authoritative' };
+          return current;
+        },
+      } as unknown as PluginPack;
+      let middleware!: Middleware;
+      createRuntimeScopeController({
+        pack, base: '/preview/', secret: 'secret',
+        resolveRoots: (dir) => [join(dir, 'assets')],
+        resolveProjectDdcRoot: projectDdcRoot, resolveCatalogRoots: () => [],
+      }).configureServer({ middlewares: { use(handler) { middleware = handler as Middleware; } } });
+      const call = async (url: string, body: unknown, headers = {}) => {
+        const result = response();
+        await middleware(request(url, 'POST', typeof body === 'string' ? body : JSON.stringify(body), headers), result, () => {});
+        return { status: result.statusCode, body: JSON.parse(result.body) };
+      };
+      const bind = (dir: string, generation: number) => call('/__pack/control/bind', command(dir, generation), { 'x-forgeax-runtime-secret': 'secret' });
+      const endpoint = '/preview/api/assets/source/execute';
+      const scope = { 'x-forgeax-game-id': 'fps', 'x-forgeax-scope-id': 'fps-scope', 'x-forgeax-generation': '1' };
+      const sourcePath = 'assets/generated.pack.ts';
+      const create = { requestId: 'create', kind: 'create-scriptable-pack', sourcePath, name: 'Generated', initialOutput: { sourceKey: 'scene/main', kind: 'scene', name: 'Main' } };
+      expect((await call(endpoint, create, scope)).status).toBe(409);
+      await bind(first, 1);
+      const validationEndpoint = '/preview/api/validation/project';
+      expect((await call(validationEndpoint, {})).status).toBe(409);
+      expect((await call(validationEndpoint, '{', scope)).status).toBe(400);
+      expect((await call(validationEndpoint, [], scope)).status).toBe(400);
+      expect((await call(validationEndpoint, { maxBytes: -1 }, scope)).status).toBe(400);
+      const validation = await call(validationEndpoint, {}, scope);
+      expect(validation.status).toBe(200);
+      expect(validation.body.gameDir).toBe(first);
+      expect(validation.body.blocking.length).toBeGreaterThan(0);
+
+      expect((await call(endpoint, create)).status).toBe(409);
+      expect((await call(endpoint, '{', scope)).status).toBe(400);
+      expect((await call(endpoint, create, scope)).body.ok).toBe(true);
+      expect(existsSync(join(first, sourcePath))).toBe(true);
+      expect(existsSync(join(second, sourcePath))).toBe(false);
+      const preflight = await call(endpoint, { requestId: 'inspect', kind: 'preflight', sourcePath }, scope);
+      expect(preflight.body.ok).toBe(true);
+      expect((await call(endpoint, { requestId: 'rebuild', kind: 'rebuild', sourcePath, expectedRevision: preflight.body.value.revision }, scope)).body.ok).toBe(true);
+      expect((await call(endpoint, { requestId: 'escape', kind: 'preflight', sourcePath: '../other.pack.ts' }, scope)).body.ok).toBe(false);
+      await bind(second, 2);
+      expect((await call(validationEndpoint, {}, scope)).status).toBe(409);
+      const secondValidation = await call(validationEndpoint, {}, { ...scope, 'x-forgeax-generation': '2' });
+      expect(secondValidation.status).toBe(200);
+      expect(secondValidation.body.gameDir).toBe(second);
+      expect((await call(endpoint, create, scope)).status).toBe(409);
+      expect(existsSync(join(second, sourcePath))).toBe(false);
+    } finally {
+      rmSync(first, { recursive: true, force: true });
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
   test('keeps the binding payload path-free while passing roots through the host seam', () => {
     const gameDir = mkdtempSync(join(tmpdir(), 'forgeax-runtime-scope-census-'));
     try {
@@ -81,7 +143,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
 
       const controller = createRuntimeScopeController({
         pack,
@@ -126,7 +188,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -204,7 +266,7 @@ describe('runtime scope controller', () => {
     const pack = {
       name: 'test-pack',
       runtimeBinding: () => undefined,
-    } as unknown as ForgeaXPackPlugin;
+    } as unknown as PluginPack;
     let middleware: Middleware | undefined;
     createRuntimeScopeController({
       pack,
@@ -241,7 +303,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -308,7 +370,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -359,7 +421,7 @@ describe('runtime scope controller', () => {
           calls += 1;
           return { ...binding, status: calls === 1 ? 'transitioning' : 'ready' };
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -406,7 +468,7 @@ describe('runtime scope controller', () => {
         name: 'test-pack',
         runtimeBinding: () => previous,
         rebind: async () => previous,
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -449,7 +511,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -507,7 +569,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as ForgeaXPackPlugin;
+      } as unknown as PluginPack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,

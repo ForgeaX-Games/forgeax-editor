@@ -180,7 +180,7 @@ function inspectMaterialReadiness(
   transport: MaterialPublicationTransport,
 ): MaterialPublicationInspection {
   if (readiness.status === 'Ready') {
-    const digest = readiness.record.receipt.inputDigest;
+    const digest = readiness.record.receipt.identity.cookIdentity;
     return {
       ok: true,
       materialGuid: readiness.materialGuid,

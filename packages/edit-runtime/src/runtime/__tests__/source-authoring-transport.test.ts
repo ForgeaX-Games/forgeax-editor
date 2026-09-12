@@ -10,8 +10,11 @@ const value = {
 describe("asset source authoring host seam", () => {
 	test("reads producer preflight through the source host without cooking or publication observation", async () => {
 		let request: Record<string, unknown> | undefined;
+		let headers: Headers | undefined;
 		const runtime = createSourceAuthoringTransport({
+			gameId: "game-a",
 			fetch: async (_path, init) => {
+				headers = new Headers(init?.headers);
 				request = JSON.parse(String(init?.body)) as Record<string, unknown>;
 				return Response.json({ ok: true, value });
 			},
@@ -21,6 +24,7 @@ describe("asset source authoring host seam", () => {
 			sourcePath: value.sourcePath,
 			requestId: "pack-preflight-1",
 		})).resolves.toEqual(value);
+		expect(headers?.get("x-forgeax-game-id")).toBe("game-a");
 		expect(request).toEqual({
 			kind: "preflight",
 			sourcePath: value.sourcePath,
@@ -34,7 +38,7 @@ describe("asset source authoring host seam", () => {
 		const runtime = createSourceAuthoringTransport({
 			triggerCook: async (_guid, mode) => {
 				cookModes.push(mode ?? "rebuild");
-				return { ok: true, value: undefined };
+				return { ok: true, value: { attempts: 1, retryWaitMs: 0 } };
 			},
 			fetch: async (path, init) => {
 				const input = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -72,7 +76,7 @@ describe("asset source authoring host seam", () => {
 
 	test("returns a recovery-bearing partial-success error when source committed but publication is not observable", async () => {
 		const runtime = createSourceAuthoringTransport({
-			triggerCook: async () => ({ ok: true, value: undefined }),
+			triggerCook: async () => ({ ok: true, value: { attempts: 1, retryWaitMs: 0 } }),
 			fetch: async () => Response.json({ ok: true, value }),
 			observePublication: async () => {
 				throw new Error("catalog row never became consumable");

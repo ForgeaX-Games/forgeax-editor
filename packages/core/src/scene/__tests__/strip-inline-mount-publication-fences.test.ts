@@ -25,7 +25,7 @@ describe('stripInlinePackMountPublicationFences', () => {
       ],
     };
     stripInlinePackMountPublicationFences(packObj);
-    expect(packObj.assets[0].payload.mounts[0].publicationFence).toBeUndefined();
+    expect(packObj.assets[0]!.payload.mounts[0]!.publicationFence).toBeUndefined();
   });
 
   it('keeps publicationFence when mount source is not an inline pack asset', () => {
@@ -41,6 +41,6 @@ describe('stripInlinePackMountPublicationFences', () => {
       ],
     };
     stripInlinePackMountPublicationFences(packObj);
-    expect(packObj.assets[0].payload.mounts[0].publicationFence).toEqual(fence);
+    expect(packObj.assets[0]!.payload.mounts[0]!.publicationFence).toEqual(fence);
   });
 });

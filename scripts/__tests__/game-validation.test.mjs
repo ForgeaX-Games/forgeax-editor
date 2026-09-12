@@ -37,6 +37,7 @@ describe('J5 game validation', () => {
     try {
       const result = await validateGameProject(root);
       expect(result.ok).toBe(true);
+      expect(result.stats.packs).toBe(1);
       expect(result.stats.entities).toBe(1);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -115,6 +116,7 @@ export default {
     try {
       const result = await validateGameProject(root);
       expect(result.ok).toBe(true);
+      expect(result.stats.packs).toBe(2);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

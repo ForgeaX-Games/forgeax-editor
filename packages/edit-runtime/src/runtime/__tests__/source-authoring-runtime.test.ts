@@ -98,7 +98,7 @@ describe('source authoring host seam', () => {
       },
       triggerCook: async (guid, signal) => {
         events.push(`cook:${guid}:${signal?.aborted === true}`);
-        return { ok: true, value: undefined };
+        return { ok: true, value: { attempts: 1, retryWaitMs: 0 } };
       },
       observePublication: async ({ op, signal }) => {
         events.push(`observe:${(op as { requestId: string }).requestId}:${signal.aborted}`);

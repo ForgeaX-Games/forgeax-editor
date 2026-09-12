@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'bun:test';
-import { createSceneDataCatalog, type RenderFeaturePlanContext } from '@forgeax/engine-render';
+import { type RenderFeaturePlanContext } from '@forgeax/engine-render';
 import { createInfiniteGridFeature } from '../infinite-grid-feature';
 
 const infiniteGridFeatureSource = readFileSync(new URL('../infinite-grid-feature.ts', import.meta.url), 'utf8');
@@ -41,12 +41,6 @@ function context(
       { name: 'color', kind: 'color', format: colorFormat, sampleCount: 1 },
       { name: 'depth', kind: 'depth', format: depthFormat, sampleCount: 1 },
     ],
-    sceneData: createSceneDataCatalog({
-      featureIdentity: 'editor.infinite-grid',
-      generation,
-      planIdentity: `editor.infinite-grid:${generation}`,
-      rgba16floatRenderable: caps.rgba16floatRenderable,
-    }),
   };
 }
 

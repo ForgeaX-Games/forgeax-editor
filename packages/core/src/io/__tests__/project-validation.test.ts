@@ -25,6 +25,9 @@ describe('project validation contract', () => {
     const normalized = normalizeProjectValidationResult(raw);
     expect(normalized).toMatchObject({ ok: true, result: {
       schemaVersion: 'project-validation/v1',
+      scope: 'source-preflight',
+      scriptableBuildsExecuted: false,
+      runtimeVerified: false,
       ok: false,
       issueCount: 131,
       blockingCount: 130,

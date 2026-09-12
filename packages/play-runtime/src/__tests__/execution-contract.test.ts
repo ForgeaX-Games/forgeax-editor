@@ -238,14 +238,14 @@ describe('Play thick execution contract', () => {
         hasResource: (name: string) => name === 'VfxGpuRuntime',
         getResource: () => vfxRuntime,
       },
-      renderer: {
+      renderer: { inspect: () => ({
         perFramePassNames: ['forgeax.vfx-render.gpu-particles::gpu.main.draw.regular'],
-        renderFeatureDiagnostics: () => [{
+        featureDiagnostics: [{
           identity: 'forgeax.vfx-render.gpu-particles',
           status: 'active',
           latestError: { code: 'none' },
         }],
-      },
+      }) },
     } as unknown as PlayExecutionRealmContext;
 
     expect(projectRuntimeDiagnostics(context)).toEqual({
@@ -284,10 +284,10 @@ describe('Play thick execution contract', () => {
         query: () => ({ unwrap: () => [] }),
         hasResource: () => false,
       },
-      renderer: {
+      renderer: { inspect: () => ({
         perFramePassNames: [],
-        renderFeatureDiagnostics: () => [],
-      },
+        featureDiagnostics: [],
+      }) },
     } as unknown as PlayExecutionRealmContext;
 
     expect(projectRuntimeDiagnostics(context)).toEqual({

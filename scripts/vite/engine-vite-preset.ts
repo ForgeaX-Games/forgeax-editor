@@ -28,8 +28,8 @@ import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import {
   pluginPack,
-  type ForgeaXPackPlugin,
-  type PluginDdcOptions,
+  type PluginPack,
+  type PluginPackDdcOptions,
 } from '@forgeax/engine-vite-plugin-pack';
 import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 // Vite's config bundle externalizes package subpaths, leaving Node to load core's
@@ -75,7 +75,7 @@ export function resolveEngineProjectDdcRoot(gameDirAbs: string): string {
  * Play carrier without an initial game uses the host root until its first
  * explicit bind, which then switches the project root to that game.
  */
-export function resolveEngineDdcOptions(gameDirAbs: string | null): PluginDdcOptions {
+export function resolveEngineDdcOptions(gameDirAbs: string | null): PluginPackDdcOptions {
   // Standalone hosts may inject a process-scoped publication root. Keeping
   // this seam in the shared preset is important because the in-process chrome
   // host does not pass an explicit `ddc` object like Edit/Play do.
@@ -781,7 +781,7 @@ export interface EngineVitePresetOptions {
    */
   gameDirAbs: string | null;
   /** Host-selected DDC roots; fixed game hosts derive them from gameDirAbs. */
-  ddc?: PluginDdcOptions;
+  ddc?: PluginPackDdcOptions;
   /** Optional fixed binding for a standalone single-game dev host. */
   runtimeBinding?: RuntimeAssetBinding;
  /**
@@ -808,7 +808,7 @@ export interface EngineVitePresetOptions {
 export interface EngineVitePreset {
   plugins: PluginOption[];
   /** The one Pack producer used by this host, if it owns a catalog. */
-  pack: ForgeaXPackPlugin | null;
+  pack: PluginPack | null;
   optimizeDeps: { exclude: string[]; include: string[]; holdUntilCrawlEnd: false };
   resolve: { dedupe: string[]; preserveSymlinks: boolean };
   build: { target: 'esnext' };
@@ -889,7 +889,7 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
  // game directory supplied later by the scope controller; --game self-host
  // passes an abs dir. Both need bare @forgeax/* re-anchored at edit-runtime.
   plugins.push(gameEngineResolve({ gameDirAbs, ...opts.gameSource }));
-  let pack: ForgeaXPackPlugin | null = null;
+  let pack: PluginPack | null = null;
   if (selfHostPack) {
     if (cleanPackMetas) cleanOrphanMetas(packRoots);
    // Keep directory roots intact so newly-created packs remain visible to the
@@ -902,7 +902,6 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     plugins.push(decodeAssetUrl());
     pack = pluginPack({
      roots: [...expandedPackRoots],
-     base,
       ignorePath: isEditorBuildOnlyPackPath,
       importers: [
         audioImporter,
@@ -921,10 +920,6 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
       // bridges. The default is intentionally no-op so a shared preset cannot
       // accidentally full-reload a live editor viewport.
       refresh: packRefresh,
-      // The Engine owns the standard Scene/Material/Mesh producers and the
-      // fixed-generation dependency scheduler. Every Editor Vite carrier opts
-      // into that one composition so dev and build cannot drift.
-      scriptablePack: {},
       ddc,
       ...(opts.runtimeBinding === undefined && opts.pack?.runtimeBinding === undefined
         ? {}

@@ -10,6 +10,7 @@ import {
   createTexturePreviewPrimitive,
   previewSnapshot,
   type TexturePreviewPrimitive,
+  type TextureBinding,
 } from '@forgeax/engine-preview';
 import type { TextureAsset } from '@forgeax/engine-types';
 import {
@@ -94,7 +95,7 @@ function textureChannels(format: string): number {
   return 1;
 }
 
-function textureBindingFromPayload(guid: string, payload: Record<string, unknown>) {
+function textureBindingFromPayload(guid: string, payload: Record<string, unknown>): TextureBinding | undefined {
   const width = payload.width;
   const height = payload.height;
   const format = payload.format;
@@ -285,7 +286,7 @@ export class TexturePreviewWorldService {
 
     this.emit({ status: 'loading', assetGuid: asset.guid });
     const parsed = AssetGuid.parse(asset.guid);
-    const previewAssets = this.app.renderer?.assets;
+    const previewAssets = this.app.assets;
     let texture: TextureAsset | undefined;
 
     if (parsed.ok && previewAssets !== undefined) {
@@ -326,26 +327,7 @@ export class TexturePreviewWorldService {
     }
 
     const textureHandle = this.app.world.allocSharedRef('TextureAsset', texture);
-    const bytes = texture.data instanceof Uint8ClampedArray
-      ? new Uint8Array(texture.data.buffer, texture.data.byteOffset, texture.data.byteLength)
-      : texture.data;
-    const uploaded = await this.app.renderer?.store.uploadTexture(textureHandle, texture, {
-      bytes,
-      width: texture.width,
-      height: texture.height,
-      mime: 'image/png',
-      colorSpace: texture.colorSpace,
-      mipmap: texture.mipmap,
-    });
-    if (this.disposed || generation !== this.generation) return;
-    if (uploaded !== undefined && !uploaded.ok) {
-      this.emit({
-        status: 'failed',
-        assetGuid: asset.guid,
-        error: `Texture upload failed: ${String((uploaded.error as { message?: string })?.message ?? uploaded.error)}`,
-      });
-      return;
-    }
+    // Engine realizes referenced texture PODs through its render-owned residency path.
 
     const binding = textureBindingFromPayload(asset.guid, asset.payload);
     let primitive: TexturePreviewPrimitive | undefined;
@@ -431,9 +413,9 @@ export class TexturePreviewWorldService {
 
       this.app = created.value;
       if (runtimeBinding !== undefined) {
-        this.app.renderer?.assets.configureRuntimeBinding(runtimeBinding);
+        this.app.assets?.configureRuntimeBinding(runtimeBinding);
       }
-      const facade = createEngineFacade(this.app.world as never, this.app.renderer?.assets);
+      const facade = createEngineFacade(this.app.world as never, this.app.assets);
       this.assembly = assembleTexturePreviewWorld(facade);
 
       const syncSize = () => {

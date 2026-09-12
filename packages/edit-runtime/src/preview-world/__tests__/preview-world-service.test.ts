@@ -12,13 +12,12 @@ import {
 type FakeHost = HTMLDivElement & { readonly children: readonly unknown[] };
 type FakeApp = {
   readonly world: object;
-  readonly renderer: {
+  readonly renderer: {};
   readonly assets: {
     configureRuntimeBinding(binding: unknown): void;
     invalidate(guid: unknown): void;
     loadByGuid(guid: unknown): Promise<{ ok: boolean; value?: unknown; error?: { code: string } }>;
     instantiate(handle: unknown, world: unknown): { ok: boolean; value?: unknown; error?: { code: string } };
-  };
   };
   readonly start: ReturnType<typeof mock>;
   readonly stop: ReturnType<typeof mock>;
@@ -143,12 +142,16 @@ function createDependencies(
   projectedBinding?: unknown,
 ): PreviewWorldServiceDependencies {
   return {
+    createPreviewBundlerOptions: async () => ({
+      shaderManifestUrl: '/fixture/shaders/manifest.json',
+      importTransport: { fetchPack: async () => { throw new Error('fixture does not fetch packs'); } } as never,
+    }),
     createApp: (async (_canvas: unknown, _options: unknown, bundlerOptions: unknown) => {
       createdBundlerOptions.push(bundlerOptions);
       const app: FakeApp = {
         world: {},
-        renderer: {
-          assets: {
+        renderer: {},
+        assets: {
             invalidate() { previewInvalidateCalls += 1; },
             configureRuntimeBinding(binding) {
               configuredBindings.push(binding);
@@ -170,7 +173,6 @@ function createDependencies(
                 ? { ok: true, value: sceneRootHandle }
                 : { ok: false, error: { code: 'scene-instantiate-failed' } };
             },
-          },
         },
         start: mock(() => undefined),
         stop: mock(() => undefined),
@@ -267,6 +269,18 @@ beforeEach(() => {
 });
 
 describe('PreviewWorldService', () => {
+  it('publishes a failed preview when shader manifest preparation rejects', async () => {
+    const snapshots: Array<{ status: string; error?: string }> = [];
+    const service = new PreviewWorldService({
+      ...createDependencies(),
+      createPreviewBundlerOptions: async () => { throw new Error('shader manifest unavailable'); },
+    });
+    await service.mount(makeHost(), (snapshot) => snapshots.push(snapshot));
+    expect(apps).toHaveLength(0);
+    expect(snapshots.at(-1)).toMatchObject({ status: 'failed', error: 'shader manifest unavailable' });
+    service.dispose();
+  });
+
   it('mounts one independent app and makes mount/dispose idempotent', async () => {
     const service = new PreviewWorldService(createDependencies());
     const host = makeHost();

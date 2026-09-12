@@ -38,7 +38,7 @@ describe('viewport shader manifest URL', () => {
 describe('mergeViewportShaderManifests', () => {
   it('deduplicates entries by hash and material shaders by identifier', () => {
     const play = {
-      entries: [{ hash: 'engine', wgsl: 'engine', glsl: '', bindings: [] }],
+      entries: [{ hash: 'engine', wgsl: 'engine', glsl: '', bindings: '[]' }],
       materialShaders: [{
         identifier: 'forgeax::default-standard-pbr',
         sourcePath: 'pbr.wgsl',
@@ -48,7 +48,7 @@ describe('mergeViewportShaderManifests', () => {
       }],
     };
     const host = {
-      entries: [{ hash: 'grid', wgsl: 'grid', glsl: '', bindings: [] }],
+      entries: [{ hash: 'grid', wgsl: 'grid', glsl: '', bindings: '[]' }],
       materialShaders: [{
         identifier: 'editor::infinite-grid',
         sourcePath: 'infinite-grid.wgsl',

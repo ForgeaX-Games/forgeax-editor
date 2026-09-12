@@ -33,6 +33,11 @@ interface SourceAuthoringOperationResult {
 }
 
 export interface SourceAuthoringTransportDependencies {
+	/** Captured viewport identity; never follow a mutable host active-game value. */
+	readonly gameId?: string;
+	readonly scopeId?: string;
+	readonly generation?: number;
+	readonly endpoint?: string;
 	readonly fetch: (path: string, init?: RequestInit) => Promise<Response>;
 	readonly triggerCook?: (
 		guid: string,
@@ -246,6 +251,12 @@ export function createSourceAuthoringTransport(
 		observePublication,
 		...overrides,
 	};
+	const headers = {
+		"content-type": "application/json",
+		...(deps.gameId ? { "x-forgeax-game-id": deps.gameId } : {}),
+		...(deps.scopeId ? { "x-forgeax-scope-id": deps.scopeId } : {}),
+		...(deps.generation !== undefined ? { "x-forgeax-generation": String(deps.generation) } : {}),
+	};
 	const operations = SOURCE_AUTHORING_OPERATION_DESCRIPTORS.map(
 		(descriptor) => ({
 			id: descriptor.id,
@@ -260,9 +271,9 @@ export function createSourceAuthoringTransport(
 			const operation = { kind: "asset.preflight", sourcePath, requestId } as EditorOp;
 			let response: Response;
 			try {
-				response = await deps.fetch("/api/assets/source/execute", {
+				response = await deps.fetch(deps.endpoint ?? "/api/assets/source/execute", {
 					method: "POST",
-					headers: { "content-type": "application/json" },
+					headers,
 					body: JSON.stringify({ kind: "preflight", sourcePath, requestId }),
 				});
 			} catch (error) {
@@ -337,9 +348,9 @@ export function createSourceAuthoringTransport(
 				editorKind === "asset-source.cold-cook" ? "cold-cook" : "rebuild";
 			let response: Response;
 			try {
-				response = await deps.fetch("/api/assets/source/execute", {
+				response = await deps.fetch(deps.endpoint ?? "/api/assets/source/execute", {
 					method: "POST",
-					headers: { "content-type": "application/json" },
+					headers,
 					body: JSON.stringify({
 						...args,
 						kind: engineKindByEditorKind[

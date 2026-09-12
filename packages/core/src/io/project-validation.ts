@@ -36,7 +36,11 @@ export interface ProjectValidationStats {
 
 export interface ProjectValidationResult {
   readonly schemaVersion: typeof PROJECT_VALIDATION_SCHEMA_VERSION;
-  /** True means the producer validator found no blocking issue. */
+  /** Source preflight only: scriptable build bodies and Play are not executed. */
+  readonly scope: 'source-preflight';
+  readonly scriptableBuildsExecuted: false;
+  readonly runtimeVerified: false;
+  /** True means source preflight found no blocking issue; it does not prove Play readiness. */
   readonly ok: boolean;
   /** The existing validator's blocking and warning rows, in producer order. */
   readonly issues: readonly ProjectValidationIssue[];
@@ -162,6 +166,9 @@ export function normalizeProjectValidationResult(value: unknown): ProjectValidat
     ok: true,
     result: Object.freeze({
       schemaVersion: PROJECT_VALIDATION_SCHEMA_VERSION,
+      scope: 'source-preflight' as const,
+      scriptableBuildsExecuted: false as const,
+      runtimeVerified: false as const,
       ok: raw.ok,
       issues: Object.freeze(issues),
       issueCount: rows.length,

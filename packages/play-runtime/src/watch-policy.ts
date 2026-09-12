@@ -23,6 +23,9 @@ export const PLAY_RUNTIME_STATIC_WATCH_IGNORES = Object.freeze([
   '**/.forgeax/cache/**',
   '**/.forgeax/chrome-webgpu-profile/**',
   '**/.forgeax/packs/**',
+  // Native agent homes link user plugin caches containing unrelated tsconfigs.
+  // Their refresh must not invalidate the running game's Vite module graph.
+  '**/.forgeax/user/**',
   '**/node_modules/**',
   // Junction remounts of the active game appear as new files under the Vite
   // root (`host-games/<slug>/tsconfig.json`). Vite 8 treats any tsconfig add

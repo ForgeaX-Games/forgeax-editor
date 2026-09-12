@@ -929,7 +929,7 @@ export function createTransportService(options: TransportServiceOptions = {}): T
           ? dispatchSave(request, input)
           : runOperation(request, 'saveDocToDisk', request.params);
       }
-      if (request.method === 'reopen') return runOperation(request, 'reopenDocument', request.params);
+      if (request.method === 'reopen') return runOperation(request, 'loadDocFromDisk', request.params);
       if (request.method === 'run.dispatch') {
         const params = record(request.params);
         const operationId = typeof params.operationId === 'string' ? params.operationId : 'unknown';

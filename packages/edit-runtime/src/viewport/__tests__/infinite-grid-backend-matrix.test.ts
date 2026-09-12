@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { createSceneDataCatalog, type RenderFeaturePlanContext } from '@forgeax/engine-render';
+import { type RenderFeaturePlanContext } from '@forgeax/engine-render';
 import { createInfiniteGridFeature } from '../infinite-grid-feature';
 
 type BackendCase = {
@@ -51,12 +51,6 @@ function run(testCase: BackendCase) {
       { name: 'color', kind: 'color', format: testCase.colorFormat, sampleCount: testCase.sampleCount },
       { name: 'depth', kind: 'depth', format: testCase.depthFormat, sampleCount: testCase.sampleCount },
     ],
-    sceneData: createSceneDataCatalog({
-      featureIdentity: 'editor.infinite-grid',
-      generation: 1,
-      planIdentity: 'editor.infinite-grid:1',
-      rgba16floatRenderable: true,
-    }),
   };
   const result = feature.plan(extracted.value, context);
   if (!result.ok) throw result.error;

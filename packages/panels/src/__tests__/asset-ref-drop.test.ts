@@ -25,6 +25,11 @@ describe('asset-ref-drop', () => {
     expect(dropClassForVerdict('none')).toBe('');
   });
 
+  it('rejects an unspecified kind when the slot requires a declared kind', () => {
+    const { kind: _kind, ...drag } = textureDrag;
+    expect(resolveAssetDropVerdict('TextureAsset', drag, new Set(['texture']))).toBe('reject');
+  });
+
   it('accepts texture kinds for texture slots', () => {
     const kinds = new Set(['texture', 'image']);
     expect(resolveAssetDropVerdict('TextureAsset', textureDrag, kinds)).toBe('accept');

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createSceneDataCatalog, type RenderFeaturePlanContext } from '@forgeax/engine-render';
+import { type RenderFeaturePlanContext } from '@forgeax/engine-render';
 import { deriveInfiniteGridVisibility } from '../ViewportComponent';
 import {
   classifyGridPlane,
@@ -51,12 +51,6 @@ function renderContext(generation: number): RenderFeaturePlanContext {
     frame: { frameNumber: generation },
     generation,
     targets: renderTargets,
-    sceneData: createSceneDataCatalog({
-      featureIdentity: 'editor.infinite-grid',
-      generation,
-      planIdentity: `editor.infinite-grid:${generation}`,
-      rgba16floatRenderable: renderCaps.rgba16floatRenderable,
-    }),
   };
 }
 
