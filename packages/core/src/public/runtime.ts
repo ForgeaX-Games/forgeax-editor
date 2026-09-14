@@ -52,3 +52,5 @@ export type {
   BunGameRuntimePortOptions,
   BunRuntimeWorld,
 } from '../product/bun-game-runtime-port';
+
+export { createGameplayInputSurface } from '../io/gameplay-input-surface';

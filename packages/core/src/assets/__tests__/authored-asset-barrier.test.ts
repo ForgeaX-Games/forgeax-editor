@@ -99,9 +99,12 @@ describe('createAuthoredAssetCatalogBarrier', () => {
         lifecycle: 'current',
       }],
     });
-    registry.refreshCatalog = async () => {
+    registry.reconcileCatalog = async () => {
       useGoodRow = true;
-      return true;
+      return { ok: true, value: registry.catalogSnapshot()! };
+    };
+    registry.refreshCatalog = async () => {
+      throw new Error("Scoped replicas must refresh through reconcileCatalog");
     };
     registry.loadByGuid = (async () => ({ ok: true, value: { kind: 'material' } as MaterialAsset })) as unknown as typeof registry.loadByGuid;
 

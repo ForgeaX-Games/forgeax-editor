@@ -439,7 +439,7 @@ const builtinOps: ReadonlyArray<{
         // be `nullable` or the now-enforced door-validation (solo round-14) would
         // wrongly reject `spawnEntity{parent:null}`, a real caller shape.
         parent: { type: 'number', nullable: true, description: 'parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder — see `_id` below.' },
-        components: { type: 'object' },
+        components: { type: 'object', description: 'Component data using the live component schema. Use catalog asset GUIDs for shared asset fields such as MeshFilter.assetHandle and MeshRenderer.materials, or bindAssetRef after creation. Numeric asset handles are opaque live references, not catalog indexes; do not guess them. Zero means unassigned, not a builtin mesh. Omit MeshRenderer to use the mesh default material.' },
         source: { type: 'string' },
         // FORWARD-REFERENCE placeholder for use INSIDE a `transaction` (solo round-23):
         // give a spawn a NEGATIVE `_id` (e.g. -1), then a LATER sub-op in the same

@@ -11,7 +11,10 @@ describe('live gameplay operations', () => {
       listGameReads: () => [{ id: 'world', title: 'World' }],
       playPhase: 'play',
     } as never;
-    const operations = createGameplayOperations(gateway);
+    const operations = createGameplayOperations(gateway, undefined, async (action) => {
+      calls.push({ hostInput: action });
+      return { ok: true, data: { acknowledged: 1 } };
+    });
 
     expect(operations.describe()).toEqual({
       actions: [{ id: 'input', title: 'Input', argsSchema: null }],
@@ -20,9 +23,20 @@ describe('live gameplay operations', () => {
     await expect(operations.input({ type: 'key', key: 'ArrowRight', phase: 'down' })).resolves.toEqual({ ok: true, data: { acknowledged: 1 } });
     await expect(operations.query('')).resolves.toEqual({ ok: true, data: { entities: [] } });
     expect(calls).toEqual([
-      { id: 'input', args: { type: 'key', key: 'ArrowRight', phase: 'down' } },
+      { hostInput: { type: 'key', key: 'ArrowRight', phase: 'down' } },
       { id: 'world' },
     ]);
+  });
+
+  test('remote host input does not require a game-defined input action', async () => {
+    const requests: unknown[] = [];
+    const gateway = createRemoteGameplayGateway({
+      descriptors: () => ({ actions: [], reads: [] }),
+      request: async (request) => { requests.push(request); return { ok: true }; },
+    }, () => 'play');
+    const operations = createGameplayOperations(gateway);
+    await expect(operations.input({ type: 'key', key: 'w', phase: 'down' })).resolves.toEqual({ ok: true });
+    expect(requests).toEqual([{ operation: 'input', action: { type: 'key', key: 'w', phase: 'down' } }]);
   });
 
   test('reports unavailable without touching the gateway', async () => {

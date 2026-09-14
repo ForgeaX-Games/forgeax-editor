@@ -17,13 +17,6 @@ describe('live gameplay carrier bridge', () => {
     const gateway = new EditGateway(createEditSession());
     const inputCalls: unknown[] = [];
     const registry = gateway.createGameProjectionRegistry();
-    registry.registrar.registerAction({
-      id: 'input', title: 'Input',
-      run: (args) => {
-        inputCalls.push(args);
-        return { acknowledged: inputCalls.length };
-      },
-    });
     registry.registrar.registerRead({ id: 'world', title: 'World', read: () => ({ entities: [1] }) });
     gateway.enterPlay(new World());
     gateway.installGameProjection(registry);
@@ -31,14 +24,14 @@ describe('live gameplay carrier bridge', () => {
       captureImage: async () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
       getProvenance: () => identity,
     });
-    const bridge = createGameplayCarrierBridge(createGameplayOperations(gateway, capture), () => identity);
+    const bridge = createGameplayCarrierBridge(createGameplayOperations(gateway, capture, async (action) => { inputCalls.push(action); return { ok: true, data: { acknowledged: inputCalls.length } }; }), () => identity);
 
     await expect(bridge.execute({ version: 1, operation: 'describe' })).resolves.toMatchObject({
       ok: true,
       operation: 'describe',
       data: {
         projections: {
-          actions: [{ id: 'input', title: 'Input' }],
+          actions: [],
           reads: [{ id: 'world', title: 'World' }],
         },
       },

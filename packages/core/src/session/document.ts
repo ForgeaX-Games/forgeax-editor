@@ -64,7 +64,7 @@ export function applyCanonicalDocumentEffect(
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'resolveComponent' | 'componentDefinition' | 'editorComponentSchema' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
+  'get' | 'resolveComponent' | 'componentDefinition' | 'editorComponentSchema' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'sharedAssetKind' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.
@@ -504,6 +504,15 @@ export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
     return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
   }
   const compData = spawnComponentData(engine, cmd.name ?? 'Entity', parentEng, cmd.components);
+  // Spawn must resolve the same shared-field contract as add/set before any
+  // entity becomes visible to the renderer or enters the undo journal.
+  for (const entry of compData) {
+    const componentName = entry.component.name;
+    const resolved = resolveSharedFields(engine, componentName, entry.data);
+    if (!resolved.ok) return { ok: false, error: { code: 'SPAWN_FAILED', hint: resolved.hint } };
+    entry.data = resolved.value;
+  }
+
   console.info(`[placement-diag] spawn-applier.before ${JSON.stringify({
     name: cmd.name ?? 'Entity',
     parent: parentEng,
@@ -969,8 +978,8 @@ function sharedTargetOf(fieldType: string): string | null {
  *  shared<T> fields into live handles. Returns a NEW object with the resolved
  *  values (untouched fields copied by reference); a resolve miss on any GUID
  *  aborts with a structured error so the caller fails fast (never a silent
- *  handle-0). Non-shared fields and numeric (already-live) handle values pass
- *  through unchanged. When the component has no shared fields — or the value
+ *  handle-0). Non-shared fields pass through unchanged; numeric references are checked
+ *  against the active world before they are reused. When the component has no shared fields — or the value
  *  carries no GUID strings — the original object is returned as-is. */
 function resolveSharedFieldGuids(
   engine: EngineWriteProxy,
@@ -986,9 +995,20 @@ function resolveSharedFieldGuids(
     if (typeof fieldType !== 'string') continue;
     const target = sharedTargetOf(fieldType);
     if (target === null) continue;
+    // Zero is the supported unassigned shared reference. Nonzero numeric
+    // references must still belong to this world's live asset store.
+    for (const handle of Array.isArray(fieldValue) ? fieldValue : [fieldValue]) {
+      if (typeof handle !== 'number' || handle === 0) continue;
+      const kind = engine.sharedAssetKind(handle);
+      const expectedKind = target === 'MeshAsset' ? 'mesh' : target === 'MaterialAsset' ? 'material' : undefined;
+      if (kind === undefined || (expectedKind !== undefined && kind !== expectedKind)) {
+        return { ok: false, hint: `${componentName}.${field} requires a live ${target} reference; handle ${handle} ${kind === undefined ? 'is not registered' : `resolves to ${kind}`}. Use a catalog GUID or bindAssetRef; do not guess numeric handles.` };
+      }
+    }
+
 
     if (Array.isArray(fieldValue)) {
-      // array<shared<T>>: resolve string elements, pass numbers through.
+      // Numeric elements were checked above; resolve the remaining GUIDs.
       let changed = false;
       const resolvedArr: unknown[] = fieldValue.map((el) => {
         if (typeof el !== 'string') return el;

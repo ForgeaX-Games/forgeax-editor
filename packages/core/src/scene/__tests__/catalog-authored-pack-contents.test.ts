@@ -120,6 +120,6 @@ describe('catalogAuthoredPackContents', () => {
         },
       ],
     };
-    expect(scenePackRefsAreAllInline(pack, pack.assets[0])).toBe(false);
+    expect(scenePackRefsAreAllInline(pack, pack.assets[0]!)).toBe(false);
   });
 });

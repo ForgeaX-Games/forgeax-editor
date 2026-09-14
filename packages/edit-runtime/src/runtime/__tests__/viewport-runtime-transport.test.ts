@@ -804,6 +804,18 @@ describe('viewport runtime transport', () => {
     const gateway = { buildQueryFn: () => () => ({ ok: true, rows: [] }) } as any;
     const entries = [{ guid: 'mesh-a', kind: 'mesh', name: 'Mesh A', packageUrl: '/assets/a.pack.json' }];
     const query = createViewportProjectionQuery({ runtime, graph, gateway, readAssetCatalog: () => entries });
+    // Observed model request: a gameplay envelope with a string query.
+    for (const invalid of ['assets.catalog', { version: 1, operation: 'query', query: 'assets.catalog' }, { query: { kind: 'assets.catalog' } }]) {
+      expect(query(invalid)).toMatchObject({
+        status: 'faulted',
+        error: {
+          code: 'projection-query-invalid',
+          hint: expect.stringContaining('directly as transport params'),
+          retryable: false,
+          recoveryActions: ['query'],
+        },
+      });
+    }
     expect(query({ kind: 'assets.catalog' })).toMatchObject({
       status: 'ready',
       value: { entries },

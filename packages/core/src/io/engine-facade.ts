@@ -39,7 +39,7 @@ import {
   worldRemoveSceneOverride,
   worldSetSceneOverride,
 } from '@forgeax/engine-scene';
-import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle, type AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { PackError } from '@forgeax/engine-pack/errors';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetError, Handle, Result, SceneAsset } from '@forgeax/engine-types';
@@ -287,6 +287,12 @@ export class EngineFacade {
    *  pre-boot envs so applier-side Fail Fast input validation (e.g.
    *  createMaterial's baseColorTexture) can distinguish "known miss" from
    *  "validation unavailable" and only reject on the former. */
+  /** Read a live shared asset's kind without allocating or mutating it. */
+  sharedAssetKind(handle: number): string | undefined {
+    const result = resolveAssetHandle(this._world, handle as Handle<string, 'shared'>);
+    return result.ok ? result.value.kind : undefined;
+  }
+
   isAssetCatalogued(guid: string): boolean | undefined {
     if (!this._registry) return undefined;
     const parsed = AssetGuid.parse(guid);

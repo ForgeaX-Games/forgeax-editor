@@ -1,3 +1,4 @@
+import { createGameplayInputSurface } from '@forgeax/editor-core/gameplay-input';
 import { runtimeFailure } from './runtime-failure';
 import {
   createApp,
@@ -716,6 +717,8 @@ if (playSceneGuid !== undefined) {
 }
 
 const gameplayProjection = createPlayGameplayProjection();
+const gameplayInput = createGameplayInputSurface(canvas, document.body);
+window.addEventListener('pagehide', () => gameplayInput.dispose(), { once: true });
 const disposeGameplayBridge = onVagMessage(window, {
   // Keep the origin gate as the trust boundary, but do not add an exact
   // WindowProxy source gate here. The embedded Play page can cross a reverse
@@ -734,6 +737,8 @@ const disposeGameplayBridge = onVagMessage(window, {
         try {
           result = request.operation === 'describe'
             ? { ok: true as const, data: gameplayProjection.describe() }
+            : request.operation === 'input'
+              ? await gameplayInput.send(request.action)
             : request.operation === 'run'
               ? await gameplayProjection.run(request.id, request.args as Parameters<typeof gameplayProjection.run>[1])
               : await gameplayProjection.read(request.id);

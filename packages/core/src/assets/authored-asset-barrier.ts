@@ -83,6 +83,16 @@ function publicationLocator(row: CatalogRevisionFacts | undefined): Record<strin
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function refreshPublicationCatalog(registry: AssetRegistry): Promise<void> {
+  // A missed event leaves a healthy but outdated replica. The configured
+  // catalog, not its stale flag, determines which refresh contract owns it.
+  if (registry.catalogSnapshot?.() !== undefined) {
+    await registry.reconcileCatalog().catch(() => undefined);
+  } else {
+    await registry.refreshCatalog?.().catch(() => false);
+  }
+}
+
 type VisibleCatalogRow = CatalogRevisionFacts & {
   readonly packageUrl?: unknown;
   readonly kind?: unknown;
@@ -114,19 +124,15 @@ async function packBodyContainsGuid(packageUrl: string, key: string): Promise<bo
 
 /** Resolve a catalog row candidate; callers must prove the pack body before pinning cache. */
 function resolveVisibleCatalogRow(registry: AssetRegistry, key: string): VisibleCatalogRow | undefined {
+  const snapshot = registry.catalogSnapshot?.();
+  if (snapshot !== undefined) {
+    // A payload cache cannot override the current scoped publication, including
+    // a removal. In particular its abbreviated rows omit revision facts.
+    return snapshot.entries.find((entry) => entry.guid.toLowerCase() === key);
+  }
   const cached = registry.packIndexCache?.get(key) as VisibleCatalogRow | undefined;
   if (cached !== undefined && typeof cached.packageUrl === 'string' && cached.packageUrl.length > 0) {
     return cached;
-  }
-  const snapshotRow = registry.catalogSnapshot?.()?.entries.find(
-    (entry) => entry.guid.toLowerCase() === key,
-  );
-  if (
-    snapshotRow !== undefined &&
-    typeof snapshotRow.packageUrl === 'string' &&
-    snapshotRow.packageUrl.length > 0
-  ) {
-    return snapshotRow;
   }
   const listed = registry.listCatalog().find((entry) => entry.guid.toLowerCase() === key);
   if (listed !== undefined && typeof listed.packageUrl === 'string' && listed.packageUrl.length > 0) {
@@ -208,11 +214,7 @@ export function createAuthoredAssetCatalogBarrier(
         }
         registry.packIndexCache?.delete(key);
       }
-      if (registry.catalogSnapshot?.()?.stale === true) {
-        await registry.reconcileCatalog?.().catch(() => undefined);
-      } else {
-        await registry.refreshCatalog?.().catch(() => false);
-      }
+      await refreshPublicationCatalog(registry);
       await sleep(rowPollMs);
     }
     if (packageUrl === null) {
@@ -231,7 +233,7 @@ export function createAuthoredAssetCatalogBarrier(
         // loadByGuid is fetching the pack body. Refresh once after that load
         // so the operation completion and gateway.assetCatalog() observe the
         // same publication, rather than ending on the pre-import snapshot.
-        await registry.refreshCatalog?.().catch(() => false);
+        await refreshPublicationCatalog(registry);
         return;
       }
       lastError = loaded.error?.code ?? 'unknown';

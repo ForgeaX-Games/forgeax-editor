@@ -913,3 +913,5 @@ export type {
   RepairReport,
   RepairEntry,
 } from './scan/index';
+
+export { createGameplayInputSurface } from './io/gameplay-input-surface';

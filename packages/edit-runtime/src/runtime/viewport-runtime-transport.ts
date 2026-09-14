@@ -666,7 +666,7 @@ function projectionError(code: string, hint: string) {
 type ViewportProjectionQueryOptions = {
   readonly runtime: ViewportRuntimeIdentity;
   readonly graph: RuntimeUiGraph;
-  readonly gateway: Pick<EditGateway, 'buildQueryFn'>;
+  readonly gateway: Pick<EditGateway, 'buildQueryFn' | 'sceneReadModel'>;
   readonly readHierarchy?: () => HierarchyRuntimeProjection | undefined;
   readonly readInspector?: () => InspectorRuntimeProjection;
   readonly readAssetCatalog?: (compatibleWith?: string) => readonly AssetBrowserRegistryEntry[];
@@ -749,7 +749,11 @@ export function createViewportProjectionQuery(
     if (query === null) return {
         ...base,
         status: 'faulted',
-        error: projectionError('projection-query-invalid', 'Use runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, scene.readModel, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list.'),
+        error: {
+          ...projectionError('projection-query-invalid', 'Pass the query object directly as transport params, for example {"kind":"assets.catalog"}. Do not pass a string or nest it under query. Set kind to runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, scene.readModel, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list in with. Correct params before retrying; reconnecting does not repair query arguments.'),
+          retryable: false,
+          recoveryActions: ['query'],
+        },
       };
     // Play/Stop chrome reads viewport.status from Gateway/quadrant, not from the
     // selector graph. Gating it on graph bind left the toolbar disabled whenever

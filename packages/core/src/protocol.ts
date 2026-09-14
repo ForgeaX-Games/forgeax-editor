@@ -17,7 +17,7 @@
 
 import { z } from 'zod';
 import { VIEWPORT_CARRIER_KINDS } from '@forgeax/editor-product';
-import { GameplayScopeSchema, type GameplayScope } from './io/gameplay-contract';
+import { GameplayInputSchema, GameplayScopeSchema, type GameplayScope } from './io/gameplay-contract';
 
 // ── 1. VAG_CONSOLE ───────────────────────────────────────────────────────────
 // Producer: editor-runtime/main.tsx:267,272,275 (console proxy + global error).
@@ -152,6 +152,12 @@ export type VagCarrierFailureMessage = z.infer<typeof VagCarrierFailureSchema>;
 export const VAG_GAMEPLAY_PROTOCOL_VERSION = 1 as const;
 
 const VagGameplayRequestPayloadSchema = z.discriminatedUnion('operation', [
+  z.object({
+    version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
+    requestId: z.string().min(1),
+    operation: z.literal('input'),
+    action: GameplayInputSchema,
+  }).strict(),
   z.object({
     version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
     requestId: z.string().min(1),

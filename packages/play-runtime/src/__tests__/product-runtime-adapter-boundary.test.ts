@@ -20,3 +20,22 @@ test('production carriers do not expose raw evaluation or hidden browser transpo
     expect(source).not.toMatch(/chrom(e|ium)|playwright/i);
   }
 });
+
+
+test('Play entry consumes the browser-only gameplay input subpath without the Editor UI barrel', async () => {
+  const entrySource = readFileSync(resolve(root, 'packages/play-runtime/src/main.ts'), 'utf8');
+  expect(entrySource).not.toMatch(/from ['"]@forgeax\/editor-core['"]/);
+  expect(entrySource).toContain("from '@forgeax/editor-core/gameplay-input'");
+  const entry = Bun.resolveSync('@forgeax/editor-core/gameplay-input', resolve(root, 'packages/play-runtime'));
+  const result = await Bun.build({
+    entrypoints: [entry],
+    target: 'browser',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    write: false,
+  });
+  expect(result.success).toBe(true);
+  const bundled = await result.outputs[0]!.text();
+  expect(bundled).not.toMatch(/from ["']react(?:-dom|\/jsx-runtime)?["']/);
+  expect(bundled).not.toContain('store/selection');
+  expect(bundled).toContain('createGameplayInputSurface');
+});

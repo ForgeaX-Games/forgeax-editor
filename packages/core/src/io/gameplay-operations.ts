@@ -75,10 +75,12 @@ export type GameplayGateway = Pick<
   'invokeGameAction' | 'readGameState' | 'listGameActions' | 'listGameReads'
 > & {
   readonly playPhase: EditGateway['playPhase'];
+  sendGameplayInput?: (action: GameplayInput) => Promise<GameplayProducerResult>;
 };
 
 export type RemoteGameplayRequest =
   | { readonly operation: 'describe' }
+  | { readonly operation: 'input'; readonly action: GameplayInput }
   | { readonly operation: 'run'; readonly id: string; readonly args: unknown }
   | { readonly operation: 'read'; readonly id: string };
 
@@ -250,7 +252,7 @@ export function createGameplayCarrierBridge(
 }
 
 /** The typed producer for the already-connected live Gateway projection. */
-export function createGameplayOperations(gateway: GameplayGateway, capture?: GameplayCaptureGateway): GameplayOperations {
+export function createGameplayOperations(gateway: GameplayGateway, capture?: GameplayCaptureGateway, sendInput?: (action: GameplayInput) => Promise<GameplayProducerResult>): GameplayOperations {
   return {
     describe: () => ({
       actions: gateway.listGameActions(),
@@ -258,9 +260,8 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
     }),
     async input(action) {
       if (gateway.playPhase !== 'play') return unavailable('input requires an active live Play projection');
-      const result = await gateway.invokeGameAction('input', action);
-      if (!result.ok) return result;
-      return result.value === undefined ? { ok: true } : { ok: true, data: result.value };
+      const dispatch = gateway.sendGameplayInput ?? sendInput;
+      return dispatch ? dispatch(action) : unavailable('the Play host has no input surface');
     },
     async query(query) {
       if (gateway.playPhase !== 'play') return unavailable('query requires an active live Play projection');
@@ -317,6 +318,10 @@ export function createRemoteGameplayGateway(
     get playPhase() { return getPlayPhase(); },
     listGameActions: () => transport.descriptors().actions,
     listGameReads: () => transport.descriptors().reads,
+    sendGameplayInput: async (action) => {
+      if (getPlayPhase() !== 'play') return unavailableResult();
+      return transport.request({ operation: 'input', action });
+    },
     invokeGameAction: async (id, args) => {
       if (getPlayPhase() !== 'play') return unavailableResult();
       return remoteFailure<GameProjectionValue | undefined>(await transport.request({ operation: 'run', id, args }));

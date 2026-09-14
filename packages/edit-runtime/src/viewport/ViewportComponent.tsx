@@ -82,6 +82,7 @@ import {
   createGameplayCaptureGateway,
   createGameplayCarrierBridge,
   createGameplayOperations,
+  createGameplayInputSurface,
   registerLiveGameplayBridge,
   installSourceAuthoringOps,
   type CommandOrigin,
@@ -2082,8 +2083,13 @@ async function bootViewport(
         getProvenance: health.getIdentity,
       });
       const gameplayGateway = session?.getGameplayGateway() ?? gateway;
+      const gameplayInput = createGameplayInputSurface(canvas, container);
+      registerTeardown(() => gameplayInput.dispose());
       const bridge = createGameplayCarrierBridge(
-        createGameplayOperations(gameplayGateway, capture),
+        createGameplayOperations(gameplayGateway, capture, async (action) => {
+          grantGameControl();
+          return gameplayInput.send(action);
+        }),
         health.getIdentity,
       );
       registerTeardown(registerLiveGameplayBridge(bridge));
