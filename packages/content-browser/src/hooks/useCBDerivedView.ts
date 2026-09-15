@@ -41,6 +41,8 @@ export interface CBDerivedViewInputs {
   sort: SortAPI;
   nav: NavHistoryAPI;
   expandedPacks: Set<string>;
+  /** Virtual browser locations for catalog-only scenes with no disk file. */
+  virtualAssetPaths?: ReadonlyMap<string, string>;
   /** Canonical Engine projections supplied by the host; never rebuilt here. */
   scriptablePacks?: readonly ScriptablePackReadModel[];
 }
@@ -64,7 +66,20 @@ export interface CBDerivedView {
 }
 
 export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
-  const { allAssets, gameSlug, diskTree, catalogAssetRoots, favorites, favoritesOnly, filter, sort, nav, expandedPacks, scriptablePacks = [] } = inputs;
+  const {
+    allAssets,
+    gameSlug,
+    diskTree,
+    catalogAssetRoots,
+    favorites,
+    favoritesOnly,
+    filter,
+    sort,
+    nav,
+    expandedPacks,
+    virtualAssetPaths,
+    scriptablePacks = [],
+  } = inputs;
   const { t } = useTranslation();
 
   // Scope the catalog to THIS game's declared asset roots. Each kept entry
@@ -79,12 +94,13 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
       // author source remains a sibling file; for UI this is especially
       // important: `hud.ui.html.meta.json` owns the UI asset while
       // `.ui.html/.ui.css` are only authoring inputs.
-      const rel = catalogPathToRoot(a.kind === 'ui' ? a.packPath : (a.sourcePath ?? a.packPath), gameSlug, catalogAssetRoots);
+      const rel = virtualAssetPaths?.get(a.guid.toLowerCase())
+        ?? catalogPathToRoot(a.kind === 'ui' ? a.packPath : (a.sourcePath ?? a.packPath), gameSlug, catalogAssetRoots);
       if (!rel) continue;
       out.push({ asset: a, rel });
     }
     return out;
-  }, [allAssets, gameSlug, catalogAssetRoots]);
+  }, [allAssets, gameSlug, catalogAssetRoots, virtualAssetPaths]);
 
   const assetsByRel = useMemo(() => {
     const map = new Map<string, CBAsset[]>();

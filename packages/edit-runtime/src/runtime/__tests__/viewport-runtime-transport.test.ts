@@ -80,6 +80,50 @@ function transportGatewayStub(overrides: Record<string, unknown> = {}) {
 }
 
 describe('viewport runtime transport', () => {
+  test('public asset payload reads load cold scenes and preserve load failures', async () => {
+    const guid = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+    const payload = { kind: 'scene', entities: [{ localId: 1, components: {
+      Transform: { pos: [0, 0, 0], quat: [-0.707, 0, 0, 0.707], scale: [100, 100, 100] },
+    } }] };
+    const producerError = { code: 'artifact-missing', hint: 'Rebuild the missing artifact.',
+      expected: { guid }, actual: { status: 404 } };
+    let loaded: unknown;
+    let fail = false;
+    let loadCalls = 0;
+    const registry = { lookup: () => loaded, loadByGuid: async () => {
+      loadCalls++;
+      if (fail) return { ok: false, error: producerError };
+      loaded = payload;
+      return { ok: true, value: payload };
+    } };
+    const assetRuntime = { ...runtime, runtimeId: 'runtime-asset-payload' };
+    const gateway = transportGatewayStub({ doc: { registry }, lookupAsset: () => loaded });
+    const service = createViewportRuntimeTransportService({ runtime: assetRuntime,
+      referenceCreationScope, gateway,
+      graph: { stats: () => ({ status: 'bound' }), mount: () => ({
+        getSnapshot: () => ({ structureEpoch: 1, rows: [] }), subscribe: () => () => {}, unsubscribe() {},
+      }) } as any,
+    });
+    const request = (id: string) => ({ jsonrpc: '2.0' as const, version: TRANSPORT_PROTOCOL_VERSION,
+      id, correlationId: id, method: 'query' as const,
+      scope: 'viewport:runtime-asset-payload:4', params: { kind: 'assets.payload', guid } });
+    try {
+      expect(await service.handle(request('cold'))).toMatchObject({ result: {
+        status: 'ready', value: { guid, payload },
+      } });
+      expect(loadCalls).toBe(1);
+      await service.handle(request('warm'));
+      expect(loadCalls).toBe(1);
+      loaded = undefined;
+      fail = true;
+      expect(await service.handle(request('failed'))).toMatchObject({ result: {
+        status: 'faulted', error: { code: 'asset-payload-load-failed',
+          details: { guid, cause: producerError },
+        },
+      } });
+    } finally { service.dispose(); }
+  });
+
   test('accepts only precise asset publication invalidations', () => {
     expect(isViewportRuntimeProjectionInvalidatedMessage({
       type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,

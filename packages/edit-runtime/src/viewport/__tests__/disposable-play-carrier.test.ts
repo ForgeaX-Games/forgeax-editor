@@ -4,12 +4,16 @@ import {
   type DisposablePlayFrame,
   type DisposablePlayFrameHost,
 } from '../disposable-play-carrier';
+import type { PlayCarrierEvent } from '../../feedback-health';
 import { createRunLifecycle } from '../run-lifecycle';
 
 function harness(
   onFps?: (fps: number, generation: number) => void,
   options: {
     readonly livenessTimeoutMs?: number;
+    readonly startupProbeTimeoutMs?: number;
+    readonly release?: () => Promise<{ ok: true }>;
+    readonly restore?: () => Promise<{ ok: true }>;
     readonly unreachableConfirmations?: number;
     /** Simulated runtime-URL reachability for the liveness probe. */
     readonly reachable?: () => boolean;
@@ -18,6 +22,14 @@ function harness(
   } = {},
 ) {
   const events: string[] = [];
+  const carrierEvents: PlayCarrierEvent[] = [];
+  const payload = {
+    version: 1, runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a:play', carrierKind: 'iframe',
+    challengeResponse: null, scope: { projectId: 'project-a', gameId: 'game-a' },
+    pageNonce: 'page-a', pageIdentity: '/preview/', canvasIdentity: 'canvas-a',
+    rendererGeneration: 1, rendererIdentity: 'renderer-a', sentinel: 1,
+    liveness: 'alive', renderReadiness: 'ready', failure: null,
+  };
   const listeners = new Set<(event: MessageEvent) => void>();
   const captureFrames: number[] = [];
   const failures: Array<{ code: string; hint: string }> = [];
@@ -55,6 +67,8 @@ function harness(
   const frame = { generation: 1, source, element: {} as HTMLIFrameElement } satisfies DisposablePlayFrame;
   const host: DisposablePlayFrameHost = {
     create(generation, url) {
+      payload.carrierId = `carrier-a:play:${generation}`;
+      payload.pageNonce = `page-${generation}`;
       events.push(`create:${generation}:${url}`);
       return { ...frame, generation };
     },
@@ -67,17 +81,19 @@ function harness(
   };
   const carrier = createDisposablePlayCarrier({
     container: {} as HTMLElement,
-    url: (generation) => `/preview/?playGeneration=${generation}&runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play&carrierKind=iframe`,
-    releaseEditSurface: async () => { events.push('release'); return { ok: true }; },
-    restoreEditSurface: async () => { events.push('restore'); return { ok: true }; },
+    url: (generation) => `/preview/?playGeneration=${generation}&runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play:${generation}&carrierKind=iframe`,
+    releaseEditSurface: async () => { events.push('release'); return options.release ? options.release() : { ok: true }; },
+    restoreEditSurface: async () => { events.push('restore'); return options.restore ? options.restore() : { ok: true }; },
     host,
-    readyTimeoutMs: 50,
+    readyTimeoutMs: options.startupProbeTimeoutMs === undefined ? 50 : 5_000,
+    ...(options.startupProbeTimeoutMs === undefined ? {} : { startupProbeTimeoutMs: options.startupProbeTimeoutMs }),
     ...(options.livenessTimeoutMs === undefined ? {} : { livenessTimeoutMs: options.livenessTimeoutMs }),
     ...(options.unreachableConfirmations === undefined
       ? {}
       : { unreachableConfirmations: options.unreachableConfirmations }),
     ...(onFps ? { onFps } : {}),
     onFailure: (failure) => failures.push(failure),
+    onCarrierEvent: (event) => carrierEvents.push(event),
   });
   // The liveness probe reads runtime reachability through global fetch; stub it
   // so a test can hold the runtime "dead" while frames keep arriving.
@@ -98,11 +114,13 @@ function harness(
   } else if (options.reachable) {
     globalThis.fetch = (async () => {
       probes += 1;
-      return { ok: options.reachable!(), body: null } as unknown as Response;
+      return { ok: options.reachable!(), status: options.reachable!() ? 200 : 500, body: null } as unknown as Response;
     }) as unknown as typeof fetch;
   }
   return {
     carrier,
+    carrierEvents,
+    payload,
     events,
     captureFrames,
     failures,
@@ -112,27 +130,118 @@ function harness(
       for (const next of [...listeners]) next({ source: eventSource, data } as MessageEvent);
     },
     ready(identity: { runtimeGeneration?: number; carrierId?: string } = {}) {
-      this.send({ type: 'VAG_CARRIER_HEARTBEAT', payload: {
+      this.send({ type: 'VAG_CARRIER_HEARTBEAT', payload: { ...payload,
           runtimeId: 'runtime-a', runtimeGeneration: identity.runtimeGeneration ?? 4,
-          carrierId: identity.carrierId ?? 'carrier-a:play', carrierKind: 'iframe', renderReadiness: 'ready',
+          carrierId: identity.carrierId ?? payload.carrierId, carrierKind: 'iframe', renderReadiness: 'ready',
       } });
     },
     fail(failure: { code: string; hint: string; message?: string }) {
-      this.send({ type: 'VAG_CARRIER_FAILURE', payload: {
-          runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a:play', carrierKind: 'iframe', failure,
+      this.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...payload,
+          runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: payload.carrierId, carrierKind: 'iframe', failure: { stage: 'renderer', retryable: false, at: '2026-09-14T14:00:00Z', ...failure },
       } });
     },
   };
 }
 
 describe('disposable Play carrier', () => {
+  it('recovers from release cancellation so the next Play can start', async () => {
+    let rejectRelease = true;
+    const h = harness(undefined, { release: async () => {
+      if (rejectRelease) throw Object.assign(new Error('play was cancelled before its next write boundary'), { code: 'run-cancelled' });
+      return { ok: true };
+    } });
+    expect(await h.carrier.start()).toMatchObject({ ok: false, error: { code: 'run-cancelled' } });
+    expect(h.carrier.state()).toBe('edit');
+    rejectRelease = false;
+    const next = h.carrier.start();
+    await Bun.sleep(0);
+    h.ready();
+    expect(await next).toEqual({ ok: true });
+    await h.carrier.stop();
+  });
+
+  it('does not mount a cancelled pending release after Stop', async () => {
+    let release!: () => void;
+    const h = harness(undefined, { release: () => new Promise((resolve) => { release = () => resolve({ ok: true }); }) });
+    const started = h.carrier.start();
+    const stopped = h.carrier.stop();
+    expect(h.carrier.stop()).toBe(stopped);
+    expect(h.carrier.state()).toBe('stopping');
+    release();
+    expect(await started).toMatchObject({ ok: false });
+    expect(await stopped).toEqual({ ok: true });
+    expect(h.events).not.toContain('mount');
+    expect(h.carrier.state()).toBe('edit');
+  });
+
+  it('leaves the transition state even if Edit restoration throws', async () => {
+    const h = harness(undefined, { restore: async () => { throw new Error('restore failed'); } });
+    const started = h.carrier.start();
+    await Promise.resolve();
+    h.ready();
+    await started;
+    await expect(h.carrier.stop()).rejects.toThrow('restore failed');
+    expect(h.carrier.state()).toBe('edit');
+  });
+
+  it('reports unavailable preview HTTP before the first-frame deadline and restores Edit', async () => {
+    const h = harness(undefined, { startupProbeTimeoutMs: 20, unreachableConfirmations: 1, reachable: () => false });
+    try {
+      expect(await h.carrier.start()).toEqual({ ok: false, error: {
+        code: 'play-runtime-unavailable',
+        hint: 'The Play preview document returned HTTP 500. Check the preview service and its build diagnostics, then try Play again.',
+      } });
+      expect(h.carrier.state()).toBe('edit');
+      expect(h.events.filter((event) => event === 'restore')).toHaveLength(1);
+    } finally { h.restoreFetch(); }
+  });
+
+  it('bounds a hung startup probe instead of waiting for the readiness deadline', async () => {
+    const h = harness(undefined, { startupProbeTimeoutMs: 20, unreachableConfirmations: 1, hang: true });
+    try {
+      const startedAt = Date.now();
+      expect(await h.carrier.start()).toMatchObject({ ok: false, error: { code: 'play-runtime-unavailable' } });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally { h.restoreFetch(); }
+  });
+
+  it('cancels the pending startup probe on readiness and never reports a later false failure', async () => {
+    const h = harness(undefined, { startupProbeTimeoutMs: 20, unreachableConfirmations: 1, hang: true });
+    try {
+      const started = h.carrier.start();
+      await Promise.resolve();
+      h.ready();
+      expect(await started).toEqual({ ok: true });
+      await Bun.sleep(30);
+      expect(h.carrier.state()).toBe('play');
+      expect(h.failures).toEqual([]);
+      await h.carrier.stop();
+    } finally { h.restoreFetch(); }
+  });
+
+  it('settles startup immediately when stopped without a second restore or removing the next frame', async () => {
+    const h = harness(undefined, { startupProbeTimeoutMs: 20, hang: true });
+    try {
+      const started = h.carrier.start();
+      await Promise.resolve();
+      await h.carrier.stop();
+      expect(await started).toMatchObject({ ok: false, error: { code: 'play-carrier-stopped' } });
+      expect(h.events.filter((event) => event === 'restore')).toHaveLength(1);
+      const next = h.carrier.start();
+      await Promise.resolve();
+      h.ready();
+      expect(await next).toEqual({ ok: true });
+      await h.carrier.stop();
+    } finally { h.restoreFetch(); }
+  });
+
   it('releases Edit before mounting Play and hard-removes Play before restore', async () => {
     const h = harness();
     const started = h.carrier.start();
     await Promise.resolve();
     expect(h.events.slice(0, 3)).toEqual([
       'release',
-      'create:1:/preview/?playGeneration=1&runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play&carrierKind=iframe',
+      'create:1:/preview/?playGeneration=1&runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play:1&carrierKind=iframe',
       'mount',
     ]);
     h.ready();
@@ -169,7 +278,7 @@ describe('disposable Play carrier', () => {
     await Promise.resolve();
     const message = '[engine] requested runtime generation does not match the active binding';
     h.fail({ code: 'play-carrier-boot-failed', hint: 'inspect the child boot log', message });
-    await expect(started).resolves.toEqual({ ok: false, error: { code: 'play-carrier-boot-failed', hint: message } });
+    await expect(started).resolves.toMatchObject({ ok: false, error: { code: 'play-carrier-boot-failed', hint: message } });
     expect(h.events).toContain('remove');
     expect(h.failures).toEqual([]);
   });
@@ -183,7 +292,7 @@ describe('disposable Play carrier', () => {
 
     h.fail({ code: 'device-lost', hint: 'GPU queue stopped', message: 'WebGPU device lost' });
     await Bun.sleep(25);
-    expect(h.failures).toEqual([{ code: 'device-lost', hint: 'WebGPU device lost' }]);
+    expect(h.failures).toMatchObject([{ code: 'device-lost', hint: 'WebGPU device lost' }]);
     await h.carrier.stop();
   });
 
@@ -342,7 +451,7 @@ describe('disposable Play carrier', () => {
     });
     const started = carrier.start();
     await Promise.resolve();
-    listener?.({ source, data: { type: 'VAG_CARRIER_HEARTBEAT', payload: {
+    listener?.({ source, data: { type: 'VAG_CARRIER_HEARTBEAT', payload: { ...harness().payload,
       runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a', carrierKind: 'iframe', renderReadiness: 'ready',
     } } } as MessageEvent);
     await expect(started).resolves.toEqual({ ok: true });
@@ -385,7 +494,7 @@ describe('disposable Play carrier', () => {
     });
     const missingStart = missingProvenance.start();
     await Promise.resolve();
-    listener?.({ source: missingSource, data: { type: 'VAG_CARRIER_HEARTBEAT', payload: {
+    listener?.({ source: missingSource, data: { type: 'VAG_CARRIER_HEARTBEAT', payload: { ...harness().payload,
       runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a', carrierKind: 'iframe', renderReadiness: 'ready',
     } } } as MessageEvent);
     await expect(missingStart).resolves.toEqual({ ok: true });
@@ -469,4 +578,87 @@ describe('disposable Play carrier', () => {
     expect(calls).toEqual({ start: 50, stop: 50, enter: 50, exit: 50, assemble: 0, pause: 0, resume: 0 });
     expect(lifecycle.currentPlayWorld()).toBeNull();
   });
+});
+
+
+describe('Play carrier failure provenance', () => {
+  it('preserves startup failure identity and original time with its initiating request', async () => {
+    const h = harness();
+    const started = h.carrier.start('request-startup');
+    await Promise.resolve();
+    h.fail({ code: 'boot-failed', hint: 'original failure' });
+    const result = await started;
+    expect(result.ok).toBe(false);
+    expect(h.carrierEvents).toHaveLength(1);
+    expect(h.carrierEvents[0]?.requestId).toBe('request-startup');
+    expect(h.carrierEvents[0]?.event.payload.failure?.at).toBe('2026-09-14T14:00:00Z');
+    expect(h.carrierEvents[0]?.event.payload.scope).toEqual(h.payload.scope);
+    expect(h.carrierEvents[0]?.event.payload.pageNonce).toBe('page-1');
+    const event = h.carrierEvents[0]?.event;
+    if (!result.ok && event?.type === 'VAG_CARRIER_FAILURE') expect(result.error.carrierFailure).toEqual(event);
+  });
+
+  it('drops wrong-source, malformed and stale-page events while retaining the original request', async () => {
+    const h = harness();
+    const started = h.carrier.start('request-running');
+    await Promise.resolve();
+    h.ready();
+    await started;
+    const failure = { code: 'app-system-update-failed', hint: 'system failed', stage: 'renderer' as const, retryable: false, at: '2026-09-14T14:01:00Z' };
+    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure } }, {} as WindowProxy);
+    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, pageNonce: 'old-page', failure } });
+    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure: { code: 'missing-time' } } });
+    expect(h.carrierEvents).toHaveLength(1);
+    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure } });
+    expect(h.carrierEvents).toHaveLength(2);
+    expect(h.carrierEvents[1]?.requestId).toBe('request-running');
+    expect(h.carrierEvents[1]?.event.payload.failure).toEqual(failure);
+    await h.carrier.stop();
+    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure } });
+    expect(h.carrierEvents).toHaveLength(2);
+  });
+});
+
+
+it('fences an old Play attempt even when runtime generation and WindowProxy are reused', async () => {
+  const h = harness();
+  const first = h.carrier.start('first');
+  await Promise.resolve();
+  h.ready();
+  await first;
+  const old = { ...h.payload };
+  await h.carrier.stop();
+  const second = h.carrier.start('second');
+  await Promise.resolve();
+  const failure = { code: 'renderer-error', hint: 'old renderer', stage: 'renderer', retryable: false, at: '2026-09-14T14:00:00Z' };
+  h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...old, failure } });
+  expect(h.carrierEvents).toHaveLength(1);
+  h.ready();
+  expect(await second).toEqual({ ok: true });
+  expect(h.carrierEvents[1]?.requestId).toBe('second');
+  expect(h.carrierEvents[1]?.event.payload.runtimeGeneration).toBe(old.runtimeGeneration);
+  expect(h.carrierEvents[1]?.event.payload.carrierId).not.toBe(old.carrierId);
+  await h.carrier.stop();
+});
+
+
+it('keeps startup provenance through the lifecycle failure callback used by health', async () => {
+  const h = harness();
+  const failures: unknown[] = [];
+  const lifecycle = createRunLifecycle({
+    gateway: {
+      playPhase: 'edit', beginPlayAttempt() {}, failPlayAttempt() {},
+      enterPlay() {}, exitPlay() {},
+    } as never,
+    editorApp: { pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
+    assemble: async () => { throw new Error('remote carrier owns assembly'); },
+    remoteCarrier: h.carrier,
+    onPlayFailed: (error) => failures.push(error),
+  });
+  const started = lifecycle.playSimulation('lifecycle-request');
+  await Promise.resolve();
+  h.fail({ code: 'boot-failed', hint: 'original boot error' });
+  await started;
+  expect(failures).toMatchObject([{ code: 'boot-failed', carrierFailure: h.carrierEvents[0]?.event }]);
+  expect(h.carrierEvents[0]?.requestId).toBe('lifecycle-request');
 });

@@ -70,3 +70,39 @@ describe('runtime binding loader', () => {
     ).rejects.toThrow('HTTP 502');
   });
 });
+
+for (const status of [200, 503]) {
+  test(`known blocking failure for this binding fails immediately for HTTP ${status}`, async () => {
+    const diagnostic = { code: 'scan-failed', severity: 'blocking', cause: [{ code: 'pack-source-external-closure-mismatch', detail: { sourcePath: './assets/scene.pack.ts', unusedDeclaredGuids: ['guid'] } }] };
+    let calls = 0;
+    const failure = await loadRuntimeBinding('binding', async () => {
+      calls++;
+      return Response.json({ ...binding, status: status === 200 ? 'degraded' : 'unavailable', diagnostic, diagnostics: [diagnostic] }, { status });
+    }, options({ expected: binding })).catch(error => error);
+    expect(calls).toBe(1);
+    expect(failure.code).toBe('pack-source-external-closure-mismatch');
+    expect(failure.retryable).toBe(false);
+    expect(failure.diagnostics.at(-1)).toEqual({ code: 'pack-source-external-closure-mismatch', sourcePath: './assets/scene.pack.ts', unusedDeclaredGuids: ['guid'] });
+  });
+}
+
+test('old-generation unavailable diagnostics cannot describe this Play attempt', async () => {
+  let calls = 0;
+  const result = await loadRuntimeBinding('binding', async () => {
+    calls++;
+    return calls === 1 ? Response.json({ ...binding, generation: 2, status: 'unavailable', diagnostic: { code: 'old-error' } }, { status: 503 }) : Response.json(binding);
+  }, options({ expected: binding }));
+  expect(calls).toBe(2);
+  expect(result).toEqual(binding);
+});
+test('a different game ready response cannot be accepted', async () => {
+  await expect(loadRuntimeBinding('binding', async () => Response.json({ ...binding, gameId: 'other' }), options({ expected: binding }))).rejects.toMatchObject({ code: 'play-runtime-scope-stale' });
+});
+test('temporary transport failure is retried without inventing a pack error', async () => {
+  let calls = 0;
+  expect(await loadRuntimeBinding('binding', async () => {
+    if (++calls === 1) throw new Error('temporary network loss');
+    return Response.json(binding);
+  }, options({ expected: binding }))).toEqual(binding);
+  expect(calls).toBe(2);
+});

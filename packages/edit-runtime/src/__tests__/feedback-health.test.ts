@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import {
   errorMessage,
+  carrierFailureFromError,
+  forwardFeedbackHealth,
+  publishPlayCarrierEvent,
+  subscribePlayCarrierEvents,
   isReportablePlayFailure,
   normalizeCarrierFailureCode,
   normalizePlayFailureCode,
@@ -107,4 +111,38 @@ describe('carrier failure codes never escape the classifier', () => {
       .toBe('renderer-error');
     expect(normalizeCarrierFailureCode(null)).toBe('renderer-error');
   });
+});
+
+
+it('forwards validated producer identity and original failure time through health and subscriptions', () => {
+  const raw = { type: 'VAG_CARRIER_FAILURE', payload: {
+    version: 1, runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'play-2', carrierKind: 'iframe',
+    challengeResponse: null, scope: { projectId: 'project-a', gameId: 'game-a' }, pageNonce: 'page-a',
+    pageIdentity: '/preview/', canvasIdentity: 'canvas-a', rendererGeneration: 1, rendererIdentity: 'renderer-a',
+    sentinel: 1, liveness: 'terminated', renderReadiness: 'unavailable',
+    failure: { code: 'system-failed', hint: 'original message', stage: 'renderer', retryable: false, at: '2026-09-14T14:00:00Z' },
+  } };
+  const failure = carrierFailureFromError({ carrierFailure: raw });
+  expect(failure).toBeDefined();
+  expect(carrierFailureFromError({ carrierFailure: { type: raw.type, payload: {} } })).toBeUndefined();
+  const received: unknown[] = [];
+  const unsubscribe = subscribePlayCarrierEvents((event) => received.push(event));
+  const broken = subscribePlayCarrierEvents(() => { throw new Error('host observer failed'); });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const posted: unknown[] = [];
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { parent: { postMessage: (message: unknown) => posted.push(message) } } });
+  try {
+    if (!failure) throw new Error('valid fixture rejected');
+    publishPlayCarrierEvent({ requestId: 'original-request', event: failure });
+    forwardFeedbackHealth({ source: 'play', code: 'renderer-error', message: 'display message', carrierFailure: failure });
+    expect(received).toEqual([{ requestId: 'original-request', event: raw }]);
+    expect(posted).toEqual([{ type: 'forgeax:health', level: 'error', source: 'play', code: 'renderer-error', message: 'display message', carrierFailure: raw }]);
+    unsubscribe();
+    publishPlayCarrierEvent({ event: failure });
+    expect(received).toHaveLength(1);
+  } finally {
+    unsubscribe(); broken();
+    if (previous) Object.defineProperty(globalThis, 'window', previous);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
 });

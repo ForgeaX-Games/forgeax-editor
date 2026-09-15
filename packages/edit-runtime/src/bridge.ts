@@ -27,6 +27,7 @@ export {
   bindViewportRuntimeClient,
   forwardViewportRuntimeTransportRequest,
   getViewportRuntimeClientSnapshot,
+  queryViewportRuntimeProjection,
   subscribeViewportRuntimeClient,
   createEvalChannel,
   resolveGamePath,
@@ -180,3 +181,5 @@ export function createEditorPanelContributionsExtension(): AppExtension {
     },
   };
 }
+
+export { subscribePlayCarrierEvents, type PlayCarrierEvent } from './feedback-health';

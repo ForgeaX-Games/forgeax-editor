@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { sceneActivationToOp, scenePromoteToOp } from '../scene-activation-route';
+import { catalogSceneVirtualPaths, sceneActivationToOp, scenePromoteToOp } from '../scene-activation-route';
 import type { SceneActivationDescriptor } from '@forgeax/editor-core';
 
 const base: SceneActivationDescriptor = {
@@ -16,6 +16,31 @@ const base: SceneActivationDescriptor = {
 };
 
 describe('Content Browser scene activation route', () => {
+  it('projects catalog-only defaults into the Scenes folder without changing authored paths', () => {
+    const paths = catalogSceneVirtualPaths([
+      {
+        id: 'default',
+        name: 'Default Scene',
+        pack: null,
+        guid: 'DEFAULT-GUID',
+        provenance: 'catalog-default',
+        isCurrent: false,
+        isDefault: true,
+      },
+      {
+        id: 'level-2',
+        name: 'Level 2',
+        pack: 'assets/scenes/level-2.pack.json',
+        guid: 'AUTHORED-GUID',
+        isCurrent: true,
+        isDefault: false,
+      },
+    ]);
+
+    expect(paths.get('default-guid')).toBe('assets/scenes/default.scene');
+    expect(paths.has('authored-guid')).toBe(false);
+  });
+
   it('routes authored descriptors to switchSceneFile', () => {
     expect(sceneActivationToOp({
       ...base,
@@ -23,6 +48,21 @@ describe('Content Browser scene activation route', () => {
       mode: 'open-authored',
       authoredSceneId: 'main',
     })).toMatchObject({ kind: 'switchSceneFile', id: 'main', requestId: expect.any(String) });
+  });
+
+  it('routes catalog defaults through the resilient scene switch path', () => {
+    expect(sceneActivationToOp({
+      ...base,
+      provenance: 'catalog-default',
+      mode: 'open-catalog',
+      authoredSceneId: 'default',
+      canEditInstance: false,
+      canPromote: false,
+    }, undefined, 'catalog-switch')).toEqual({
+      kind: 'switchSceneFile',
+      id: 'default',
+      requestId: 'catalog-switch',
+    });
   });
 
   it('routes imported descriptors by GUID without scene-list/path guessing', () => {

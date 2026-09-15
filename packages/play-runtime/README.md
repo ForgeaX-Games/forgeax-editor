@@ -104,3 +104,24 @@ Play World 是本次独立 Play 的唯一运行时 World。它不接受 Edit Wor
 | VAG 消息没有到达宿主 | 使用了非 SSOT 的自定义消息名或绕过协议 schema | 复用 `@forgeax/editor-core/protocol` 的 VAG schema 和 `sendVagMessage` |
 | HMR 不生效 | 文件事件未传到 engine-src 的 Vite watcher | 确认 `usePolling: true` 且 `run.sh` 的 symlink 有效 |
 | play-runtime 端口被占用 | 另一个 engine Vite 实例未停止 | 使用对应 host 的 stop 命令停止服务后重试；不要结束其他 workspace 的 Play 进程 |
+
+
+### Scoped source metadata recovery
+
+The host-authenticated `POST /__pack/control/recover-asset` accepts the normal
+binding fields (`gameId`, `gameDir`, `scopeId`, `generation`) plus one project-relative
+`sourcePath`. It uses `x-forgeax-runtime-secret`, shares the binding queue, and
+requires a newer generation and a currently bound or previously attempted game.
+The source must already exist inside that project; external paths and symlink
+sidecars are rejected. Existing metadata must expose valid producer identities.
+Recovery uses the same metadata producer as interactive import, preserves those
+identities, checks the source/sidecar snapshot before its atomic write, then runs
+the ordinary full Pack rebind. It never repairs an entire directory automatically.
+
+Success returns `{ ok: true, sourcePath, metaPath, subAssets, metadataRebuilt: true,
+binding }`. A failure returns HTTP 409 with `error`, `code`, `diagnostic` and
+`metadataRebuilt`; the latter stays true when metadata was written but another
+source still prevents the full catalog from binding. A lost response gives no
+proof about the write outcome. Bind failures and the initial binding probe retain
+structured `code`/`expected`/`hint`/`detail`/`cause` diagnostics with project-relative
+paths and without raw Error stacks or credential fields.

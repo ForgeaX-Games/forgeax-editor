@@ -82,6 +82,25 @@ export const VAG_CARRIER_PROTOCOL_VERSION = 1 as const;
 export const VagCarrierScopeSchema = GameplayScopeSchema;
 export type VagCarrierScope = GameplayScope;
 
+// A bounded projection of producer diagnostics, never an arbitrary Error payload.
+export const VagRuntimeDiagnosticSchema = z.object({
+  code: z.string().min(1).max(256),
+  hint: z.string().max(2000).optional(),
+  expected: z.string().max(2000).optional(),
+  actual: z.string().max(2000).optional(),
+  propertyPath: z.string().max(4096).optional(),
+  unexpectedSourceKeys: z.array(z.string().max(4096)).max(100).optional(),
+  kindMismatches: z.array(z.object({ sourceKey: z.string().max(4096), expected: z.string().max(2000), actual: z.string().max(2000) })).max(100).optional(),
+  sourcePath: z.string().max(4096).optional(),
+  sourceKey: z.string().max(4096).optional(),
+  missingGuids: z.array(z.string().max(128)).max(100).optional(),
+  undeclaredReferencedGuids: z.array(z.string().max(128)).max(100).optional(),
+  undeclaredReadGuids: z.array(z.string().max(128)).max(100).optional(),
+  unusedDeclaredGuids: z.array(z.string().max(128)).max(100).optional(),
+});
+export const VagRuntimeDiagnosticsSchema = z.array(VagRuntimeDiagnosticSchema).max(16);
+export type VagRuntimeDiagnostic = z.infer<typeof VagRuntimeDiagnosticSchema>;
+
 export const VagCarrierFailureDetailSchema = z.object({
   code: z.string().min(1),
   stage: z.enum(['handshake', 'heartbeat', 'renderer', 'device-lost', 'uncaptured-error']),
@@ -89,6 +108,7 @@ export const VagCarrierFailureDetailSchema = z.object({
   hint: z.string().min(1),
   at: z.string().min(1),
   message: z.string().optional(),
+  diagnostics: VagRuntimeDiagnosticsSchema.optional(),
 });
 export type VagCarrierFailureDetail = z.infer<typeof VagCarrierFailureDetailSchema>;
 

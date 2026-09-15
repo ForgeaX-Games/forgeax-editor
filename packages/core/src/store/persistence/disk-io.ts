@@ -523,7 +523,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     }
     if (ctx.currentSceneFile) {
       const entry = ctx.sceneList.find((s) => s.id === ctx.currentSceneFile);
-      if (entry) path = deps.resolveGamePath(entry.pack);
+      if (entry?.pack) path = deps.resolveGamePath(entry.pack);
     }
     // A discovered scene manifest (or a declared default GUID) is the modern
     // level model. If it has no resolvable current scene, keep the editor on an
@@ -1051,7 +1051,12 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       // *.pack.ts). There is deliberately no fake disk path to read or save back
       // to: open the authoritative catalog asset directly and keep scenePath()
       // null so persistence remains fail-closed.
-      const catalogSceneGuid = ctx.defaultSceneGuid;
+      const currentEntry = ctx.currentSceneFile === null
+        ? undefined
+        : ctx.sceneList.find((entry) => entry.id === ctx.currentSceneFile);
+      const catalogSceneGuid = currentEntry?.pack === null
+        ? (currentEntry.guid ?? null)
+        : ctx.defaultSceneGuid;
       if (catalogSceneGuid === null) {
         recordDocLoadFailure({ phase: 'no-pack-path', detail: { defaultSceneGuid: null } });
         return false;

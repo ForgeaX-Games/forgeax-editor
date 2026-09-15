@@ -8,9 +8,12 @@
 export interface SceneReadModelEntry {
   readonly id: string;
   readonly name: string;
-  readonly pack: string;
+  /** Authored storage path, or null for a generated catalog-only scene. */
+  readonly pack: string | null;
   /** Stable scene-asset identity from the pack envelope, when available. */
   readonly guid: string | null;
+  /** Omitted for legacy callers; generated defaults are explicitly read-only. */
+  readonly provenance?: 'authored-pack' | 'catalog-default';
   readonly isCurrent: boolean;
   readonly isDefault: boolean;
 }

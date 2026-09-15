@@ -1,4 +1,4 @@
-export type SceneActivationMode = 'open-authored' | 'preview-imported' | 'promote-imported';
+export type SceneActivationMode = 'open-authored' | 'open-catalog' | 'preview-imported' | 'promote-imported';
 
 export interface SceneActivationUnavailable {
   readonly reason: string;
@@ -7,7 +7,7 @@ export interface SceneActivationUnavailable {
 
 export interface SceneActivationDescriptor {
   readonly subjectKind: 'scene';
-  readonly provenance: 'authored-pack' | 'imported-output';
+  readonly provenance: 'authored-pack' | 'catalog-default' | 'imported-output';
   readonly revision: string;
   readonly sourceKey: string;
   readonly guid: string;
@@ -36,6 +36,7 @@ export interface SceneActivationAssetFacts {
 export interface AuthoredSceneFact {
   readonly id: string;
   readonly guid: string | null;
+  readonly provenance?: 'authored-pack' | 'catalog-default';
 }
 
 /**
@@ -48,23 +49,29 @@ export function describeSceneActivation(
   revision: string,
 ): SceneActivationDescriptor | null {
   if (asset.kind !== 'scene') return null;
-  const authored = authoredScenes.find((scene) => scene.guid !== null
+  const listed = authoredScenes.find((scene) => scene.guid !== null
     && scene.guid.toLowerCase() === asset.guid.toLowerCase());
-  if (authored !== undefined) {
+  if (listed !== undefined) {
+    const catalogDefault = listed.provenance === 'catalog-default';
     return {
       subjectKind: 'scene',
-      provenance: 'authored-pack',
+      provenance: catalogDefault ? 'catalog-default' : 'authored-pack',
       revision,
       sourceKey: asset.packageUrl,
       guid: asset.guid,
-      mode: 'open-authored',
-      authoredSceneId: authored.id,
+      mode: catalogDefault ? 'open-catalog' : 'open-authored',
+      authoredSceneId: listed.id,
       canPreview: true,
       canMount: false,
-      canEditInstance: true,
+      canEditInstance: !catalogDefault,
       canPromote: false,
       unavailable: {
-        mount: { reason: 'Authored scenes open as documents.', recoveryActions: ['switchSceneFile'] },
+        mount: {
+          reason: catalogDefault
+            ? 'Generated defaults open as read-only catalog scenes.'
+            : 'Authored scenes open as documents.',
+          recoveryActions: ['switchSceneFile'],
+        },
       },
     };
   }

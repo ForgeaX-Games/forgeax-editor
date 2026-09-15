@@ -1,9 +1,36 @@
+import { VagCarrierFailureSchema, type VagCarrierFailureMessage, type VagCarrierHandshakeMessage, type VagCarrierHeartbeatMessage } from '@forgeax/editor-core/protocol';
+
+export interface PlayCarrierEvent {
+  readonly requestId?: string;
+  readonly event: VagCarrierFailureMessage | VagCarrierHandshakeMessage | VagCarrierHeartbeatMessage;
+}
+
+const playCarrierListeners = new Set<(event: PlayCarrierEvent) => void>();
+
+/** The request belongs to the Play attempt, including failures before its first frame. */
+export function subscribePlayCarrierEvents(listener: (event: PlayCarrierEvent) => void): () => void {
+  playCarrierListeners.add(listener);
+  return () => { playCarrierListeners.delete(listener); };
+}
+
+export function publishPlayCarrierEvent(event: PlayCarrierEvent): void {
+  for (const listener of playCarrierListeners) {
+    try { listener(event); } catch { /* Host observers cannot break the renderer lifecycle. */ }
+  }
+}
+
+export function carrierFailureFromError(error: unknown): VagCarrierFailureMessage | undefined {
+  const parsed = VagCarrierFailureSchema.safeParse(record(error)?.carrierFailure);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export type FeedbackHealthSource = 'edit' | 'play';
 
 export interface FeedbackHealthSignal {
   readonly code: string;
   readonly message: string;
   readonly source: FeedbackHealthSource;
+  readonly carrierFailure?: VagCarrierFailureMessage;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -37,6 +64,7 @@ export function forwardFeedbackHealth(signal: FeedbackHealthSignal): void {
       source: signal.source,
       code: signal.code,
       message: signal.message,
+      ...(signal.carrierFailure === undefined ? {} : { carrierFailure: signal.carrierFailure }),
     }, '*');
   } catch {
     // The health channel is best effort and must not mask the owning failure.

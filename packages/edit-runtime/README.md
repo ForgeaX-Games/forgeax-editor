@@ -306,3 +306,24 @@ real UI action path are established. Port readiness, API-only dispatch, raw prev
 shell mirrors do not prove the grid. The M0 Engine seam remains conditional: only a
 reproducible public seam failure can route to an Engine-owned generic fix; Editor-side
 raw-device or backend-specific workarounds are not valid recovery.
+
+
+### Play carrier events for embedding hosts
+
+`@forgeax/editor/bridge` exposes `subscribePlayCarrierEvents(listener)`, returning
+an unsubscribe function. Notifications contain `{ requestId?, event }`; `requestId`
+is the initiating `editor.play` input identity, passed through the operation and
+lifecycle rather than inferred from the currently selected session. Toolbar Play
+has no caller request identity. Repeated Play against an already active attempt
+does not reassign its owner.
+
+`event` is the validated original `VAG_CARRIER_HANDSHAKE`, first ready
+`VAG_CARRIER_HEARTBEAT`, or `VAG_CARRIER_FAILURE` message. Scope, runtime identity,
+page nonce and `failure.at` remain producer facts. Startup failures are observable
+before the first ready frame. Hosts must register request correlation before
+forwarding Play and must not create an agent task for an unassociated event.
+The carrier rejects other iframe sources, other Play attempts and stale page
+nonces. Each Play attempt has a distinct carrier ID even when the runtime binding
+generation is unchanged. Classified `forgeax:health` notifications additionally
+retain the original message as `carrierFailure`; synthetic local liveness errors
+do not invent producer provenance.

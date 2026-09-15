@@ -41,6 +41,29 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
       sourceKey: 'assets/Fox.glb',
       canMount: true,
     });
+
+    const generatedDefault = describeSceneActivation(
+      {
+        guid: 'generated-default-guid',
+        kind: 'scene',
+        packageUrl: '/__forgeax-ddc/generated-default.pack.json',
+        sourcePath: 'assets/scene.pack.ts',
+        sourceKey: 'scene/showcase',
+      },
+      [{
+        id: 'default',
+        guid: 'generated-default-guid',
+        provenance: 'catalog-default',
+      }],
+      'workspace:r3',
+    );
+    expect(generatedDefault).toMatchObject({
+      provenance: 'catalog-default',
+      mode: 'open-catalog',
+      guid: 'generated-default-guid',
+      authoredSceneId: 'default',
+      canEditInstance: false,
+    });
   });
 
   it('rejects document and save operations in imported preview before effects', () => {

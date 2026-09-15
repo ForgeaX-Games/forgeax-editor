@@ -1,3 +1,5 @@
+import { recoverAssetSource } from '../../../scripts/host/asset-source-recovery';
+import { projectRuntimeDiagnostic, resolveRuntimeDiagnosticAliases, type RuntimeDiagnosticAlias } from '../../../scripts/host/runtime-diagnostic';
 import { handleProjectValidation } from '../../../scripts/host/project-validation';
 import { createSourceAuthoringHandler } from '../../../scripts/host/source-authoring';
 import { resolve } from 'node:path';
@@ -147,16 +149,18 @@ function errorCode(error: unknown): string {
   return 'runtime-scope-bind-failed';
 }
 
-function redactedBindError(error: unknown): {
+function redactedBindError(error: unknown, gameRoot?: string, diagnostic?: Record<string, unknown>): {
   readonly error: 'runtime-scope-bind-failed';
   readonly code: string;
   readonly detail: string;
+  readonly diagnostic: Record<string, unknown>;
 } {
   const code = errorCode(error);
   return {
     error: 'runtime-scope-bind-failed',
     code,
     detail: code,
+    diagnostic: diagnostic ?? projectRuntimeDiagnostic(error, gameRoot),
   };
 }
 
@@ -168,17 +172,30 @@ function redactedBindError(error: unknown): {
 export function createRuntimeScopeController(options: RuntimeScopeControllerOptions) {
   let serial = Promise.resolve();
   let initialBind: Promise<RuntimeAssetBinding | undefined> | undefined;
-  let initialBindError: unknown;
+  let lastBindError: unknown;
+  const failureDiagnostics = new WeakMap<object, Record<string, unknown>>();
+  const diagnosticFor = (error: unknown) => error !== null && typeof error === 'object' ? failureDiagnostics.get(error) : undefined;
   let committed: { readonly identity: string; readonly binding: RuntimeAssetBinding; readonly gameDir: string } | undefined;
+  let lastAttempt: RuntimeScopeCommand | undefined;
   const inFlight = new Map<string, Promise<RuntimeAssetBinding>>();
-  const rebind = (command: RuntimeScopeCommand): Promise<RuntimeAssetBinding> => {
+  // A committed mount owns identity, not the producer's immutable publication.
+  // Watch/rebuild may replace the binding without creating a new mount.
+  const currentBinding = (): RuntimeAssetBinding | undefined => {
+    const live = options.pack.runtimeBinding();
+    const accepted = committed?.binding;
+    if (accepted === undefined) return live;
+    return live !== undefined && live.gameId === accepted.gameId
+      && live.scopeId === accepted.scopeId && live.generation === accepted.generation
+      ? live : accepted;
+  };
+  const rebind = (command: RuntimeScopeCommand, sourcePath?: string): Promise<RuntimeAssetBinding | Awaited<ReturnType<typeof recoverAssetSource>> & { readonly binding: RuntimeAssetBinding; readonly ok: true }> => {
     const identity = commandIdentity(command);
-    if (committed?.identity === identity) return Promise.resolve(committed.binding);
+    if (sourcePath === undefined && committed?.identity === identity) return Promise.resolve(currentBinding()!);
     const existing = inFlight.get(identity);
-    if (existing !== undefined) return existing;
+    if (sourcePath === undefined && existing !== undefined) return existing;
 
     const run = serial.then(async () => {
-      if (committed?.identity === identity) return committed.binding;
+      if (sourcePath === undefined && committed?.identity === identity) return currentBinding()!;
       const currentGeneration = options.pack.runtimeBinding()?.generation;
       if (currentGeneration !== undefined && command.generation <= currentGeneration) {
         throw Object.assign(
@@ -186,9 +203,25 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           { code: 'runtime-generation-stale' },
         );
       }
-      const mountTransition = await options.prepareGameMount?.(command.gameDir, command.gameId);
+      let recovered: Awaited<ReturnType<typeof recoverAssetSource>> | undefined;
+      if (sourcePath !== undefined) {
+        const known = [committed, lastAttempt];
+        if (!known.some((scope) => scope?.gameDir === command.gameDir && ('gameId' in scope ? scope.gameId : scope.binding.gameId) === command.gameId)) {
+          throw Object.assign(new Error('asset-recovery-scope-mismatch'), { code: 'asset-recovery-scope-mismatch', hint: 'Bind this game before recovering its source.', metadataRebuilt: false });
+        }
+        recovered = await recoverAssetSource(command.gameDir, sourcePath);
+        // A successful sidecar write changes authored inputs. Even if Pack
+        // restores its older snapshot on failure, that snapshot no longer
+        // proves these inputs ready. Only the subsequent bind can commit it.
+        committed = undefined;
+      }
+      lastAttempt = command;
+      let mountTransition: void | RuntimeScopeMountTransition = undefined;
+      let diagnosticAliases: readonly RuntimeDiagnosticAlias[] = [];
       try {
+        mountTransition = await options.prepareGameMount?.(command.gameDir, command.gameId);
         const roots = options.resolveRoots(command.gameDir, command.gameId);
+        diagnosticAliases = resolveRuntimeDiagnosticAliases(command.gameDir, roots);
         const projectDdcRoot = options.resolveProjectDdcRoot(command.gameDir, command.gameId);
         const catalogRoots = options.resolveCatalogRoots(command.gameDir, command.gameId);
         const binding = await options.pack.rebind(
@@ -206,13 +239,28 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
             { code: 'runtime-binding-mismatch' },
           );
         }
+        const blocking = binding.diagnostics?.find((diagnostic) => diagnostic.severity === 'blocking');
+        if (recovered !== undefined && (binding.status !== 'ready' || binding.authority === 'degraded' || blocking !== undefined)) {
+          throw Object.assign(new Error('runtime-asset-recovery-not-ready'), {
+            code: blocking?.code ?? 'runtime-asset-recovery-not-ready',
+            expected: blocking?.expected ?? 'a ready authoritative catalog without blocking diagnostics',
+            hint: blocking?.hint ?? 'Metadata was rebuilt, but the catalog is still degraded; repair its remaining diagnostics before using this runtime.',
+            detail: { status: binding.status, authority: binding.authority, diagnostics: binding.diagnostics ?? [] },
+          });
+        }
         if (!isReadyBinding(binding)) {
           throw new Error(`runtime generation ${command.generation} did not become ready (${binding.status})`);
         }
         await mountTransition?.commit();
         committed = { identity, gameDir: command.gameDir, binding };
-        return binding;
+        lastBindError = undefined;
+        return recovered === undefined ? binding : { ok: true as const, ...recovered, binding };
       } catch (error) {
+        const captureDiagnostic = (failure: unknown) => {
+          if (failure !== null && typeof failure === 'object') failureDiagnostics.set(failure, projectRuntimeDiagnostic(failure, command.gameDir, diagnosticAliases));
+        };
+        captureDiagnostic(error);
+        lastBindError = error;
         try {
           await mountTransition?.rollback();
         } catch (rollbackError) {
@@ -221,15 +269,20 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
               [error, rollbackError],
               'runtime game mount rollback failed after bind failure',
             ),
-            { code: 'runtime-mount-rollback-failed' },
+            { code: 'runtime-mount-rollback-failed', ...(recovered === undefined ? {} : { metadataRebuilt: true }) },
           );
+        }
+        if (recovered !== undefined) {
+          const failure = Object.assign(new Error(errorCode(error)), { code: errorCode(error), cause: error, metadataRebuilt: true });
+          captureDiagnostic(failure);
+          throw failure;
         }
         throw error;
       }
     });
     serial = run.then(() => undefined, () => undefined);
-    inFlight.set(identity, run);
-    void run.then(
+    if (sourcePath === undefined) inFlight.set(identity, run as Promise<RuntimeAssetBinding>);
+    if (sourcePath === undefined) void run.then(
       () => inFlight.delete(identity),
       () => inFlight.delete(identity),
     );
@@ -277,20 +330,25 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           if (initialBind !== undefined) {
             await initialBind;
           }
-          const binding = committed?.binding ?? options.pack.runtimeBinding();
+          await serial;
+          const binding = currentBinding();
+          const failedIdentity = lastAttempt === undefined ? {} : {
+            gameId: lastAttempt.gameId, scopeId: lastAttempt.scopeId, generation: lastAttempt.generation,
+          };
           if (binding === undefined) {
-            respond(res, 503, { error: 'runtime-scope-unbound', status: 'unbound' });
+            respond(res, 503, { ...(lastBindError === undefined ? { error: 'runtime-scope-unbound' } : redactedBindError(lastBindError, lastAttempt?.gameDir ?? options.initial?.gameDir, diagnosticFor(lastBindError))), ...failedIdentity, status: lastBindError === undefined ? 'unbound' : 'unavailable' });
           } else if (
-            initialBindError !== undefined
-            && (binding.status === 'transitioning' || binding.status === 'unavailable')
+            lastBindError !== undefined
+            && (committed === undefined || binding.status === 'transitioning' || binding.status === 'unavailable')
           ) {
-            respond(res, 503, { ...redactedBindError(initialBindError), status: binding.status });
+            respond(res, 503, { ...redactedBindError(lastBindError, lastAttempt?.gameDir ?? options.initial?.gameDir, diagnosticFor(lastBindError)), ...failedIdentity, status: committed === undefined ? 'unavailable' : binding.status });
           } else {
             respond(res, 200, binding);
           }
           return;
         }
-        if (url !== '/__pack/control/bind') {
+        const recovery = url === '/__pack/control/recover-asset';
+        if (url !== '/__pack/control/bind' && !recovery) {
           next();
           return;
         }
@@ -303,17 +361,25 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           respond(res, 403, { error: 'runtime-scope-control-forbidden' });
           return;
         }
+        let command: RuntimeScopeCommand | undefined;
         try {
-          const command = parseCommand(JSON.parse(await readBody(req)));
-          respond(res, 200, await rebind(command));
+          const body = JSON.parse(await readBody(req));
+          command = parseCommand(body);
+          if (recovery && (typeof body.sourcePath !== 'string' || body.sourcePath.length === 0)) {
+            throw Object.assign(new Error('asset-recovery-path-invalid'), { code: 'asset-recovery-path-invalid' });
+          }
+          respond(res, 200, await rebind(command, recovery ? body.sourcePath : undefined));
         } catch (error) {
-          respond(res, 409, redactedBindError(error));
+          respond(res, 409, {
+            ...redactedBindError(error, command?.gameDir, diagnosticFor(error)),
+            ...(recovery ? { error: 'runtime-asset-recovery-failed', metadataRebuilt: (error as { metadataRebuilt?: boolean } | null)?.metadataRebuilt === true } : {}),
+          });
         }
       });
 
       if (options.initial !== undefined) {
-        initialBind = rebind(options.initial).catch((error) => {
-          initialBindError = error;
+        initialBind = (rebind(options.initial) as Promise<RuntimeAssetBinding>).catch((error) => {
+          lastBindError = error;
           console.warn('[forgeax] initial runtime scope bind failed:', error);
           return undefined;
         });

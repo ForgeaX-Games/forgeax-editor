@@ -1,0 +1,58 @@
+{
+  "engineCommit": "de48d92f32ac1a98638d80cca5d6645a37858f21",
+  "handler": "packages/vite-plugin-pack/src/dev/transport-routes.ts#createTransportRouteHandler",
+  "cases": [
+    {
+      "name": "degraded-scope",
+      "status": 409,
+      "body": {
+        "error": "runtime-scope-catalog-degraded",
+        "diagnostics": [
+          {
+            "code": "produce-failed",
+            "hint": "repair source",
+            "expected": "an accepted snapshot",
+            "detail": {
+              "stage": "produce",
+              "subject": "assets/scene.pack.ts"
+            },
+            "cause": {
+              "code": "pack-source-external-closure-mismatch",
+              "hint": "repair declarations",
+              "detail": {
+                "sourcePath": "assets/scene.pack.ts",
+                "unusedDeclaredGuids": [
+                  "unused-guid"
+                ]
+              }
+            },
+            "severity": "blocking"
+          }
+        ]
+      }
+    },
+    {
+      "name": "failed-session",
+      "status": 503,
+      "body": {
+        "error": "produce-failed",
+        "expected": "an accepted snapshot",
+        "hint": "repair source",
+        "detail": {
+          "stage": "produce",
+          "subject": "assets/scene.pack.ts"
+        },
+        "cause": {
+          "code": "pack-source-external-closure-mismatch",
+          "hint": "repair declarations",
+          "detail": {
+            "sourcePath": "assets/scene.pack.ts",
+            "unusedDeclaredGuids": [
+              "unused-guid"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

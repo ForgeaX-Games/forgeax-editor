@@ -55,7 +55,7 @@ import {
   type GamePluginLoad,
 } from '@forgeax/editor-game-plugins';
 import { createDisposablePlayCarrier } from './disposable-play-carrier';
-import { forwardFeedbackHealth, normalizeCarrierFailureCode } from '../feedback-health';
+import { publishPlayCarrierEvent, forwardFeedbackHealth, normalizeCarrierFailureCode } from '../feedback-health';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
 // the ECS/renderer types evolve independently; we keep the same discipline). ──
@@ -245,7 +245,7 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
 
 export interface HostSession {
   /** ▶ Play — apply the explicit dirty-scene policy, then assemble a transient play world. */
-  playSimulation(policy?: PlayDirtyPolicy, origin?: CommandOrigin): PlayDispatchResult;
+  playSimulation(policy?: PlayDirtyPolicy, origin?: CommandOrigin, requestId?: string): PlayDispatchResult;
   /** ■ Stop — freeze + restore the pre-▶ snapshot. */
   stopSimulation(): void;
   /** Capture from the active RHI carrier; remote Play never falls back to paused Edit. */
@@ -779,6 +779,7 @@ export function createHostSession(deps: HostSessionDeps): {
             hint: result.error?.hint ?? 'Edit surface restore failed',
           } };
         },
+        onCarrierEvent: publishPlayCarrierEvent,
         onReady: (payload) => {
           const execution = (payload as { execution?: { requestedTier?: unknown; actualTier?: unknown; engine?: { realm?: unknown } } } | null)?.execution;
           emitBoot(`play ▸ child ready; execution requested=${String(execution?.requestedTier ?? 'unreported')} actual=${String(execution?.actualTier ?? 'unreported')} realm=${String(execution?.engine?.realm ?? 'unreported')}`);
@@ -786,10 +787,12 @@ export function createHostSession(deps: HostSessionDeps): {
         onFailure: (failure) => {
           forwardFeedbackHealth({
             source: 'play',
-            code: normalizeCarrierFailureCode(failure),
+            code: normalizeCarrierFailureCode(failure.carrierFailure?.payload.failure ?? failure),
             message: failure.hint,
+            ...(failure.carrierFailure === undefined ? {} : { carrierFailure: failure.carrierFailure }),
           });
         },
+        startupProbeTimeoutMs: 3_000,
         livenessTimeoutMs: 3_000,
         // Runtime reachability is probed every tick (independent of frame
         // cadence), so require three consecutive failures before declaring an

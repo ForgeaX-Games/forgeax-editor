@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { ensureAssetCataloged } from '../assets/ensure-asset-cataloged';
+import { ensureAssetCataloged, ensureAssetCatalogedResult } from '../assets/ensure-asset-cataloged';
 
 const GUID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
 
@@ -30,6 +30,35 @@ function makeRegistry(opts: { cataloged?: boolean; loadOk?: boolean } = {}): Fak
 }
 
 describe('ensureAssetCataloged', () => {
+  it('distinguishes unavailable registry, malformed GUID and stale catalog without loading', async () => {
+    expect(await ensureAssetCatalogedResult(undefined, GUID)).toMatchObject({ ok: false,
+      error: { code: 'asset-registry-unavailable', retryable: true, details: { guid: GUID } } });
+    const reg = makeRegistry();
+    expect(await ensureAssetCatalogedResult(reg as never, 'invalid')).toMatchObject({ ok: false,
+      error: { code: 'asset-guid-invalid', retryable: false } });
+    const diagnostics = [{ code: 'catalog-source-failed', hint: 'Repair source input.' }];
+    const stale = { ...reg, catalogSnapshot: () => ({ stale: true, diagnostics }) };
+    expect(await ensureAssetCatalogedResult(stale as never, GUID)).toMatchObject({ ok: false,
+      error: { code: 'asset-catalog-stale', details: { guid: GUID, cause: diagnostics } } });
+    expect(reg.loadCalls).toEqual([]);
+  });
+
+  it('retains producer errors and serializable thrown diagnostics', async () => {
+    const producer = { code: 'artifact-missing', hint: 'Rebuild source.',
+      expected: { guid: GUID }, actual: { status: 404 }, recoveryActions: ['asset.rebuild'] };
+    const reg = makeRegistry();
+    reg.loadByGuid = async () => ({ ok: false, error: producer });
+    const result = await ensureAssetCatalogedResult(reg as never, GUID);
+    expect(result).toMatchObject({ ok: false, error: {
+      code: 'asset-payload-load-failed', details: { guid: GUID, cause: producer },
+    } });
+    const thrown = Object.assign(new Error('request failed'), { code: 'HTTP_ERROR', details: { status: 503 } });
+    reg.loadByGuid = async () => { throw thrown; };
+    expect(JSON.parse(JSON.stringify(await ensureAssetCatalogedResult(reg as never, GUID)))).toMatchObject({
+      ok: false, error: { details: { cause: { message: 'request failed', code: 'HTTP_ERROR', details: { status: 503 } } } },
+    });
+  });
+
   it('returns false without a registry (headless / pre-boot)', async () => {
     expect(await ensureAssetCataloged(undefined, GUID)).toBe(false);
   });

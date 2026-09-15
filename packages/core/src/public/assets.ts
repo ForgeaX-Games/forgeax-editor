@@ -206,7 +206,7 @@ export {
 export { installAssetHmrBridge } from "../assets/asset-hmr-bridge";
 export type { AuthoredAssetCatalogBarrierOptions } from "../assets/authored-asset-barrier";
 export { createAuthoredAssetCatalogBarrier } from "../assets/authored-asset-barrier";
-export { ensureAssetCataloged } from "../assets/ensure-asset-cataloged";
+export { ensureAssetCataloged, ensureAssetCatalogedResult } from "../assets/ensure-asset-cataloged";
 export type {
 	AuthoredSceneFact,
 	SceneActivationAssetFacts,

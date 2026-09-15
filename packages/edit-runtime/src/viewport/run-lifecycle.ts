@@ -49,6 +49,7 @@
 //     undo concepts removed) / AC-06 / AC-07 (edit world frozen during play)
 //   requirements section 8 (progressive-disclosure header — proposition first)
 
+import { carrierFailureFromError } from '../feedback-health';
 import type { PlayAssembly } from './play-assemble';
 import { Update, type World } from '@forgeax/engine-ecs';
 import type {
@@ -155,7 +156,7 @@ export interface RunGateway {
 }
 
 export interface RemotePlayCarrier {
-  start(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
+  start(requestId?: string): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
   stop(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
   pause(): void;
   resume(): void;
@@ -234,7 +235,7 @@ export interface RunLifecycleDeps {
 
 /** The ▶/■ pair + a play-world accessor (GC-reachability assertions in tests). */
 export interface RunLifecycle {
-  playSimulation(): Promise<void>;
+  playSimulation(requestId?: string): Promise<void>;
   stopSimulation(): void | Promise<void>;
   /** Terminal teardown for viewport realm reset: cancel in-flight play assembly
    *  and stop the live play App before the shared renderer is disposed. */
@@ -314,10 +315,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       deps.runProjection?.failed(playRunId, { code, hint, retryable: true, recoveryActions: ['operation.retry'] });
       playRunId = null;
     }
-    deps.onPlayFailed?.({ code, hint });
+    const carrierFailure = carrierFailureFromError(error);
+    deps.onPlayFailed?.({ code, hint, ...(carrierFailure === undefined ? {} : { carrierFailure }) });
   }
 
-  async function playSimulation(): Promise<void> {
+  async function playSimulation(requestId?: string): Promise<void> {
     if (disposed) return;
     if (starting) return;
     if (active !== null) return; // already playing — ▶ is a no-op (idempotent)
@@ -337,7 +339,7 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     deps.onDirtyPlayHint?.();
 
     if (deps.remoteCarrier !== undefined) {
-      const remote = await deps.remoteCarrier.start();
+      const remote = await deps.remoteCarrier.start(requestId);
       starting = false;
       if (disposed || token !== generation) {
         if (remote.ok) await deps.remoteCarrier.stop();

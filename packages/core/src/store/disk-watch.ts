@@ -17,6 +17,13 @@ export const SELF_SAVE_ECHO_WINDOW_MS = 3000;
 
 const normPath = (p: string): string => p.replace(/\\/g, '/');
 
+/** Ordinary source/sidecar writes refresh the catalog, not the live scene realm. */
+export function diskChangeHint(eventPath: string | undefined, activeScenePath: string | null): 'pack-changed' | 'scene-document-changed' {
+  return eventPath && activeScenePath && normPath(eventPath) === normPath(activeScenePath)
+    ? 'scene-document-changed'
+    : 'pack-changed';
+}
+
 /** Inputs for {@link isSelfSaveEcho} — pure so the decision is unit-testable
  *  without a WebSocket, timers, or the network. */
 export interface SelfSaveEchoInput {
@@ -109,7 +116,7 @@ export function initDiskWatch(): () => void {
       scope: msg.path ?? msg.gamePath ?? 'assets',
       resourceRevision: msg.change ?? 'external-change',
     });
-    broadcastAssetsChanged('pack-changed', 'disk-watch');
+    broadcastAssetsChanged(diskChangeHint(msg.path, scenePath()), 'disk-watch');
   };
 
   const connect = (): void => {

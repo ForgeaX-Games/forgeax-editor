@@ -31,6 +31,7 @@ describe('live gameplay carrier bridge', () => {
       operation: 'describe',
       data: {
         projections: {
+          runtime: { playPhase: 'play', captureAvailable: true },
           actions: [],
           reads: [{ id: 'world', title: 'World' }],
         },
@@ -76,4 +77,23 @@ describe('live gameplay carrier bridge', () => {
     await expect(bridge.execute({ version: 1, operation: 'capture' })).resolves.toMatchObject({ ok: false, operation: 'capture', error: { code: 'identity-unavailable', phase: 'identity' } });
     expect(calls).toBe(0);
   });
+});
+
+test('discovery and capture failure expose the current Play prerequisite without starting it', async () => {
+  const gateway = new EditGateway(createEditSession());
+  let captures = 0;
+  const capture = { captureGameplayFrame: async () => { captures++; throw new Error('must not capture while inactive'); } };
+  const bridge = createGameplayCarrierBridge(createGameplayOperations(gateway, capture), () => identity);
+  for (const phase of ['edit', 'starting', 'failed'] as const) {
+    if (phase === 'starting') gateway.beginPlayAttempt();
+    if (phase === 'failed') gateway.failPlayAttempt({ code: 'test-failure', hint: 'test failure' } as never);
+    expect(await bridge.execute({ version: 1, operation: 'describe' })).toMatchObject({
+      ok: true, data: { projections: { runtime: { playPhase: phase, captureAvailable: false } } },
+    });
+    expect(await bridge.execute({ version: 1, operation: 'capture' })).toMatchObject({
+      ok: false, error: { code: 'surface-unavailable', details: { playPhase: phase, statusQuery: { kind: 'viewport.status' } } },
+    });
+    expect(gateway.playPhase).toBe(phase);
+  }
+  expect(captures).toBe(0);
 });

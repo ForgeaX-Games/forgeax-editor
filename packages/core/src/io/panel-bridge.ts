@@ -25,7 +25,8 @@ export interface PanelBridgeEvents {
   /** Asset file/catalog changed; directory-only skips pack-catalog refresh.
    * `mutation` is present only after a known local asset lifecycle write lands. */
   assetsChanged: {
-    hint?: 'directory-only' | 'pack-changed';
+    /** Only scene-document-changed requires reloading the current scene world. */
+    hint?: 'directory-only' | 'pack-changed' | 'scene-document-changed';
     source?: 'local-op' | 'disk-watch';
     mutation?:
       | { kind: 'renamed'; guid: string; name: string }

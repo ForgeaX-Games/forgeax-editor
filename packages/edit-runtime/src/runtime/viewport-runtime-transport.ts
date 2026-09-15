@@ -24,7 +24,7 @@ import {
   entComponents,
   entExists,
   entName,
-  ensureAssetCataloged,
+  ensureAssetCatalogedResult,
   getAssetSelectionList,
   getEditorWorldProjection,
   getLastSelectionDomain,
@@ -1048,8 +1048,12 @@ export function createViewportRuntimeTransportService(options: {
       }),
       query: async (input) => {
         const parsed = parseProjectionQuery(input);
-        if (parsed?.kind === 'assets.payload' && options.gateway.lookupAsset(parsed.guid) === undefined) {
-          await ensureAssetCataloged(options.gateway.doc.registry, parsed.guid);
+        if (parsed?.kind === 'assets.payload') {
+          const loaded = await ensureAssetCatalogedResult(options.gateway.doc.registry, parsed.guid);
+          if (!loaded.ok) {
+            const { version, runtime, revision } = await projectionQuery(input);
+            return { version, runtime, revision, status: 'faulted' as const, error: loaded.error };
+          }
         }
         return projectionQuery(input);
       },

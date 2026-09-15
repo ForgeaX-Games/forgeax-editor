@@ -6,12 +6,18 @@ import type {
   RemoteGameplayResult,
 } from '@forgeax/editor-core';
 import {
+  VagCarrierFailureSchema,
+  VagCarrierHandshakeSchema,
+  VagCarrierHeartbeatSchema,
+  type VagCarrierFailureMessage,
   VagFpsStatsSchema,
   VagGameplayDescribeDataSchema,
   VagGameplayRequestSchema,
   VagGameplayResponseSchema,
   VAG_GAMEPLAY_PROTOCOL_VERSION,
 } from '@forgeax/editor-core/protocol';
+
+import type { PlayCarrierEvent } from '../feedback-health';
 
 export interface DisposablePlayFrame {
   readonly generation: number;
@@ -40,7 +46,7 @@ export interface CaptureArtifactWithProvenance {
 
 export type PlayCarrierResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly error: { readonly code: string; readonly hint: string } };
+  | { readonly ok: false; readonly error: { readonly code: string; readonly hint: string; readonly carrierFailure?: VagCarrierFailureMessage } };
 
 export interface DisposablePlayCarrierDeps {
   readonly container: HTMLElement;
@@ -48,12 +54,15 @@ export interface DisposablePlayCarrierDeps {
   readonly releaseEditSurface: () => Promise<PlayCarrierResult>;
   readonly restoreEditSurface: () => Promise<PlayCarrierResult>;
   readonly readyTimeoutMs?: number;
+  /** Probe the document while awaiting first frame; enabled by browser composition. */
+  readonly startupProbeTimeoutMs?: number;
   readonly host?: DisposablePlayFrameHost;
+  readonly onCarrierEvent?: (event: PlayCarrierEvent) => void;
   readonly onReady?: (payload: unknown) => void;
   /** Child-owned frame cadence, accepted only from the current generation/source. */
   readonly onFps?: (fps: number, generation: number) => void;
   /** Report terminal failures after the child has reached first-frame readiness. */
-  readonly onFailure?: (failure: { readonly code: string; readonly hint: string }) => void;
+  readonly onFailure?: (failure: { readonly code: string; readonly hint: string; readonly carrierFailure?: VagCarrierFailureMessage }) => void;
   /** Disabled unless supplied by the browser host composition root. */
   readonly livenessTimeoutMs?: number | false;
   /** Consecutive unreachable probes required before declaring the runtime gone.
@@ -71,7 +80,7 @@ export interface DisposablePlayFrameHost {
 }
 
 export interface DisposablePlayCarrier {
-  start(): Promise<PlayCarrierResult>;
+  start(requestId?: string): Promise<PlayCarrierResult>;
   stop(): Promise<PlayCarrierResult>;
   /** Capture from the currently live Play child without falling back to Edit. */
   captureFrame(frames: number): Promise<unknown>;
@@ -196,8 +205,12 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
   let phase: ReturnType<DisposablePlayCarrier['state']> = 'edit';
   let frame: DisposablePlayFrame | null = null;
   let nextGeneration = 0;
+  let transition = 0;
+  let releasing: Promise<PlayCarrierResult> | undefined;
+  let stopping: Promise<PlayCarrierResult> | undefined;
   let desiredPaused = false;
   let unsubscribeFrameMessages = () => {};
+  let cancelReady: (() => void) | undefined;
   let livenessTimer: ReturnType<typeof setInterval> | undefined;
   let lastCarrierHeartbeatAt = 0;
   let livenessProbeActive = false;
@@ -337,6 +350,7 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
   async function stopFrame(restore: boolean): Promise<PlayCarrierResult> {
     const current = frame;
     frame = null;
+    cancelReady?.();
     unsubscribeFrameMessages();
     unsubscribeFrameMessages = () => {};
     if (livenessTimer !== undefined) clearInterval(livenessTimer);
@@ -358,13 +372,34 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     return deps.restoreEditSurface();
   }
 
-  async function start(): Promise<PlayCarrierResult> {
+  async function start(requestId?: string): Promise<PlayCarrierResult> {
     if (phase === 'play') return { ok: true };
     if (phase !== 'edit') {
       return { ok: false, error: { code: 'play-carrier-transition-active', hint: `cannot start while carrier is ${phase}` } };
     }
     phase = 'entering-play';
-    const released = await deps.releaseEditSurface();
+    const operation = ++transition;
+    try {
+      return await startCurrent(operation, requestId);
+    } catch (error) {
+      const failure = record(error);
+      const result: PlayCarrierResult = { ok: false, error: {
+        code: typeof failure?.code === 'string' ? failure.code : 'play-carrier-start-failed',
+        hint: error instanceof Error ? error.message : String(error),
+      } };
+      if (operation !== transition) return result;
+      try { await stopFrame(true); } catch (cleanupError) {
+        return { ok: false, error: { ...result.error, hint: `${result.error.hint}; Edit restoration failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}` } };
+      } finally { phase = 'edit'; releasing = undefined; }
+      return result;
+    }
+  }
+
+  async function startCurrent(operation: number, requestId?: string): Promise<PlayCarrierResult> {
+    releasing = deps.releaseEditSurface();
+    const released = await releasing;
+    if (operation !== transition) return { ok: false, error: { code: 'play-carrier-stopped', hint: 'Play startup was cancelled' } };
+    releasing = undefined;
     if (!released.ok) {
       phase = 'edit';
       return released;
@@ -403,10 +438,26 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       return currentSource !== null && eventSource === currentSource;
     };
 
+    let pageNonce: string | undefined;
+    let publishedReady = false;
+    const parseCarrierMessage = (data: unknown) => {
+      const parsed = VagCarrierFailureSchema.safeParse(data);
+      const result = parsed.success ? parsed : VagCarrierHandshakeSchema.safeParse(data);
+      const message = result.success ? result : VagCarrierHeartbeatSchema.safeParse(data);
+      if (!message.success || !matchesCarrierMessageIdentity(message.data.payload, expectedIdentity)) return undefined;
+      if (pageNonce !== undefined && message.data.payload.pageNonce !== pageNonce) return undefined;
+      pageNonce ??= message.data.payload.pageNonce;
+      return message.data;
+    };
+
     unsubscribeFrameMessages = host.subscribe((event) => {
       if (!isCurrentFrameSource(event.source)) return;
-      const carrierData = event.data as { type?: unknown; payload?: unknown } | null;
-      if (matchesCarrierMessageIdentity(carrierData?.payload, expectedIdentity)) {
+      const carrierData = parseCarrierMessage(event.data);
+      if (carrierData !== undefined) {
+        if (carrierData.type === 'VAG_CARRIER_FAILURE' || (!publishedReady && carrierData.payload.renderReadiness === 'ready')) {
+          if (carrierData.type !== 'VAG_CARRIER_FAILURE') publishedReady = true;
+          deps.onCarrierEvent?.({ ...(requestId === undefined ? {} : { requestId }), event: carrierData });
+        }
         if (carrierData?.type === 'VAG_CARRIER_HEARTBEAT') lastCarrierHeartbeatAt = Date.now();
         if (carrierData?.type === 'VAG_CARRIER_FAILURE' && phase === 'play') {
           const failure = record(record(carrierData.payload)?.failure);
@@ -418,7 +469,7 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
           if (!terminalFailureReported && reportedFailureKey !== key) {
             terminalFailureReported = true;
             reportedFailureKey = key;
-            deps.onFailure?.({ code, hint });
+            deps.onFailure?.({ code, hint, carrierFailure: carrierData });
             if (livenessTimer !== undefined) clearInterval(livenessTimer);
             livenessTimer = undefined;
           }
@@ -450,21 +501,27 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       let settled = false;
       let timer: ReturnType<typeof setTimeout>;
       let unsubscribe = () => {};
+      let probeTimer: ReturnType<typeof setTimeout> | undefined;
+      const probeAbort = new AbortController();
       const finish = (result: PlayCarrierResult): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(probeTimer);
+        probeAbort.abort();
+        cancelReady = undefined;
         unsubscribe();
         resolve(result);
       };
       const onMessage = (event: MessageEvent): void => {
         if (!isCurrentFrameSource(event.source)) return;
-        const data = event.data as { type?: unknown; payload?: unknown } | null;
-        if (!matchesCarrierMessageIdentity(data?.payload, expectedIdentity)) return;
+        const data = parseCarrierMessage(event.data);
+        if (data === undefined) return;
         const payload = record(data?.payload);
         if (data?.type === 'VAG_CARRIER_FAILURE') {
           const failure = record(payload?.failure);
           finish({ ok: false, error: {
+            carrierFailure: data,
             code: typeof failure?.code === 'string' ? failure.code : 'play-carrier-failed',
             hint: typeof failure?.message === 'string'
               ? failure.message
@@ -483,8 +540,41 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
         error: { code: 'play-carrier-ready-timeout', hint: 'Play iframe did not publish a ready first frame before the deadline' },
       }), deps.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
       unsubscribe = host.subscribe(onMessage);
+      cancelReady = () => finish({ ok: false, error: {
+        code: 'play-carrier-stopped', hint: 'Play was stopped before its first frame was ready',
+      } });
+      if (deps.startupProbeTimeoutMs !== undefined) {
+        let failedProbes = 0;
+        const probe = async (): Promise<void> => {
+          let status: number | undefined;
+          let reachable = false;
+          try {
+            const response = await fetch(childUrl, {
+              method: 'GET', cache: 'no-store',
+              signal: AbortSignal.any([probeAbort.signal, AbortSignal.timeout(deps.startupProbeTimeoutMs!)]),
+            });
+            status = response.status;
+            reachable = response.ok;
+            try { await response.body?.cancel(); } catch { /* best effort */ }
+          } catch { /* Network rejection or bounded timeout is an unreachable sample. */ }
+          if (settled || frame !== created) return;
+          failedProbes = reachable ? 0 : failedProbes + 1;
+          if (failedProbes >= Math.max(1, deps.unreachableConfirmations ?? 3)) {
+            finish({ ok: false, error: {
+              code: 'play-runtime-unavailable',
+              hint: status === undefined
+                ? 'The Play preview service could not be reached. Restore the preview service and try Play again.'
+                : `The Play preview document returned HTTP ${status}. Check the preview service and its build diagnostics, then try Play again.`,
+            } });
+            return;
+          }
+          probeTimer = setTimeout(() => { void probe(); }, 1_000);
+        };
+        void probe();
+      }
     });
 
+    if (operation !== transition || frame !== created) return { ok: false, error: { code: 'play-carrier-stopped', hint: 'Play startup was cancelled' } };
     if (!ready.ok) {
       await stopFrame(true);
       phase = 'edit';
@@ -553,12 +643,24 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     return { ok: true };
   }
 
-  async function stop(): Promise<PlayCarrierResult> {
-    if (phase === 'edit') return { ok: true };
+  function stop(): Promise<PlayCarrierResult> {
+    if (stopping) return stopping;
+    if (phase === 'edit') return Promise.resolve({ ok: true });
+    stopping = stopCurrent().finally(() => { stopping = undefined; });
+    return stopping;
+  }
+
+  async function stopCurrent(): Promise<PlayCarrierResult> {
     phase = 'stopping';
-    const restored = await stopFrame(true);
-    phase = 'edit';
-    return restored;
+    ++transition;
+    try {
+      // Do not restore or allow a new start until the previous release settles.
+      await releasing?.catch(() => undefined);
+      return await stopFrame(true);
+    } finally {
+      releasing = undefined;
+      phase = 'edit';
+    }
   }
 
   function captureFrame(frames: number): Promise<unknown> {

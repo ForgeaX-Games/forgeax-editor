@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import capturedFailures from './fixtures/scoped-import-failures.json';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 
 import { AssetIOFacade, isRetryableCookTriggerFailure } from '../io/asset-io-facade';
@@ -112,6 +113,24 @@ describe('AssetIOFacade runtime scope', () => {
     expect(attempts).toBe(1);
   });
 
+  it('does not retry a blocking pack declaration failure and preserves its diagnostic', async () => {
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts += 1;
+      return Response.json({ error: 'runtime-scope-catalog-degraded', diagnostics: [{
+        severity: 'blocking', code: 'pack-source-external-closure-mismatch', message: 'unused external assets',
+      }] }, { status: 409 });
+    }) as unknown as typeof fetch;
+    const facade = new AssetIOFacade();
+    facade.setRuntimeBinding(binding());
+    expect(await facade.triggerCook('asset-guid')).toMatchObject({ ok: false, error: {
+      hint: 'pack-source-external-closure-mismatch: unused external assets',
+    } });
+    expect(attempts).toBe(1);
+    expect(isRetryableCookTriggerFailure(503, { error: 'runtime-scope-unavailable' })).toBe(true);
+    expect(isRetryableCookTriggerFailure(409, { error: 'runtime-scope-catalog-degraded' })).toBe(true);
+  });
+
   it('classifies transient cook trigger failures', () => {
     expect(isRetryableCookTriggerFailure(404, { error: 'meta-not-found' }, 'cold-cook')).toBe(true);
     expect(isRetryableCookTriggerFailure(404, { error: 'meta-not-found' }, 'rebuild')).toBe(false);
@@ -119,3 +138,28 @@ describe('AssetIOFacade runtime scope', () => {
     expect(isRetryableCookTriggerFailure(422, { code: 'import-failed', error: 'import-failed' })).toBe(false);
   });
 });
+
+it('retains producer code, causal chain and details from the cook HTTP response', async () => {
+  const producer = { code: 'produce-failed', hint: 'repair producer', cause: { code: 'pack-source-external-closure-mismatch', detail: { unusedDeclaredGuids: ['unused-guid'] } }, detail: { sourcePath: 'assets/scene.pack.ts' } };
+  globalThis.fetch = (async () => Response.json(producer, { status: 503 })) as unknown as typeof fetch;
+  const facade = new AssetIOFacade();
+  facade.setRuntimeBinding(binding());
+  const result = await facade.triggerCook('asset-guid', undefined, 'cold-cook');
+  expect(result).toMatchObject({ ok: false, error: { kind: 'http', status: 503, producerError: { code: producer.code, hint: producer.hint, cause: producer.cause, details: producer.detail } } });
+});
+
+
+for (const captured of capturedFailures.cases) {
+  it(`preserves the actual Engine scoped import ${captured.name} response`, async () => {
+    const body = captured.body;
+    const producer = 'diagnostics' in body ? body.diagnostics![0]! : body;
+    globalThis.fetch = (async () => Response.json(body, { status: captured.status })) as unknown as typeof fetch;
+    const facade = new AssetIOFacade();
+    facade.setRuntimeBinding(binding());
+    const result = await facade.triggerCook('asset-guid', undefined, 'cold-cook');
+    expect(JSON.parse(JSON.stringify(result))).toMatchObject({ ok: false, error: { producerError: {
+      code: 'code' in producer ? producer.code : body.error,
+      hint: producer.hint, cause: producer.cause, details: producer.detail,
+    } } });
+  });
+}

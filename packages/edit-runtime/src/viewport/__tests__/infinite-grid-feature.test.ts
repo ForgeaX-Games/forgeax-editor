@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { type RenderFeaturePlanContext } from '@forgeax/engine-render';
-import { deriveInfiniteGridVisibility } from '../ViewportComponent';
+import { createSceneDataCatalog, type RenderFeaturePlanContext } from '@forgeax/engine-render';
+import {
+  deriveInfiniteGridVisibility,
+  resolveInfiniteGridSceneHasRenderableContent,
+  sceneHasFrustumVisibleRenderables,
+} from '../ViewportComponent';
+import {
+  isInfiniteGridVisibilityTraceEnabled,
+  resetInfiniteGridVisibilityTraceForTests,
+} from '../infinite-grid-visibility-trace';
 import {
   classifyGridPlane,
   computeGridLod,
@@ -51,6 +59,12 @@ function renderContext(generation: number): RenderFeaturePlanContext {
     frame: { frameNumber: generation },
     generation,
     targets: renderTargets,
+    sceneData: createSceneDataCatalog({
+      featureIdentity: 'editor.infinite-grid',
+      generation,
+      planIdentity: `editor.infinite-grid:${generation}`,
+      rgba16floatRenderable: renderCaps.rgba16floatRenderable,
+    }),
   };
 }
 
@@ -177,20 +191,36 @@ describe('public no-vertex RenderFeature plan contract', () => {
 });
 
 describe('infinite grid chrome projection', () => {
+  test('treats a missing scene world as non-renderable (no grid during boot/switch gap)', () => {
+    expect(resolveInfiniteGridSceneHasRenderableContent(undefined)).toBe(false);
+  });
+
+  test('requires frustum-visible renderables for view bind group support', () => {
+    expect(sceneHasFrustumVisibleRenderables(undefined)).toBe(false);
+    expect(sceneHasFrustumVisibleRenderables({ culled: 0, total: 0 })).toBe(false);
+    expect(sceneHasFrustumVisibleRenderables({ culled: 3, total: 3 })).toBe(false);
+    expect(sceneHasFrustumVisibleRenderables({ culled: 2, total: 5 })).toBe(true);
+  });
+
+  test('trace flag defaults off', () => {
+    resetInfiniteGridVisibilityTraceForTests();
+    expect(isInfiniteGridVisibilityTraceEnabled()).toBe(false);
+  });
+
   test('keeps the preference intact while deriving visibility from Edit phase and scene display', () => {
-    expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'scene', playPhase: 'edit' })).toBe(true);
-    expect(deriveInfiniteGridVisibility({
-      gridVisible: true,
-      display: 'scene',
-      playPhase: 'edit',
-      sceneHasRenderableContent: false,
-    })).toBe(false);
+    expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'scene', playPhase: 'edit' })).toBe(false);
     expect(deriveInfiniteGridVisibility({
       gridVisible: true,
       display: 'scene',
       playPhase: 'edit',
       sceneHasRenderableContent: true,
     })).toBe(true);
+    expect(deriveInfiniteGridVisibility({
+      gridVisible: true,
+      display: 'scene',
+      playPhase: 'edit',
+      sceneHasRenderableContent: false,
+    })).toBe(false);
     expect(deriveInfiniteGridVisibility({ gridVisible: false, display: 'scene', playPhase: 'edit' })).toBe(false);
     expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'game', playPhase: 'edit' })).toBe(false);
     expect(deriveInfiniteGridVisibility({ gridVisible: true, display: 'scene', playPhase: 'starting' })).toBe(false);

@@ -594,12 +594,13 @@ export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
   // The asset gate owns the actual pack mutation. The returned completion is
   // bound by EditGateway to the request-correlated OperationRun, so dispatch
   // acceptance cannot be mistaken for a committed pack write.
+  const needsCook = execution === 'cooked';
   const completion = ctx.assetIO.createAssetInPack({
     packPath,
     asset: { guid, kind: assetKind, name, payload, refs: assetRefs, execution },
     extraAssets: extraAssets.length > 0 ? extraAssets : undefined,
   })
-    .then((r) => {
+    .then(async (r) => {
       if (!r.ok) {
         broadcastAssetsError({ op: 'createAsset', path: packPath, hint: `createAsset write failed (${r.reason}): ${r.hint}` });
         return {
@@ -611,6 +612,36 @@ export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
             recoveryActions: ['run.retry'],
           },
         };
+      }
+      // Authored particle effects ship with execution:'cooked' — the authored
+      // ParticleEffectSourceV2 must be baked into a VfxGpuEffectAsset before the
+      // VFX editor can load it. In dev the vite-plugin-pack watcher cooks on file
+      // change; the packaged editor has no watcher, so trigger the scoped engine
+      // cook explicitly and wait for the cooked catalog row before broadcasting.
+      // Without this the VFX preview boots against the authored source and throws
+      // "not a cooked GPU effect" (masked as "VFX preview runtime is unavailable"),
+      // and the fresh GUID stays invisible in the Content Browser until a restart
+      // (no watcher to re-scan). triggerCook('rebuild') rescans roots so a freshly
+      // written, still-unindexed pack is discovered and cooked in one shot.
+      if (needsCook) {
+        try {
+          const cooked = await ctx.assetIO.triggerCook(guid, undefined, 'rebuild');
+          if (!cooked.ok) {
+            broadcastAssetsError({
+              op: 'createAsset',
+              path: packPath,
+              hint: `particle-effect cook failed: ${cooked.error.hint}`,
+            });
+          } else {
+            await awaitPostAssetWriteCatalogSync(guid);
+          }
+        } catch (cause) {
+          broadcastAssetsError({
+            op: 'createAsset',
+            path: packPath,
+            hint: `particle-effect cook failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          });
+        }
       }
       broadcastAssetsChanged();
       return { ok: true as const, result: r };

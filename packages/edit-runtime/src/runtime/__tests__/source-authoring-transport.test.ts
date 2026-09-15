@@ -145,3 +145,17 @@ describe("asset source authoring host seam", () => {
 		});
 	});
 });
+
+
+test("preserves structured cook failures before publication observation", async () => {
+  const cause = { code: "pack-source-external-closure-mismatch", hint: "repair declarations", detail: { sourcePath: value.sourcePath, unusedDeclaredGuids: ["unused-guid"] } };
+  const producerError = { code: "produce-failed" as import("@forgeax/editor-core").CommandError["code"], hint: "repair producer", retryable: false, recoveryActions: ["asset.preflight"], cause };
+  let observed = false;
+  const runtime = createSourceAuthoringTransport({
+    triggerCook: async () => ({ ok: false, error: { kind: "http", status: 503, hint: "repair producer", producerError } }),
+    fetch: async () => Response.json({ ok: true, value }),
+    observePublication: async () => { observed = true; },
+  });
+  expect(await runtime.execute({ kind: "asset-source.cold-cook", sourcePath: value.sourcePath, expectedRevision: value.revision, requestId: "cook-failure" })).toMatchObject({ ok: false, error: producerError });
+  expect(observed).toBe(false);
+});

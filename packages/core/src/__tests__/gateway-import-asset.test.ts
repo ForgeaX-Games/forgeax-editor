@@ -147,6 +147,40 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     expect(calls.some((c) => c.url.includes('/api/files/upload'))).toBe(false);
   });
 
+  it('rejects a missing on-disk image before writing metadata or triggering cook', async () => {
+    globalThis.fetch = (async (url: unknown, opts?: RequestInit) => {
+      calls.push({ url: String(url), method: opts?.method ?? 'GET' });
+      return new Response('Missing source', { status: 404 });
+    }) as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: 'assets/library/kart.png',
+      sourceName: 'assets/imported/kart.png',
+      skipUpload: true,
+    });
+    expect(result.errorDetail?.code).toBe('IMPORT_SOURCE_READ_FAILED');
+    expect(calls.every((call) => call.method === 'GET')).toBe(true);
+    expect(calls.some((call) => call.url.includes('/import/'))).toBe(false);
+  });
+
+  it('stores the actual destination filename as the sidecar-relative source', async () => {
+    let writtenBody = '';
+    const fakeFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, opts?: RequestInit) => {
+      if (opts?.method === 'POST' && String(url).includes('/api/files') && !String(url).includes('upload')) {
+        writtenBody = String(opts.body);
+      }
+      return fakeFetch(url as string, opts);
+    }) as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: 'assets/imported/renamed-kart.png',
+      sourceName: 'assets/downloads/kart.png',
+      skipUpload: true,
+    });
+    expect(result.status).toBe('done');
+    expect(writtenBody).toContain('renamed-kart.png');
+    expect(writtenBody).not.toContain('assets/downloads/kart.png');
+  });
+
   it('uploads the bounded UI companion inside the same Runtime-owned import', async () => {
     const r = await executeAssetImport({
       destPath: '/games/demo/assets/hud.ui.html',
@@ -442,8 +476,8 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
   });
 
   it('publishes a structured terminal failure instead of resolving success', async () => {
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
-      Promise.resolve(new Response('', { status: 500 }))) as unknown as typeof fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((_url: string, opts?: RequestInit) =>
+      Promise.resolve(new Response('', { status: opts?.method === 'POST' ? 500 : 200 }))) as unknown as typeof fetch;
     const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-test-failed' });
     expect(r).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
 

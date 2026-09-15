@@ -126,17 +126,18 @@ test('a delayed successful remote startup becomes successful only after activati
   const ready = deferred<{ ok: true }>();
   const gateway = new EditGateway(createEditSession());
   let starts = 0;
+  const requests: (string | undefined)[] = [];
   const lifecycle = createRunLifecycle({
     gateway, editorApp: { pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
     assemble: async () => { throw new Error('remote carrier owns assembly'); },
     remoteCarrier: {
-      start: () => { starts++; return ready.promise; }, stop: async () => ({ ok: true }), pause() {}, resume() {},
+      start: (requestId) => { starts++; requests.push(requestId); return ready.promise; }, stop: async () => ({ ok: true }), pause() {}, resume() {},
       state: () => 'entering-play', gameplayDescriptors: () => ({ actions: [], reads: [] }) as never,
       gameplay: async () => ({ ok: false }) as never,
     },
   });
   const operation = createPlayOperation({ gateway, lifecycle: () => lifecycle, hasPendingDiskSave: () => false, invalidateScene() {}, onFailure() {} });
-  const started = operation.play();
+  const started = operation.play('last-saved', 'ai', 'original-play-request');
   let settled = false;
   void started.completion?.then(() => { settled = true; });
   await Promise.resolve();
@@ -147,6 +148,7 @@ test('a delayed successful remote startup becomes successful only after activati
   expect(gateway.playPhase).toBe('play');
   expect(operation.play()).toEqual({ ok: true });
   expect(starts).toBe(1);
+  expect(requests).toEqual(['original-play-request']);
   operation.stop();
 });
 

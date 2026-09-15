@@ -63,7 +63,8 @@ describe('Play carrier handshake', () => {
   });
 
   test('reads managed carrier scope through the Projects API', () => {
-    expect(source).toContain("fetch('/api/projects/active', { cache: 'no-store' })");
+    expect(source).toContain('resolveCarrierScope(carrierRuntimeId, requestedGameIdValidated, fetch)');
+    expect(source.indexOf('await carrierScopeReady;')).toBeLessThan(source.indexOf('let runtimeBinding:'));
     expect(source).not.toContain('/api/workbench/active-game');
   });
 });

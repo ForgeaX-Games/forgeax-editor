@@ -77,7 +77,7 @@ import {
   sourceMutationPreflightFromRun,
   type SourceMutationAction,
 } from './source-authoring/source-mutation-view-model';
-import { sceneActivationToOp, scenePromoteToOp } from './scene-activation-route';
+import { catalogSceneVirtualPaths, sceneActivationToOp, scenePromoteToOp } from './scene-activation-route';
 import { resolveContentBrowserReveal } from './resolve-content-browser-reveal';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem, CBViewMode, RenameSurface } from './types';
 import {
@@ -359,6 +359,10 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // Subscribe to the existing scene-list signal so the read model is rebuilt
   // from the real slug instead of remaining on the initial `default` guard.
   const sceneModel = useSceneReadModel();
+  const virtualSceneAssetPaths = useMemo(
+    () => catalogSceneVirtualPaths(sceneModel.scenes),
+    [sceneModel.scenes],
+  );
   const operationRunSource = operationRuns ?? localOperationRuns;
   const operationRunSnapshot = useSyncExternalStore(
     (listener) => operationRunSource.subscribe?.(listener) ?? (() => {}),
@@ -574,6 +578,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     sort,
     nav,
     expandedPacks,
+    virtualAssetPaths: virtualSceneAssetPaths,
   });
 
   // `selectedSourcePath` = the exact source path of the right-panel subject.
@@ -888,7 +893,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     const selection = await dispatchActiveEditorOperation({ kind: 'setAssetSelectionOne', asset: selectedAsset });
     if (!selection.ok) return;
     if (asset.activation) {
-      if (asset.activation.mode === 'open-authored') {
+      if (asset.activation.mode === 'open-authored' || asset.activation.mode === 'open-catalog') {
         await requestSceneSwitch(asset.activation.authoredSceneId ?? '');
       } else {
         await dispatchActiveEditorOperation(sceneActivationToOp(asset.activation, asset.sourcePath), 'human');

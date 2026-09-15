@@ -53,6 +53,17 @@ function deps() {
 }
 
 describe('viewport session applier registrar (M3)', () => {
+  it('passes the operation request identity directly to the Play owner', () => {
+    const d = deps();
+    const requests: (string | undefined)[] = [];
+    registered.push(registerViewportSessionAppliers({ ...d.value, play: (_policy, _origin, requestId) => {
+      requests.push(requestId);
+      return { ok: true };
+    } }));
+    gateway.dispatch({ kind: 'play', requestId: 'specific-play-request' }, 'ai');
+    expect(requests).toEqual(['specific-play-request']);
+  });
+
   it('registers viewport operations and routes calls to runtime deps', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));

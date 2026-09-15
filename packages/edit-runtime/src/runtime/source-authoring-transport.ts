@@ -389,7 +389,9 @@ export function createSourceAuthoringTransport(
 				if (deps.triggerCook !== undefined) {
 					const cooked = await deps.triggerCook(cookGuid, cookMode);
 					if (!cooked.ok) {
-						return transportError(cooked.error.hint);
+						return cooked.error.producerError === undefined
+							? transportError(cooked.error.hint)
+							: { ok: false, error: cooked.error.producerError };
 					}
 				}
 				const observedValue = {

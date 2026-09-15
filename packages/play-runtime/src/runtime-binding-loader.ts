@@ -1,3 +1,4 @@
+import { PlayBindingFailure } from './boot-diagnostic';
 import {
   isRuntimeCatalogRoots,
   type RuntimeAssetBinding,
@@ -10,6 +11,7 @@ export const RUNTIME_BINDING_REQUEST_TIMEOUT_MS = 2_000;
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface RuntimeBindingLoaderOptions {
+  readonly expected?: { gameId: string; scopeId: string; generation: number };
   readonly maxWaitMs?: number;
   readonly retryDelayMs?: number;
   readonly requestTimeoutMs?: number;
@@ -69,6 +71,20 @@ export async function loadRuntimeBinding(
     try {
       const response = await fetchImpl(bindingUrl, { cache: 'no-store', signal: controller.signal });
       const body = await response.json().catch(() => null) as unknown;
+      const state = body !== null && typeof body === 'object' ? body as Record<string, unknown> : undefined;
+      const expected = options.expected;
+      const matches = !expected || (state?.gameId === expected.gameId && state?.scopeId === expected.scopeId && state?.generation === expected.generation);
+      // A known producer failure is not evidence of a slow first frame. Ignore
+      // diagnostics from any other binding; they do not describe this attempt.
+      if (matches && state?.status !== 'transitioning') {
+        const blocking = Array.isArray(state?.diagnostics)
+          ? state.diagnostics.find((item: unknown) => item !== null && typeof item === 'object' && (item as { severity?: unknown }).severity === 'blocking') : undefined;
+        if (blocking) throw new PlayBindingFailure(blocking);
+        if (response.status === 503 && state?.diagnostic && state.status === 'unavailable') {
+          throw new PlayBindingFailure(state.diagnostic);
+        }
+      }
+      if (response.ok && !matches) throw new PlayBindingFailure({ code: 'play-runtime-scope-stale', hint: 'The requested runtime binding has changed; start a new Play attempt.' });
       if (response.status === 503) {
         if (
           body !== null
@@ -90,6 +106,7 @@ export async function loadRuntimeBinding(
         lastFailure = `HTTP ${response.status} invalid binding payload`;
       }
     } catch (error) {
+      if (error instanceof PlayBindingFailure) throw error;
       lastFailure = errorMessage(error);
     } finally {
       clearTimeout(timeout);

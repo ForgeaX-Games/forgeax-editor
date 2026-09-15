@@ -14,7 +14,7 @@ import { awaitAuthoredMaterialReady, entComponent, registerSessionApplier, resto
 import { captureCpuProfile } from './frame-phase-profiler';
 
 export interface ViewportSessionApplierDeps {
-  readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai') => PlayDispatchResult;
+  readonly play: (policy: PlayDirtyPolicy, origin: 'human' | 'ai', requestId?: string) => PlayDispatchResult;
   readonly stop: () => void;
   readonly setDisplay: (display: 'scene' | 'game') => void;
   readonly grantGameControl: () => void;
@@ -291,7 +291,7 @@ function registerAll(deps: ViewportSessionApplierDeps): Array<() => void> {
       // world — restore preview-touched runtime fields first so the simulation
       // (and any save-then-play) starts from authored values.
       if (ctx?.engine) restoreAllAnimationPreviews(ctx.engine);
-      const started = deps.play(dirtyPolicy, origin);
+      const started = deps.play(dirtyPolicy, origin, (op as { requestId?: string }).requestId);
       if (!started.ok || !started.completion) return started;
       ctx?.operationRun?.registerCancelHandler?.(() => { started.cancel?.(); return { ok: true }; });
       const requestId = (op as { requestId?: string }).requestId;

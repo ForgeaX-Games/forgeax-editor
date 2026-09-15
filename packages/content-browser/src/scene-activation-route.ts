@@ -1,11 +1,30 @@
 import type { EditorOp, SceneActivationDescriptor } from '@forgeax/editor-core';
+import type { SceneReadModel } from '@forgeax/editor-core';
+
+/**
+ * Generated default scenes have a real catalog identity but no authored disk
+ * file. Project them into the conventional Scenes folder without rewriting
+ * their real sourcePath (`*.pack.ts`), which source-authoring actions still use.
+ */
+export function catalogSceneVirtualPaths(
+  scenes: SceneReadModel['scenes'],
+): ReadonlyMap<string, string> {
+  return new Map(
+    scenes
+      .filter((scene) => scene.provenance === 'catalog-default' && scene.guid !== null)
+      .map((scene) => [
+        scene.guid!.toLowerCase(),
+        `assets/scenes/${scene.id}.scene`,
+      ]),
+  );
+}
 
 export function sceneActivationToOp(
   descriptor: SceneActivationDescriptor,
   sourcePath?: string,
   requestId: string = globalThis.crypto.randomUUID(),
 ): EditorOp {
-  if (descriptor.mode === 'open-authored') {
+  if (descriptor.mode === 'open-authored' || descriptor.mode === 'open-catalog') {
     return { kind: 'switchSceneFile', id: descriptor.authoredSceneId ?? '', requestId };
   }
   return {

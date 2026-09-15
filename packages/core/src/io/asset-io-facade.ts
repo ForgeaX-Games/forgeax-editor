@@ -72,6 +72,8 @@ export interface AssetIoError {
   readonly kind: 'http' | 'network';
   readonly hint: string;
   readonly status?: number;
+  /** Structured producer failure from the JSON cook response, when available. */
+  readonly producerError?: CommandError;
 }
 
 export type AssetIoResult<T = void> =
@@ -218,7 +220,7 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
 /** Transient import-route failures that settle once the pack watcher finishes indexing. */
 export function isRetryableCookTriggerFailure(
   status: number,
-  body: { readonly error?: string; readonly hint?: string; readonly reason?: string; readonly code?: string },
+  body: { readonly error?: string; readonly hint?: string; readonly reason?: string; readonly code?: string; readonly diagnostics?: readonly { readonly code?: string; readonly severity?: string; readonly cause?: unknown }[] },
   mode: 'rebuild' | 'cold-cook' = 'rebuild',
 ): boolean {
   const error = body.error ?? '';
@@ -231,6 +233,19 @@ export function isRetryableCookTriggerFailure(
   ) {
     return mode === 'cold-cook';
   }
+  // An invalid pack declaration needs a source edit; waiting cannot repair it.
+  if (error === 'runtime-scope-catalog-degraded' && body.diagnostics?.some(
+    (diagnostic) => {
+      if (diagnostic.severity !== 'blocking') return false;
+      let current: unknown = diagnostic;
+      for (let depth = 0; depth < 8 && current !== null && typeof current === 'object'; depth += 1) {
+        const cause = current as { readonly code?: unknown; readonly cause?: unknown };
+        if (typeof cause.code === 'string' && cause.code.startsWith('pack-source-')) return true;
+        current = cause.cause;
+      }
+      return false;
+    },
+  )) return false;
   if (status === 409 && error.startsWith('runtime-scope')) return true;
   if (status === 410 && error.startsWith('runtime-scope-generation')) return true;
   if (status === 503 && error === 'runtime-scope-unavailable') return true;
@@ -833,6 +848,13 @@ export class AssetIOFacade {
           reason?: string;
           hint?: string;
           code?: string;
+          cause?: CommandError['cause'];
+          expected?: unknown;
+          actual?: unknown;
+          details?: unknown;
+          retryable?: boolean;
+          recoveryActions?: readonly string[];
+          diagnostics?: readonly { readonly code?: string; readonly severity?: string; readonly message?: string; readonly hint?: string; readonly cause?: CommandError['cause']; readonly detail?: unknown; readonly expected?: unknown; readonly actual?: unknown }[];
           detail?: { readonly reason?: string; readonly loadError?: string };
         };
         const detailReason = body.detail?.reason ?? body.detail?.loadError;
@@ -846,7 +868,9 @@ export class AssetIOFacade {
           hint: body.hint ?? body.reason ?? detailReason,
           mode,
         });
-        const reason = detailReason ?? body.reason ?? body.hint ?? body.error ?? `cook failed (${res.status})`;
+        const diagnostic = body.diagnostics?.find((item) => item.severity === 'blocking');
+        const diagnosticHint = diagnostic && [diagnostic.code, diagnostic.message ?? diagnostic.hint].filter(Boolean).join(': ');
+        const reason = detailReason ?? diagnosticHint ?? body.reason ?? body.hint ?? body.error ?? `cook failed (${res.status})`;
         if (isRetryableCookTriggerFailure(res.status, body, mode) && attempt < maxAttempts - 1) {
           const delayMs = baseDelayMs * (attempt + 1);
           retryWaitMs += delayMs;
@@ -854,7 +878,25 @@ export class AssetIOFacade {
           continue;
         }
         console.warn('[import-diag] triggerCook FAILED', { guid, reason, body, attempt });
-        return { ok: false, error: { kind: 'http', status: res.status, hint: String(reason) } };
+        const producer = typeof body.code === 'string' ? body : { ...body, ...diagnostic };
+        const producerCode = typeof producer.code === 'string' ? producer.code : typeof body.error === 'string' ? body.error : undefined;
+        return { ok: false, error: {
+          kind: 'http', status: res.status, hint: String(reason),
+          ...(producerCode === undefined ? {} : { producerError: {
+            code: producerCode as CommandError['code'],
+            hint: typeof producer.hint === 'string' ? producer.hint : String(reason),
+            owner: 'engine',
+            category: 'resource',
+            retryable: producer.retryable === true,
+            recoveryActions: Array.isArray(producer.recoveryActions)
+              ? producer.recoveryActions.filter((action): action is string => typeof action === 'string')
+              : ['asset.preflight'],
+            ...(producer.cause === undefined ? {} : { cause: producer.cause }),
+            ...(producer.expected === undefined ? {} : { expected: producer.expected }),
+            ...(producer.actual === undefined ? {} : { actual: producer.actual }),
+            ...(producer.detail === undefined && producer.details === undefined ? {} : { details: producer.detail ?? producer.details }),
+          } }),
+        } };
       } catch (err) {
         if (isAbortSignalActive(signal)) {
           return { ok: false, error: { kind: 'network', hint: 'triggerCook aborted before cook completed' } };

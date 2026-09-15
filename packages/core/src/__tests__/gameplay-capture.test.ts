@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { EditGateway } from '../io/gateway';
-import { createGameplayCaptureGateway, createGameplayOperations } from '../io/gameplay-operations';
+import { createGameplayCaptureGateway, createGameplayOperations, createGameplayCarrierBridge } from '../io/gameplay-operations';
 
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -53,4 +53,37 @@ describe('live gameplay capture', () => {
       error: { code: 'capture-failed', hint: 'viewport HUD root is unavailable' },
     });
   });
+});
+
+
+test('capture diagnostic stage and observed identity reach the public carrier error', async () => {
+  const gateway = new EditGateway({} as never); gateway.enterPlay({} as never);
+  const capture = createGameplayCaptureGateway({ getProvenance: () => identity,
+    captureImage: async () => { throw Object.assign(new Error('viewport capture timed out'), {
+      details: { stage: 'hud-rasterization', elapsedMs: 5001, timeoutMs: 5000 },
+    }); },
+  });
+  const bridge = createGameplayCarrierBridge(createGameplayOperations(gateway, capture), () => identity);
+  await expect(bridge.execute({ version: 1, operation: 'capture' })).resolves.toMatchObject({ ok: false,
+    error: { code: 'capture-failed', phase: 'capture', details: {
+      stage: 'hud-rasterization', elapsedMs: 5001, timeoutMs: 5000, provenance: identity, currentProvenance: identity,
+    } },
+  });
+});
+
+test('identity replacement during capture rejects a successful old PNG', async () => {
+  let current: { readonly runtimeId: string } & Omit<typeof identity, 'runtimeId'> = identity;
+  const capture = createGameplayCaptureGateway({ getProvenance: () => current,
+    captureImage: async () => { current = { ...identity, runtimeId: 'replacement' }; return png; },
+  });
+  await expect(capture.captureGameplayFrame()).resolves.toMatchObject({ ok: false, error: { code: 'identity-mismatch' } });
+});
+
+test('Stop during capture cannot publish a successful artifact', async () => {
+  let phase = 'play';
+  const capture = createGameplayCaptureGateway({ getProvenance: () => identity,
+    captureImage: async () => { phase = 'edit'; return png; },
+  });
+  const gateway = { get playPhase() { return phase; } } as never;
+  await expect(createGameplayOperations(gateway, capture).capture()).resolves.toMatchObject({ ok: false });
 });

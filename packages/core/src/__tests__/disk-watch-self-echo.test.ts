@@ -12,11 +12,21 @@
 // case. These cases pin that contract headlessly (no WebSocket / timers / net).
 
 import { describe, expect, it } from 'bun:test';
-import { isSelfSaveEcho, SELF_SAVE_ECHO_WINDOW_MS } from '../store/disk-watch';
+import { diskChangeHint, isSelfSaveEcho, SELF_SAVE_ECHO_WINDOW_MS } from '../store/disk-watch';
 import type { LastSelfSave } from '../store/scene-persistence';
 
 const SCENE = '/games/g1/scene.pack.json';
 const BYTES = '{"assets":[{"kind":"scene"}]}\n';
+
+it('asset import writes keep the scene realm while the active scene still reloads', () => {
+  expect(diskChangeHint('/games/g1/kart.png.meta.json', SCENE)).toBe('pack-changed');
+  expect(diskChangeHint('/games/g1/kart.glb', SCENE)).toBe('pack-changed');
+  expect(diskChangeHint('/games/g1/other.pack.json', SCENE)).toBe('pack-changed');
+  expect(diskChangeHint(SCENE, SCENE)).toBe('scene-document-changed');
+  expect(diskChangeHint('C:\\games\\g1\\scene.pack.json', 'C:/games/g1/scene.pack.json')).toBe('scene-document-changed');
+  expect(diskChangeHint(undefined, SCENE)).toBe('pack-changed');
+  expect(diskChangeHint(SCENE, null)).toBe('pack-changed');
+});
 
 function save(over?: Partial<LastSelfSave>): LastSelfSave {
   return { path: SCENE, content: BYTES, at: 1_000_000, ...over };

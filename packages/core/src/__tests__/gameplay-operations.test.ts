@@ -19,6 +19,7 @@ describe('live gameplay operations', () => {
     expect(operations.describe()).toEqual({
       actions: [{ id: 'input', title: 'Input', argsSchema: null }],
       reads: [{ id: 'world', title: 'World' }],
+      runtime: { playPhase: 'play', captureAvailable: false },
     });
     await expect(operations.input({ type: 'key', key: 'ArrowRight', phase: 'down' })).resolves.toEqual({ ok: true, data: { acknowledged: 1 } });
     await expect(operations.query('')).resolves.toEqual({ ok: true, data: { entities: [] } });

@@ -36,7 +36,7 @@
 //     feat-20260705-editor-core-engine-convergence-store-ts-decompose.
 import { useSyncExternalStore } from 'react';
 import { loadGameProject, FORGE_JSON, type GameProject } from '@forgeax/engine-project';
-import { findScenePackByGuid, findAllScenePacks } from '../../assets/assets';
+import { findAllScenePacks } from '../../assets/assets';
 import type { ScenePersistenceContext, SceneFileEntry } from '../scene-persistence';
 import type { PersistenceGateway } from './disk-io';
 import type { SceneReadModel } from '../../io/scene-read-model';
@@ -73,6 +73,8 @@ export interface SceneListDeps {
   readonly loadDocFromStorage: () => boolean;
   /** Replace the whole authoring doc after a switch (disk-io unit). */
   readonly replaceDoc: (doc: import('../../types').EditSession) => void;
+  /** Publish authored vs generated/read-only scene session policy. */
+  readonly activateSceneSession: (entry: SceneFileEntry) => void;
 }
 
 /** The multi-scene management surface. */
@@ -120,7 +122,7 @@ export type SetDefaultSceneEffect =
 export interface SceneDeleteReference {
   readonly sceneId: string;
   readonly sceneGuid: string | null;
-  readonly pack: string;
+  readonly pack: string | null;
   readonly assetGuid: string;
   readonly assetKind: string;
 }
@@ -128,7 +130,7 @@ export interface SceneDeleteReference {
 export interface SceneDeleteImpact {
   readonly sceneId: string;
   readonly sceneGuid: string;
-  readonly pack: string;
+  readonly pack: string | null;
   readonly isCurrent: boolean;
   readonly isDefault: boolean;
   readonly referencedBy: readonly SceneDeleteReference[];
@@ -185,6 +187,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       name: entry.name ?? entry.id,
       pack: entry.pack,
       guid: entry.guid ?? null,
+      ...(entry.provenance === undefined ? {} : { provenance: entry.provenance }),
       isCurrent: currentEntry === entry,
       isDefault: entry.guid !== undefined && entry.guid === ctx.defaultSceneGuid,
     }));
@@ -420,6 +423,18 @@ export function createSceneList(deps: SceneListDeps): SceneList {
         },
       };
     }
+    if (target.pack === null) {
+      return {
+        ok: false,
+        error: {
+          code: 'scene-delete-guarded',
+          hint: `Scene "${target.name ?? target.id}" is a generated catalog scene and cannot be deleted as an authored pack.`,
+          current: { requestId, impact: baseImpact },
+          retryable: false,
+          recoveryActions: ['scene.source.inspect'],
+        },
+      };
+    }
 
     let targetPack: Awaited<ReturnType<SceneListDeps['assetIO']['readPack']>>;
     try {
@@ -451,7 +466,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
 
     const referencedBy: SceneDeleteReference[] = [];
     for (const entry of ctx.sceneList) {
-      if (entry === target || entry.guid === undefined) continue;
+      if (entry === target || entry.guid === undefined || entry.pack === null) continue;
       let pack: Awaited<ReturnType<SceneListDeps['assetIO']['readPack']>>;
       try {
         pack = await deps.assetIO.readPack(deps.resolveGamePath(entry.pack));
@@ -581,16 +596,24 @@ export function createSceneList(deps: SceneListDeps): SceneList {
         next.push({ id: stem, name: stem, pack, guid });
       }
       ctx.sceneList = next;
-      // Fallback: resolve forge.json `defaultScene` GUID when no scene packs found.
-      if (ctx.sceneList.length === 0) {
-        const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
-        if (defGuid) {
-          const pack = await findScenePackByGuid(ctx.currentSceneId, defGuid);
-          if (pack) {
-            const stem = (pack.split('/').pop() ?? 'main').replace(/\.pack\.json$/, '') || 'main';
-            ctx.sceneList.push({ id: stem, name: stem, pack, guid: defGuid });
-          }
+      // A default scene may be a generated ScriptablePack output (`*.pack.ts`),
+      // so it has no authored `*.pack.json` path. Keep it in the scene manifest
+      // as a catalog-only, read-only entry even after authored scenes are added.
+      // Otherwise creating the first authored scene makes the generated default
+      // disappear from the switcher even though the runtime catalog still owns it.
+      const defGuid = typeof fj?.defaultScene === 'string' ? fj.defaultScene : null;
+      if (defGuid && !ctx.sceneList.some((entry) => entry.guid === defGuid)) {
+        let id = 'default';
+        for (let suffix = 2; ctx.sceneList.some((entry) => entry.id === id); suffix++) {
+          id = `default-${suffix}`;
         }
+        ctx.sceneList.push({
+          id,
+          name: 'Default Scene',
+          pack: null,
+          guid: defGuid,
+          provenance: 'catalog-default',
+        });
       }
     }
     if (ctx.sceneList.length > 0) {
@@ -624,6 +647,8 @@ export function createSceneList(deps: SceneListDeps): SceneList {
         (want && ctx.sceneList.some((s) => s.id === want)) ? want
         : defId ? defId
         : null;
+      const currentEntry = ctx.sceneList.find((entry) => entry.id === ctx.currentSceneFile);
+      if (currentEntry !== undefined) deps.activateSceneSession(currentEntry);
       if (ctx.currentSceneFile === null) {
         console.warn(
           `[editor-core] ${ctx.sceneList.length} scene pack(s) found but none bound for edit: `
@@ -691,6 +716,8 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       // listeners, but NOT the gateway.subscribe listeners the viewport uses to
       // (re)build the RENDERED scene — fire them via replaceDoc, which also clears
       // the previous scene's undo history (correct for a swap).
+      const activatedEntry = ctx.sceneList.find((entry) => entry.id === id);
+      if (activatedEntry !== undefined) deps.activateSceneSession(activatedEntry);
       deps.replaceDoc(gateway.doc);
       emitSceneList();
       return true;

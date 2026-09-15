@@ -1,5 +1,8 @@
+import { hasPendingDiskSave } from '@forgeax/editor-core';
+import type { PlayPreparation } from './play-preparation';
+export { createPlayPreparation, type PlayPreparation } from './play-preparation';
 import { getLocale } from '@forgeax/editor-core/i18n';
-import { installPlayFailureNotice } from './play-failure-notice';
+import { createPlayFailureReporter, installPlayFailureNotice } from './play-failure-notice';
 import type { PlayDispatchResult } from './play-operation';
 // ViewportComponent — the in-process engine viewport surface (plan-strategy
 // REPLAN D8; q2 viewport boundary; AC-04 single-realm).
@@ -190,6 +193,7 @@ import { createBootLease } from './boot-lease';
 import { prepareViewportShaderManifestUrl } from './shader-manifest-url';
 import {
   errorMessage,
+  carrierFailureFromError,
   forwardFeedbackHealth,
   isReportablePlayFailure,
   normalizePlayFailureCode,
@@ -198,7 +202,11 @@ import {
 } from '../feedback-health';
 import { createAnimationDiagnosticsProvider } from './animation-diagnostics-provider';
 import { createEngineExecutionDiagnostics } from './execution-diagnostics-provider';
-import { createInfiniteGridFeature } from './infinite-grid-feature';
+import { createInfiniteGridFeature, INFINITE_GRID_FEATURE_ID } from './infinite-grid-feature';
+import {
+  traceInfiniteGridRendererError,
+  traceInfiniteGridVisibility,
+} from './infinite-grid-visibility-trace';
 import { createGizmoRenderFeature } from './gizmo-render-feature';
 import {
   createVersionControlHostPort,
@@ -273,13 +281,49 @@ export function deriveInfiniteGridVisibility(input: {
     input.gridVisible
     && input.display === 'scene'
     && input.playPhase === 'edit'
-    && input.sceneHasRenderableContent !== false
+    && input.sceneHasRenderableContent === true
   );
 }
 
 function hasRenderableSceneContent(world: World): boolean {
   const query = world.query({ with: [Transform, MeshFilter, MeshRenderer] });
   return query.ok && [...query.value].length > 0;
+}
+
+/**
+ * The infinite-grid shader binds the shared PBR view group, which the renderer
+ * only materializes when at least one scene renderable survives frustum
+ * validation for the frame (see typed-frame-graph resolveTargetBindings).
+ */
+export function sceneHasFrustumVisibleRenderables(
+  frustumStats: { readonly culled: number; readonly total: number } | undefined,
+): boolean {
+  if (frustumStats === undefined) return false;
+  if (frustumStats.total <= 0) return false;
+  return frustumStats.culled < frustumStats.total;
+}
+
+/** SSOT for infinite-grid visibility gating (boot gap / empty / all-frustum-culled). */
+export function resolveInfiniteGridSceneHasRenderableContent(
+  sceneWorld: World | undefined,
+  frustumStats?: { readonly culled: number; readonly total: number },
+): boolean {
+  if (sceneWorld === undefined) return false;
+  if (!hasRenderableSceneContent(sceneWorld)) return false;
+  return sceneHasFrustumVisibleRenderables(frustumStats);
+}
+
+export function countRenderableSceneMeshEntities(world: World): number {
+  const query = world.query({ with: [Transform, MeshFilter, MeshRenderer] });
+  return query.ok ? [...query.value].length : 0;
+}
+
+function isInfiniteGridRenderFeatureHealthy(renderer: Renderer | undefined): boolean {
+  if (renderer === undefined) return false;
+  const feature = renderer.inspect().featureDiagnostics.find(
+    (candidate) => candidate.identity === INFINITE_GRID_FEATURE_ID,
+  );
+  return feature?.status !== 'failed';
 }
 
 async function loadRuntimeAssetPayload(
@@ -561,7 +605,7 @@ function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): v
 }
 
 interface BootFns {
-  playSimulation: (policy?: PlayDirtyPolicy, origin?: CommandOrigin) => PlayDispatchResult;
+  playSimulation: (policy?: PlayDirtyPolicy, origin?: CommandOrigin, requestId?: string) => PlayDispatchResult;
   stopSimulation: () => void;
 }
 
@@ -582,6 +626,8 @@ export interface ViewportComponentProps {
   readonly runtimeBinding?: RuntimeAssetBinding;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
+  /** Host preparation survives a same-game runtime generation rebuild. */
+  readonly playPreparation?: PlayPreparation;
   /** Host carrier transition seam; Runtime owns the barrier/handoff protocol. */
   readonly versionControlTransition?: VersionControlRuntimeTransition;
 }
@@ -599,12 +645,16 @@ export function ViewportComponent({
   runtimeBinding,
   selectedSceneGuid,
   versionControlTransition,
+  playPreparation,
 }: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Deferred ▶/■ actions are reached through the hosting PanelShell toolbar and
   // the Runtime transport. This renderer surface deliberately owns no product
   // controls, whether docked or detached.
-  const actionsRef = useRef<BootFns>({ playSimulation: () => ({ ok: true }), stopSimulation: () => {} });
+  const actionsRef = useRef<BootFns>({
+    playSimulation: () => ({ ok: false, error: { code: 'play-unavailable', hint: 'The viewport is not ready.' } }),
+    stopSimulation: () => {},
+  });
   useEffect(() => {
     setPreviewRuntimeBinding(runtimeBinding);
     return () => clearPreviewRuntimeBinding(runtimeBinding);
@@ -623,7 +673,7 @@ export function ViewportComponent({
       runtimeBinding,
       selectedSceneGuid,
       versionControlTransition,
-    }, isCurrentBoot).catch((error: unknown) => {
+    }, isCurrentBoot, playPreparation).catch((error: unknown) => {
       if (!isCurrentBoot()) return;
       // A rejected boot must converge to a visible terminal state. Without a
       // catch here, the overlay remains on "Starting engine…" forever while
@@ -659,6 +709,7 @@ async function bootViewport(
   actionsRef: React.MutableRefObject<BootFns>,
   gameSession: HostGameSession,
   isCurrentBoot: () => boolean,
+  playPreparation?: PlayPreparation,
 ): Promise<Viewport | null> {
   if (!isCurrentBoot()) return null;
   const registerTeardown = (fn: () => void): void => {
@@ -867,17 +918,53 @@ async function bootViewport(
     }),
     renderFeatureDiagnostics: () => vfxRenderer?.inspect().featureDiagnostics ?? [],
   });
+  let infiniteGridRenderer: Renderer | undefined;
   const infiniteGridFeature = createInfiniteGridFeature({
     isVisible: () => {
       const sceneWorld = gateway.doc.world as unknown as World | undefined;
-      return deriveInfiniteGridVisibility({
-        gridVisible: getViewportPreferences().gridVisible,
-        display: getViewportQuadrant().display,
-        playPhase: gateway.playPhase,
-        sceneHasRenderableContent: sceneWorld === undefined
-          ? true
-          : hasRenderableSceneContent(sceneWorld),
+      const frustumStats = infiniteGridRenderer?.inspect().frustumStats;
+      const gridVisible = getViewportPreferences().gridVisible;
+      const display = getViewportQuadrant().display;
+      const playPhase = gateway.playPhase;
+      const ecsMeshEntities = sceneWorld === undefined ? 0 : countRenderableSceneMeshEntities(sceneWorld);
+      const sceneHasViewBindGroupSupport = resolveInfiniteGridSceneHasRenderableContent(
+        sceneWorld,
+        frustumStats,
+      );
+      const renderFeatureHealthy = isInfiniteGridRenderFeatureHealthy(infiniteGridRenderer);
+      const visible = renderFeatureHealthy && deriveInfiniteGridVisibility({
+        gridVisible,
+        display,
+        playPhase,
+        sceneHasRenderableContent: sceneHasViewBindGroupSupport,
       });
+      let reason = visible ? 'shown' : 'hidden';
+      if (!renderFeatureHealthy) reason = 'render-feature-unhealthy';
+      else if (!gridVisible) reason = 'grid-preference-off';
+      else if (display !== 'scene') reason = 'not-scene-display';
+      else if (playPhase !== 'edit') reason = `play-phase-${playPhase}`;
+      else if (sceneWorld === undefined) reason = 'scene-world-missing';
+      else if (ecsMeshEntities === 0) reason = 'no-ecs-mesh-entities';
+      else if (!sceneHasFrustumVisibleRenderables(frustumStats)) {
+        reason = frustumStats === undefined
+          ? 'frustum-stats-unavailable'
+          : frustumStats.total <= 0
+            ? 'frustum-total-zero'
+            : 'all-frustum-culled';
+      }
+      traceInfiniteGridVisibility({
+        visible,
+        gridVisible,
+        display,
+        playPhase,
+        sceneWorldDefined: sceneWorld !== undefined,
+        ecsMeshEntities,
+        frustumStats: frustumStats === undefined ? null : { ...frustumStats },
+        sceneHasViewBindGroupSupport,
+        renderFeatureHealthy,
+        reason,
+      });
+      return visible;
     },
   });
   const gizmoRenderFeature = createGizmoRenderFeature({
@@ -1076,6 +1163,16 @@ async function bootViewport(
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(infiniteGridDiagnostics));
   registerTeardown(renderer.subscribe((event) => {
     if (event.kind === 'state-changed' || event.kind === 'error') infiniteGridDiagnostics.notify();
+    if (event.kind === 'error') {
+      const feature = renderer.inspect().featureDiagnostics.find(
+        (candidate) => candidate.identity === INFINITE_GRID_FEATURE_ID,
+      );
+      traceInfiniteGridRendererError(event.error, {
+        frustumStats: { ...renderer.inspect().frustumStats },
+        featureStatus: feature?.status ?? null,
+        featureLatestError: feature?.latestError ?? null,
+      });
+    }
   }));
   let vfxRenderFeatureEnabled = false;
   if (supportsVfxRenderFeature(renderer.inspect().capabilities)) {
@@ -1095,6 +1192,7 @@ async function bootViewport(
   const executionDiagnostics = createEngineExecutionDiagnostics(editorApp.execution);
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(executionDiagnostics.provider));
   vfxRenderer = renderer;
+  infiniteGridRenderer = renderer;
   registerTeardown(renderer.subscribe((event) => {
     if (event.kind === 'state-changed' || event.kind === 'error' || event.kind === 'frame-submitted') {
       vfxBridge.notifyDiagnosticsChanged();
@@ -1508,6 +1606,10 @@ async function bootViewport(
   registerTeardown(onViewportQuadrantChange((q) => _syncDisplayMode(q.display)));
 
   const playFailureNotice = installPlayFailureNotice(container, getLocale);
+  const reportPlayStartupFailure = createPlayFailureReporter({
+    fail: (error) => gateway.failPlayAttempt(error),
+    notice: playFailureNotice,
+  });
   registerTeardown(() => playFailureNotice.dispose());
 
   // ── run the application session tail on this world (host-boot, D8) ──────────
@@ -1549,7 +1651,7 @@ async function bootViewport(
             runtimeId: runtimeIdentity.runtimeId,
             runtimeScopeId: binding.scopeId,
             runtimeGeneration: String(binding.generation),
-            carrierId: `${runtimeIdentity.carrierId}:play`,
+            carrierId: `${runtimeIdentity.carrierId}:play:${generation}`,
             carrierKind: 'iframe',
           });
           if (gameSession.selectedSceneGuid) params.set('sceneGuid', gameSession.selectedSceneGuid);
@@ -1602,6 +1704,7 @@ async function bootViewport(
           forwardFeedbackHealth({
             source: 'play',
             code: normalizePlayFailureCode(error),
+            carrierFailure: carrierFailureFromError(error),
             message: errorMessage(error, 'Play could not start.'),
           });
         }
@@ -1613,8 +1716,9 @@ async function bootViewport(
       return null;
     }
     console.error('[editor] host session init failed:', err);
+    reportPlayStartupFailure(err);
     session = {
-      playSimulation: () => ({ ok: true }),
+      playSimulation: () => reportPlayStartupFailure(err),
       stopSimulation: () => {},
       captureFrame: () => Promise.reject(new Error('RHI debug capture is unavailable; host session failed to initialize')),
       dispose: () => {},
@@ -1691,11 +1795,11 @@ async function bootViewport(
 
   // Wire the deferred ▶/■ chrome actions now that the lifecycle exists (was :505).
   actionsRef.current = {
-    playSimulation: (policy = 'last-saved', origin = 'human') => {
+    playSimulation: (policy = 'last-saved', origin = 'human', requestId?: string) => {
       canvasInput.revokeGame();
       // `session.playSimulation()` assembles asynchronously. Its lifecycle
       // callback publishes play·game only after gateway.activeWorld is live.
-      return session!.playSimulation(policy, origin);
+      return session!.playSimulation(policy, origin, requestId);
     },
     stopSimulation: () => {
       revokeGameControl();
@@ -1705,6 +1809,32 @@ async function bootViewport(
       refreshVisibilityTarget();
     },
   };
+
+  if (playPreparation) {
+    const sessionActions = actionsRef.current;
+    registerTeardown(playPreparation.attach({
+      play: sessionActions.playSimulation,
+      stop: sessionActions.stopSimulation,
+      isPlaying: () => gateway.playPhase === 'play',
+      preparing: () => gateway.beginPlayAttempt(),
+      failed: reportPlayStartupFailure,
+      prepareScene: async (policy, origin) => {
+        if (!hasPendingDiskSave()) return;
+        if (policy === 'cancel') throw { code: 'play-cancelled-dirty', hint: 'The scene has unsaved edits.' };
+        if (policy !== 'save-then-play') return;
+        const saveId = crypto.randomUUID();
+        const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId: saveId }, origin);
+        const saved = accepted.ok ? await gateway.waitOperationRun(saveId) : undefined;
+        if (!saved?.ok || saved.value?.status !== 'succeeded') {
+          throw { code: 'play-save-failed', hint: 'Save must succeed before preparing the runtime.' };
+        }
+      },
+    }));
+    actionsRef.current = {
+      playSimulation: playPreparation.play,
+      stopSimulation: playPreparation.stop,
+    };
+  }
 
   // ── D-11 (plan-strategy §2): register the REAL play/stop session appliers ────
   // play·stop are session-domain ops whose state machine lives here in edit-runtime
@@ -1720,7 +1850,7 @@ async function bootViewport(
   // returned unregister fns run on teardown to avoid leaking a stale applier across
   // a cross-game realm reset.
   registerTeardown(registerViewportSessionAppliers({
-    play: (policy, origin) => actionsRef.current.playSimulation(policy, origin),
+    play: (policy, origin, requestId) => actionsRef.current.playSimulation(policy, origin, requestId),
     stop: () => actionsRef.current.stopSimulation(),
     setDisplay: (display) => {
       if (display !== 'game') revokeGameControl();
@@ -2078,8 +2208,10 @@ async function bootViewport(
   void installManagedCarrierHealth(canvas, renderer, gameSession.slug, rendererProvenance)
     .then((health) => {
       registerTeardown(health.dispose);
+      const captureLifetime = new AbortController();
+      registerTeardown(() => captureLifetime.abort());
       const capture = createGameplayCaptureGateway({
-        captureImage: () => captureGameplayViewport(container, canvas),
+        captureImage: () => captureGameplayViewport(container, canvas, captureLifetime.signal),
         getProvenance: health.getIdentity,
       });
       const gameplayGateway = session?.getGameplayGateway() ?? gateway;

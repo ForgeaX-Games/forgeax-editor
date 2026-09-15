@@ -143,6 +143,7 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
       loadDocFromDisk: () => Promise.resolve(false),
       loadDocFromStorage: () => false,
       replaceDoc: (_d) => {},
+      activateSceneSession: () => {},
       ...over,
     };
     return { sl: createSceneList(deps), ctx };
@@ -382,6 +383,34 @@ describe('createSceneList — state via ctx, no network on the guarded paths (AC
     expect(await sl.doSwitchSceneFile('lvl2', 'discard')).toBe(true);
     expect(ctx.currentSceneFile).toBe('lvl2');
     expect(ctx.isDirty).toBe(false);
+  });
+
+  it('switches from an authored scene back to a catalog-only generated default', async () => {
+    const loadedSceneIds: Array<string | null> = [];
+    const activatedSceneIds: string[] = [];
+    const ctx = createScenePersistenceContext();
+    const { sl } = make({
+      ctx,
+      loadDocFromDisk: () => {
+        loadedSceneIds.push(ctx.currentSceneFile);
+        ctx.currentSceneGuid = 'guid-default';
+        return Promise.resolve(true);
+      },
+      activateSceneSession: (entry) => { activatedSceneIds.push(entry.id); },
+    });
+    ctx.currentSceneId = 'shoot';
+    ctx.currentSceneFile = 'lvl1';
+    ctx.currentSceneGuid = 'guid-lvl1';
+    ctx.sceneList = [
+      { id: 'lvl1', name: 'Level 1', pack: 'assets/scenes/lvl1.pack.json', guid: 'guid-lvl1' },
+      { id: 'default', name: 'Default Scene', pack: null, guid: 'guid-default', provenance: 'catalog-default' },
+    ];
+
+    expect(await sl.doSwitchSceneFile('default')).toBe(true);
+    expect(loadedSceneIds).toEqual(['default']);
+    expect(activatedSceneIds).toEqual(['default']);
+    expect(ctx.currentSceneFile).toBe('default');
+    expect(ctx.currentSceneGuid).toBe('guid-default');
   });
 
   it('save policy persists before switching and preserves origin', async () => {

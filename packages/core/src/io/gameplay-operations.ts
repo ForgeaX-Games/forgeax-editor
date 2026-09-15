@@ -59,8 +59,16 @@ export function createGameplayCaptureGateway(surface: GameplayCaptureSurface): G
       try {
         dataUrl = await surface.captureImage();
       } catch (error) {
-        return { ok: false, error: { code: 'capture-failed', hint: error instanceof Error ? error.message : String(error) } };
+        const details = error && typeof error === 'object' && 'details' in error
+          && error.details && typeof error.details === 'object' && !Array.isArray(error.details) ? error.details : {};
+        return { ok: false, error: { code: 'capture-failed', hint: error instanceof Error ? error.message : String(error),
+          details: { ...details, provenance, currentProvenance: readSurfaceProvenance(surface) } } };
       }
+      const current = readSurfaceProvenance(surface);
+      if (!current || !sameGameplayIdentity(current, provenance).matches) return { ok: false, error: {
+        code: 'identity-mismatch', hint: 'capture surface changed before completion',
+        details: { provenance, currentProvenance: current },
+      } };
       const bytes = decodedPngBytes(dataUrl);
       if (bytes === null || bytes === 0) return { ok: false, error: { code: 'surface-unavailable', hint: 'live canvas produced no readable PNG artifact' } };
       const artifact = GameplayCaptureArtifactSchema.safeParse({ dataUrl, bytes, provenance });
@@ -106,6 +114,7 @@ export interface GameplayOperations {
   describe(): {
     readonly actions: ReturnType<GameplayGateway['listGameActions']>;
     readonly reads: ReturnType<GameplayGateway['listGameReads']>;
+    readonly runtime?: { readonly playPhase: GameplayGateway['playPhase']; readonly captureAvailable: boolean };
   };
   input(action: GameplayInput): Promise<GameplayProducerResult>;
   query(query: string): Promise<GameplayProducerResult>;
@@ -257,6 +266,7 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
     describe: () => ({
       actions: gateway.listGameActions(),
       reads: gateway.listGameReads(),
+      runtime: { playPhase: gateway.playPhase, captureAvailable: gateway.playPhase === 'play' && capture !== undefined },
     }),
     async input(action) {
       if (gateway.playPhase !== 'play') return unavailable('input requires an active live Play projection');
@@ -269,9 +279,14 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
       return result.ok ? { ok: true, data: result.value } : result;
     },
     async capture() {
-      if (gateway.playPhase !== 'play') return unavailable('capture requires an active live Play projection');
+      if (gateway.playPhase !== 'play') return { ok: false, error: {
+        code: 'surface-unavailable',
+        hint: 'Capture requires active Play. Read viewport.status for the current phase and any startup error. If running the game is intended, use editor.play and wait for Play before capturing; a read-only screenshot request does not itself start Play.',
+        details: { playPhase: gateway.playPhase, statusQuery: { kind: 'viewport.status' }, recoveryActions: ['query', 'editor.play'] },
+      } };
       if (!capture) return unavailable('capture requires a live canvas capture surface');
       const result = await capture.captureGameplayFrame();
+      if (result.ok && gateway.playPhase !== 'play') return unavailable('Play stopped before capture completed');
       return result.ok ? { ok: true, data: result.value } : result;
     },
   };

@@ -15,7 +15,7 @@ export function createPlayOperation(deps: {
   let pending: { completion: Promise<DispatchResult>; cancel: () => void; stop: () => void } | undefined;
   const cancelled: DispatchResult = { ok: false, error: { code: 'play-cancelled', hint: 'Play was stopped before startup completed.' } };
 
-  function play(policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human'): PlayDispatchResult {
+  function play(policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human', requestId?: string): PlayDispatchResult {
     if (pending) return { ok: true, completion: pending.completion, cancel: pending.stop };
     const lifecycle = deps.lifecycle();
     if (!lifecycle) return { ok: false, error: { code: 'play-unavailable', hint: 'The viewport lifecycle is not ready.' } };
@@ -45,7 +45,7 @@ export function createPlayOperation(deps: {
           }
         }
         if (stopped) return cancelled;
-        await lifecycle.playSimulation();
+        await lifecycle.playSimulation(requestId);
         if (stopped) return cancelled;
         // The lifecycle handles assembly errors internally: Promise resolution
         // alone is not success. Read its authoritative Gateway outcome.

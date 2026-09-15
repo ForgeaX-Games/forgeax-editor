@@ -91,7 +91,7 @@ export const GAMEPLAY_CONTRACT_DESCRIPTION = Object.freeze({
   operations: Object.freeze([
     { operation: 'describe', purpose: 'Read this live contract.', request: { version: 1, operation: 'describe' } },
     { operation: 'query', purpose: 'Read a game-published state projection.', request: { version: 1, operation: 'query', query: '<read-id>' } },
-    { operation: 'capture', purpose: 'Capture the authoritative live canvas.', request: { version: 1, operation: 'capture' } },
+    { operation: 'capture', purpose: 'Capture the authoritative live game canvas and viewport-local HUD. Requires runtime.playPhase=play and runtime.captureAvailable=true in the describe projections. It never starts Play. Application DOM screenshots cannot establish game rendering, including whether its canvas is blank.', evidenceType: 'gameplay-canvas', statusQuery: { kind: 'viewport.status' }, request: { version: 1, operation: 'capture' } },
     { operation: 'input', purpose: 'Send a key transition.', request: { version: 1, operation: 'input', action: { type: 'key', key: 'ArrowLeft', phase: 'down' } } },
     {
       operation: 'input',

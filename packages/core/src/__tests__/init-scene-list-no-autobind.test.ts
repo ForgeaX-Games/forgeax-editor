@@ -157,3 +157,52 @@ describe('initSceneList — default binding uses the completed manifest scan', (
     expect(packReads).toBe(2);
   });
 });
+
+describe('initSceneList — generated default remains discoverable beside authored scenes', () => {
+  const realFetch = globalThis.fetch;
+  const generatedGuid = 'cccc3333-0000-4000-8000-000000000003';
+
+  beforeEach(() => {
+    setPathResolver((rel: string) => (rel ? `/game/${rel}` : '/game'));
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.startsWith('/api/files/tree?root=')) return jsonResponse(TREE);
+      if (url.startsWith('/api/files?path=')) {
+        const path = decodeURIComponent(url.slice('/api/files?path='.length));
+        if (path === '/game/forge.json') {
+          return jsonResponse({ content: JSON.stringify({
+            id: 'sample',
+            name: 'sample',
+            schemaVersion: '1.0.0',
+            entry: 'src/main.ts',
+            defaultScene: generatedGuid,
+          }) });
+        }
+        if (path in PACKS) return jsonResponse({ content: PACKS[path] });
+        return new Response('not found', { status: 404 });
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+    gateway.dispatch({ kind: 'setSceneId', id: 'sample' } as EditorOp);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    setPathResolver(null);
+    gateway.dispatch({ kind: 'setSceneId', id: null } as EditorOp);
+    try { localStorage.clear(); } catch { /* no localStorage in this env */ }
+  });
+
+  it('keeps the catalog-only default in the manifest after authored packs exist', async () => {
+    await initSceneList();
+
+    expect(getSceneList()).toContainEqual({
+      id: 'default',
+      name: 'Default Scene',
+      pack: null,
+      guid: generatedGuid,
+      provenance: 'catalog-default',
+    });
+    expect(getSceneFile()).toBe('default');
+  });
+});

@@ -289,8 +289,18 @@ export async function loadImportedScenePreview(
   return true;
 }
 
-/** A game's scene-manifest entry (one scene pack plus its stable asset identity). */
-export interface SceneFileEntry { id: string; name?: string; pack: string; guid?: string }
+/** A game's scene-manifest entry plus generated default scenes loaded by GUID. */
+export interface SceneFileEntry {
+  id: string;
+  name?: string;
+  /**
+   * Authored storage path. `null` means the scene is a catalog-only generated
+   * output (for example a ScriptablePack `*.pack.ts`) and must stay read-only.
+   */
+  pack: string | null;
+  guid?: string;
+  provenance?: 'authored-pack' | 'catalog-default';
+}
 
 // ── Compose the four persistence DI units (D-3) ───────────────────────────────
 // ONE of each factory with the real gateway / fetch / fetchWithTimeout /
@@ -324,6 +334,11 @@ const sceneList = createSceneList({
   loadDocFromDisk: () => diskIo.doLoadDocFromDisk(),
   loadDocFromStorage: () => storage.loadDocFromStorage(),
   replaceDoc: (doc) => diskIo.replaceDoc(doc),
+  activateSceneSession: (entry) => setAuthoringSession(
+    entry.provenance === 'catalog-default'
+      ? importedPreviewSession()
+      : AUTHORED_SCENE_AUTHORING_SESSION,
+  ),
 });
 gateway.registerSceneReadProvider(sceneList.getSceneReadModel);
 bindLocalSceneReadModelSource({

@@ -34,6 +34,7 @@ import { describe, expect, it } from 'bun:test';
 import { Entity, World } from '@forgeax/engine-ecs';
 import { Name, Transform } from '@forgeax/engine-scene';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { SceneInstance } from '@forgeax/engine-render';
 import {
   attachPublicationFences,
@@ -829,9 +830,13 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes gu
 
   it('opens a declared catalog-only default scene without inventing a writable pack path', async () => {
     const guid = '11111111-2222-5333-8444-555555555555';
+    const expectedGuid = AssetGuid.parse(guid);
+    if (!expectedGuid.ok) throw new Error('test GUID must be valid');
+    const loadedGuids: unknown[] = [];
     const registry = {
       assetCatalog: new Map(),
-      async loadByGuid() {
+      async loadByGuid(loadedGuid: unknown) {
+        loadedGuids.push(loadedGuid);
         return { ok: true, value: { kind: 'scene', entities: [] } };
       },
       catalog(_guid: string, payload: unknown) {
@@ -844,6 +849,14 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes gu
     const ctx = createScenePersistenceContext();
     ctx.currentSceneId = 'scriptable-game';
     ctx.defaultSceneGuid = guid;
+    ctx.currentSceneFile = 'default';
+    ctx.sceneList = [{
+      id: 'default',
+      name: 'Default Scene',
+      pack: null,
+      guid,
+      provenance: 'catalog-default',
+    }];
     const net = makeNetSpies();
     const world = createCoreTestWorld();
     const gateway = makeFakeGateway({ world, registry }).gateway;
@@ -860,6 +873,7 @@ describe('doLoadDocFromDisk — uses the injected fetchWithTimeout, publishes gu
     expect(io.scenePath()).toBeNull();
     expect(await io.doLoadDocFromDisk()).toBe(true);
     expect(net.fetchTimeoutCalls).toHaveLength(0);
+    expect(loadedGuids).toEqual([expectedGuid.value]);
     expect(ctx.currentSceneGuid).toBe(guid);
     expect(ctx.isDirty).toBe(false);
     expect(notifications).toBe(1);

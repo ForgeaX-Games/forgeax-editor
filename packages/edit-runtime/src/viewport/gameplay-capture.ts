@@ -62,20 +62,24 @@ function throwIfAborted(signal: AbortSignal): void {
     : captureError('viewport capture timed out');
 }
 
-function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal, cleanup: () => void = () => {}): Promise<T> {
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason instanceof Error
-      ? signal.reason
-      : captureError('viewport capture timed out'));
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      cleanup();
+      reject(signal.reason instanceof Error ? signal.reason : captureError('viewport capture timed out'));
+    };
     signal.addEventListener('abort', abort, { once: true });
     operation.then(
       (value) => {
         signal.removeEventListener('abort', abort);
-        resolve(value);
+        cleanup();
+        if (!signal.aborted) resolve(value);
       },
       (error: unknown) => {
         signal.removeEventListener('abort', abort);
+        cleanup();
         reject(error);
       },
     );
@@ -90,6 +94,7 @@ function canvasToBlob(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<B
       return;
     }
     canvas.toBlob((blob) => {
+      if (signal.aborted) return;
       if (blob) resolve(blob);
       else reject(captureError('viewport capture produced no PNG data'));
     }, 'image/png');
@@ -98,38 +103,50 @@ function canvasToBlob(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<B
 
 function blobToDataUrl(blob: Blob, signal: AbortSignal): Promise<string> {
   throwIfAborted(signal);
+  const reader = new FileReader();
   return waitForAbortable(new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
     reader.onload = () => typeof reader.result === 'string'
       ? resolve(reader.result)
       : reject(captureError('viewport capture produced no PNG data'));
     reader.onerror = () => reject(reader.error ?? captureError('viewport capture could not encode PNG data'));
     reader.readAsDataURL(blob);
-  }), signal);
+  }), signal, () => {
+    reader.onload = null; reader.onerror = null;
+    if (reader.readyState === 1) reader.abort();
+  });
 }
 
-async function loadDataUrlImage(doc: Document, blob: Blob, signal: AbortSignal): Promise<HTMLImageElement> {
+async function loadDataUrlImage(doc: Document, blob: Blob, signal: AbortSignal, stage: (name: string) => void): Promise<HTMLImageElement> {
+  stage('hud-svg-encoding');
   const source = await blobToDataUrl(blob, signal);
   if (!source.startsWith('data:image/svg+xml')) {
     throw captureError('viewport HUD could not be encoded as SVG');
   }
+  stage('hud-rasterization');
+  const image = doc.createElement('img');
   return waitForAbortable(new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = doc.createElement('img');
     image.onload = () => resolve(image);
     image.onerror = () => reject(captureError('viewport HUD rasterization failed'));
     image.src = source;
-  }), signal);
+  }), signal, () => {
+    image.onload = null; image.onerror = null;
+    if (signal.aborted) image.removeAttribute('src');
+  });
 }
 
 function waitForPresentedFrame(doc: Document, signal: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   const view = doc.defaultView;
-  if (!view) return waitForAbortable(new Promise<void>((resolve) => {
-    globalThis.setTimeout(resolve, 0);
-  }), signal);
+  if (!view) {
+    let timer: ReturnType<typeof setTimeout>;
+    return waitForAbortable(new Promise<void>((resolve) => {
+      timer = globalThis.setTimeout(resolve, 0);
+    }), signal, () => globalThis.clearTimeout(timer));
+  }
+  let frame = 0;
   return waitForAbortable(new Promise<void>((resolve) => {
-    view.requestAnimationFrame(() => resolve());
-  }), signal);
+    frame = view.requestAnimationFrame(() => resolve());
+  }), signal, () => view.cancelAnimationFrame(frame));
 }
 
 function renderedChildren(source: Element): Iterable<Node> {
@@ -325,6 +342,7 @@ async function drawHud(
   viewport: CaptureSize,
   output: CaptureSize,
   signal: AbortSignal,
+  stage: (name: string) => void,
 ): Promise<void> {
   if (!hud) return;
   throwIfAborted(signal);
@@ -336,7 +354,7 @@ async function drawHud(
   if (blob.size > HUD_MAX_SERIALIZED_BYTES) {
     throw captureError('viewport HUD exceeds the serialized capture budget');
   }
-  const image = await loadDataUrlImage(hud.ownerDocument, blob, signal);
+  const image = await loadDataUrlImage(hud.ownerDocument, blob, signal, stage);
   throwIfAborted(signal);
   context.drawImage(image, 0, 0, output.width, output.height);
 }
@@ -345,6 +363,7 @@ async function performCapture(
   container: HTMLElement,
   renderCanvas: HTMLCanvasElement,
   signal: AbortSignal,
+  stage: (name: string) => void,
 ): Promise<string> {
   const doc = container.ownerDocument;
   const rect = container.getBoundingClientRect();
@@ -360,9 +379,15 @@ async function performCapture(
   const context = output.getContext('2d');
   if (!context) throw captureError('viewport capture requires a 2D canvas context');
 
+  stage('frame-wait');
   await drawCanvas(context, renderCanvas, size, signal);
-  await drawHud(context, cloneHud(container), viewport, size, signal);
-  const dataUrl = await blobToDataUrl(await canvasToBlob(output, signal), signal);
+  stage('hud-clone');
+  await drawHud(context, cloneHud(container), viewport, size, signal, stage);
+  stage('png-encoding');
+  const blob = await canvasToBlob(output, signal);
+  stage('png-readback');
+  const dataUrl = await blobToDataUrl(blob, signal);
+  stage('complete');
   if (!dataUrl.startsWith('data:image/png;base64,')) {
     throw captureError('viewport capture produced no PNG data');
   }
@@ -377,24 +402,51 @@ async function performCapture(
 export function captureGameplayViewport(
   container: HTMLElement,
   renderCanvas: HTMLCanvasElement,
+  signal?: AbortSignal,
 ): Promise<string> {
+  const startedAt = Date.now();
+  let stageName = 'surface-resolution';
+  let stageStartedAt = startedAt;
+  const failure = (error: unknown, surface?: CaptureSurface) => Object.assign(
+    captureError(error instanceof Error ? error.message : String(error)),
+    { details: {
+      stage: stageName, elapsedMs: Date.now() - startedAt, stageElapsedMs: Date.now() - stageStartedAt,
+      startedAt, deadlineAt: startedAt + CAPTURE_TIMEOUT_MS, timeoutMs: CAPTURE_TIMEOUT_MS,
+      ...(surface ? { surface: {
+        canvasAvailable: true, canvasWidth: surface.renderCanvas.width, canvasHeight: surface.renderCanvas.height,
+        ...(typeof surface.renderCanvas.isConnected === 'boolean' ? { connected: surface.renderCanvas.isConnected } : {}),
+        ...(surface.renderCanvas.ownerDocument.visibilityState ? { visibility: surface.renderCanvas.ownerDocument.visibilityState } : {}),
+      } } : {}),
+    } },
+  );
   let surface: CaptureSurface;
   try {
     surface = resolveCaptureSurface(container, renderCanvas);
   } catch (error) {
-    return Promise.reject(error);
+    return Promise.reject(failure(error));
   }
 
   const active = capturesInFlight.get(surface.renderCanvas);
   if (active) return active;
 
   const controller = new AbortController();
+  const cancel = () => controller.abort(captureError('viewport capture cancelled'));
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener('abort', cancel, { once: true });
+  const stage = (name: string) => {
+    throwIfAborted(controller.signal);
+    const current = resolveCaptureSurface(container, renderCanvas);
+    if (current.renderCanvas !== surface.renderCanvas || current.container !== surface.container
+      || surface.renderCanvas.isConnected === false) throw captureError('viewport capture surface changed');
+    stageName = name; stageStartedAt = Date.now();
+  };
   const timer = globalThis.setTimeout(
     () => controller.abort(captureError('viewport capture timed out')),
-    CAPTURE_TIMEOUT_MS,
+    Math.max(0, startedAt + CAPTURE_TIMEOUT_MS - Date.now()),
   );
-  const capture = performCapture(surface.container, surface.renderCanvas, controller.signal)
-    .finally(() => globalThis.clearTimeout(timer));
+  const capture = performCapture(surface.container, surface.renderCanvas, controller.signal, stage)
+    .catch((error: unknown) => { throw failure(error, surface); })
+    .finally(() => { globalThis.clearTimeout(timer); signal?.removeEventListener('abort', cancel); });
   capturesInFlight.set(surface.renderCanvas, capture);
   void capture.then(
     () => { if (capturesInFlight.get(surface.renderCanvas) === capture) capturesInFlight.delete(surface.renderCanvas); },

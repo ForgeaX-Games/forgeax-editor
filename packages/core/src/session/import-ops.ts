@@ -27,8 +27,7 @@
 
 import { assetIO, type AssetIoResult, type TriggerCookStats } from '../io/asset-io-facade';
 import { getImportFormat } from '../scan/ext-importer-map';
-import { cookGltfMeta } from '../assets/gltf-cook';
-import { cookFbxMeta } from '../assets/fbx-cook';
+import { produceSourceMetadata, type SourceMetadataResult } from '../assets/source-metadata-producer';
 import { storagePathToCatalogSourceKey } from '../assets/catalog-storage-path';
 import { generateAssetGuid } from './pack-ops';
 import { awaitPostAssetWriteCatalogSync } from './authored-asset-write';
@@ -668,6 +667,8 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
   };
   const isCancelled = (): boolean => signal?.aborted === true && cancellationPolicy.cancellable;
   const cancelledHint = 'Import cancelled before its next write boundary; no temporary sidecar was created.';
+  // Metadata resolves its source relative to the sidecar, not the caller's working directory.
+  const sourceFileName = destPath.replace(/\\/g, '/').split('/').at(-1) || sourceName;
   const ext = sourceName.slice(sourceName.lastIndexOf('.')).toLowerCase();
   const format = getImportFormat(sourceName);
 
@@ -793,33 +794,20 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       const bytes = sourceBytes.value;
       if (existing === undefined) existing = existingImportMeta(await assetIO.readExistingMeta(metaPath));
       if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
-      let cooked: Awaited<ReturnType<typeof cookGltfMeta>> | Awaited<ReturnType<typeof cookFbxMeta>>;
+      let cooked: SourceMetadataResult;
       try {
         const fbxCandidatePaths = sourceFiles === undefined
           ? existingFbxCandidatePaths(existing)
           : dependencyFiles.map((sourceFile) => sourceFile.relativePath);
-        cooked = format.importer === 'gltf'
-          ? await cookGltfMeta(bytes, sourceName, existing)
-          : await cookFbxMeta(
-              bytes,
-              sourceName,
-              existing,
-              fbxCandidatePaths === undefined ? {} : { fbxCandidatePaths },
-            );
+        cooked = await produceSourceMetadata({ bytes, sourceName: sourceFileName, existing,
+          ...(fbxCandidatePaths === undefined ? {} : { fbxCandidatePaths }) });
       } catch (err) {
         if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
         const hint = err instanceof Error ? err.message : String(err);
         return failedImport(sourceName, destPath, 'IMPORT_COOK_FAILED', hint, { retryable: false });
       }
-      if (!cooked.ok || !cooked.metaJson) {
-        const cookCode = format.importer === 'fbx' && 'code' in cooked
-          ? cooked.code === 'FBX_PARSE_FAILED'
-            ? 'IMPORT_FBX_PARSE_FAILED'
-            : cooked.code === 'FBX_SOURCE_INVALID'
-              ? 'IMPORT_FBX_SOURCE_INVALID'
-              : 'IMPORT_COOK_FAILED'
-          : 'IMPORT_COOK_FAILED';
-        return failedImport(sourceName, destPath, cookCode, cooked.error ?? `${format.importer} cook failed`, { retryable: false });
+      if (!cooked.ok) {
+        return failedImport(sourceName, destPath, cooked.code, cooked.error, { retryable: false });
       }
       if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
       setCancellationPolicy({
@@ -877,30 +865,28 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       return { filename: sourceName, status: 'done', guid, subAssets };
     }
 
+    // A source-only import must prove the destination exists before publishing metadata.
+    if (skipUpload) {
+      const source = await assetIO.readSourceBytes(destPath, signal);
+      if (!source.ok) {
+        return failedImport(
+          sourceName,
+          destPath,
+          source.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_SOURCE_READ_FAILED',
+          source.error.hint,
+          { retryable: source.error.kind === 'network' },
+        );
+      }
+    }
+
     // 3. Other importers (image/audio/font/pack): write a simple sidecar + cook.
     // Font is special: the engine fontImporter expects three sub-assets
     // (texture atlas, sampler, font glyph metrics) declared in the sidecar so
     // it can resolve each by kind. All other importers produce a single
     // sub-asset of their declared kind.
-    const subAssets = format.subAssetKinds.map((kind, sourceIndex) => ({
-      guid: existing?.subAssets.find((entry) => entry.kind === kind)?.guid
-        ?? (sourceIndex === 0 ? guid : generateAssetGuid()),
-      sourceIndex,
-      kind,
-      // Font declares three outputs from one source file; meta.schema requires
-      // distinct sourceIndex values and stable sourceKey locators (see dejavu
-      // fixture). Reusing sourceIndex 0 for every sub-asset fails scan with
-      // pack-malformed-meta / source-index-ambiguous and degrades the catalog.
-      ...(format.importer === 'font' ? { sourceKey: `font:${kind}` } : {}),
-    }));
-    const meta = {
-      schemaVersion: '1.0.0',
-      kind: 'external-asset-package',
-      importer: format.importer,
-      source: sourceName,
-      importSettings: { ...format.defaultSettings, ...(existing?.importSettings ?? {}) },
-      subAssets,
-    };
+    const produced = await produceSourceMetadata({ bytes: new ArrayBuffer(0), sourceName: sourceFileName, existing, firstGuid: guid });
+    if (!produced.ok) return failedImport(sourceName, destPath, produced.code, produced.error, { retryable: false });
+    const subAssets = subAssetsFromMetaJson(produced.metaJson);
     setCancellationPolicy({
       cancellable: false,
       hint: 'Import is writing the metadata sidecar; cancellation is unavailable until the write completes.',
@@ -910,8 +896,8 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       fraction: format.importer === 'audio' ? IMPORT_FRACTION.done : IMPORT_FRACTION.sidecar,
     });
     const wrote = sourceTransaction === undefined
-      ? await assetIO.writeMetaSidecar(metaPath, JSON.stringify(meta, null, 2) + '\n', signal)
-      : await sourceTransaction.writeMeta(JSON.stringify(meta, null, 2) + '\n', signal);
+      ? await assetIO.writeMetaSidecar(metaPath, produced.metaJson, signal)
+      : await sourceTransaction.writeMeta(produced.metaJson, signal);
     if (!wrote.ok) {
       return failedImport(
         sourceName,

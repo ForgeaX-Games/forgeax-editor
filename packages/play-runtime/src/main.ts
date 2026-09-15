@@ -1,3 +1,5 @@
+import { PlayBindingFailure } from './boot-diagnostic';
+import { resolveCarrierScope } from './carrier-scope';
 import { createGameplayInputSurface } from '@forgeax/editor-core/gameplay-input';
 import { runtimeFailure } from './runtime-failure';
 import {
@@ -187,9 +189,10 @@ function publishCarrierBootFailure(error: unknown): void {
         ? detail.hint
         : String(error);
   carrierFailure = {
-    code: 'play-carrier-boot-failed',
+    code: error instanceof PlayBindingFailure ? error.code : 'play-carrier-boot-failed',
     stage: 'handshake',
-    retryable: true,
+    retryable: error instanceof PlayBindingFailure ? error.retryable : true,
+    ...(error instanceof PlayBindingFailure ? { diagnostics: error.diagnostics } : {}),
     hint: message,
     at: new Date().toISOString(),
     message,
@@ -205,9 +208,15 @@ function publishCarrierBootFailure(error: unknown): void {
 async function loadRuntimeBinding(): Promise<RuntimeAssetBinding | undefined> {
   if (__FORGEAX_STATIC_BUILD__) return undefined;
   const bindingUrl = `${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/__pack/runtime-binding.json`;
-  return fetchRuntimeBinding(bindingUrl, fetch);
+  return fetchRuntimeBinding(bindingUrl, fetch, {
+    ...(requestedGameIdValidated && expectedScopeId && expectedGeneration !== null
+      ? { expected: { gameId: requestedGameIdValidated, scopeId: expectedScopeId, generation: expectedGeneration } } : {}),
+  });
 }
 
+const carrierScopeReady = resolveCarrierScope(carrierRuntimeId, requestedGameIdValidated, fetch)
+  .then((scope) => { carrierScope = scope; });
+await carrierScopeReady;
 let runtimeBinding: RuntimeAssetBinding | undefined;
 try {
   runtimeBinding = await loadRuntimeBinding();
@@ -256,30 +265,7 @@ Object.defineProperty(window, '__forgeaxPlayRendererProvenance', {
   get: () => () => carrierRendererProvenance,
 });
 
-async function resolveManagedCarrierScope(): Promise<void> {
-  if (!carrierRuntimeId || !carrierOwnershipChallenge) return;
-  try {
-    const [healthResponse, activeGameResponse] = await Promise.all([
-      fetch('/api/health', { cache: 'no-store' }),
-      fetch('/api/projects/active', { cache: 'no-store' }),
-    ]);
-    if (!healthResponse.ok || !activeGameResponse.ok) return;
-    const health = await healthResponse.json() as { instanceRootAbs?: unknown };
-    const activeGame = await activeGameResponse.json() as { activeSlug?: unknown };
-    if (typeof health.instanceRootAbs !== 'string' || health.instanceRootAbs.length === 0) return;
-    carrierScope = {
-      projectId: health.instanceRootAbs,
-      gameId: typeof activeGame.activeSlug === 'string' && GAME_ID_RE.test(activeGame.activeSlug)
-        ? activeGame.activeSlug
-        : null,
-    };
-  } catch {
-    // A managed page must fail its handshake when the producer facts cannot be
-    // read. Ordinary user-opened preview pages do not use the carrier protocol.
-  }
-}
 
-const carrierScopeReady = resolveManagedCarrierScope();
 
 // ── Physics gate (per-game opt-in via forge.json "physics") ──
 // Physics is OFF by default so non-physics games pay zero rapier-WASM cost. A
