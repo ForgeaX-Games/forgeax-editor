@@ -84,6 +84,8 @@ export type VagCarrierScope = GameplayScope;
 
 // A bounded projection of producer diagnostics, never an arbitrary Error payload.
 export const VagRuntimeDiagnosticSchema = z.object({
+  diagnostic: z.string().max(2000).optional(),
+  phase: z.string().max(256).optional(),
   code: z.string().min(1).max(256),
   hint: z.string().max(2000).optional(),
   expected: z.string().max(2000).optional(),

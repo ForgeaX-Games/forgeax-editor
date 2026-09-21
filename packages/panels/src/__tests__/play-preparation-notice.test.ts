@@ -29,7 +29,7 @@ test('preparation rejection reaches visible notice and preserves the original di
   expect(plays).toBe(0);
   const node = f.container.querySelector<HTMLElement>('[role=status]')!;
   expect(node.style.display).toBe('flex');
-  expect(node.textContent).toContain('assets/scene.pack.ts: Repair the declared GUIDs and rebuild.');
+  expect(node.textContent).toContain('Repair the declared GUIDs and rebuild. · [pack-source-external-closure-mismatch] · assets/scene.pack.ts');
   expect(f.errors[0]).toMatchObject({ code: 'play-assemble-failed', cause: { code: 'produce-failed', details: diagnostic } });
   broken = false;
   expect(await prep.play().completion).toEqual({ ok: true });

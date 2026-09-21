@@ -33,6 +33,7 @@ export interface ImportFormat {
 
 /** Canonical extension → importer format mapping. Keep in sync with content-browser/src/import-registry.ts. */
 export const IMPORT_FORMATS: ImportFormat[] = [
+  { extensions: ['.pack.json', '.pack.ts'], label: 'Authored Asset Pack', importer: 'pack', subAssetKinds: [], defaultSettings: {} },
   {
     extensions: ['.png', '.jpg', '.jpeg', '.webp', '.tga'],
     label: 'Image Texture',

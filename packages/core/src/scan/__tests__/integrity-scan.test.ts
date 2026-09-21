@@ -37,3 +37,12 @@ describe('scanAssetsIntegrity', () => {
     }
   });
 });
+
+
+test('native Pack sources never request a synthetic metadata sidecar', async () => {
+  setPathResolver((path) => path ? `game/${path}` : 'game');
+  assetIO.listSourceFiles = async () => ['game/assets/native.pack.ts', 'game/assets/geometry-data.ts'];
+  const result = await scanAssetsIntegrity();
+  expect(result.needsMeta).toEqual([]);
+  expect(result.orphanedSidecar).toEqual([]);
+});

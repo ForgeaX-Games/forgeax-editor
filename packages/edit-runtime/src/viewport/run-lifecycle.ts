@@ -1,3 +1,4 @@
+import { normalizePlayFailure } from './play-failure-notice';
 // run-lifecycle.ts — ▶ Play / ■ Stop for the editor: play=level-load, stop=drop,
 // with one renderer-owner restore guard shared by every teardown path.
 //
@@ -303,20 +304,14 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   }
 
   function reportPlayFailure(error: unknown): void {
-    const structured = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
-    let hint = String(error);
-    if (error instanceof Error) hint = error.message;
-    if (structured && typeof structured.hint === 'string') hint = structured.hint;
-    const code = structured && typeof structured.code === 'string'
-      ? structured.code
-      : 'play-assemble-failed';
-    deps.gateway.failPlayAttempt({ code, hint });
+    const failure = normalizePlayFailure(error);
+    deps.gateway.failPlayAttempt(failure);
     if (playRunId !== null) {
-      deps.runProjection?.failed(playRunId, { code, hint, retryable: true, recoveryActions: ['operation.retry'] });
+      deps.runProjection?.failed(playRunId, { ...failure, retryable: true, recoveryActions: ['operation.retry'] });
       playRunId = null;
     }
     const carrierFailure = carrierFailureFromError(error);
-    deps.onPlayFailed?.({ code, hint, ...(carrierFailure === undefined ? {} : { carrierFailure }) });
+    deps.onPlayFailed?.({ ...failure, ...(carrierFailure === undefined ? {} : { carrierFailure }) });
   }
 
   async function playSimulation(requestId?: string): Promise<void> {

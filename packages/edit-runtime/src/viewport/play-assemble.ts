@@ -1,3 +1,4 @@
+import { normalizePlayFailure } from './play-failure-notice';
 // play-assemble.ts — assemble a fresh play World for ▶ Play (level-load model).
 //
 // Proposition (P1 progressive disclosure): play = a fresh `new World()` assembled
@@ -298,13 +299,7 @@ export async function assemblePlayWorld(
   const vfxFeatureEnabled = deps.vfxRuntimeHost !== undefined
     && deps.vfxRenderFeatureEnabled === true;
 
-  const startupError = (code: string, error: unknown): { code: string; hint: string } => {
-    const structured = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
-    let hint = String(error);
-    if (error instanceof Error) hint = error.message;
-    if (structured && typeof structured.hint === 'string') hint = structured.hint;
-    return { code: structured && typeof structured.code === 'string' ? structured.code : code, hint };
-  };
+  const startupError = (code: string, error: unknown) => normalizePlayFailure(error, code);
 
   const detachHostResources = (): void => {
     if (detached) return;

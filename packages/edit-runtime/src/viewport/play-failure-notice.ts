@@ -1,28 +1,60 @@
 import type { CommandError, DispatchResult } from '@forgeax/editor-core';
+import { carrierFailureFromError } from '../feedback-health';
 
-function failureDetail(error: unknown): { code?: unknown; hint: string } {
+function failureDetail(error: unknown, fullSource = false): { code?: unknown; hint: string } {
   const seen = new Set<object>();
+  const carrierDiagnostics = [...(carrierFailureFromError(error)?.payload.failure.diagnostics ?? [])];
+  const maxDepth = 8 + carrierDiagnostics.length;
   let value = error;
   let hint = '';
   let code: unknown;
   let source = '';
-  for (let depth = 0; depth < 8 && value && typeof value === 'object' && !seen.has(value); depth += 1) {
+  let diagnostic = '';
+  let property = '';
+  let closure = '';
+  for (let depth = 0; depth < maxDepth && value && typeof value === 'object' && !seen.has(value); depth += 1) {
     seen.add(value);
     const entry = value as Record<string, unknown>;
     if (typeof entry.code === 'string') code = entry.code;
     if (typeof entry.hint === 'string' && entry.hint.trim()) hint = entry.hint;
     else if (typeof entry.message === 'string' && entry.message.trim()) hint = entry.message;
-    const detail = entry.detail && typeof entry.detail === 'object' ? entry.detail as Record<string, unknown> : undefined;
+    const detail = entry.detail && typeof entry.detail === 'object' ? entry.detail as Record<string, unknown> : entry;
     if (typeof detail?.sourcePath === 'string') source = detail.sourcePath;
-    if (typeof detail?.propertyPath === 'string') source += `${source ? ' · ' : ''}${detail.propertyPath}`;
-    value = entry.cause;
+    if (typeof detail?.propertyPath === 'string') property = detail.propertyPath;
+    if (typeof detail?.diagnostic === 'string' && detail.diagnostic.trim()) diagnostic = detail.diagnostic;
+    if (Array.isArray(detail?.unusedDeclaredGuids)) {
+      const guids = detail.unusedDeclaredGuids.filter((guid): guid is string => typeof guid === 'string');
+      if (guids.length) closure = `Unused asset declarations: ${guids.join(', ')}`;
+    }
+    value = entry.cause ?? carrierDiagnostics.shift();
   }
   if (!hint && typeof error === 'string') hint = error;
-  return { code, hint: [source, hint].filter(Boolean).join(': ') };
+  // Keep the actionable failure before paths so narrow viewports cannot hide it.
+  const shortSource = source.replace(/\\/g, '/').split('/').filter(Boolean).slice(-2).join('/');
+  const location = [fullSource ? source : shortSource, property].filter(Boolean).join(' · ');
+  const primary = diagnostic || closure || hint;
+  const label = code && (diagnostic || closure || source) ? `[${code}]` : '';
+  const message = [primary, diagnostic ? closure : '', primary.includes(label) ? '' : label, primary.includes(location) ? '' : location]
+    .filter(Boolean).join(' · ');
+  return { code, hint: message };
 }
 
-export function playFailureMessage(error: unknown, language: string): string {
-  const detail = failureDetail(error);
+/** Preserve structured diagnostics for Gateway runs as well as the visible notice. */
+export function normalizePlayFailure(error: unknown, fallbackCode = 'play-assemble-failed') {
+  const structured = error && typeof error === 'object' ? error as Record<string, unknown> : undefined;
+  const fields: Record<string, unknown> = { ...structured };
+  // Native Error.message/cause are non-enumerable but remain useful on the wire.
+  if (structured && 'cause' in structured) fields.cause = structured.cause;
+  if (typeof structured?.message === 'string') fields.message = structured.message;
+  return {
+    ...fields,
+    code: typeof structured?.code === 'string' ? structured.code : fallbackCode,
+    hint: failureDetail(error, true).hint || String(error),
+  };
+}
+
+export function playFailureMessage(error: unknown, language: string, fullSource = false): string {
+  const detail = failureDetail(error, fullSource);
   const zh = language === 'zh';
   return detail.code === 'render-system-no-camera'
     ? zh ? '暂时无法预览：游戏场景没有相机。请添加相机，或让 Agent 完成场景后再试。'
@@ -75,7 +107,7 @@ export function installPlayFailureNotice(container: HTMLElement, locale: () => s
       const zh = locale() === 'zh';
       const message = playFailureMessage(error, locale());
       text.textContent = message;
-      text.title = message;
+      text.title = playFailureMessage(error, locale(), true);
       close.setAttribute('aria-label', zh ? '关闭预览提示' : 'Dismiss Play notice');
       notice.style.display = 'flex';
     },

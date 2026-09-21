@@ -169,3 +169,28 @@ test('save-then-play waits for save and then for the actual assembly outcome', a
     expect(await started.completion).toMatchObject({ ok: false, error: { hint: 'saved entry failed', retryable: false } });
   } finally { restore(); }
 });
+
+
+test('assembly asset diagnostics survive lifecycle and Gateway completion', async () => {
+  const r = rig();
+  const started = r.operation.play();
+  const cause = { code: 'pack-source-load-failed', hint: 'Repair the module', detail: {
+    diagnostic: 'AssetGuidParser is not defined', phase: 'module-load', sourcePath: 'assets/scene.pack.ts',
+  } };
+  r.assembly.resolve({ ok: false, error: { code: 'catalog-scan-failed', hint: 'Catalog failed', cause } });
+  const result = await started.completion;
+  expect(result).toMatchObject({ ok: false, error: { code: 'catalog-scan-failed', cause } });
+  if (result && !result.ok) expect(result.error.hint).toContain('AssetGuidParser is not defined');
+  expect(r.gateway.lastPlayError).toMatchObject({ cause });
+});
+
+
+test('native Error cause remains structured in the Gateway result', async () => {
+  const r = rig();
+  const started = r.operation.play();
+  const cause = { code: 'pack-source-load-failed', detail: { diagnostic: 'AssetGuidParser is not defined', sourcePath: 'assets/scene.pack.ts' } };
+  r.assembly.reject(new Error('Assembly failed', { cause }));
+  const result = await started.completion;
+  expect(result).toMatchObject({ ok: false, error: { cause, message: 'Assembly failed' } });
+  if (result && !result.ok) expect(result.error.hint).toContain('AssetGuidParser is not defined');
+});

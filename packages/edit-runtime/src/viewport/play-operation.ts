@@ -1,3 +1,4 @@
+import { normalizePlayFailure } from './play-failure-notice';
 import type { CommandOrigin, DispatchResult, PlayDirtyPolicy } from '@forgeax/editor-core';
 import type { HostGateway } from './host-session';
 import type { RunLifecycle } from './run-lifecycle';
@@ -53,7 +54,7 @@ export function createPlayOperation(deps: {
         return { ok: false, error: deps.gateway.lastPlayError ?? { code: 'play-cancelled', hint: 'Play ended without activating a live world.' } };
       } catch (cause) {
         if (stopped) return cancelled;
-        const error = { code: 'play-assemble-failed' as const, hint: cause instanceof Error ? cause.message : String(cause) };
+        const error = { ...normalizePlayFailure(cause), code: 'play-assemble-failed' as const };
         deps.invalidateScene(false);
         deps.gateway.failPlayAttempt(error);
         deps.onFailure(error);

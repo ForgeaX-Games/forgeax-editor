@@ -752,3 +752,197 @@ describe('importAsset terminal error taxonomy', () => {
     expect(cook.errorDetail).toMatchObject({ code: 'IMPORT_COOK_FAILED', path: '/games/demo/assets/model.glb', retryable: false });
   });
 });
+
+describe('authored Pack import', () => {
+  const guid = 'd9f2a000-0002-5000-8000-000000000002';
+  const pack = () => ({
+    schemaVersion: '2.0.0',
+    kind: 'internal-text-package',
+    assets: [
+      {
+        guid,
+        kind: 'material',
+        payload: {
+          passes: [
+            {
+              name: 'Forward',
+              program: { module: 'forgeax::default-unlit' },
+              renderState: { tags: { LightMode: 'Forward' }, queue: 2000 },
+            },
+          ],
+          values: { baseColor: [1, 0, 0, 1] },
+        },
+        refs: [],
+        artifacts: {},
+      },
+    ],
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    assetIO.setRuntimeBinding(undefined);
+  });
+  it('keeps Pack GUIDs and triggers Engine cook without writing any metadata sidecar', async () => {
+    const binding = testRuntimeBinding();
+    assetIO.setRuntimeBinding(binding);
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === binding.catalogUrl)
+        return new Response(
+          JSON.stringify({
+            schemaVersion: 'runtime-catalog-snapshot-v1',
+            scopeId: binding.scopeId,
+            generation: binding.generation,
+            authority: 'authoritative',
+            entries: [],
+            diagnostics: [],
+          }),
+        );
+      if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/source.pack.json',
+      sourceName: 'source.pack.json',
+      base64: btoa(JSON.stringify(pack())),
+    });
+    expect(result.status).toBe('done');
+    expect(result.guid).toBe(guid);
+    expect(result.subAssets).toEqual([{ guid, kind: 'material' }]);
+    expect(requests.some((url) => url.includes('.meta.json'))).toBe(false);
+    expect(requests.some((url) => url.includes(`/import/${guid}`))).toBe(true);
+  });
+  it.each(['missing-reference', 'duplicate-guid', 'cooked', 'bad-artifact-digest'] as const)(
+    'rejects %s before source promotion or Engine cook',
+    async (kind) => {
+      const binding = testRuntimeBinding();
+      assetIO.setRuntimeBinding(binding);
+      const requests: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === binding.catalogUrl)
+          return new Response(
+            JSON.stringify({
+              schemaVersion: 'runtime-catalog-snapshot-v1',
+              scopeId: binding.scopeId,
+              generation: binding.generation,
+              authority: 'authoritative',
+              entries: [],
+              diagnostics: [],
+            }),
+          );
+        if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+        return new Response('', { status: 200 });
+      }) as typeof fetch;
+      const value: any = pack();
+      if (kind === 'missing-reference') value.assets[0].refs = ['d9f2a000-0002-5000-8000-000000000099'];
+      if (kind === 'duplicate-guid') value.assets.push({ ...value.assets[0] });
+      if (kind === 'cooked') value.generation = 1;
+      if (kind === 'bad-artifact-digest')
+        value.assets[0].artifacts = {
+          data: {
+            path: 'data.bin',
+            mediaType: 'application/octet-stream',
+            byteLength: 3,
+            integrity: { algorithm: 'sha256', digest: '0'.repeat(64) },
+          },
+        };
+      const result = await executeAssetImport({
+        destPath: '/games/demo/assets/source.pack.json',
+        sourceName: 'source.pack.json',
+        base64: btoa(JSON.stringify(value)),
+        sourceFiles:
+          kind === 'bad-artifact-digest'
+            ? [{ destPath: '/games/demo/assets/data.bin', relativePath: 'data.bin', base64: btoa('abc') }]
+            : [],
+      });
+      expect(result.status).toBe('error');
+      expect(requests.some((url) => url.includes(`/import/${guid}`))).toBe(false);
+    },
+  );
+  it('imports companion Packs as one reference closure and retains all identities', async () => {
+    const binding = testRuntimeBinding();
+    assetIO.setRuntimeBinding(binding);
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === binding.catalogUrl)
+        return new Response(
+          JSON.stringify({
+            schemaVersion: 'runtime-catalog-snapshot-v1',
+            scopeId: binding.scopeId,
+            generation: binding.generation,
+            authority: 'authoritative',
+            entries: [],
+            diagnostics: [],
+          }),
+        );
+      if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    const primary: any = pack();
+    const auxiliary = pack();
+    auxiliary.assets[0]!.guid = 'd9f2a000-0002-5000-8000-000000000099';
+    primary.assets[0].refs = [auxiliary.assets[0]!.guid];
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/source.pack.json',
+      sourceName: 'source.pack.json',
+      base64: btoa(JSON.stringify(primary)),
+      sourceFiles: [
+        {
+          destPath: '/games/demo/assets/aux.pack.json',
+          relativePath: 'aux.pack.json',
+          base64: btoa(JSON.stringify(auxiliary)),
+        },
+      ],
+    });
+    expect(result.status).toBe('done');
+    expect(result.subAssets?.map((asset) => asset.guid)).toEqual([guid, auxiliary.assets[0]!.guid]);
+  });
+  it('recognizes only the authored Pack suffix, not arbitrary JSON', () => {
+    expect(getImportFormat('source.pack.json')?.importer).toBe('pack');
+    expect(getImportFormat('source.json')).toBeUndefined();
+  });
+});
+
+
+describe('native Pack source import', () => {
+  afterEach(() => { globalThis.fetch = originalFetch; assetIO.setRuntimeBinding(undefined); });
+  it.each([false, true])('uses Engine identities and rolls back failed discovery (%s)', async (fail) => {
+    assetIO.setRuntimeBinding({ ...testRuntimeBinding(), catalogRoots: [{ root: 'assets', catalogPrefix: 'host-games/demo/assets' }] });
+    const calls: { url: string; method: string }[] = [];
+    const guid = '1073cc16-2533-53dc-a63f-cbd45527b75d';
+    globalThis.fetch = (async (input: RequestInfo | URL, opts?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: opts?.method ?? 'GET' });
+      if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      if (url.endsWith('/import/source')) {
+        expect(new Headers(opts?.headers).get('x-forgeax-import-source-key')).toBe('host-games/demo/assets/counter.pack.ts');
+        return new Response(JSON.stringify(fail ? { code: 'pack-source-external-closure-mismatch', hint: 'duplicate GUID in another Pack', detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] } } : [
+          { guid, kind: 'scene', sourcePath: 'host-games/demo/assets/counter.pack.ts' },
+        ]), { status: fail ? 422 : 200 });
+      }
+      return new Response('');
+    }) as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/counter.pack.ts', sourceName: 'counter.pack.ts',
+      base64: btoa('export default definePack({});'),
+      sourceFiles: [{ destPath: '/games/demo/assets/geometry.ts', relativePath: 'geometry.ts', base64: btoa('export const vertices=[];') }],
+    });
+    expect(result.status).toBe(fail ? 'error' : 'done');
+    if (fail) {
+      expect(result.error).toContain('duplicate GUID');
+      expect(result.errorDetail).toMatchObject({ code: 'IMPORT_COOK_TRIGGER_FAILED', producerError: {
+        code: 'pack-source-external-closure-mismatch', owner: 'engine',
+        details: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] },
+      } });
+      expect(calls.filter(call => call.method === 'DELETE').length).toBeGreaterThanOrEqual(2);
+    } else {
+      expect(result.guid).toBe(guid);
+      expect(result.subAssets).toEqual([{ guid, kind: 'scene' }]);
+    }
+    expect(calls.filter(call => call.url.endsWith('/import/source'))).toHaveLength(1);
+    expect(calls.some(call => call.url.includes('.meta.json') && call.method !== 'DELETE')).toBe(false);
+  });
+});

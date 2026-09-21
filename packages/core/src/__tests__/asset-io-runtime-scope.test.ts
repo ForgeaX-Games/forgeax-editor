@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, test } from 'bun:test';
 import capturedFailures from './fixtures/scoped-import-failures.json';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 
@@ -163,3 +163,19 @@ for (const captured of capturedFailures.cases) {
     } } });
   });
 }
+
+test('source import keeps top-level producer path and expected/actual diagnostics', async () => {
+  globalThis.fetch = (async () => Response.json({ error: 'source-import-failed', code: 'producer-failed', hint: 'repair source', path: 'assets/scene.pack.ts', expected: 'declared refs', actual: 'unused dependency' }, { status: 422 })) as typeof fetch;
+  const facade = new AssetIOFacade(); facade.setRuntimeBinding(binding());
+  expect(await facade.importPackSource('assets/counter.pack.ts')).toMatchObject({ ok: false, error: { producerError: {
+    code: 'producer-failed', expected: 'declared refs', actual: 'unused dependency', details: { sourcePath: 'assets/scene.pack.ts' },
+  } } });
+});
+
+test('native source import preserves the scoped catalog blocking diagnostic', async () => {
+  globalThis.fetch = (async () => Response.json({ error: 'runtime-scope-catalog-degraded', diagnostics: [{ severity: 'blocking', code: 'produce-failed', hint: 'repair declared GUIDs', cause: { code: 'pack-source-external-closure-mismatch', detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] } } }] }, { status: 409 })) as typeof fetch;
+  const facade = new AssetIOFacade(); facade.setRuntimeBinding(binding());
+  expect(await facade.importPackSource('assets/counter.pack.ts')).toMatchObject({ ok: false, error: { hint: 'repair declared GUIDs', producerError: {
+    code: 'produce-failed', cause: { details: { code: 'pack-source-external-closure-mismatch', detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] } } },
+  } } });
+});

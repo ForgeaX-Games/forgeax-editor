@@ -571,3 +571,15 @@ test('reopen dispatches the existing document reload operation through the host'
   expect(response.result).toMatchObject({ status: 'succeeded' });
   expect(calls).toEqual(['loadDocFromDisk']);
 });
+
+
+test('reopen resolves the namespaced capability used by the live Gateway adapter', async () => {
+  const registry = new CapabilityRegistry();
+  let loaded = false;
+  registry.register({id:'editor.loadDocFromDisk',kind:'operation',version:'1',subject:'editor',verb:'loadDocFromDisk',inputSchema:{type:'object'},outputSchema:{type:'object'},availability:{available:true},preconditions:[],recoveryActions:[],executor:{execute:async () => {loaded=true;return {ok:true};}}});
+  const service=createTransportService({product:createEditorProduct({availability:{available:true,blocking:false,code:'product-available'},capabilityRegistry:registry})});
+  const response=await service.handle(request('reopen-live','reopen',auth));
+  expect(response.error).toBeUndefined();
+  expect(loaded).toBe(true);
+  expect(response.result).toMatchObject({status:'succeeded'});
+});

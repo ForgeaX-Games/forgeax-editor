@@ -52,6 +52,7 @@ export type EngineInterfaceName =
   | 'assetIO.uploadSourceBytes'
   | 'assetIO.writeMetaSidecar'
   | 'assetIO.triggerCook'
+  | 'assetIO.importPackSource'
   | 'assetIO.readSourceBytes'
   | 'assetIO.probeSourceFile'
   | 'assetIO.moveSourceFile'

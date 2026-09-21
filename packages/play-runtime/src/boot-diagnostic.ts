@@ -11,6 +11,8 @@ export function bootDiagnostics(value: unknown): VagRuntimeDiagnostic[] {
     const node = value as Record<string, unknown>;
     const detail = node.detail && typeof node.detail === 'object' ? node.detail as Record<string, unknown> : undefined;
     const parsed = VagRuntimeDiagnosticSchema.safeParse({
+      diagnostic: node.diagnostic ?? detail?.diagnostic,
+      phase: node.phase ?? detail?.phase,
       code: node.code, hint: node.hint, expected: node.expected ?? detail?.expected,
       actual: node.actual ?? detail?.actual,
       propertyPath: node.propertyPath ?? detail?.propertyPath,
@@ -41,7 +43,7 @@ export class PlayBindingFailure extends Error {
   constructor(diagnostic: unknown) {
     const diagnostics = bootDiagnostics(diagnostic);
     const cause = diagnostics.at(-1);
-    super(cause?.hint || cause?.code || 'The runtime catalog has a blocking diagnostic.');
+    super(cause?.diagnostic || cause?.hint || cause?.code || 'The runtime catalog has a blocking diagnostic.');
     this.code = cause?.code ?? 'play-runtime-binding-failed';
     this.diagnostics = diagnostics;
   }

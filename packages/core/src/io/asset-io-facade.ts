@@ -785,6 +785,61 @@ export class AssetIOFacade {
    *  The host binding supplies the only valid generation-scoped import route.
    *  Returns a structured success/failure result so the executor preserves the
    *  first decisive boundary instead of collapsing it into a generic error. */
+  /** Discover and cook a native Pack through the active Engine, without inventing an asset GUID. */
+  async importPackSource(
+    sourceKey: string,
+    signal?: AbortSignal,
+  ): Promise<AssetIoResult<readonly { guid: string; kind: string }[]>> {
+    recordAssetLeaf('assetIO.importPackSource');
+    const binding = this.runtimeBinding;
+    if (!binding) return { ok: false, error: { kind: 'network', hint: 'No active runtime asset binding' } };
+    try {
+      const response = await fetch(`${binding.importUrlBase.replace(/\/+$/, '')}/source`, {
+        method: 'POST', headers: { 'x-forgeax-import-source-key': sourceKey }, signal,
+      });
+      const body: unknown = await response.json();
+      if (!response.ok) {
+        const envelope = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {};
+        const diagnostic = Array.isArray(envelope.diagnostics)
+          ? envelope.diagnostics.find(value => value && typeof value === 'object' && value.severity === 'blocking') : undefined;
+        const producer = diagnostic ? { ...envelope, ...diagnostic } : envelope;
+        const hint = typeof producer.hint === 'string' ? producer.hint : typeof producer.message === 'string'
+          ? producer.message : `Source import failed (${response.status}); inspect producer diagnostics before retrying`;
+        return { ok: false, error: { kind: 'http', status: response.status, hint,
+          producerError: {
+            code: (typeof producer.code === 'string' ? producer.code : typeof producer.error === 'string' ? producer.error : 'source-import-failed') as CommandError['code'],
+            hint, owner: 'engine', category: 'resource', retryable: false,
+            recoveryActions: ['asset.preflight'],
+            ...(producer.expected === undefined ? {} : { expected: producer.expected }),
+            ...(producer.actual === undefined ? {} : { actual: producer.actual }),
+            ...(producer.detail === undefined && producer.path === undefined ? {} : { details: {
+              ...(typeof producer.detail === 'object' && producer.detail !== null ? producer.detail : {}),
+              ...(typeof producer.path === 'string' ? { sourcePath: producer.path } : {}),
+            } }),
+            ...(producer.cause === undefined ? {} : { cause: { code: 'source-import-cause', owner: 'engine' as const, details: producer.cause } }),
+          },
+        } };
+      }
+      if (this.runtimeBinding?.scopeId !== binding.scopeId || this.runtimeBinding?.generation !== binding.generation)
+        throw new Error('Runtime changed during source import; retry in the active project');
+      if (!Array.isArray(body) || body.length === 0) throw new Error('Engine returned no source assets');
+      const assets: { guid: string; kind: string }[] = [];
+      const seen = new Set<string>();
+      for (const row of body) {
+        if (typeof row !== 'object' || row === null || typeof row.guid !== 'string'
+          || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(row.guid)
+          || typeof row.kind !== 'string' || !row.kind || row.sourcePath !== sourceKey || seen.has(row.guid)) {
+          throw new Error('Engine returned an invalid source asset identity');
+        }
+        seen.add(row.guid);
+        assets.push({ guid: row.guid, kind: row.kind });
+      }
+      return { ok: true, value: assets };
+    } catch (error) {
+      return { ok: false, error: { kind: 'network', hint: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
   async triggerCook(
     guid: string,
     signal?: AbortSignal,

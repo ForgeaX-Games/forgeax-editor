@@ -99,7 +99,7 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
   for (const filePath of allFiles) {
     if (filePath.endsWith('.meta.json')) {
       metaFiles.add(filePath);
-    } else if (filePath.endsWith('.pack.json')) {
+    } else if (/\.pack\.(json|ts)$/i.test(filePath)) {
       packFiles.add(filePath);
     } else {
       sourceFiles.push(filePath);
